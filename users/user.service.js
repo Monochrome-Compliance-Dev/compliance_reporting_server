@@ -31,11 +31,9 @@ module.exports = {
 };
 
 async function authenticate({ email, password, ipAddress }) {
-  console.log("authenticate!!");
   const user = await db.User.scope("withHash").findOne({
     where: { email },
   });
-  console.log("authenticate user: ", user);
 
   if (
     !user ||
@@ -46,15 +44,11 @@ async function authenticate({ email, password, ipAddress }) {
   }
 
   // authentication successful so generate jwt and refresh tokens
-  console.log("got past this");
   const jwtToken = generateJwtToken(user);
-  console.log("jwtToken: ", jwtToken);
   const refreshToken = generateRefreshToken(user, ipAddress);
-  console.log("refreshToken: ", refreshToken);
 
   // save refresh token
   await refreshToken.save();
-  console.log("saved in authenticate: ", refreshToken);
 
   // return basic details and tokens
   return {
@@ -293,7 +287,6 @@ async function hash(password) {
 }
 
 function generateJwtToken(user) {
-  console.log("generateJwtToken!!");
   // create a jwt token containing the user id that expires in 15 minutes
   return jwt.sign({ sub: user.id, id: user.id }, config.secret, {
     expiresIn: "15m",
