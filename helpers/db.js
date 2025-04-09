@@ -75,10 +75,13 @@ async function initSequelize(database, user, password, host, socketPath) {
   try {
     await sequelize.authenticate();
     console.log(
-      "Connection to the OTAB database has been established successfully."
+      "Connection to the Compliance Reporting database has been established successfully."
     );
   } catch (error) {
-    console.error("Unable to connect to the OTAB database:", error);
+    console.error(
+      "Unable to connect to the Compliance Reporting database:",
+      error
+    );
   }
   return sequelize;
 }

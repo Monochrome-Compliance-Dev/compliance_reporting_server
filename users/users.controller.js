@@ -2,7 +2,7 @@
 const router = express.Router();
 const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
-const authorize = require("../middleware/authorise");
+const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
 const rateLimit = require("express-rate-limit");
@@ -17,7 +17,7 @@ const authLimiter = rateLimit({
 // routes
 router.post("/authenticate", authLimiter, authenticateSchema, authenticate);
 router.post("/refresh-token", refreshToken);
-router.post("/revoke-token", authorize(), revokeTokenSchema, revokeToken);
+router.post("/revoke-token", authorise(), revokeTokenSchema, revokeToken);
 router.post("/register", registerSchema, register);
 router.post("/verify-email", verifyEmailSchema, verifyEmail);
 router.post(
@@ -32,11 +32,11 @@ router.post(
   validateResetToken
 );
 router.post("/reset-password", resetPasswordSchema, resetPassword);
-router.get("/", authorize(Role.Admin), getAll);
-router.get("/:id", authorize(), getById);
-router.post("/", authorize(Role.Admin), createSchema, create);
-router.put("/:id", authorize(), updateSchema, update);
-router.delete("/:id", authorize(), _delete);
+router.get("/", authorise(Role.Admin), getAll);
+router.get("/:id", authorise(), getById);
+router.post("/", authorise(Role.Admin), createSchema, create);
+router.put("/:id", authorise(), updateSchema, update);
+router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 
@@ -98,7 +98,7 @@ function revokeToken(req, res, next) {
   if (!token) return res.status(400).json({ message: "Token is required" });
 
   if (!body.ownsToken(token) && body.role !== Role.Admin) {
-    return res.status(401).json({ message: "Unauthorized" });
+    return res.status(401).json({ message: "Unauthorised" });
   }
 
   userService
@@ -207,7 +207,7 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
-    return res.status(401).json({ error: "Unauthorized", code: 401 });
+    return res.status(401).json({ error: "Unauthorised", code: 401 });
   }
 
   userService
@@ -258,7 +258,7 @@ function updateSchema(req, res, next) {
 
 function update(req, res, next) {
   if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
-    return res.status(401).json({ message: "Unauthorized" });
+    return res.status(401).json({ message: "Unauthorised" });
   }
 
   userService
@@ -269,7 +269,7 @@ function update(req, res, next) {
 
 function _delete(req, res, next) {
   if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
-    return res.status(401).json({ message: "Unauthorized" });
+    return res.status(401).json({ message: "Unauthorised" });
   }
 
   userService

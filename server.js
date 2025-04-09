@@ -4,7 +4,7 @@ const app = express();
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
-const errorHandler = require("middleware/error-handler");
+const errorHandler = require("./middleware/error-handler");
 // const helmet = require('helmet');
 
 app.use(bodyParser.urlencoded({ extended: false }));
@@ -16,15 +16,32 @@ app.use(cookieParser());
 // app.use(helmet());
 
 // allow cors requests from any origin and with credentials
-https: app.use(
+app.use(
   cors({
     origin: (origin, callback) => callback(null, true),
     credentials: true,
   })
 );
 
-// api routes
-app.use("/users", require("./users/users.controller"));
+// Add the /api prefix to all routes
+app.use("/api/users", require("./users/users.controller"));
+
+// Middleware to log all registered routes
+app._router.stack.forEach((middleware) => {
+  if (middleware.route) {
+    console.log(
+      `Route: ${middleware.route.path}, Methods: ${Object.keys(middleware.route.methods).join(", ")}`
+    );
+  } else if (middleware.name === "router") {
+    middleware.handle.stack.forEach((handler) => {
+      if (handler.route) {
+        console.log(
+          `Route: ${handler.route.path}, Methods: ${Object.keys(handler.route.methods).join(", ")}`
+        );
+      }
+    });
+  }
+});
 
 // swagger docs route
 // app.use("/api-docs", require("helpers/swagger"));
