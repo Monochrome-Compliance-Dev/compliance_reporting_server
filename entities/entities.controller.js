@@ -10,7 +10,7 @@ const entityService = require("./entity.service");
 router.get("/", authorise(), getAll);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), createSchema, create);
-router.put("/:id", authorise(), update);
+router.put("/:id", authorise(), updateSchema, update);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
@@ -33,14 +33,14 @@ function createSchema(req, res, next) {
   const schema = Joi.object({
     BusinessName: Joi.string().required(),
     ABN: Joi.string().required(),
-    ACN: Joi.string().required(),
-    ControllingCorporationName: Joi.string().required(),
-    ControllingCorporationABN: Joi.string().required(),
-    ControllingCorporationACN: Joi.string().required(),
-    HeadEntityName: Joi.string().required(),
-    HeadEntityABN: Joi.string().required(),
-    HeadEntityACN: Joi.string().required(),
-    BusinessIndustryCode: Joi.string().required(),
+    // ACN: Joi.string().required(),
+    // ControllingCorporationName: Joi.string(),
+    // ControllingCorporationABN: Joi.string(),
+    // ControllingCorporationACN: Joi.string(),
+    // HeadEntityName: Joi.string(),
+    // HeadEntityABN: Joi.string(),
+    // HeadEntityACN: Joi.string(),
+    // BusinessIndustryCode: Joi.string(),
   });
   validateRequest(req, next, schema);
 }
@@ -50,6 +50,22 @@ function create(req, res, next) {
     .create(req.body)
     .then((entity) => res.json(entity))
     .catch(next);
+}
+
+function updateSchema(req, res, next) {
+  const schema = Joi.object({
+    BusinessName: Joi.string().required(),
+    ABN: Joi.string().required(),
+    // ACN: Joi.string().required(),
+    // ControllingCorporationName: Joi.string(),
+    // ControllingCorporationABN: Joi.string(),
+    // ControllingCorporationACN: Joi.string(),
+    // HeadEntityName: Joi.string(),
+    // HeadEntityABN: Joi.string(),
+    // HeadEntityACN: Joi.string(),
+    // BusinessIndustryCode: Joi.string(),
+  });
+  validateRequest(req, next, schema);
 }
 
 function update(req, res, next) {

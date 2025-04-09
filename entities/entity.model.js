@@ -14,12 +14,6 @@ function model(sequelize) {
     HeadEntityABN: { type: DataTypes.STRING, allowNull: true },
     HeadEntityACN: { type: DataTypes.STRING, allowNull: true },
     BusinessIndustryCode: { type: DataTypes.STRING, allowNull: true },
-    created: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-    },
-    updated: { type: DataTypes.DATE },
   };
 
   return sequelize.define("entity", attributes, { tableName: "tbl_entities" });
