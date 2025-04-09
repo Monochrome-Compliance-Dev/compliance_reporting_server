@@ -1,5 +1,5 @@
 const { expressjwt: expressJwt } = require("express-jwt");
-const { secret } = require("config.json");
+const { secret } = require("../config.json");
 const db = require("../helpers/db");
 const logger = require("winston");
 
@@ -18,16 +18,17 @@ function authorize(roles = []) {
 
     // authorize based on user role
     async (req, res, next) => {
-      const user = await db.User.findByPk(req.user.id);
+      console.log("req.auth", req.auth);
+      const user = await db.User.findByPk(req.auth.id);
 
       if (!user || (roles.length && !roles.includes(user.role))) {
-        logger.warn(`Unauthorized access attempt by user ID: ${req.user.id}`);
+        logger.warn(`Unauthorized access attempt by user ID: ${req.auth.id}`);
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      req.user.role = user.role;
+      req.auth.role = user.role;
       const refreshTokens = await user.getRefreshTokens();
-      req.user.ownsToken = (token) =>
+      req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);
 
       next();
