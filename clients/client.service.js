@@ -16,53 +16,53 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Entity.findAll();
+  return await db.Client.findAll();
 }
 
 async function getById(id) {
-  return await getEntity(id);
+  return await getClient(id);
 }
 
 async function create(params) {
   // validate
-  if (await db.Entity.findOne({ where: { ABN: params.ABN } })) {
-    throw "Entity with this ABN already exists";
+  if (await db.Client.findOne({ where: { ABN: params.ABN } })) {
+    throw "Client with this ABN already exists";
   }
 
-  // save entity
-  await db.Entity.create(params);
+  // save client
+  await db.Client.create(params);
 }
 
 async function update(id, params) {
-  const entity = await getEntity(id);
+  const client = await getClient(id);
 
   // validate
   if (
-    params.BusinessName !== entity.BusinessName &&
-    (await db.Entity.findOne({ where: { BusinessName: params.BusinessName } }))
+    params.BusinessName !== client.BusinessName &&
+    (await db.Client.findOne({ where: { BusinessName: params.BusinessName } }))
   ) {
-    throw "Entity with this ABN already exists";
+    throw "Client with this ABN already exists";
   }
 
-  // copy params to entity and save
-  Object.assign(entity, params);
-  await entity.save();
+  // copy params to client and save
+  Object.assign(client, params);
+  await client.save();
 }
 
 async function _delete(id) {
-  const entity = await getEntity(id);
-  await entity.destroy();
+  const client = await getClient(id);
+  await client.destroy();
 }
 
 // helper functions
-async function getEntity(id) {
-  const entity = await db.Entity.findByPk(id);
-  if (!entity) throw "Entity not found";
-  return entity;
+async function getClient(id) {
+  const client = await db.Client.findByPk(id);
+  if (!client) throw "Client not found";
+  return client;
 }
 
 async function getEntitiesByABN(abn) {
-  const entities = await db.Entity.findAll({
+  const entities = await db.Client.findAll({
     where: {
       ABN: {
         [Op.like]: `%${abn}%`,
@@ -73,7 +73,7 @@ async function getEntitiesByABN(abn) {
 }
 
 async function getEntitiesByACN(acn) {
-  const entities = await db.Entity.findAll({
+  const entities = await db.Client.findAll({
     where: {
       ACN: {
         [Op.like]: `%${acn}%`,
@@ -84,7 +84,7 @@ async function getEntitiesByACN(acn) {
 }
 
 async function getEntitiesByBusinessName(businessName) {
-  const entities = await db.Entity.findAll({
+  const entities = await db.Client.findAll({
     where: {
       BusinessName: {
         [Op.like]: `%${businessName}%`,

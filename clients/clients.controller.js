@@ -4,7 +4,7 @@ const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
-const entityService = require("./client.service");
+const clientService = require("./client.service");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -16,16 +16,16 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  entityService
+  clientService
     .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getById(req, res, next) {
-  entityService
+  clientService
     .getById(req.params.id)
-    .then((entity) => (entity ? res.json(entity) : res.sendStatus(404)))
+    .then((client) => (client ? res.json(client) : res.sendStatus(404)))
     .catch(next);
 }
 
@@ -40,9 +40,9 @@ function createSchema(req, res, next) {
 }
 
 function create(req, res, next) {
-  entityService
+  clientService
     .create(req.body)
-    .then((entity) => res.json(entity))
+    .then((client) => res.json(client))
     .catch(next);
 }
 
@@ -57,15 +57,15 @@ function updateSchema(req, res, next) {
 }
 
 function update(req, res, next) {
-  entityService
+  clientService
     .update(req.params.id, req.body)
-    .then((entity) => res.json(entity))
+    .then((client) => res.json(client))
     .catch(next);
 }
 
 function _delete(req, res, next) {
-  entityService
+  clientService
     .delete(req.params.id)
-    .then(() => res.json({ message: "Entity deleted successfully" }))
+    .then(() => res.json({ message: "Client deleted successfully" }))
     .catch(next);
 }
