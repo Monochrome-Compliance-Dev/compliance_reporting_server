@@ -64,7 +64,6 @@ async function refreshToken({ token, ipAddress }) {
   const user = await refreshToken.getUser();
   const newRefreshToken = generateRefreshToken(user, ipAddress);
 
-  // console.log('about to refreshToken.save: ', refreshToken);
   refreshToken.revoked = Date.now();
   refreshToken.revokedByIp = ipAddress;
   refreshToken.replacedByToken = newRefreshToken.token;
@@ -87,7 +86,6 @@ async function _refreshToken({ token, ipAddress }) {
 
   if (token) {
     const refreshToken = await getRefreshToken(token);
-    //console.log('refreshToken: ', refreshToken);
     const user = await refreshToken.getUser();
     // replace old refresh token with a new one and save
     const newRefreshToken = generateRefreshToken(user, ipAddress);
@@ -274,11 +272,19 @@ async function getUserByToken(token) {
 }
 
 async function getRefreshToken(token) {
-  // console.log('getRefreshToken(token): ', token);
+  console.log("Looking for refresh token:", token); // Log the token being queried
   const refreshToken = await db.RefreshToken.findOne({ where: { token } });
-  // console.log('refreshToken: ', refreshToken.isActive);
-  if (!refreshToken || !refreshToken.isActive)
-    throw { status: 400, message: "Invalid token" };
+
+  if (!refreshToken) {
+    console.error("Refresh token not found:", token); // Log if the token is not found
+    throw { status: 400, message: "Invalid token: Token not found" };
+  }
+
+  if (!refreshToken.isActive) {
+    console.error("Refresh token is not active:", token); // Log if the token is inactive
+    throw { status: 400, message: "Invalid token: Token is not active" };
+  }
+
   return refreshToken;
 }
 
@@ -308,13 +314,25 @@ function randomTokenString() {
 }
 
 function basicDetails(user) {
-  const { id, firstName, lastName, email, role, created, updated, isVerified } =
-    user;
+  const {
+    id,
+    firstName,
+    lastName,
+    email,
+    role,
+    phone,
+    position,
+    created,
+    updated,
+    isVerified,
+  } = user;
   return {
     id,
     firstName,
     lastName,
     email,
+    phone,
+    position,
     role,
     created,
     updated,

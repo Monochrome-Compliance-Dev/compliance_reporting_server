@@ -25,7 +25,7 @@ async function getById(id) {
 
 async function create(params) {
   // validate
-  if (await db.Client.findOne({ where: { ABN: params.ABN } })) {
+  if (await db.Client.findOne({ where: { abn: params.abn } })) {
     throw "Client with this ABN already exists";
   }
 

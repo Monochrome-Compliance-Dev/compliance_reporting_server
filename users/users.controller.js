@@ -6,6 +6,7 @@ const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
 const rateLimit = require("express-rate-limit");
+const { act } = require("react");
 
 // Rate limiter for authentication routes
 const authLimiter = rateLimit({
@@ -112,15 +113,27 @@ function registerSchema(req, res, next) {
     firstName: Joi.string().required(),
     lastName: Joi.string().required(),
     email: Joi.string().email().required(),
+    phone: Joi.string().required(),
+    position: Joi.string().required(),
     password: Joi.string().min(6).required(),
     confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-    acceptTerms: Joi.boolean().valid(true).required(),
-    acceptMarketing: Joi.boolean().required(),
+    role: Joi.string()
+      // .valid(
+      //   Role.Admin,
+      //   Role.User,
+      //   Role.Approver,
+      //   Role.Submitter,
+      //   Role.Approver
+      // )
+      .required(),
+    active: Joi.boolean().required(),
+    f_clientId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
 }
 
 function register(req, res, next) {
+  console.log("req.body", req.body, req.get("origin"));
   userService
     .register(req.body, req.get("origin"))
     .then(() =>
@@ -225,9 +238,21 @@ function createSchema(req, res, next) {
     firstName: Joi.string().required(),
     lastName: Joi.string().required(),
     email: Joi.string().email().required(),
+    phone: Joi.string().required(),
+    position: Joi.string().required(),
     password: Joi.string().min(6).required(),
     confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-    role: Joi.string().valid(Role.Admin, Role.User).required(),
+    role: Joi.string()
+      // .valid(
+      //   Role.Admin,
+      //   Role.User,
+      //   Role.Approver,
+      //   Role.Submitter,
+      //   Role.Approver
+      // )
+      .required(),
+    active: Joi.boolean().required(),
+    f_clientId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
 }
