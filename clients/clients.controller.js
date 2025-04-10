@@ -4,7 +4,7 @@ const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
-const entityService = require("./entity.service");
+const entityService = require("./client.service");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -33,14 +33,8 @@ function createSchema(req, res, next) {
   const schema = Joi.object({
     BusinessName: Joi.string().required(),
     ABN: Joi.string().required(),
-    // ACN: Joi.string().required(),
-    // ControllingCorporationName: Joi.string(),
-    // ControllingCorporationABN: Joi.string(),
-    // ControllingCorporationACN: Joi.string(),
-    // HeadEntityName: Joi.string(),
-    // HeadEntityABN: Joi.string(),
-    // HeadEntityACN: Joi.string(),
-    // BusinessIndustryCode: Joi.string(),
+    ACN: Joi.string().required(),
+    BusinessIndustryCode: Joi.string(),
   });
   validateRequest(req, next, schema);
 }
@@ -56,14 +50,8 @@ function updateSchema(req, res, next) {
   const schema = Joi.object({
     BusinessName: Joi.string().required(),
     ABN: Joi.string().required(),
-    // ACN: Joi.string().required(),
-    // ControllingCorporationName: Joi.string(),
-    // ControllingCorporationABN: Joi.string(),
-    // ControllingCorporationACN: Joi.string(),
-    // HeadEntityName: Joi.string(),
-    // HeadEntityABN: Joi.string(),
-    // HeadEntityACN: Joi.string(),
-    // BusinessIndustryCode: Joi.string(),
+    ACN: Joi.string().required(),
+    BusinessIndustryCode: Joi.string(),
   });
   validateRequest(req, next, schema);
 }

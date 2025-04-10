@@ -50,7 +50,7 @@ async function initialize() {
   // init models and add them to the exported db object
   db.User = require("../users/user.model")(sequelize);
   db.RefreshToken = require("../users/refresh-token.model")(sequelize);
-  db.Entity = require("../entities/entity.model")(sequelize);
+  db.Client = require("../clients/client.model")(sequelize);
 
   // define relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });
