@@ -31,10 +31,11 @@ module.exports = {
 };
 
 async function authenticate({ email, password, ipAddress }) {
+  console.log("Authenticate user:", email); // Log the email being authenticated
   const user = await db.User.scope("withHash").findOne({
     where: { email },
   });
-
+  console.log("User found:", user); // Log the user object for debugging
   if (
     !user ||
     !user.isVerified ||
@@ -297,6 +298,7 @@ function basicDetails(user) {
     created,
     updated,
     isVerified,
+    clientId,
   } = user;
   return {
     id,
@@ -309,6 +311,7 @@ function basicDetails(user) {
     created,
     updated,
     isVerified,
+    clientId,
   };
 }
 

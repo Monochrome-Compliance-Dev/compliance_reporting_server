@@ -7,11 +7,11 @@ function model(sequelize) {
     ReportingPeriodStartDate: { type: DataTypes.DATE, allowNull: false },
     ReportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
     ReportComments: { type: DataTypes.STRING, allowNull: true },
-    SubmitterFirstName: { type: DataTypes.STRING, allowNull: false },
-    SubmitterLastName: { type: DataTypes.STRING, allowNull: false },
+    SubmitterFirstName: { type: DataTypes.STRING, allowNull: true },
+    SubmitterLastName: { type: DataTypes.STRING, allowNull: true },
     SubmitterPosition: { type: DataTypes.STRING, allowNull: true },
     SubmitterPhoneNumber: { type: DataTypes.STRING, allowNull: true },
-    SubmitterEmail: { type: DataTypes.STRING, allowNull: false },
+    SubmitterEmail: { type: DataTypes.STRING, allowNull: true },
     ApproverFirstName: { type: DataTypes.STRING, allowNull: true },
     ApproverLastName: { type: DataTypes.STRING, allowNull: true },
     ApproverPosition: { type: DataTypes.STRING, allowNull: true },
@@ -24,12 +24,24 @@ function model(sequelize) {
       allowNull: true,
     },
     ResponsibleMemberDeclaration: { type: DataTypes.STRING, allowNull: true },
-    created: {
-      type: DataTypes.DATE,
+    reportName: { type: DataTypes.STRING, allowNull: false },
+    createdBy: { type: DataTypes.INTEGER, allowNull: false },
+    updatedBy: { type: DataTypes.INTEGER, allowNull: true },
+    submittedDate: { type: DataTypes.DATE, allowNull: true },
+    submittedBy: { type: DataTypes.INTEGER, allowNull: true },
+    reportStatus: {
+      type: DataTypes.ENUM(
+        "Created",
+        "Cancelled",
+        "Received",
+        "Accepted",
+        "Rejected"
+      ),
       allowNull: false,
-      defaultValue: DataTypes.NOW,
+      defaultValue: "Created",
     },
-    updated: { type: DataTypes.DATE },
+    statusUpdatedDate: { type: DataTypes.DATE, allowNull: true },
+    clientId: { type: DataTypes.INTEGER, allowNull: false },
   };
 
   return sequelize.define("report", attributes, { tableName: "tbl_reports" });

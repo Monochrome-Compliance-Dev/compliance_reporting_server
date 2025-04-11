@@ -129,7 +129,7 @@ function registerSchema(req, res, next) {
       // )
       .required(),
     active: Joi.boolean().required(),
-    f_clientId: Joi.number().required(),
+    clientId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
 }
@@ -254,7 +254,7 @@ function createSchema(req, res, next) {
       // )
       .required(),
     active: Joi.boolean().required(),
-    f_clientId: Joi.number().required(),
+    clientId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
 }
