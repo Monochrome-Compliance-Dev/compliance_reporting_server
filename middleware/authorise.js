@@ -18,19 +18,17 @@ function authorize(roles = []) {
 
     // authorize based on user role
     async (req, res, next) => {
-      // console.log("req.auth", req.auth);
       const user = await db.User.findByPk(req.auth.id);
 
       if (!user || (roles.length && !roles.includes(user.role))) {
-        logger.warn(`Unauthorized access attempt by user ID: ${req.auth.id}`);
-        return res.status(401).json({ message: "Unauthorized" });
+        logger.warn(`Unauthorised access attempt by user ID: ${req.auth.id}`);
+        return res.status(401).json({ message: "Unauthorised" });
       }
 
       req.auth.role = user.role;
       const refreshTokens = await user.getRefreshTokens();
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);
-
       next();
     },
   ];

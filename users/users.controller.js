@@ -83,14 +83,15 @@ async function unauthorised(res) {
 }
 
 function revokeTokenSchema(req, res, next) {
+  console.log("revokeTokenSchema", req.body);
   const schema = Joi.object({
-    jwtToken: Joi.string().empty(""),
-    ownsToken: Joi.function().required(),
+    jwtToken: Joi.string().empty(""), // Validate only jwtToken
   });
   validateRequest(req, next, schema);
 }
 
 function revokeToken(req, res, next) {
+  console.log("revokeToken", req.body);
   const { body } = req;
 
   const token = body.token || req.cookies.refreshToken;
@@ -98,7 +99,8 @@ function revokeToken(req, res, next) {
 
   if (!token) return res.status(400).json({ message: "Token is required" });
 
-  if (!body.ownsToken(token) && body.role !== Role.Admin) {
+  // Use req.auth.ownsToken to check token ownership
+  if (!req.auth.ownsToken(token) && req.auth.role !== Role.Admin) {
     return res.status(401).json({ message: "Unauthorised" });
   }
 

@@ -58,7 +58,6 @@ async function authenticate({ email, password, ipAddress }) {
   };
 }
 
-// Remove unnecessary console logs
 async function refreshToken({ token, ipAddress }) {
   const refreshToken = await getRefreshToken(token);
   const user = await refreshToken.getUser();
@@ -81,42 +80,9 @@ async function refreshToken({ token, ipAddress }) {
   };
 }
 
-async function _refreshToken({ token, ipAddress }) {
-  console.log("refreshToken!!");
-
-  if (token) {
-    const refreshToken = await getRefreshToken(token);
-    const user = await refreshToken.getUser();
-    // replace old refresh token with a new one and save
-    const newRefreshToken = generateRefreshToken(user, ipAddress);
-    refreshToken.revoked = Date.now();
-    refreshToken.revokedByIp = ipAddress;
-    refreshToken.replacedByToken = newRefreshToken.token;
-    await refreshToken.save();
-    await newRefreshToken.save();
-
-    // generate new jwt
-    const jwtToken = generateJwtToken(user);
-
-    // return basic details and tokens
-    return {
-      ...basicDetails(user),
-      jwtToken,
-      refreshToken: newRefreshToken.token,
-    };
-  } else {
-    console.log("no token");
-    // generate mock jwt
-    const jwtToken = generateJwtToken({ user: { id: "0" } });
-    return {
-      user: "no user",
-      jwtToken,
-      refreshToken: jwtToken,
-    };
-  }
-}
-
 async function revokeToken({ token, ipAddress }) {
+  console.log("Revoke token:", token); // Log the token being revoked
+  console.log("IP Address:", ipAddress); // Log the IP address
   const refreshToken = await getRefreshToken(token);
 
   // revoke token and save
@@ -280,8 +246,14 @@ async function getRefreshToken(token) {
     throw { status: 400, message: "Invalid token: Token not found" };
   }
 
-  if (!refreshToken.isActive) {
-    console.error("Refresh token is not active:", token); // Log if the token is inactive
+  // Check if the token is active
+  const isActive = refreshToken.expires > Date.now() && !refreshToken.revoked;
+  if (!isActive) {
+    console.error("Refresh token is not active:", {
+      token,
+      expires: refreshToken.expires,
+      revoked: refreshToken.revoked,
+    }); // Log detailed reasons for inactivity
     throw { status: 400, message: "Invalid token: Token is not active" };
   }
 
@@ -304,7 +276,7 @@ function generateRefreshToken(user, ipAddress) {
   return new db.RefreshToken({
     userId: user.id,
     token: randomTokenString(),
-    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Set expiry to 7 days
     createdByIp: ipAddress,
   });
 }
