@@ -24,8 +24,6 @@ async function getById(id) {
 }
 
 async function create(params) {
-  console.log("Creating Report");
-  console.log("Request Body:", params); // Log the request body for debugging
   // validate
   // if (await db.Report.findOne({ where: { abn: params.abn } })) {
   //   throw "Report with this ABN already exists";

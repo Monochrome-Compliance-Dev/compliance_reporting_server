@@ -30,8 +30,6 @@ function getById(req, res, next) {
 }
 
 function createSchema(req, res, next) {
-  console.log("Create Report Schema Validation");
-  console.log("Request Body:", req.body); // Log the request body for debugging
   const schema = Joi.object({
     ReportingPeriodStartDate: Joi.string().required(),
     ReportingPeriodEndDate: Joi.string().required(),
@@ -44,8 +42,6 @@ function createSchema(req, res, next) {
 }
 
 function create(req, res, next) {
-  console.log("Creating Report");
-  console.log("Request Body:", req.body); // Log the request body for debugging
   reportService
     .create(req.body)
     .then((report) => res.json(report))
