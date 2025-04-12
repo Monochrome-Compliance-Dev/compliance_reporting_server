@@ -5,9 +5,11 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const reportService = require("./report.service");
+const { report } = require("../../compliance_reporting/src/data/reportFields");
 
 // routes
 router.get("/", authorise(), getAll);
+router.get("/reports/:clientId", authorise(), getAllById);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
@@ -20,6 +22,17 @@ function getAll(req, res, next) {
     .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
+}
+
+function getAllById(req, res, next) {
+  console.log("Client ID:", req.params); // Log the client ID for debugging
+  reportService
+    .getAllById(req.params.clientId)
+    .then((reports) => (reports ? res.json(reports) : res.sendStatus(404)))
+    .catch((error) => {
+      console.error("Error fetching reports:", error); // Log the error details
+      next(error); // Pass the error to the global error handler
+    });
 }
 
 function getById(req, res, next) {
