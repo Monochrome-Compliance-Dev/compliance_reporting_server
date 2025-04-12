@@ -31,7 +31,7 @@ function getById(req, res, next) {
 
 function createSchema(req, res, next) {
   const schema = Joi.object({
-    clientName: Joi.string().required(),
+    businessName: Joi.string().required(),
     abn: Joi.string().required(),
     acn: Joi.string().required(),
     addressline1: Joi.string().required(),
@@ -67,7 +67,7 @@ function create(req, res, next) {
 
 function updateSchema(req, res, next) {
   const schema = Joi.object({
-    clientName: Joi.string().required(),
+    businessName: Joi.string().required(),
     abn: Joi.string().required(),
     acn: Joi.string().required(),
     addressline1: Joi.string().required(),
