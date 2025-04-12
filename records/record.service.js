@@ -17,65 +17,65 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Report.findAll();
+  return await db.Record.findAll();
 }
 
 async function getAllById(clientId) {
-  // get all reports for the client
-  const reports = await db.Report.findAll({
+  // get all records for the client
+  const records = await db.Record.findAll({
     where: {
       clientId: clientId,
     },
   });
 
-  if (!reports) throw "Reports not found";
-  return reports;
+  if (!records) throw "Records not found";
+  return records;
 }
 
 async function getById(id) {
-  return await getReport(id);
+  return await getRecord(id);
 }
 
 async function create(params) {
   // validate
-  // if (await db.Report.findOne({ where: { abn: params.abn } })) {
-  //   throw "Report with this ABN already exists";
+  // if (await db.Record.findOne({ where: { abn: params.abn } })) {
+  //   throw "Record with this ABN already exists";
   // }
 
-  // save report
-  await db.Report.create(params);
+  // save record
+  await db.Record.create(params);
 }
 
 async function update(id, params) {
-  const report = await getReport(id);
+  const record = await getRecord(id);
 
   // validate
   if (
-    params.BusinessName !== report.BusinessName &&
-    (await db.Report.findOne({ where: { BusinessName: params.BusinessName } }))
+    params.BusinessName !== record.BusinessName &&
+    (await db.Record.findOne({ where: { BusinessName: params.BusinessName } }))
   ) {
-    throw "Report with this ABN already exists";
+    throw "Record with this ABN already exists";
   }
 
-  // copy params to report and save
-  Object.assign(report, params);
-  await report.save();
+  // copy params to record and save
+  Object.assign(record, params);
+  await record.save();
 }
 
 async function _delete(id) {
-  const report = await getReport(id);
-  await report.destroy();
+  const record = await getRecord(id);
+  await record.destroy();
 }
 
 // helper functions
-async function getReport(id) {
-  const report = await db.Report.findByPk(id);
-  if (!report) throw "Report not found";
-  return report;
+async function getRecord(id) {
+  const record = await db.Record.findByPk(id);
+  if (!record) throw "Record not found";
+  return record;
 }
 
 async function getEntitiesByABN(abn) {
-  const entities = await db.Report.findAll({
+  const entities = await db.Record.findAll({
     where: {
       ABN: {
         [Op.like]: `%${abn}%`,
@@ -86,7 +86,7 @@ async function getEntitiesByABN(abn) {
 }
 
 async function getEntitiesByACN(acn) {
-  const entities = await db.Report.findAll({
+  const entities = await db.Record.findAll({
     where: {
       ACN: {
         [Op.like]: `%${acn}%`,
@@ -97,7 +97,7 @@ async function getEntitiesByACN(acn) {
 }
 
 async function getEntitiesByBusinessName(businessName) {
-  const entities = await db.Report.findAll({
+  const entities = await db.Record.findAll({
     where: {
       BusinessName: {
         [Op.like]: `%${businessName}%`,
