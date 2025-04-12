@@ -37,12 +37,12 @@ async function update(id, params) {
   const client = await getClient(id);
 
   // validate
-  if (
-    params.BusinessName !== client.BusinessName &&
-    (await db.Client.findOne({ where: { BusinessName: params.BusinessName } }))
-  ) {
-    throw "Client with this ABN already exists";
-  }
+  // if (
+  //   params.businessName !== client.businessName &&
+  //   (await db.Client.findOne({ where: { businessName: params.businessName } }))
+  // ) {
+  //   throw "Client with this ABN already exists";
+  // }
 
   // copy params to client and save
   Object.assign(client, params);
