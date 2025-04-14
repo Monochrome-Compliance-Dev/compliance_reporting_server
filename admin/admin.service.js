@@ -17,65 +17,67 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Record.findAll();
+  return await db.Admin.findAll();
 }
 
 async function getAllById(clientId) {
-  // get all records for the client
-  const records = await db.Record.findAll({
+  // Get all admins for the client
+  const admins = await db.Admin.findAll({
     where: {
       clientId: clientId,
     },
   });
 
-  if (!records) throw "Records not found";
-  return records;
+  console.log("admins", admins); // Log the result for debugging
+
+  // Return the admins array (even if empty)
+  return admins;
 }
 
 async function getById(id) {
-  return await getRecord(id);
+  return await getAdmin(id);
 }
 
 async function create(params) {
   // validate
-  // if (await db.Record.findOne({ where: { abn: params.abn } })) {
-  //   throw "Record with this ABN already exists";
+  // if (await db.Admin.findOne({ where: { abn: params.abn } })) {
+  //   throw "Admin with this ABN already exists";
   // }
 
-  // save record
-  await db.Record.create(params);
+  // save admin
+  await db.Admin.create(params);
 }
 
 async function update(id, params) {
-  const record = await getRecord(id);
+  const admin = await getAdmin(id);
 
   // validate
   if (
-    params.BusinessName !== record.BusinessName &&
-    (await db.Record.findOne({ where: { BusinessName: params.BusinessName } }))
+    params.BusinessName !== admin.BusinessName &&
+    (await db.Admin.findOne({ where: { BusinessName: params.BusinessName } }))
   ) {
-    throw "Record with this ABN already exists";
+    throw "Admin with this ABN already exists";
   }
 
-  // copy params to record and save
-  Object.assign(record, params);
-  await record.save();
+  // copy params to admin and save
+  Object.assign(admin, params);
+  await admin.save();
 }
 
 async function _delete(id) {
-  const record = await getRecord(id);
-  await record.destroy();
+  const admin = await getAdmin(id);
+  await admin.destroy();
 }
 
 // helper functions
-async function getRecord(id) {
-  const record = await db.Record.findByPk(id);
-  if (!record) throw "Record not found";
-  return record;
+async function getAdmin(id) {
+  const admin = await db.Admin.findByPk(id);
+  if (!admin) throw "Admin not found";
+  return admin;
 }
 
 async function getEntitiesByABN(abn) {
-  const entities = await db.Record.findAll({
+  const entities = await db.Admin.findAll({
     where: {
       ABN: {
         [Op.like]: `%${abn}%`,
@@ -86,7 +88,7 @@ async function getEntitiesByABN(abn) {
 }
 
 async function getEntitiesByACN(acn) {
-  const entities = await db.Record.findAll({
+  const entities = await db.Admin.findAll({
     where: {
       ACN: {
         [Op.like]: `%${acn}%`,
@@ -97,7 +99,7 @@ async function getEntitiesByACN(acn) {
 }
 
 async function getEntitiesByBusinessName(businessName) {
-  const entities = await db.Record.findAll({
+  const entities = await db.Admin.findAll({
     where: {
       BusinessName: {
         [Op.like]: `%${businessName}%`,

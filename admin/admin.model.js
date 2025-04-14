@@ -44,5 +44,5 @@ function model(sequelize) {
     clientId: { type: DataTypes.INTEGER, allowNull: false },
   };
 
-  return sequelize.define("record", attributes, { tableName: "tbl_records" });
+  return sequelize.define("admin", attributes, { tableName: "tbl_admin" });
 }

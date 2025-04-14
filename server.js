@@ -26,7 +26,7 @@ app.use(
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
 app.use("/api/clients", require("./clients/clients.controller"));
-app.use("/api/records", require("./records/records.controller"));
+app.use("/api/admin", require("./admin/admin.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {
