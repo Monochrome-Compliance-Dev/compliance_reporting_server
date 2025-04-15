@@ -9,87 +9,56 @@ const Role = require("../helpers/role");
 
 module.exports = {
   getAll,
-  getById,
+  getByReportId,
   create,
   update,
   delete: _delete,
 };
 
 async function getAll() {
-  return await db.Payment.findAll();
+  return await db.Finance.findAll();
 }
 
-async function getById(id) {
-  return await getPayment(id);
+async function getByReportId(id) {
+  return await getFinanceByReportId(id);
 }
 
 async function create(params) {
-  // validate
-  if (await db.Payment.findOne({ where: { abn: params.abn } })) {
-    throw "Payment with this ABN already exists";
+  // save finance
+  const finance = await db.Finance.create(params);
+  if (!finance) {
+    throw "Finance creation failed";
   }
-
-  // save payment
-  await db.Payment.create(params);
+  return finance;
 }
 
 async function update(id, params) {
-  const payment = await getPayment(id);
+  const finance = await getFinance(id);
 
-  // validate
-  // if (
-  //   params.businessName !== payment.businessName &&
-  //   (await db.Payment.findOne({ where: { businessName: params.businessName } }))
-  // ) {
-  //   throw "Payment with this ABN already exists";
-  // }
-
-  // copy params to payment and save
-  Object.assign(payment, params);
-  await payment.save();
+  // copy params to finance and save
+  Object.assign(finance, params);
+  await finance.save();
+  return finance;
 }
 
 async function _delete(id) {
-  const payment = await getPayment(id);
-  await payment.destroy();
+  const finance = await getFinance(id);
+  await finance.destroy();
 }
 
 // helper functions
-async function getPayment(id) {
-  const payment = await db.Payment.findByPk(id);
-  if (!payment) throw "Payment not found";
-  return payment;
+async function getFinance(id) {
+  const finance = await db.Finance.findByPk(id);
+  if (!finance) throw "Finance not found";
+  return finance;
 }
 
-async function getEntitiesByABN(abn) {
-  const entities = await db.Payment.findAll({
+async function getFinanceByReportId(id) {
+  const finance = await db.Finance.findOne({
     where: {
-      ABN: {
-        [Op.like]: `%${abn}%`,
-      },
+      reportId: id,
     },
   });
-  return entities;
-}
-
-async function getEntitiesByACN(acn) {
-  const entities = await db.Payment.findAll({
-    where: {
-      ACN: {
-        [Op.like]: `%${acn}%`,
-      },
-    },
-  });
-  return entities;
-}
-
-async function getEntitiesByBusinessName(businessName) {
-  const entities = await db.Payment.findAll({
-    where: {
-      BusinessName: {
-        [Op.like]: `%${businessName}%`,
-      },
-    },
-  });
-  return entities;
+  if (!finance) throw "Finance not found";
+  return finance;
 }

@@ -10,7 +10,7 @@ const Role = require("../helpers/role");
 module.exports = {
   getAll,
   getAllById,
-  getById,
+  // getById,
   create,
   update,
   delete: _delete,
@@ -34,9 +34,9 @@ async function getAllById(clientId) {
   return reports;
 }
 
-async function getById(id) {
-  return await getReport(id);
-}
+// async function getById(id) {
+//   return await getReport(id);
+// }
 
 async function create(params) {
   // validate

@@ -15,6 +15,7 @@ function model(sequelize) {
       type: DataTypes.ENUM(
         "Created",
         "Cancelled",
+        "Updated",
         "Received",
         "Accepted",
         "Rejected"

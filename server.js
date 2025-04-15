@@ -7,6 +7,21 @@ const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
 // const helmet = require('helmet');
 
+app.use(
+  cors({
+    origin: "http://localhost:3000", // Allow requests from the frontend
+    credentials: true, // Allow cookies and credentials
+  })
+);
+
+// allow cors requests from any origin and with credentials
+// app.use(
+//   cors({
+//     origin: (origin, callback) => callback(null, true),
+//     credentials: true,
+//   })
+// );
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
@@ -15,19 +30,12 @@ app.use(cookieParser());
 // helmetjs.github.io/?ref=hackernoon.com
 // app.use(helmet());
 
-// allow cors requests from any origin and with credentials
-app.use(
-  cors({
-    origin: (origin, callback) => callback(null, true),
-    credentials: true,
-  })
-);
-
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
 app.use("/api/clients", require("./clients/clients.controller"));
 app.use("/api/reports", require("./reports/reports.controller"));
-app.use("/api/admin", require("./admin/admin.controller"));
+app.use("/api/payments", require("./payments/payments.controller"));
+app.use("/api/finances", require("./finance/finances.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

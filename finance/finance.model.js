@@ -46,12 +46,11 @@ function model(sequelize) {
       type: DataTypes.STRING,
       allowNull: true,
     },
-    created: {
-      type: DataTypes.DATE,
+    createdBy: {
+      type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: DataTypes.NOW,
     },
-    updated: { type: DataTypes.DATE },
+    updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
 
   return sequelize.define("finance", attributes, { tableName: "tbl_finance" });
