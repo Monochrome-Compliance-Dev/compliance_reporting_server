@@ -51,6 +51,7 @@ async function initialize() {
   db.User = require("../users/user.model")(sequelize);
   db.RefreshToken = require("../users/refresh-token.model")(sequelize);
   db.Client = require("../clients/client.model")(sequelize);
+  db.Report = require("../reports/report.model")(sequelize);
   db.Admin = require("../admin/admin.model")(sequelize);
 
   // define relationships
@@ -58,10 +59,10 @@ async function initialize() {
   db.RefreshToken.belongsTo(db.User);
   db.User.belongsTo(db.Client);
   db.Client.hasMany(db.User);
-  db.Client.hasMany(db.Admin);
-  db.Admin.belongsTo(db.Client);
-  db.Client.hasMany(db.Admin, { onDelete: "CASCADE" });
-  db.Admin.belongsTo(db.Client, { onDelete: "CASCADE" });
+  db.Client.hasMany(db.Report, { onDelete: "CASCADE" });
+  db.Report.belongsTo(db.Client);
+  db.Admin.belongsTo(db.Report, { onDelete: "CASCADE" });
+  db.Report.hasMany(db.Admin, { onDelete: "CASCADE" });
 
   // sync all models with database
   await sequelize.sync();
