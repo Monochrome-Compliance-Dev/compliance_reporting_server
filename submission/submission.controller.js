@@ -44,13 +44,13 @@ function createSchema(req, res, next) {
     ApproverPosition: Joi.string(),
     ApproverPhoneNumber: Joi.string(),
     ApproverEmail: Joi.string(),
-    ApprovalDate: Joi.string(),
+    ApprovalDate: Joi.date().iso().allow(null, ""), // Ensure ISO date format or allow null/empty
     PrincipalGoverningBodyName: Joi.string(),
     PrincipalGoverningBodyDescription: Joi.string(),
     ResponsibleMemberDeclaration: Joi.string(),
     createdBy: Joi.number().required(),
     updatedBy: Joi.number(),
-    submittedDate: Joi.string(),
+    submittedDate: Joi.date(),
     submittedBy: Joi.number(),
     statusUpdatedDate: Joi.string(),
     reportId: Joi.number().required(),
@@ -59,6 +59,11 @@ function createSchema(req, res, next) {
 }
 
 function create(req, res, next) {
+  // Sanitize input data
+  // if (req.body.ApprovalDate === "") {
+  //   req.body.ApprovalDate = null; // Convert empty string to null
+  // }
+
   submissionService
     .create(req.body)
     .then((submission) => res.json(submission))
@@ -70,32 +75,37 @@ function create(req, res, next) {
 
 function updateSchema(req, res, next) {
   const schema = Joi.object({
-    ReportComments: Joi.string(),
-    SubmitterFirstName: Joi.string(),
-    SubmitterLastName: Joi.string(),
-    SubmitterPosition: Joi.string(),
-    SubmitterPhoneNumber: Joi.string(),
-    SubmitterEmail: Joi.string(),
-    ApproverFirstName: Joi.string(),
-    ApproverLastName: Joi.string(),
-    ApproverPosition: Joi.string(),
-    ApproverPhoneNumber: Joi.string(),
-    ApproverEmail: Joi.string(),
-    ApprovalDate: Joi.string(),
-    PrincipalGoverningBodyName: Joi.string(),
-    PrincipalGoverningBodyDescription: Joi.string(),
-    ResponsibleMemberDeclaration: Joi.string(),
-    createdBy: Joi.number().required(),
+    ReportComments: Joi.string().allow(null, ""),
+    SubmitterFirstName: Joi.string().allow(null, ""),
+    SubmitterLastName: Joi.string().allow(null, ""),
+    SubmitterPosition: Joi.string().allow(null, ""),
+    SubmitterPhoneNumber: Joi.string().allow(null, ""),
+    SubmitterEmail: Joi.string().allow(null, ""),
+    ApproverFirstName: Joi.string().allow(null, ""),
+    ApproverLastName: Joi.string().allow(null, ""),
+    ApproverPosition: Joi.string().allow(null, ""),
+    ApproverPhoneNumber: Joi.string().allow(null, ""),
+    ApproverEmail: Joi.string().allow(null, ""),
+    ApprovalDate: Joi.date().allow(null, ""),
+    PrincipalGoverningBodyName: Joi.string().allow(null, ""),
+    PrincipalGoverningBodyDescription: Joi.string().allow(null, ""),
+    ResponsibleMemberDeclaration: Joi.string().allow(null, ""),
+    // createdBy: Joi.number().required(),
     updatedBy: Joi.number().required(),
-    submittedDate: Joi.string(),
+    submittedDate: Joi.date(),
     submittedBy: Joi.number().required(),
-    statusUpdatedDate: Joi.string(),
+    statusUpdatedDate: Joi.string().allow(null, ""),
     reportId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
 }
 
 function update(req, res, next) {
+  // // Sanitize input data
+  // if (req.body.ApprovalDate === "") {
+  //   req.body.ApprovalDate = null; // Convert empty string to null
+  // }
+
   submissionService
     .update(req.params.id, req.body)
     .then((submission) => res.json(submission))
