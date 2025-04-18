@@ -28,7 +28,7 @@ async function getAllById(clientId) {
     },
   });
 
-  console.log("reports", reports); // Log the result for debugging
+  // console.log("reports", reports); // Log the result for debugging
 
   // Return the reports array (even if empty)
   return reports;

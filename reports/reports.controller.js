@@ -50,6 +50,7 @@ function createSchema(req, res, next) {
   const schema = Joi.object({
     ReportingPeriodStartDate: Joi.string().required(),
     ReportingPeriodEndDate: Joi.string().required(),
+    code: Joi.string().required(),
     reportName: Joi.string().required(),
     createdBy: Joi.number().required(),
     reportStatus: Joi.string().required(),
@@ -71,6 +72,7 @@ function create(req, res, next) {
 function updateSchema(req, res, next) {
   const schema = Joi.object({
     reportName: Joi.string(),
+    code: Joi.string().required(),
     ReportingPeriodStartDate: Joi.string(),
     ReportingPeriodEndDate: Joi.string(),
     reportName: Joi.string(),

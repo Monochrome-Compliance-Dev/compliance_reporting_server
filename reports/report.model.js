@@ -6,6 +6,7 @@ function model(sequelize) {
   const attributes = {
     ReportingPeriodStartDate: { type: DataTypes.DATE, allowNull: false },
     ReportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
+    code: { type: DataTypes.STRING, allowNull: false },
     reportName: { type: DataTypes.STRING, allowNull: false },
     createdBy: { type: DataTypes.INTEGER, allowNull: false },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
