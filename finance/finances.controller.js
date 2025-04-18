@@ -44,7 +44,6 @@ function createSchema(req, res, next) {
     DetailOfChangeInAccountingPeriod: Joi.string(),
     DetailOfChangeInBusinessName: Joi.string(),
     DetailEntitesBelowReportingThreshold: Joi.string(),
-
     createdBy: Joi.number().required(),
     updatedBy: Joi.number(),
     reportId: Joi.number().required(),
@@ -76,7 +75,6 @@ function updateSchema(req, res, next) {
     DetailOfChangeInAccountingPeriod: Joi.string(),
     DetailOfChangeInBusinessName: Joi.string(),
     DetailEntitesBelowReportingThreshold: Joi.string(),
-
     createdBy: Joi.number().required(),
     updatedBy: Joi.number().required(),
     reportId: Joi.number().required(),

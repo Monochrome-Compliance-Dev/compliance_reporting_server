@@ -4,8 +4,6 @@ module.exports = model;
 
 function model(sequelize) {
   const attributes = {
-    ReportingPeriodStartDate: { type: DataTypes.DATE, allowNull: false },
-    ReportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
     ReportComments: { type: DataTypes.STRING, allowNull: true },
     SubmitterFirstName: { type: DataTypes.STRING, allowNull: true },
     SubmitterLastName: { type: DataTypes.STRING, allowNull: true },
@@ -24,25 +22,14 @@ function model(sequelize) {
       allowNull: true,
     },
     ResponsibleMemberDeclaration: { type: DataTypes.STRING, allowNull: true },
-    reportName: { type: DataTypes.STRING, allowNull: false },
     createdBy: { type: DataTypes.INTEGER, allowNull: false },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
     submittedDate: { type: DataTypes.DATE, allowNull: true },
     submittedBy: { type: DataTypes.INTEGER, allowNull: true },
-    reportStatus: {
-      type: DataTypes.ENUM(
-        "Created",
-        "Cancelled",
-        "Received",
-        "Accepted",
-        "Rejected"
-      ),
-      allowNull: false,
-      defaultValue: "Created",
-    },
     statusUpdatedDate: { type: DataTypes.DATE, allowNull: true },
-    clientId: { type: DataTypes.INTEGER, allowNull: false },
   };
 
-  return sequelize.define("admin", attributes, { tableName: "tbl_admin" });
+  return sequelize.define("submission", attributes, {
+    tableName: "tbl_submissions",
+  });
 }
