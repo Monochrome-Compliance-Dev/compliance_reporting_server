@@ -9,7 +9,7 @@ const reportService = require("./report.service");
 // routes
 router.get("/", authorise(), getAll);
 router.get("/:clientId", authorise(), getAllById);
-// router.get("/:id", authorise(), getById);
+router.get("/report/:id", authorise(), getById);
 router.post("/", authorise(), createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
 router.delete("/:id", authorise(), _delete);
@@ -39,12 +39,12 @@ function getAllById(req, res, next) {
     });
 }
 
-// function getById(req, res, next) {
-//   reportService
-//     .getById(req.params.id)
-//     .then((report) => (report ? res.json(report) : res.sendStatus(404)))
-//     .catch(next);
-// }
+function getById(req, res, next) {
+  reportService
+    .getById(req.params.id)
+    .then((report) => (report ? res.json(report) : res.sendStatus(404)))
+    .catch(next);
+}
 
 function createSchema(req, res, next) {
   const schema = Joi.object({
