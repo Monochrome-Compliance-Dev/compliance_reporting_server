@@ -50,9 +50,6 @@ function createSchema(req, res, next) {
     ResponsibleMemberDeclaration: Joi.string(),
     createdBy: Joi.number().required(),
     updatedBy: Joi.number(),
-    submittedDate: Joi.date(),
-    submittedBy: Joi.number(),
-    statusUpdatedDate: Joi.string(),
     reportId: Joi.number().required(),
   });
   validateRequest(req, next, schema);
@@ -92,9 +89,6 @@ function updateSchema(req, res, next) {
     ResponsibleMemberDeclaration: Joi.string().allow(null, ""),
     // createdBy: Joi.number().required(),
     updatedBy: Joi.number().required(),
-    submittedDate: Joi.date(),
-    submittedBy: Joi.number().required(),
-    statusUpdatedDate: Joi.string().allow(null, ""),
     reportId: Joi.number().required(),
   });
   validateRequest(req, next, schema);

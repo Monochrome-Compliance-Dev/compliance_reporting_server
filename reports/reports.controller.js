@@ -78,8 +78,8 @@ function updateSchema(req, res, next) {
     reportName: Joi.string(),
     createdBy: Joi.number(),
     updatedBy: Joi.number(),
-    submittedDate: Joi.date(),
-    submittedBy: Joi.number(),
+    submittedDate: Joi.date().allow(null),
+    submittedBy: Joi.number().allow(null),
     reportStatus: Joi.string(),
     clientId: Joi.number().required(),
   });

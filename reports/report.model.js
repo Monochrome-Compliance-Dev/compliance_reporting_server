@@ -19,7 +19,8 @@ function model(sequelize) {
         "Updated",
         "Received",
         "Accepted",
-        "Rejected"
+        "Rejected",
+        "Submitted"
       ),
       allowNull: false,
       defaultValue: "Created",

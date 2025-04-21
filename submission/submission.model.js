@@ -24,9 +24,6 @@ function model(sequelize) {
     ResponsibleMemberDeclaration: { type: DataTypes.STRING, allowNull: true },
     createdBy: { type: DataTypes.INTEGER, allowNull: false },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
-    submittedDate: { type: DataTypes.DATE, allowNull: true },
-    submittedBy: { type: DataTypes.INTEGER, allowNull: true },
-    statusUpdatedDate: { type: DataTypes.DATE, allowNull: true },
   };
 
   return sequelize.define("submission", attributes, {
