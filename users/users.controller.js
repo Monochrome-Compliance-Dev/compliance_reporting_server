@@ -6,7 +6,6 @@ const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
 const rateLimit = require("express-rate-limit");
-const { act } = require("react");
 
 // Rate limiter for authentication routes
 const authLimiter = rateLimit({
@@ -75,7 +74,14 @@ function refreshToken(req, res, next) {
       setTokenCookie(res, refreshToken);
       res.json(user);
     })
-    .catch(next);
+    .catch((next) => {
+      console.error("Error in refreshToken:", next);
+      if (next.status === 400) {
+        console.error("----------------Invalid token");
+        return unauthorised(res);
+      }
+      return res.status(500).json({ message: "Internal Server Error" });
+    });
 }
 
 async function unauthorised(res) {

@@ -62,6 +62,7 @@ async function authenticate({ email, password, ipAddress }) {
 async function refreshToken({ token, ipAddress }) {
   const refreshToken = await getRefreshToken(token);
   const user = await refreshToken.getUser();
+  console.log("User found for refresh token:", user); // Log the user object for debugging
   const newRefreshToken = generateRefreshToken(user, ipAddress);
 
   refreshToken.revoked = Date.now();
@@ -239,7 +240,7 @@ async function getUserByToken(token) {
 }
 
 async function getRefreshToken(token) {
-  console.log("Looking for refresh token:", token); // Log the token being queried
+  // console.log("Looking for refresh token:", token); // Log the token being queried
   const refreshToken = await db.RefreshToken.findOne({ where: { token } });
 
   if (!refreshToken) {
