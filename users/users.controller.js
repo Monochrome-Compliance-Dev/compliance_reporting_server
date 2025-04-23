@@ -75,9 +75,7 @@ function refreshToken(req, res, next) {
       res.json(user);
     })
     .catch((next) => {
-      console.error("Error in refreshToken:", next);
       if (next.status === 400) {
-        console.error("----------------Invalid token");
         return unauthorised(res);
       }
       return res.status(500).json({ message: "Internal Server Error" });
@@ -89,7 +87,6 @@ async function unauthorised(res) {
 }
 
 function revokeTokenSchema(req, res, next) {
-  console.log("revokeTokenSchema", req.body);
   const schema = Joi.object({
     jwtToken: Joi.string().empty(""), // Validate only jwtToken
   });
@@ -97,7 +94,6 @@ function revokeTokenSchema(req, res, next) {
 }
 
 function revokeToken(req, res, next) {
-  console.log("revokeToken", req.body);
   const { body } = req;
 
   const token = body.token || req.cookies.refreshToken;

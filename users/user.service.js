@@ -31,11 +31,9 @@ module.exports = {
 };
 
 async function authenticate({ email, password, ipAddress }) {
-  console.log("Authenticate user:", email); // Log the email being authenticated
   const user = await db.User.scope("withHash").findOne({
     where: { email },
   });
-  console.log("User found:", user); // Log the user object for debugging
   if (
     !user ||
     !user.isVerified ||
@@ -62,7 +60,6 @@ async function authenticate({ email, password, ipAddress }) {
 async function refreshToken({ token, ipAddress }) {
   const refreshToken = await getRefreshToken(token);
   const user = await refreshToken.getUser();
-  console.log("User found for refresh token:", user); // Log the user object for debugging
   const newRefreshToken = generateRefreshToken(user, ipAddress);
 
   refreshToken.revoked = Date.now();
@@ -83,8 +80,6 @@ async function refreshToken({ token, ipAddress }) {
 }
 
 async function revokeToken({ token, ipAddress }) {
-  console.log("Revoke token:", token); // Log the token being revoked
-  console.log("IP Address:", ipAddress); // Log the IP address
   const refreshToken = await getRefreshToken(token);
 
   // revoke token and save
