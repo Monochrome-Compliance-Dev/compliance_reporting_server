@@ -26,7 +26,7 @@ async function getById(id) {
 async function create(params) {
   // validate
   if (await db.Client.findOne({ where: { abn: params.abn } })) {
-    throw "Client with this ABN already exists";
+    throw { status: 500, message: "Client with this ABN already exists" };
   }
 
   // save client
@@ -57,7 +57,7 @@ async function _delete(id) {
 // helper functions
 async function getClient(id) {
   const client = await db.Client.findByPk(id);
-  if (!client) throw "Client not found";
+  if (!client) throw { status: 404, message: "Client not found" };
   return client;
 }
 

@@ -27,7 +27,7 @@ async function create(params) {
   // save finance
   const finance = await db.Finance.create(params);
   if (!finance) {
-    throw "Finance creation failed";
+    throw { status: 500, message: "Finance creation failed" };
   }
   return finance;
 }
@@ -49,7 +49,7 @@ async function _delete(id) {
 // helper functions
 async function getFinance(id) {
   const finance = await db.Finance.findByPk(id);
-  if (!finance) throw "Finance not found";
+  if (!finance) throw { status: 404, message: "Finance not found" };
   return finance;
 }
 
@@ -59,6 +59,6 @@ async function getFinanceByReportId(id) {
       reportId: id,
     },
   });
-  if (!finance) throw "Finance not found";
+  if (!finance) throw { status: 404, message: "Finance not found" };
   return finance;
 }

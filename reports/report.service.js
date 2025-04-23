@@ -28,26 +28,13 @@ async function getAllById(clientId) {
     },
   });
 
-  // console.log("reports", reports); // Log the result for debugging
-
-  // Return the reports array (even if empty)
   return reports;
 }
 
-// async function getById(id) {
-//   return await getReport(id);
-// }
-
 async function create(params) {
-  // validate
-  // if (await db.Report.findOne({ where: { abn: params.abn } })) {
-  //   throw "Report with this ABN already exists";
-  // }
-
-  // save report
   const report = await db.Report.create(params);
   if (!report) {
-    throw "Report creation failed";
+    throw { status: 500, message: "Report creation failed" };
   }
   // return saved report
   return report;
@@ -71,7 +58,7 @@ async function _delete(id) {
 // helper functions
 async function getReport(id) {
   const report = await db.Report.findByPk(id);
-  if (!report) throw "Report not found";
+  if (!report) throw { status: 404, message: "Report not found" };
   return report;
 }
 

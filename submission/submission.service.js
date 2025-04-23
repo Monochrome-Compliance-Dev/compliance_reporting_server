@@ -27,7 +27,7 @@ async function create(params) {
   // save submission
   const submission = await db.Submission.create(params);
   if (!submission) {
-    throw "Submission creation failed";
+    throw { status: 500, message: "Submission creation failed" };
   }
   return submission;
 }
@@ -49,7 +49,7 @@ async function _delete(id) {
 // helper functions
 async function getSubmission(id) {
   const submission = await db.Submission.findByPk(id);
-  if (!submission) throw "Submission not found";
+  if (!submission) throw { status: 404, message: "Submission not found" };
   return submission;
 }
 
@@ -59,6 +59,6 @@ async function getSubmissionByReportId(id) {
       reportId: id,
     },
   });
-  if (!submission) throw "Submission not found";
+  if (!submission) throw { status: 404, message: "Submission not found" };
   return submission;
 }

@@ -7,13 +7,6 @@ const sendEmail = require("../helpers/send-email");
 const db = require("../helpers/db");
 const Role = require("../helpers/role");
 
-class AppError extends Error {
-  constructor(message, statusCode) {
-    super(message);
-    this.statusCode = statusCode;
-  }
-}
-
 module.exports = {
   authenticate,
   refreshToken,
@@ -39,7 +32,7 @@ async function authenticate({ email, password, ipAddress }) {
     !user.isVerified ||
     !(await bcrypt.compare(password, user.passwordHash))
   ) {
-    throw new AppError("Email or password is incorrect", 401);
+    throw { status: 401, message: "Email or password is incorrect" };
   }
 
   // authentication successful so generate jwt and refresh tokens
@@ -92,7 +85,11 @@ async function register(params, origin) {
   // validate
   if (await db.User.findOne({ where: { email: params.email } })) {
     // send already registered error in email to prevent user enumeration
-    return await sendAlreadyRegisteredEmail(params.email, origin);
+    await sendAlreadyRegisteredEmail(params.email, origin);
+    throw {
+      status: 400,
+      message: `Email "${params.email}" is already registered`,
+    };
   }
 
   // create user object
@@ -118,7 +115,7 @@ async function verifyEmail({ token }) {
     where: { verificationToken: token },
   });
 
-  if (!user) throw "Verification failed";
+  if (!user) throw { status: 401, message: "Verification failed" };
 
   user.verified = Date.now();
   user.verificationToken = null;
@@ -148,7 +145,7 @@ async function validateResetToken({ token }) {
     },
   });
 
-  if (!user) throw "Invalid token";
+  if (!user) throw { status: 401, message: "Invalid token" };
 
   return user;
 }
@@ -176,7 +173,10 @@ async function getById(id) {
 async function create(params) {
   // validate
   if (await db.User.findOne({ where: { email: params.email } })) {
-    throw 'Email "' + params.email + '" is already registered';
+    throw {
+      status: 500,
+      message: 'Email "' + params.email + '" is already registered',
+    };
   }
 
   const user = new db.User(params);
@@ -200,7 +200,10 @@ async function update(id, params) {
     user.email !== params.email &&
     (await db.User.findOne({ where: { email: params.email } }))
   ) {
-    throw 'Email "' + params.email + '" is already taken';
+    throw {
+      status: 500,
+      message: 'Email "' + params.email + '" is already taken',
+    };
   }
 
   // hash password if it was entered
@@ -225,7 +228,7 @@ async function _delete(id) {
 
 async function getUser(id) {
   const user = await db.User.findByPk(id);
-  if (!user) throw "User not found";
+  if (!user) throw { status: 404, message: "User not found" };
   return user;
 }
 

@@ -27,7 +27,7 @@ async function create(params) {
   // save payment
   const payment = await db.Payment.create(params);
   if (!payment) {
-    throw "Payment creation failed";
+    throw { status: 500, message: "Payment creation failed" };
   }
   // return saved payment
   return payment;
@@ -35,7 +35,7 @@ async function create(params) {
 
 async function update(id, params) {
   const payment = await getPayment(id);
-  console.log("Payment found:", payment); // Debugging line
+
   // copy params to payment and save
   Object.assign(payment, params);
   await payment.save();
@@ -50,7 +50,7 @@ async function _delete(id) {
 // helper functions
 async function getPayment(id) {
   const payment = await db.Payment.findByPk(id);
-  if (!payment) throw "Payment not found";
+  if (!payment) throw { status: 404, message: "Payment not found" };
   return payment;
 }
 async function getPaymentByReportId(id) {
@@ -59,6 +59,6 @@ async function getPaymentByReportId(id) {
       reportId: id,
     },
   });
-  if (!payment) throw "Payment not found";
+  if (!payment) throw { status: 404, message: "Payment not found" };
   return payment;
 }

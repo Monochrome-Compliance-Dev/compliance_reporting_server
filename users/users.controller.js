@@ -137,7 +137,7 @@ function registerSchema(req, res, next) {
 }
 
 function register(req, res, next) {
-  console.log("req.body", req.body, req.get("origin"));
+  // console.log("req.body", req.body, req.get("origin"));
   userService
     .register(req.body, req.get("origin"))
     .then(() =>
