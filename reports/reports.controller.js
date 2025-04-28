@@ -8,7 +8,7 @@ const reportService = require("./report.service");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/:clientId", authorise(), getAllById);
+router.get("/:clientId", authorise(), getAllByClientId);
 router.get("/report/:id", authorise(), getById);
 router.post("/", authorise(), createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
@@ -23,9 +23,9 @@ function getAll(req, res, next) {
     .catch(next);
 }
 
-function getAllById(req, res, next) {
+function getAllByClientId(req, res, next) {
   reportService
-    .getAllById(req.params.clientId)
+    .getAllByClientId(req.params.clientId)
     .then((reports) => {
       if (!reports || reports.length === 0) {
         console.log("No reports found for clientId:", req.params.clientId);

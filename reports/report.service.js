@@ -9,8 +9,8 @@ const Role = require("../helpers/role");
 
 module.exports = {
   getAll,
-  getAllById,
-  // getById,
+  getById,
+  getAllByClientId,
   create,
   update,
   delete: _delete,
@@ -20,7 +20,7 @@ async function getAll() {
   return await db.Report.findAll();
 }
 
-async function getAllById(clientId) {
+async function getAllByClientId(clientId) {
   // Get all reports for the client
   const reports = await db.Report.findAll({
     where: {
@@ -56,7 +56,7 @@ async function _delete(id) {
 }
 
 // helper functions
-async function getReport(id) {
+async function getById(id) {
   const report = await db.Report.findByPk(id);
   if (!report) throw { status: 404, message: "Report not found" };
   return report;
