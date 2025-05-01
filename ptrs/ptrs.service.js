@@ -2,6 +2,7 @@ const db = require("../helpers/db");
 
 module.exports = {
   getAll,
+  getAllByReportId,
   getById,
   create,
   update,
@@ -10,6 +11,13 @@ module.exports = {
 
 async function getAll() {
   return await db.Ptrs.findAll();
+}
+
+async function getAllByReportId(reportId) {
+  const ptrs = await db.Ptrs.findAll({
+    where: { reportId },
+  });
+  return ptrs;
 }
 
 async function getById(id) {

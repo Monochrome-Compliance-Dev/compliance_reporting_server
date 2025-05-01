@@ -8,6 +8,7 @@ const { add } = require("winston");
 
 // routes
 router.get("/", authorise(), getAll);
+router.get("/report/:id", authorise(), getAllByReportId);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), bulkPrep);
 router.put("/:id", authorise(), updateSchema, update);
@@ -19,6 +20,13 @@ function getAll(req, res, next) {
   ptrsService
     .getAll()
     .then((entities) => res.json(entities))
+    .catch(next);
+}
+
+function getAllByReportId(req, res, next) {
+  ptrsService
+    .getAllByReportId(req.params.id)
+    .then((ptrs) => (ptrs ? res.json(ptrs) : res.sendStatus(404)))
     .catch(next);
 }
 
