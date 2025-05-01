@@ -76,7 +76,7 @@ async function validateRecord(req) {
   const schema = Joi.object({
     payerEntityName: Joi.string().required(),
     payerEntityAbn: Joi.number().allow(null), // Changed to number
-    payerEntityAcnArbn: Joi.string().allow(null, ""),
+    payerEntityAcnArbn: Joi.number().allow(null),
     payeeEntityName: Joi.string().required(),
     payeeEntityAbn: Joi.number().allow(null), // Changed to number
     payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
