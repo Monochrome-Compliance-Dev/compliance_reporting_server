@@ -34,9 +34,7 @@ app.use(cookieParser());
 app.use("/api/users", require("./users/users.controller"));
 app.use("/api/clients", require("./clients/clients.controller"));
 app.use("/api/reports", require("./reports/reports.controller"));
-// app.use("/api/payments", require("./payments/payments.controller"));
-// app.use("/api/finances", require("./finance/finances.controller"));
-// app.use("/api/submissions", require("./submission/submission.controller"));
+app.use("/api/ptrs", require("./ptrs/ptrs.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {
