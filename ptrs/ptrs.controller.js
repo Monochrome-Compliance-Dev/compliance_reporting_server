@@ -30,50 +30,77 @@ function getById(req, res, next) {
 }
 
 function bulkPrep(req, res, next) {
-  // Need to destructure the request body to get the array of objects
-  console.log("Request body:", typeof req.body);
-  req.body.map((item) => {
-    createSchema({ body: item }, res, next);
-    // Call the create function for each item
-    // ptrsService
-    //   .create(item)
-    //   .then((ptrs) => {
-    //     console.log("Created ptrs:", ptrs);
-    //   })
-    //   .catch((error) => {
-    //     console.error("Error creating ptrs:", error); // Log the error details
-    //     next(error); // Pass the error to the global error handler
-    //   });
-  });
+  try {
+    // Ensure req.body is an object and iterate through its keys
+    const records = Object.values(req.body);
+
+    const promises = records.flatMap((item) => {
+      // Check if item is an array and process each object individually
+      const itemsToProcess = Array.isArray(item) ? item : [item];
+
+      return itemsToProcess.map(async (record) => {
+        try {
+          // Validate each record using createSchema
+          const reqForValidation = { body: record };
+          await validateRecord(reqForValidation);
+
+          // Save each record using ptrsService
+          return await ptrsService.create(record);
+        } catch (error) {
+          console.error("Error processing record:", error);
+          throw error; // Propagate the error to Promise.all
+        }
+      });
+    });
+
+    // Wait for all records to be saved
+    Promise.all(promises)
+      .then((results) =>
+        res.json({
+          success: true,
+          message: "All records saved successfully",
+          results,
+        })
+      )
+      .catch((error) => {
+        console.error("Error saving records:", error);
+        next(error); // Pass the error to the global error handler
+      });
+  } catch (error) {
+    console.error("Error processing bulk records:", error);
+    next(error); // Pass the error to the global error handler
+  }
 }
 
-function createSchema(req, res, next) {
-  console.log("Request body:", req.body);
-  // const schema = Joi.object({
-  //   payerEntityName: Joi.string().required(),
-  //   payerEntityAbn: Joi.string().allow(null, ""),
-  //   payerEntityAcnArbn: Joi.string().allow(null, ""),
-  //   payeeEntityName: Joi.string().required(),
-  //   payeeEntityAbn: Joi.string().allow(null, ""),
-  //   payeeEntityAcnArbn: Joi.string().allow(null, ""),
-  //   paymentAmount: Joi.string().required(),
-  //   description: Joi.string().allow(null, ""),
-  //   supplyDate: Joi.date().allow(null, ""),
-  //   paymentDate: Joi.date().required(),
-  //   contractPoReferenceNumber: Joi.string().allow(null, ""),
-  //   contractPoPaymentTerms: Joi.string().allow(null, ""),
-  //   noticeForPaymentIssueDate: Joi.date().allow(null, ""),
-  //   noticeForPaymentTerms: Joi.string().allow(null, ""),
-  //   invoiceReferenceNumber: Joi.string().allow(null, ""),
-  //   invoiceIssueDate: Joi.date().allow(null, ""),
-  //   invoiceReceiptDate: Joi.date().allow(null, ""),
-  //   invoicePaymentTerms: Joi.string().allow(null, ""),
-  //   invoiceDueDate: Joi.date().allow(null, ""),
-  //   isTcp: Joi.boolean().required(),
-  //   comment: Joi.string().allow(null, ""),
-  //   updatedBy: Joi.number().required(),
-  // });
-  // validateRequest(req, next, schema);
+async function validateRecord(req) {
+  const schema = Joi.object({
+    payerEntityName: Joi.string().required(),
+    payerEntityAbn: Joi.number().allow(null), // Changed to number
+    payerEntityAcnArbn: Joi.string().allow(null, ""),
+    payeeEntityName: Joi.string().required(),
+    payeeEntityAbn: Joi.number().allow(null), // Changed to number
+    payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
+    paymentAmount: Joi.number().required(), // Changed to number
+    description: Joi.string().allow(null, ""),
+    supplyDate: Joi.date().allow(null, ""),
+    paymentDate: Joi.date().required(),
+    contractPoReferenceNumber: Joi.string().allow(null, ""),
+    contractPoPaymentTerms: Joi.string().allow(null, ""),
+    noticeForPaymentIssueDate: Joi.date().allow(null, ""),
+    noticeForPaymentTerms: Joi.string().allow(null, ""),
+    invoiceReferenceNumber: Joi.string().allow(null, ""),
+    invoiceIssueDate: Joi.date().allow(null, ""),
+    invoiceReceiptDate: Joi.date().allow(null, ""),
+    invoicePaymentTerms: Joi.string().allow(null, ""),
+    invoiceDueDate: Joi.date().allow(null, ""),
+    isTcp: Joi.boolean().allow(null, ""),
+    comment: Joi.string().allow(null, ""),
+    updatedBy: Joi.number().required(),
+    reportId: Joi.number().required(),
+  });
+
+  // Validate the request body
+  await schema.validateAsync(req.body);
 }
 
 function create(req, res, next) {
@@ -89,12 +116,12 @@ function create(req, res, next) {
 function updateSchema(req, res, next) {
   const schema = Joi.object({
     payerEntityName: Joi.string(),
-    payerEntityAbn: Joi.string().allow(null, ""),
+    payerEntityAbn: Joi.number().allow(null), // Changed to number
     payerEntityAcnArbn: Joi.string().allow(null, ""),
     payeeEntityName: Joi.string(),
-    payeeEntityAbn: Joi.string().allow(null, ""),
-    payeeEntityAcnArbn: Joi.string().allow(null, ""),
-    paymentAmount: Joi.string(),
+    payeeEntityAbn: Joi.number().allow(null), // Changed to number
+    payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
+    paymentAmount: Joi.number(), // Changed to number
     description: Joi.string().allow(null, ""),
     supplyDate: Joi.date().allow(null, ""),
     paymentDate: Joi.date(),

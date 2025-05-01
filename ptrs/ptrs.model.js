@@ -6,12 +6,12 @@ function model(sequelize) {
   const attributes = {
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
     payerEntityName: { type: DataTypes.STRING, allowNull: false },
-    payerEntityAbn: { type: DataTypes.STRING, allowNull: true },
-    payerEntityAcnArbn: { type: DataTypes.STRING, allowNull: true },
+    payerEntityAbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
+    payerEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
     payeeEntityName: { type: DataTypes.STRING, allowNull: false },
-    payeeEntityAbn: { type: DataTypes.STRING, allowNull: true },
-    payeeEntityAcnArbn: { type: DataTypes.STRING, allowNull: true },
-    paymentAmount: { type: DataTypes.STRING, allowNull: false },
+    payeeEntityAbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
+    payeeEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
+    paymentAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: false }, // Changed to DECIMAL for monetary values
     description: { type: DataTypes.STRING, allowNull: true },
     supplyDate: { type: DataTypes.DATE, allowNull: true },
     paymentDate: { type: DataTypes.DATE, allowNull: false },

@@ -17,11 +17,6 @@ async function getById(id) {
 }
 
 async function create(params) {
-  // validate
-  if (await db.Ptrs.findOne({ where: { reportId: params.reportId } })) {
-    throw { status: 500, message: "Ptrs with this reportId already exists" };
-  }
-
   // save ptrs
   await db.Ptrs.create(params);
 }
