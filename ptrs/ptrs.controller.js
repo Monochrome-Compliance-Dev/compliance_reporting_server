@@ -10,8 +10,8 @@ const { add } = require("winston");
 router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getAllByReportId);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), bulkPrep);
-router.put("/:id", authorise(), updateSchema, update);
+router.post("/", authorise(), bulkCreate);
+router.put("/", authorise(), bulkUpdate);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
@@ -37,7 +37,7 @@ function getById(req, res, next) {
     .catch(next);
 }
 
-function bulkPrep(req, res, next) {
+function bulkCreate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
@@ -103,7 +103,8 @@ async function validateRecord(req) {
     invoiceDueDate: Joi.date().allow(null, ""),
     isTcp: Joi.boolean().allow(null, ""),
     comment: Joi.string().allow(null, ""),
-    updatedBy: Joi.number().required(),
+    createdBy: Joi.number().required(),
+    updatedBy: Joi.number().allow(null),
     reportId: Joi.number().required(),
   });
 
@@ -121,18 +122,64 @@ function create(req, res, next) {
     });
 }
 
-function updateSchema(req, res, next) {
+function bulkUpdate(req, res, next) {
+  try {
+    // Ensure req.body is an object and iterate through its keys
+    const records = Object.values(req.body);
+
+    const promises = records.flatMap((item) => {
+      // Check if item is an array and process each object individually
+      const itemsToProcess = Array.isArray(item) ? item : [item];
+
+      return itemsToProcess.map(async (record) => {
+        try {
+          // Exclude id and createdAt fields from the record
+          const { id, createdAt, ...recordToUpdate } = record;
+
+          // Validate each record using updateSchema
+          const reqForValidation = { body: recordToUpdate };
+          await updateSchema(reqForValidation); // Validate the record
+
+          // Save each record using ptrsService
+          return await ptrsService.update(id, recordToUpdate);
+        } catch (error) {
+          console.error("Error processing record:", error);
+          throw error; // Propagate the error to Promise.all
+        }
+      });
+    });
+
+    // Wait for all records to be saved
+    Promise.all(promises)
+      .then((results) =>
+        res.json({
+          success: true,
+          message: "All records updated successfully",
+          results,
+        })
+      )
+      .catch((error) => {
+        console.error("Error updating records:", error);
+        next(error); // Pass the error to the global error handler
+      });
+  } catch (error) {
+    console.error("Error processing bulk records:", error);
+    next(error); // Pass the error to the global error handler
+  }
+}
+
+async function updateSchema(req) {
   const schema = Joi.object({
-    payerEntityName: Joi.string(),
-    payerEntityAbn: Joi.number().allow(null), // Changed to number
-    payerEntityAcnArbn: Joi.string().allow(null, ""),
-    payeeEntityName: Joi.string(),
-    payeeEntityAbn: Joi.number().allow(null), // Changed to number
-    payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
-    paymentAmount: Joi.number(), // Changed to number
+    payerEntityName: Joi.string().required(),
+    payerEntityAbn: Joi.number().allow(null),
+    payerEntityAcnArbn: Joi.number().allow(null),
+    payeeEntityName: Joi.string().required(),
+    payeeEntityAbn: Joi.number().allow(null),
+    payeeEntityAcnArbn: Joi.number().allow(null),
+    paymentAmount: Joi.number().required(),
     description: Joi.string().allow(null, ""),
     supplyDate: Joi.date().allow(null, ""),
-    paymentDate: Joi.date(),
+    paymentDate: Joi.date().required(),
     contractPoReferenceNumber: Joi.string().allow(null, ""),
     contractPoPaymentTerms: Joi.string().allow(null, ""),
     noticeForPaymentIssueDate: Joi.date().allow(null, ""),
@@ -142,11 +189,16 @@ function updateSchema(req, res, next) {
     invoiceReceiptDate: Joi.date().allow(null, ""),
     invoicePaymentTerms: Joi.string().allow(null, ""),
     invoiceDueDate: Joi.date().allow(null, ""),
-    isTcp: Joi.boolean(),
+    isTcp: Joi.boolean().allow(null, ""),
     comment: Joi.string().allow(null, ""),
+    createdBy: Joi.number().allow(null),
     updatedBy: Joi.number().required(),
+    updatedAt: Joi.date().required(),
+    reportId: Joi.number().required(),
   });
-  validateRequest(req, next, schema);
+
+  // Validate the request body
+  await schema.validateAsync(req.body);
 }
 
 function update(req, res, next) {

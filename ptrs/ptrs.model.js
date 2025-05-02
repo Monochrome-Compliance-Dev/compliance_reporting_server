@@ -26,7 +26,8 @@ function model(sequelize) {
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
     isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }, // Field to track TCP selection
     comment: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
-    updatedBy: { type: DataTypes.INTEGER, allowNull: false },
+    createdBy: { type: DataTypes.INTEGER, allowNull: true },
+    updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
 
   return sequelize.define("ptrs", attributes, { tableName: "tbl_ptrs" });
