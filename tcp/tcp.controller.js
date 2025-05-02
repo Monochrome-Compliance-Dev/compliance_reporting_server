@@ -3,7 +3,7 @@ const router = express.Router();
 const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const ptrsService = require("./ptrs.service");
+const tcpService = require("./tcp.service");
 const { add } = require("winston");
 
 // routes
@@ -17,23 +17,23 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  ptrsService
+  tcpService
     .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getAllByReportId(req, res, next) {
-  ptrsService
+  tcpService
     .getAllByReportId(req.params.id)
-    .then((ptrs) => (ptrs ? res.json(ptrs) : res.sendStatus(404)))
+    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getById(req, res, next) {
-  ptrsService
+  tcpService
     .getById(req.params.id)
-    .then((ptrs) => (ptrs ? res.json(ptrs) : res.sendStatus(404)))
+    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
 
@@ -41,6 +41,7 @@ function bulkCreate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
+    console.log("=-=-=-=--==-=-Records to process:", records);
 
     const promises = records.flatMap((item) => {
       // Check if item is an array and process each object individually
@@ -52,8 +53,8 @@ function bulkCreate(req, res, next) {
           const reqForValidation = { body: record };
           await validateRecord(reqForValidation);
 
-          // Save each record using ptrsService
-          return await ptrsService.create(record);
+          // Save each record using tcpService
+          return await tcpService.create(record);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -102,7 +103,15 @@ async function validateRecord(req) {
     invoicePaymentTerms: Joi.string().allow(null, ""),
     invoiceDueDate: Joi.date().allow(null, ""),
     isTcp: Joi.boolean().allow(null, ""),
-    comment: Joi.string().allow(null, ""),
+    tcpExclusion: Joi.string().allow(null, ""),
+    peppolEnabled: Joi.boolean().allow(null, ""),
+    rcti: Joi.boolean().allow(null, ""),
+    creditCardPayment: Joi.boolean().allow(null, ""),
+    creditCardNumber: Joi.string().allow(null, ""),
+    partialPayment: Joi.boolean().allow(null, ""),
+    paymentTerm: Joi.number().allow(null),
+    excludedTCP: Joi.boolean().allow(null, ""),
+    notes: Joi.string().allow(null, ""),
     createdBy: Joi.number().required(),
     updatedBy: Joi.number().allow(null),
     reportId: Joi.number().required(),
@@ -113,11 +122,11 @@ async function validateRecord(req) {
 }
 
 function create(req, res, next) {
-  ptrsService
+  tcpService
     .create(req.body)
-    .then((ptrs) => res.json(ptrs))
+    .then((tcp) => res.json(tcp))
     .catch((error) => {
-      console.error("Error creating ptrs:", error); // Log the error details
+      console.error("Error creating tcp:", error); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }
@@ -140,8 +149,8 @@ function bulkUpdate(req, res, next) {
           const reqForValidation = { body: recordToUpdate };
           await updateSchema(reqForValidation); // Validate the record
 
-          // Save each record using ptrsService
-          return await ptrsService.update(id, recordToUpdate);
+          // Save each record using tcpService
+          return await tcpService.update(id, recordToUpdate);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -190,7 +199,15 @@ async function updateSchema(req) {
     invoicePaymentTerms: Joi.string().allow(null, ""),
     invoiceDueDate: Joi.date().allow(null, ""),
     isTcp: Joi.boolean().allow(null, ""),
-    comment: Joi.string().allow(null, ""),
+    tcpExclusion: Joi.string().allow(null, ""),
+    peppolEnabled: Joi.boolean().allow(null, ""),
+    rcti: Joi.boolean().allow(null, ""),
+    creditCardPayment: Joi.boolean().allow(null, ""),
+    creditCardNumber: Joi.string().allow(null, ""),
+    partialPayment: Joi.boolean().allow(null, ""),
+    paymentTerm: Joi.number().allow(null),
+    excludedTCP: Joi.boolean().allow(null, ""),
+    notes: Joi.string().allow(null, ""),
     createdBy: Joi.number().allow(null),
     updatedBy: Joi.number().required(),
     updatedAt: Joi.date().required(),
@@ -202,18 +219,18 @@ async function updateSchema(req) {
 }
 
 function update(req, res, next) {
-  ptrsService
+  tcpService
     .update(req.params.id, req.body)
-    .then((ptrs) => res.json(ptrs))
+    .then((tcp) => res.json(tcp))
     .catch(next);
 }
 
 function _delete(req, res, next) {
-  ptrsService
+  tcpService
     .delete(req.params.id)
-    .then(() => res.json({ message: "Ptrs deleted successfully" }))
+    .then(() => res.json({ message: "Tcp deleted successfully" }))
     .catch((error) => {
-      console.error("Error deleting ptrs:", error); // Log the error details
+      console.error("Error deleting tcp:", error); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }

@@ -52,7 +52,7 @@ async function initialize() {
   db.RefreshToken = require("../users/refresh-token.model")(sequelize);
   db.Client = require("../clients/client.model")(sequelize);
   db.Report = require("../reports/report.model")(sequelize);
-  db.Ptrs = require("../ptrs/ptrs.model")(sequelize);
+  db.Tcp = require("../tcp/tcp.model")(sequelize);
 
   // define relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });
@@ -61,8 +61,8 @@ async function initialize() {
   db.Client.hasMany(db.User);
   db.Client.hasMany(db.Report, { onDelete: "CASCADE" });
   db.Report.belongsTo(db.Client);
-  db.Ptrs.belongsTo(db.Report, { onDelete: "CASCADE" });
-  db.Report.hasMany(db.Ptrs, { onDelete: "CASCADE" });
+  db.Tcp.belongsTo(db.Report, { onDelete: "CASCADE" });
+  db.Report.hasMany(db.Tcp, { onDelete: "CASCADE" });
 
   // sync all models with database
   await sequelize.sync();

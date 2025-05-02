@@ -26,9 +26,33 @@ function model(sequelize) {
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
     isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // Field to track TCP selection
     tcpExclusion: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
+    peppolEnabled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    rcti: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    creditCardPayment: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    creditCardNumber: { type: DataTypes.STRING, allowNull: true },
+    partialPayment: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    paymentTerm: { type: DataTypes.INTEGER, allowNull: true },
+    excludedTCP: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    notes: { type: DataTypes.TEXT, allowNull: true },
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
 
-  return sequelize.define("ptrs", attributes, { tableName: "tbl_ptrs" });
+  return sequelize.define("tcp", attributes, { tableName: "tbl_tcp" });
 }
