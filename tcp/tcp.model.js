@@ -44,12 +44,13 @@ function model(sequelize) {
       defaultValue: false,
     },
     paymentTerm: { type: DataTypes.INTEGER, allowNull: true },
-    excludedTCP: {
+    excludedTcp: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: false,
     },
     notes: { type: DataTypes.TEXT, allowNull: true },
+    isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
