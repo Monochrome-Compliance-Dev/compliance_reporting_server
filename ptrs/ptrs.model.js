@@ -24,7 +24,7 @@ function model(sequelize) {
     invoiceReceiptDate: { type: DataTypes.DATE, allowNull: true },
     invoicePaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
-    isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false }, // Field to track TCP selection
+    isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // Field to track TCP selection
     comment: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
