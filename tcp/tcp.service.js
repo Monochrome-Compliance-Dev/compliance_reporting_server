@@ -1,8 +1,11 @@
 const db = require("../helpers/db");
+const { get } = require("./tcp.controller");
 
 module.exports = {
   getAll,
   getAllByReportId,
+  getTcpByReportId,
+  updateTcpFile,
   getById,
   create,
   update,
@@ -18,6 +21,31 @@ async function getAllByReportId(reportId) {
     where: { reportId },
   });
   return tcp;
+}
+
+async function getTcpByReportId(reportId) {
+  const tcp = await db.Tcp.findAll({
+    where: { reportId, isTcp: true, excludedTcp: false },
+  });
+  return tcp;
+}
+
+async function updateTcpFile(reportId, params) {
+  // Finds the TCP record by payeeEntityAbn and updates isSbi to false
+  const tcp = await db.Tcp.findAll({
+    where: { reportId, payeeEntityAbn: params.payeeEntityAbn },
+  });
+  if (tcp.length > 0) {
+    await db.Tcp.update(
+      { isSb: false },
+      {
+        where: {
+          reportId,
+          payeeEntityAbn: params.payeeEntityAbn,
+        },
+      }
+    );
+  }
 }
 
 async function getById(id) {

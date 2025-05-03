@@ -9,9 +9,11 @@ const { add } = require("winston");
 // routes
 router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getAllByReportId);
+router.get("/tcp/:id", authorise(), getTcpByReportId);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), bulkCreate);
 router.put("/", authorise(), bulkUpdate);
+router.put("/sbi/:id", authorise(), updateTcpFile);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
@@ -30,6 +32,64 @@ function getAllByReportId(req, res, next) {
     .catch(next);
 }
 
+function getTcpByReportId(req, res, next) {
+  tcpService
+    .getTcpByReportId(req.params.id)
+    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
+    .catch(next);
+}
+
+function updateTcpFile(req, res, next) {
+  try {
+    // Ensure req.body is an object and iterate through its keys
+    const records = Object.values(req.body);
+
+    const promises = records.flatMap((item) => {
+      // Check if item is an array and process each object individually
+      const itemsToProcess = Array.isArray(item) ? item : [item];
+
+      return itemsToProcess.map(async (record) => {
+        try {
+          // Validate each record using sbiSchema
+          const reqForValidation = { body: record };
+          await validateSbiRecord(reqForValidation);
+
+          // Save each record using tcpService
+          return await tcpService.updateTcpFile(req.params.id, record);
+        } catch (error) {
+          console.error("Error processing record:", error);
+          throw error; // Propagate the error to Promise.all
+        }
+      });
+    });
+
+    // Wait for all records to be saved
+    Promise.all(promises)
+      .then((results) =>
+        res.json({
+          success: true,
+          message: "All records saved successfully",
+          results,
+        })
+      )
+      .catch((error) => {
+        console.error("Error saving records:", error);
+        next(error); // Pass the error to the global error handler
+      });
+  } catch (error) {
+    console.error("Error processing bulk records:", error);
+    next(error); // Pass the error to the global error handler
+  }
+}
+
+async function validateSbiRecord(req) {
+  const schema = Joi.object({
+    payeeEntityAbn: Joi.number().required(),
+  });
+  // Validate the request body
+  await schema.validateAsync(req.body);
+}
+
 function getById(req, res, next) {
   tcpService
     .getById(req.params.id)
@@ -41,7 +101,6 @@ function bulkCreate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
-    console.log("=-=-=-=--==-=-Records to process:", records);
 
     const promises = records.flatMap((item) => {
       // Check if item is an array and process each object individually
