@@ -22,6 +22,7 @@ function model(sequelize) {
     invoiceReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     invoiceIssueDate: { type: DataTypes.DATE, allowNull: true },
     invoiceReceiptDate: { type: DataTypes.DATE, allowNull: true },
+    invoiceAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: true }, // Changed to DECIMAL for monetary values
     invoicePaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
     isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // Field to track TCP selection
