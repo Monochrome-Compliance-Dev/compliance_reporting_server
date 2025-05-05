@@ -13,6 +13,7 @@ router.get("/tcp/:id", authorise(), getTcpByReportId);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), bulkCreate);
 router.put("/", authorise(), bulkUpdate);
+router.put("/partial", authorise(), partialUpdate);
 router.put("/sbi/:id", authorise(), updateTcpFile);
 router.delete("/:id", authorise(), _delete);
 
@@ -86,6 +87,63 @@ async function validateSbiRecord(req) {
   const schema = Joi.object({
     payeeEntityAbn: Joi.number().required(),
   });
+  // Validate the request body
+  await schema.validateAsync(req.body);
+}
+
+function partialUpdate(req, res, next) {
+  try {
+    // Ensure req.body is an object and iterate through its keys
+    const records = Object.values(req.body);
+    console.log("Records to update:", records);
+
+    const promises = records.flatMap((item) => {
+      // Check if item is an array and process each object individually
+      const itemsToProcess = Array.isArray(item) ? item : [item];
+
+      return itemsToProcess.map(async (record) => {
+        try {
+          // Exclude id and createdAt fields from the record
+          const { id, createdAt, ...recordToUpdate } = record;
+
+          // Validate each record using bulkUpdateSchema
+          const reqForValidation = { body: recordToUpdate };
+          await partialUpdateSchema(reqForValidation); // Validate the record
+
+          // Save each record using tcpService
+          return await tcpService.update(record.id, recordToUpdate);
+        } catch (error) {
+          console.error("Error processing record:", error);
+          throw error; // Propagate the error to Promise.all
+        }
+      });
+    });
+
+    // Wait for all records to be saved
+    Promise.all(promises)
+      .then((results) =>
+        res.json({
+          success: true,
+          message: "All records updated successfully",
+          results,
+        })
+      )
+      .catch((error) => {
+        console.error("Error updating records:", error);
+        next(error); // Pass the error to the global error handler
+      });
+  } catch (error) {
+    console.error("Error processing bulk records:", error);
+    next(error); // Pass the error to the global error handler
+  }
+}
+
+async function partialUpdateSchema(req) {
+  const schema = Joi.object({
+    partialPayment: Joi.boolean().required(),
+    updatedBy: Joi.number().required(),
+  });
+
   // Validate the request body
   await schema.validateAsync(req.body);
 }
@@ -196,6 +254,7 @@ function bulkUpdate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
+    console.log("Records to update:", records);
 
     const promises = records.flatMap((item) => {
       // Check if item is an array and process each object individually
@@ -206,9 +265,9 @@ function bulkUpdate(req, res, next) {
           // Exclude id and createdAt fields from the record
           const { id, createdAt, ...recordToUpdate } = record;
 
-          // Validate each record using updateSchema
+          // Validate each record using bulkUpdateSchema
           const reqForValidation = { body: recordToUpdate };
-          await updateSchema(reqForValidation); // Validate the record
+          await bulkUpdateSchema(reqForValidation); // Validate the record
 
           // Save each record using tcpService
           return await tcpService.update(id, recordToUpdate);
@@ -238,7 +297,7 @@ function bulkUpdate(req, res, next) {
   }
 }
 
-async function updateSchema(req) {
+async function bulkUpdateSchema(req) {
   const schema = Joi.object({
     payerEntityName: Joi.string().required(),
     payerEntityAbn: Joi.number().allow(null),

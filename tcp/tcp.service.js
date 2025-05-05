@@ -58,6 +58,7 @@ async function create(params) {
 }
 
 async function update(id, params) {
+  console.log("tcpService update", id, params);
   const tcp = await getTcp(id);
 
   // validate
