@@ -14,7 +14,7 @@ router.get("/:id", authorise(), getById);
 router.post("/", authorise(), bulkCreate);
 router.put("/", authorise(), bulkUpdate);
 router.put("/partial", authorise(), partialUpdate);
-router.put("/sbi/:id", authorise(), updateTcpFile);
+router.put("/sbi/:id", authorise(), sbiUpdate);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
@@ -40,7 +40,7 @@ function getTcpByReportId(req, res, next) {
     .catch(next);
 }
 
-function updateTcpFile(req, res, next) {
+function sbiUpdate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
@@ -56,7 +56,7 @@ function updateTcpFile(req, res, next) {
           await validateSbiRecord(reqForValidation);
 
           // Save each record using tcpService
-          return await tcpService.updateTcpFile(req.params.id, record);
+          return await tcpService.sbiUpdate(req.params.id, record);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -231,6 +231,7 @@ async function validateRecord(req) {
     excludedTcp: Joi.boolean().allow(null, ""),
     notes: Joi.string().allow(null, ""),
     isSb: Joi.boolean().allow(null),
+    paymentTime: Joi.number().allow(null),
     createdBy: Joi.number().required(),
     updatedBy: Joi.number().allow(null),
     reportId: Joi.number().required(),
@@ -330,6 +331,7 @@ async function bulkUpdateSchema(req) {
     excludedTcp: Joi.boolean().allow(null, ""),
     notes: Joi.string().allow(null, ""),
     isSb: Joi.boolean().allow(null),
+    paymentTime: Joi.number().allow(null),
     createdBy: Joi.number().allow(null),
     updatedBy: Joi.number().required(),
     updatedAt: Joi.date().required(),

@@ -52,6 +52,7 @@ function model(sequelize) {
     },
     notes: { type: DataTypes.TEXT, allowNull: true },
     isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
+    paymentTime: { type: DataTypes.INTEGER, allowNull: true },
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
