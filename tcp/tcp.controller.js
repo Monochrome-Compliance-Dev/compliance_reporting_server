@@ -300,10 +300,10 @@ function bulkUpdate(req, res, next) {
 
 async function bulkUpdateSchema(req) {
   const schema = Joi.object({
-    payerEntityName: Joi.string().required(),
+    payerEntityName: Joi.string().allow(null),
     payerEntityAbn: Joi.number().allow(null),
     payerEntityAcnArbn: Joi.number().allow(null),
-    payeeEntityName: Joi.string().required(),
+    payeeEntityName: Joi.string().allow(null),
     payeeEntityAbn: Joi.number().allow(null),
     payeeEntityAcnArbn: Joi.number().allow(null),
     paymentAmount: Joi.number().required(),
