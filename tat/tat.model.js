@@ -7,7 +7,7 @@ function model(sequelize) {
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
 
     // TERMS
-    // // Current reporting period
+    // Current reporting period
     mostCommonPaymentTerm: { type: DataTypes.INTEGER, allowNull: false },
     receivableTermComparison: {
       type: DataTypes.ENUM("Shorter", "Same", "Longer"),
@@ -24,8 +24,8 @@ function model(sequelize) {
     expectedRangeMin: { type: DataTypes.INTEGER, allowNull: false },
     expectedRangeMax: { type: DataTypes.INTEGER, allowNull: false },
 
-    //TIMES
-    // // Summary statistics
+    // TIMES
+    // Summary statistics
     averagePaymentTime: { type: DataTypes.FLOAT, allowNull: false },
     medianPaymentTime: { type: DataTypes.FLOAT, allowNull: false },
     percentile80: { type: DataTypes.INTEGER, allowNull: false },
