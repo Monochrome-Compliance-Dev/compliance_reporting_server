@@ -255,7 +255,7 @@ function bulkUpdate(req, res, next) {
   try {
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
-    console.log("Records to update:", records);
+    // console.log("Records to update:", records);
 
     const promises = records.flatMap((item) => {
       // Check if item is an array and process each object individually
