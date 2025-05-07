@@ -7,6 +7,10 @@ const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
 // const helmet = require('helmet');
 
+// app.get("*", (req, res) => {
+//   res.sendFile(path.join(__dirname, "build", "index.html"));
+// });
+
 app.use(
   cors({
     origin: "http://localhost:3000", // Allow requests from the frontend

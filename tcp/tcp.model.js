@@ -26,7 +26,7 @@ function model(sequelize) {
     invoicePaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
     isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // Field to track TCP selection
-    tcpExclusion: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
+    tcpExclusionComment: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
     peppolEnabled: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -50,9 +50,10 @@ function model(sequelize) {
       allowNull: false,
       defaultValue: false,
     },
-    notes: { type: DataTypes.TEXT, allowNull: true },
+    explanatoryComments1: { type: DataTypes.TEXT, allowNull: true },
     isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     paymentTime: { type: DataTypes.INTEGER, allowNull: true },
+    explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
     createdBy: { type: DataTypes.INTEGER, allowNull: true },
     updatedBy: { type: DataTypes.INTEGER, allowNull: true },
   };
