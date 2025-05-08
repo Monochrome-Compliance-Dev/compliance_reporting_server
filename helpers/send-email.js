@@ -9,8 +9,21 @@ async function sendEmail({ to, subject, html, from = config.emailFrom }) {
 }
 
 async function sendAttachmentEmail(req, res) {
-  const { to, from, subject, html } = req.body;
-  const pdfBuffer = req.file.buffer;
+  console.log("Processing email with attachment...");
+  console.log("Form data (req.body):", req.body);
+  console.log("Uploaded file (req.file):", req.file);
+
+  // Parse req.body fields explicitly
+  const to = req.body.to;
+  const from = req.body.from || config.emailFrom;
+  const subject = req.body.subject;
+  const html = req.body.html;
+
+  if (!to || !subject || !html || !req.file) {
+    return res
+      .status(400)
+      .json({ message: "Missing required fields or attachment" });
+  }
 
   const transporter = nodemailer.createTransport(config.smtpOptions);
 
@@ -21,11 +34,12 @@ async function sendAttachmentEmail(req, res) {
     html,
     attachments: [
       {
-        filename: "entity-report-summary.pdf",
-        content: pdfBuffer,
+        filename: req.file.originalname,
+        path: req.file.path, // Use the file path saved by multer
+        contentType: req.file.mimetype,
       },
     ],
   });
 
-  res.json({ message: "Email sent" });
+  res.json({ message: "Email sent successfully" });
 }

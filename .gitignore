@@ -46,3 +46,6 @@ config.json
 
 # Environment variables
 .env
+
+# Upload files
+uploads

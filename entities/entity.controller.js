@@ -5,7 +5,7 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const entityService = require("./entity.service");
 const upload = require("../middleware/upload");
-const sendAttachmentEmail = require("../helpers/send-email");
+const { sendAttachmentEmail } = require("../helpers/send-email");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -81,7 +81,17 @@ function create(req, res, next) {
 }
 
 function sendPdfEmail(req, res, next) {
-  sendAttachmentEmail(req.body)
+  console.log("Sending email with attachment...");
+  console.log("Headers:", req.headers);
+  console.log("Content-Type:", req.headers["content-type"]); // Log the Content-Type header
+  console.log("Form data (req.body):", req.body);
+  console.log("Uploaded file (req.file):", req.file);
+
+  if (!req.file) {
+    return res.status(400).json({ message: "Attachment is required" });
+  }
+
+  sendAttachmentEmail(req, res)
     .then(() => res.json({ message: "Email sent successfully" }))
     .catch((error) => {
       console.error("Error sending email:", error); // Log the error details
