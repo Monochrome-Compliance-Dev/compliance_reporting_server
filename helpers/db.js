@@ -54,6 +54,7 @@ async function initialize() {
   db.Report = require("../reports/report.model")(sequelize);
   db.Tcp = require("../tcp/tcp.model")(sequelize);
   db.Tat = require("../tat/tat.model")(sequelize);
+  db.Entity = require("../entities/entity.model")(sequelize);
 
   // define relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });

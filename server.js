@@ -40,6 +40,7 @@ app.use("/api/clients", require("./clients/clients.controller"));
 app.use("/api/reports", require("./reports/reports.controller"));
 app.use("/api/tcp", require("./tcp/tcp.controller"));
 app.use("/api/tat", require("./tat/tat.controller"));
+app.use("/api/entities", require("./entities/entity.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

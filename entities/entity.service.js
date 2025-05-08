@@ -1,9 +1,10 @@
 const db = require("../helpers/db");
+const sendEmail = require("../helpers/send-email");
 
 module.exports = {
   getAll,
   getAllByReportId,
-  getTatByReportId,
+  getEntityByReportId,
   sbiUpdate,
   getById,
   create,
@@ -12,30 +13,30 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Tat.findAll();
+  return await db.Entity.findAll();
 }
 
 async function getAllByReportId(reportId) {
-  const tat = await db.Tat.findAll({
+  const entity = await db.Entity.findAll({
     where: { reportId },
   });
-  return tat;
+  return entity;
 }
 
-async function getTatByReportId(reportId) {
-  const tat = await db.Tat.findAll({
-    where: { reportId, isTat: true, excludedTat: false },
+async function getEntityByReportId(reportId) {
+  const entity = await db.Entity.findAll({
+    where: { reportId, isEntity: true, excludedEntity: false },
   });
-  return tat;
+  return entity;
 }
 
 async function sbiUpdate(reportId, params) {
   // Finds the TCP record by payeeEntityAbn and updates isSbi to false
-  const tat = await db.Tat.findAll({
+  const entity = await db.Entity.findAll({
     where: { reportId, payeeEntityAbn: params.payeeEntityAbn },
   });
-  if (tat.length > 0) {
-    await db.Tat.update(
+  if (entity.length > 0) {
+    await db.Entity.update(
       { isSb: false },
       {
         where: {
@@ -48,39 +49,39 @@ async function sbiUpdate(reportId, params) {
 }
 
 async function getById(id) {
-  return await getTat(id);
+  return await getEntity(id);
 }
 
 async function create(params) {
-  // save tat
-  await db.Tat.create(params);
+  // save entity
+  await db.Entity.create(params);
 }
 
 async function update(id, params) {
-  // console.log("tatService update", id, params);
-  const tat = await getTat(id);
+  // console.log("entityService update", id, params);
+  const entity = await getEntity(id);
 
   // validate
   // if (
-  //   params.businessName !== tat.businessName &&
-  //   (await db.Tat.findOne({ where: { businessName: params.businessName } }))
+  //   params.businessName !== entity.businessName &&
+  //   (await db.Entity.findOne({ where: { businessName: params.businessName } }))
   // ) {
-  //   throw "Tat with this ABN already exists";
+  //   throw "Entity with this ABN already exists";
   // }
 
-  // copy params to tat and save
-  Object.assign(tat, params);
-  await tat.save();
+  // copy params to entity and save
+  Object.assign(entity, params);
+  await entity.save();
 }
 
 async function _delete(id) {
-  const tat = await getTat(id);
-  await tat.destroy();
+  const entity = await getEntity(id);
+  await entity.destroy();
 }
 
 // helper functions
-async function getTat(id) {
-  const tat = await db.Tat.findByPk(id);
-  if (!tat) throw { status: 404, message: "Tat not found" };
-  return tat;
+async function getEntity(id) {
+  const entity = await db.Entity.findByPk(id);
+  if (!entity) throw { sentityus: 404, message: "Entity not found" };
+  return entity;
 }

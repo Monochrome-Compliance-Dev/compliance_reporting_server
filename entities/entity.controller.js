@@ -3,45 +3,47 @@ const router = express.Router();
 const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const tatService = require("./entity.service");
-const { add } = require("winston");
+const entityService = require("./entity.service");
+const upload = require("../middleware/upload");
+const sendAttachmentEmail = require("../helpers/send-email");
 
 // routes
 router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getAllByReportId);
-router.get("/tat/:id", authorise(), getTatByReportId);
+router.get("/entity/:id", authorise(), getEntityByReportId);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), createSchema, create);
+router.post("/", create);
+router.post("/send-email", upload.single("attachment"), sendPdfEmail);
 router.put("/:id", authorise(), updateSchema, update);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 
 function getAll(req, res, next) {
-  tatService
+  entityService
     .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getAllByReportId(req, res, next) {
-  tatService
+  entityService
     .getAllByReportId(req.params.id)
-    .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
+    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
     .catch(next);
 }
 
-function getTatByReportId(req, res, next) {
-  tatService
-    .getTatByReportId(req.params.id)
-    .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
+function getEntityByReportId(req, res, next) {
+  entityService
+    .getEntityByReportId(req.params.id)
+    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
     .catch(next);
 }
 
 function getById(req, res, next) {
-  tatService
+  entityService
     .getById(req.params.id)
-    .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
+    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
     .catch(next);
 }
 
@@ -69,19 +71,28 @@ function createSchema(req, res, next) {
 }
 
 function create(req, res, next) {
-  tatService
+  entityService
     .create(req.body)
-    .then((tat) => res.json(tat))
+    .then((entity) => res.json(entity))
     .catch((error) => {
-      console.error("Error creating tat:", error); // Log the error details
+      console.error("Error creating entity:", error); // Log the error details
+      next(error); // Pass the error to the global error handler
+    });
+}
+
+function sendPdfEmail(req, res, next) {
+  sendAttachmentEmail(req.body)
+    .then(() => res.json({ message: "Email sent successfully" }))
+    .catch((error) => {
+      console.error("Error sending email:", error); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }
 
 function update(req, res, next) {
-  tatService
+  entityService
     .update(req.params.id, req.body)
-    .then((tat) => res.json(tat))
+    .then((entity) => res.json(entity))
     .catch(next);
 }
 
@@ -109,11 +120,11 @@ function updateSchema(req, res, next) {
 }
 
 function _delete(req, res, next) {
-  tatService
+  entityService
     .delete(req.params.id)
-    .then(() => res.json({ message: "Tat deleted successfully" }))
+    .then(() => res.json({ message: "Entity deleted successfully" }))
     .catch((error) => {
-      console.error("Error deleting tat:", error); // Log the error details
+      console.error("Error deleting entity:", error); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }
