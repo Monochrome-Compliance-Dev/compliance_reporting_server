@@ -19,12 +19,6 @@ function sendEmailPrep(req, res) {
   const { error } = schema.validate(req.body);
   if (error) return res.status(400).send(error.details[0].message);
 
-  // Simulate sending email
-  //   console.log("Email name:", req.body.name);
-  //   console.log("Email sent from:", req.body.email);
-  //   console.log("Subject:", req.body.subject);
-  //   console.log("Message:", req.body.message);
-
   sendEmail({
     to: "darryll@stillproud.com",
     subject: req.body.subject,
