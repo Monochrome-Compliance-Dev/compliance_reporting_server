@@ -81,11 +81,11 @@ function create(req, res, next) {
 }
 
 function sendPdfEmail(req, res, next) {
-  console.log("Sending email with attachment...");
-  console.log("Headers:", req.headers);
-  console.log("Content-Type:", req.headers["content-type"]); // Log the Content-Type header
-  console.log("Form data (req.body):", req.body);
-  console.log("Uploaded file (req.file):", req.file);
+  // console.log("Sending email with attachment...");
+  // console.log("Headers:", req.headers);
+  // console.log("Content-Type:", req.headers["content-type"]); // Log the Content-Type header
+  // console.log("Form data (req.body):", req.body);
+  // console.log("Uploaded file (req.file):", req.file);
 
   if (!req.file) {
     return res.status(400).json({ message: "Attachment is required" });

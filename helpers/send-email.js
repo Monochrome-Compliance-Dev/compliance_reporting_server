@@ -5,7 +5,13 @@ module.exports = { sendEmail, sendAttachmentEmail };
 
 async function sendEmail({ to, subject, html, from = config.emailFrom }) {
   const transporter = nodemailer.createTransport(config.smtpOptions);
-  await transporter.sendMail({ from, to, subject, html });
+  try {
+    await transporter.sendMail({ from, to, subject, html });
+    return null;
+  } catch (error) {
+    console.error("Error sending email:", error);
+    return error;
+  }
 }
 
 async function sendAttachmentEmail(req, res) {
