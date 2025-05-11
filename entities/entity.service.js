@@ -54,7 +54,8 @@ async function getById(id) {
 
 async function create(params) {
   // save entity
-  await db.Entity.create(params);
+  const entity = await db.Entity.create(params);
+  return entity;
 }
 
 async function update(id, params) {
@@ -71,7 +72,8 @@ async function update(id, params) {
 
   // copy params to entity and save
   Object.assign(entity, params);
-  await entity.save();
+  const response = await entity.save();
+  return response;
 }
 
 async function _delete(id) {
