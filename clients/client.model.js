@@ -1,10 +1,19 @@
 const { DataTypes } = require("sequelize");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = model;
 
 function model(sequelize) {
   const attributes = {
-    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    id: {
+      type: DataTypes.STRING(10),
+      defaultValue: () => nanoid(10),
+      primaryKey: true,
+    },
     businessName: { type: DataTypes.STRING, allowNull: false },
     abn: { type: DataTypes.STRING, allowNull: false },
     acn: { type: DataTypes.STRING, allowNull: false },
@@ -35,7 +44,9 @@ function model(sequelize) {
     headEntityAbn: { type: DataTypes.STRING, allowNull: true },
     headEntityAcn: { type: DataTypes.STRING, allowNull: true },
     active: { type: DataTypes.BOOLEAN, defaultValue: true },
+    createdBy: { type: DataTypes.STRING(10), allowNull: false },
+    updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  return sequelize.define("client", attributes, { tableName: "tbl_clients" });
+  return sequelize.define("client", attributes, { tableName: "tbl_client" });
 }

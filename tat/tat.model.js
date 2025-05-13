@@ -1,10 +1,19 @@
 const { DataTypes } = require("sequelize");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = model;
 
 function model(sequelize) {
   const attributes = {
-    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    id: {
+      type: DataTypes.STRING(10),
+      defaultValue: () => nanoid(10),
+      primaryKey: true,
+    },
 
     // TERMS
     // Current reporting period
@@ -38,8 +47,8 @@ function model(sequelize) {
     paidOver60DaysPercent: { type: DataTypes.FLOAT, allowNull: false },
 
     // Metadata
-    createdBy: { type: DataTypes.INTEGER, allowNull: true },
-    updatedBy: { type: DataTypes.INTEGER, allowNull: true },
+    createdBy: { type: DataTypes.STRING(10), allowNull: true },
+    updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
   return sequelize.define("tat", attributes, { tableName: "tbl_tat" });

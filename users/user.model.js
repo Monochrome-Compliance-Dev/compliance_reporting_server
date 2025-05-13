@@ -1,9 +1,19 @@
 const { DataTypes } = require("sequelize");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = model;
 
 function model(sequelize) {
   const attributes = {
+    id: {
+      type: DataTypes.STRING(10),
+      defaultValue: () => nanoid(10),
+      primaryKey: true,
+    },
     email: { type: DataTypes.STRING, allowNull: false },
     phone: { type: DataTypes.STRING, allowNull: false },
     passwordHash: { type: DataTypes.STRING, allowNull: true },
@@ -29,7 +39,6 @@ function model(sequelize) {
         return !!(this.verified || this.passwordReset);
       },
     },
-    // clientId: { type: DataTypes.INTEGER },
   };
 
   const options = {

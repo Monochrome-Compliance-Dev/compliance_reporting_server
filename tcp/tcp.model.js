@@ -1,10 +1,19 @@
 const { DataTypes } = require("sequelize");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = model;
 
 function model(sequelize) {
   const attributes = {
-    id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+    id: {
+      type: DataTypes.STRING(10),
+      defaultValue: () => nanoid(10),
+      primaryKey: true,
+    },
     payerEntityName: { type: DataTypes.STRING, allowNull: false },
     payerEntityAbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
     payerEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
@@ -54,8 +63,8 @@ function model(sequelize) {
     isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     paymentTime: { type: DataTypes.INTEGER, allowNull: true },
     explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
-    createdBy: { type: DataTypes.INTEGER, allowNull: true },
-    updatedBy: { type: DataTypes.INTEGER, allowNull: true },
+    createdBy: { type: DataTypes.STRING(10), allowNull: true },
+    updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
   return sequelize.define("tcp", attributes, { tableName: "tbl_tcp" });
