@@ -131,7 +131,7 @@ function registerSchema(req, res, next) {
       // )
       .required(),
     active: Joi.boolean().required(),
-    clientId: Joi.number().required(),
+    clientId: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }

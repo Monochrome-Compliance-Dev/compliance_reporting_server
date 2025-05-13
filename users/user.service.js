@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { Op } = require("sequelize");
-const sendEmail = require("../helpers/send-email");
+const { sendEmail } = require("../helpers/send-email");
 const db = require("../helpers/db");
 const Role = require("../helpers/role");
 
@@ -266,9 +266,13 @@ async function hash(password) {
 
 function generateJwtToken(user) {
   // create a jwt token containing the user id that expires in 15 minutes
-  return jwt.sign({ sub: user.id, id: user.id }, config.secret, {
-    expiresIn: "15m",
-  });
+  return jwt.sign(
+    { id: user.id, role: user.role, tenantId: user.clientId },
+    config.secret,
+    {
+      expiresIn: "15m",
+    }
+  );
 }
 
 function generateRefreshToken(user, ipAddress) {

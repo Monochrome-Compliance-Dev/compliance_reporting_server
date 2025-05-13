@@ -1,11 +1,11 @@
 const { expressjwt: expressJwt } = require("express-jwt");
 const { secret } = require("../config.json");
 const db = require("../helpers/db");
-const logger = require("winston");
+const logger = require("../helpers/logger");
 
-module.exports = authorize;
+module.exports = authorise;
 
-function authorize(roles = []) {
+function authorise(roles = []) {
   // roles param can be a single role string (e.g. Role.User or 'User')
   // or an array of roles (e.g. [Role.Admin, Role.User] or ['Admin', 'User'])
   if (typeof roles === "string") {
@@ -13,7 +13,7 @@ function authorize(roles = []) {
   }
 
   return [
-    // authenticate JWT token and attach user to request object (req.user)
+    // authenticate JWT token and attach user to request object (req.auth)
     expressJwt({ secret, algorithms: ["HS256"] }),
 
     // authorize based on user role
@@ -23,6 +23,13 @@ function authorize(roles = []) {
       if (!user || (roles.length && !roles.includes(user.role))) {
         logger.warn(`Unauthorised access attempt by user ID: ${req.auth.id}`);
         return res.status(401).json({ message: "Unauthorised" });
+      }
+
+      if (user.clientId !== req.auth.tenantId) {
+        logger.warn(`Tenant mismatch for user ID: ${req.auth.id}`);
+        return res
+          .status(403)
+          .json({ message: "Forbidden: Tenant access denied" });
       }
 
       req.auth.role = user.role;

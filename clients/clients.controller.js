@@ -52,6 +52,7 @@ function createSchema(req, res, next) {
     contactEmail: Joi.string().required(),
     contactPhone: Joi.string().required(),
     active: Joi.boolean().required(),
+    createdBy: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }
