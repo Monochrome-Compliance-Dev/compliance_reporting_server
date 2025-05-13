@@ -8,7 +8,6 @@ const reportService = require("./report.service");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/:clientId", authorise(), getAllByClientId);
 router.get("/report/:id", authorise(), getById);
 router.post("/", authorise(), createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
@@ -17,26 +16,11 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
+  const clientId = req.auth.clientId; // Assumes clientId is embedded in the JWT and available on req.user
   reportService
-    .getAll()
+    .getAll(clientId)
     .then((reports) => res.json(reports))
     .catch(next);
-}
-
-function getAllByClientId(req, res, next) {
-  reportService
-    .getAllByClientId(req.params.clientId)
-    .then((reports) => {
-      if (!reports || reports.length === 0) {
-        console.log("No reports found for clientId:", req.params.clientId);
-        return res.status(404).json({ message: "No reports found" });
-      }
-      res.json(reports);
-    })
-    .catch((error) => {
-      console.error("Error fetching report:", error); // Log the error details
-      next(error); // Pass the error to the global error handler
-    });
 }
 
 function getById(req, res, next) {

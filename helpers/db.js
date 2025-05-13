@@ -10,7 +10,21 @@ const DB_PASSWORD = process.env.DB_PASSWORD || config.database.password;
 const DB_NAME = process.env.DB_NAME || config.database.database;
 const DB_SOCKET_PATH = process.env.DB_SOCKET_PATH || config.database.socketPath;
 
-module.exports = db = {};
+const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
+  dialect: "mysql",
+  dialectOptions: { decimalNumbers: true, socketPath: DB_SOCKET_PATH },
+  host: DB_HOST,
+  pool: {
+    max: 100,
+    min: 0,
+    acquire: 30000,
+    idle: 10000,
+  },
+});
+
+module.exports = db = {
+  sequelize,
+};
 
 initialize();
 
@@ -39,12 +53,9 @@ async function initialize() {
   }
 
   // connect to db
-  const sequelize = await initSequelize(
-    DB_NAME,
-    DB_USER,
-    DB_PASSWORD,
-    DB_HOST,
-    DB_SOCKET_PATH
+  await sequelize.authenticate();
+  console.log(
+    "Connection to the Compliance Reporting database has been established successfully."
   );
 
   // init models and add them to the exported db object
@@ -62,6 +73,8 @@ async function initialize() {
   db.User.belongsTo(db.Client);
   db.Client.hasMany(db.User);
   db.Client.hasMany(db.Report, { onDelete: "CASCADE" });
+  db.Client.hasMany(db.Tat, { onDelete: "CASCADE" });
+  db.Client.hasMany(db.Tcp, { onDelete: "CASCADE" });
   db.Report.belongsTo(db.Client);
   db.Tcp.belongsTo(db.Report, { onDelete: "CASCADE" });
   db.Report.hasMany(db.Tcp, { onDelete: "CASCADE" });
@@ -70,31 +83,4 @@ async function initialize() {
 
   // sync all models with database
   await sequelize.sync();
-}
-
-async function initSequelize(database, user, password, host, socketPath) {
-  const sequelize = new Sequelize(database, user, password, {
-    dialect: "mysql",
-    dialectOptions: { decimalNumbers: true, socketPath },
-    host,
-    pool: {
-      max: 100,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
-  });
-
-  try {
-    await sequelize.authenticate();
-    console.log(
-      "Connection to the Compliance Reporting database has been established successfully."
-    );
-  } catch (error) {
-    console.error(
-      "Unable to connect to the Compliance Reporting database:",
-      error
-    );
-  }
-  return sequelize;
 }

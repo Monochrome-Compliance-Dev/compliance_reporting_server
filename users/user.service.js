@@ -267,7 +267,7 @@ async function hash(password) {
 function generateJwtToken(user) {
   // create a jwt token containing the user id that expires in 15 minutes
   return jwt.sign(
-    { id: user.id, role: user.role, tenantId: user.clientId },
+    { id: user.id, role: user.role, clientId: user.clientId },
     config.secret,
     {
       expiresIn: "15m",

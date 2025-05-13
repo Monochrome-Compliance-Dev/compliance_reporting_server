@@ -30,7 +30,11 @@ async function create(params) {
   }
 
   // save client
-  await db.Client.create(params);
+  const client = await db.Client.create(params);
+
+  // Create views for tables locked down to the client
+  await createClientViews(client.id);
+  return client;
 }
 
 async function update(id, params) {
@@ -61,35 +65,33 @@ async function getClient(id) {
   return client;
 }
 
-async function getEntitiesByABN(abn) {
-  const entities = await db.Client.findAll({
-    where: {
-      ABN: {
-        [Op.like]: `%${abn}%`,
-      },
-    },
-  });
-  return entities;
-}
+const tablesNames = ["tbl_report", "tbl_tat", "tbl_tcp"];
 
-async function getEntitiesByACN(acn) {
-  const entities = await db.Client.findAll({
-    where: {
-      ACN: {
-        [Op.like]: `%${acn}%`,
-      },
-    },
-  });
-  return entities;
-}
+async function createClientViews(clientId) {
+  const results = [];
 
-async function getEntitiesByBusinessName(businessName) {
-  const entities = await db.Client.findAll({
-    where: {
-      BusinessName: {
-        [Op.like]: `%${businessName}%`,
-      },
-    },
-  });
-  return entities;
+  for (const tableName of tablesNames) {
+    const viewName = `client_${clientId}_${tableName}`;
+
+    const sql = `
+      CREATE OR REPLACE VIEW \`${viewName}\` AS
+      SELECT * FROM ${tableName} WHERE clientId = ?
+    `;
+
+    // Properly quote the clientId value
+    const safeSql = sql.replace("?", `'${clientId}'`);
+    try {
+      await db.sequelize.query(safeSql); // Ensure db.sequelize is properly initialized
+      results.push({ tableName, success: true });
+    } catch (error) {
+      results.push({ tableName, success: false, error: error.message });
+    }
+  }
+
+  console.log("Client views created:", results);
+  if (results.some((result) => !result.success)) {
+    throw new Error("Failed to create some client views");
+  }
+
+  return results;
 }

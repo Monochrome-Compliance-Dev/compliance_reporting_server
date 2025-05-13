@@ -1,34 +1,28 @@
-const config = require("config.json");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
 const { Op } = require("sequelize");
-const sendEmail = require("../helpers/send-email");
 const db = require("../helpers/db");
-const Role = require("../helpers/role");
 
 module.exports = {
   getAll,
   getById,
-  getAllByClientId,
   create,
   update,
   delete: _delete,
 };
 
-async function getAll() {
-  return await db.Report.findAll();
-}
-
-async function getAllByClientId(clientId) {
-  // Get all reports for the client
-  const reports = await db.Report.findAll({
-    where: {
-      clientId: clientId,
-    },
-  });
-
-  return reports;
+async function getAll(clientId) {
+  const viewName = `client_${clientId}_reports`;
+  try {
+    const [results] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
+    if (results.length === 0) {
+      return { message: "No reports found for the specified client." };
+    }
+    return results;
+  } catch (error) {
+    return {
+      message: "An error occurred while fetching reports.",
+      error: error.message,
+    };
+  }
 }
 
 async function create(params) {

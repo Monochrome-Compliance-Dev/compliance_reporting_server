@@ -25,14 +25,15 @@ function authorise(roles = []) {
         return res.status(401).json({ message: "Unauthorised" });
       }
 
-      if (user.clientId !== req.auth.tenantId) {
-        logger.warn(`Tenant mismatch for user ID: ${req.auth.id}`);
+      if (user.clientId !== req.auth.clientId) {
+        logger.warn(
+          `Unauthorised access - User ID: ${req.auth.id}, Role: ${user?.role}, Client: ${user?.clientId}`
+        );
         return res
           .status(403)
           .json({ message: "Forbidden: Tenant access denied" });
       }
 
-      req.auth.role = user.role;
       const refreshTokens = await user.getRefreshTokens();
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);

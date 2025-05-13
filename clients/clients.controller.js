@@ -10,7 +10,7 @@ const { add } = require("winston");
 // routes
 router.get("/", authorise(), getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), createSchema, create);
+router.post("/", createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
 router.delete("/:id", authorise(), _delete);
 
