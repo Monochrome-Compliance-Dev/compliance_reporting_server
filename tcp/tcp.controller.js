@@ -5,7 +5,7 @@ const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
 const setClientContext = require("../middleware/set-client-context");
 const validateRequest = require("../middleware/validate-request");
-const { tcpSchema } = require("./tcp.validator");
+const { tcpImportSchema, tcpSchema } = require("./tcp.validator");
 const logger = require("../helpers/logger");
 
 // routes
@@ -16,7 +16,7 @@ router.get("/:id", authorise(), setClientContext, getById);
 router.post(
   "/",
   authorise(),
-  validateRequest(tcpSchema),
+  validateRequest(tcpImportSchema),
   setClientContext,
   bulkCreate
 );
