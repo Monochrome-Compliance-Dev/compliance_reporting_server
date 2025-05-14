@@ -62,8 +62,8 @@ function createSchema(req, res, next) {
     paidWithin30DaysPercent: Joi.float().required(),
     paid31To60DaysPercent: Joi.float().required(),
     paidOver60DaysPercent: Joi.float().required(),
-    reportId: Joi.number().required(),
-    createdBy: Joi.number().required(),
+    reportId: Joi.string().required(),
+    createdBy: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }
@@ -102,8 +102,8 @@ function updateSchema(req, res, next) {
     paidWithin30DaysPercent: Joi.float().allow(null),
     paid31To60DaysPercent: Joi.float().allow(null),
     paidOver60DaysPercent: Joi.float().allow(null),
-    reportId: Joi.number().required(),
-    updatedBy: Joi.number().required(),
+    reportId: Joi.string().required(),
+    updatedBy: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }

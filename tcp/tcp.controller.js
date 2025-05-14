@@ -339,10 +339,10 @@ async function bulkUpdateSchema(req) {
     notes: Joi.string().allow(null, ""),
     isSb: Joi.boolean().allow(null),
     paymentTime: Joi.number().allow(null),
-    createdBy: Joi.number().allow(null),
-    updatedBy: Joi.number().required(),
+    createdBy: Joi.string().allow(null),
+    updatedBy: Joi.string().required(),
     updatedAt: Joi.date().required(),
-    reportId: Joi.number().required(),
+    reportId: Joi.string().required(),
   });
 
   // Validate the request body
