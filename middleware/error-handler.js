@@ -29,6 +29,10 @@ function errorHandler(err, req, res, next) {
       // jwt authentication error
       return res.status(401).json({ message: "Unauthorized" });
     default:
-      return res.status(500).json({ message: err.message });
+      const message =
+        process.env.NODE_ENV === "production"
+          ? "An unexpected error occurred. Please try again later."
+          : err.message;
+      return res.status(500).json({ message });
   }
 }

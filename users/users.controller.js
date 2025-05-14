@@ -5,27 +5,14 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
-const rateLimit = require("express-rate-limit");
-
-// Rate limiter for authentication routes
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per windowMs
-  message: "Too many login attempts, please try again later.",
-});
 
 // routes
-router.post("/authenticate", authLimiter, authenticateSchema, authenticate);
+router.post("/authenticate", authenticateSchema, authenticate);
 router.post("/refresh-token", refreshToken);
 router.post("/revoke-token", authorise(), revokeTokenSchema, revokeToken);
 router.post("/register", registerSchema, register);
 router.post("/verify-email", verifyEmailSchema, verifyEmail);
-router.post(
-  "/forgot-password",
-  authLimiter,
-  forgotPasswordSchema,
-  forgotPassword
-);
+router.post("/forgot-password", forgotPasswordSchema, forgotPassword);
 router.post(
   "/validate-reset-token",
   validateResetTokenSchema,

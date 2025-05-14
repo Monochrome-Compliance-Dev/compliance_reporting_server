@@ -4,14 +4,28 @@ const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
 const setClientContext = require("../middleware/set-client-context");
+const validateRequest = require("../middleware/validate-request");
+const { tcpSchema } = require("./tcp.validator");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);
 router.get("/report/:id", authorise(), setClientContext, getAllByReportId);
 router.get("/tcp/:id", authorise(), setClientContext, getTcpByReportId);
 router.get("/:id", authorise(), setClientContext, getById);
-router.post("/", authorise(), setClientContext, bulkCreate);
-router.put("/", authorise(), setClientContext, bulkUpdate);
+router.post(
+  "/",
+  authorise(),
+  validateRequest(tcpSchema),
+  setClientContext,
+  bulkCreate
+);
+router.put(
+  "/",
+  authorise(),
+  validateRequest(tcpSchema),
+  setClientContext,
+  bulkUpdate
+);
 router.put("/partial", authorise(), setClientContext, partialUpdate);
 router.put("/sbi/:id", authorise(), setClientContext, sbiUpdate);
 router.delete("/:id", authorise(), setClientContext, _delete);
@@ -174,8 +188,8 @@ function bulkCreate(req, res, next) {
       return itemsToProcess.map(async (record) => {
         try {
           // Validate each record using createSchema
-          const reqForValidation = { body: record };
-          await validateRecord(reqForValidation);
+          // const reqForValidation = { body: record };
+          // await validateRecord(reqForValidation);
 
           // Save each record using tcpService
           return await tcpService.create(record, req.auth.clientId);
@@ -205,48 +219,48 @@ function bulkCreate(req, res, next) {
   }
 }
 
-async function validateRecord(req) {
-  const schema = Joi.object({
-    payerEntityName: Joi.string().required(),
-    payerEntityAbn: Joi.number().allow(null), // Changed to number
-    payerEntityAcnArbn: Joi.number().allow(null),
-    payeeEntityName: Joi.string().required(),
-    payeeEntityAbn: Joi.number().allow(null), // Changed to number
-    payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
-    paymentAmount: Joi.number().required(), // Changed to number
-    description: Joi.string().allow(null, ""),
-    supplyDate: Joi.date().allow(null, ""),
-    paymentDate: Joi.date().required(),
-    contractPoReferenceNumber: Joi.string().allow(null, ""),
-    contractPoPaymentTerms: Joi.string().allow(null, ""),
-    noticeForPaymentIssueDate: Joi.date().allow(null, ""),
-    noticeForPaymentTerms: Joi.string().allow(null, ""),
-    invoiceReferenceNumber: Joi.string().allow(null, ""),
-    invoiceIssueDate: Joi.date().allow(null, ""),
-    invoiceReceiptDate: Joi.date().allow(null, ""),
-    invoiceAmount: Joi.number().allow(null),
-    invoicePaymentTerms: Joi.string().allow(null, ""),
-    invoiceDueDate: Joi.date().allow(null, ""),
-    isTcp: Joi.boolean().allow(null, ""),
-    tcpExclusion: Joi.string().allow(null, ""),
-    peppolEnabled: Joi.boolean().allow(null, ""),
-    rcti: Joi.boolean().allow(null, ""),
-    creditCardPayment: Joi.boolean().allow(null, ""),
-    creditCardNumber: Joi.string().allow(null, ""),
-    partialPayment: Joi.boolean().allow(null, ""),
-    paymentTerm: Joi.number().allow(null),
-    excludedTcp: Joi.boolean().allow(null, ""),
-    notes: Joi.string().allow(null, ""),
-    isSb: Joi.boolean().allow(null),
-    paymentTime: Joi.number().allow(null),
-    createdBy: Joi.string().required(),
-    updatedBy: Joi.string().allow(null),
-    reportId: Joi.string().required(),
-  });
+// async function validateRecord(req) {
+//   const schema = Joi.object({
+//     payerEntityName: Joi.string().required(),
+//     payerEntityAbn: Joi.number().allow(null), // Changed to number
+//     payerEntityAcnArbn: Joi.number().allow(null),
+//     payeeEntityName: Joi.string().required(),
+//     payeeEntityAbn: Joi.number().allow(null), // Changed to number
+//     payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
+//     paymentAmount: Joi.number().required(), // Changed to number
+//     description: Joi.string().allow(null, ""),
+//     supplyDate: Joi.date().allow(null, ""),
+//     paymentDate: Joi.date().required(),
+//     contractPoReferenceNumber: Joi.string().allow(null, ""),
+//     contractPoPaymentTerms: Joi.string().allow(null, ""),
+//     noticeForPaymentIssueDate: Joi.date().allow(null, ""),
+//     noticeForPaymentTerms: Joi.string().allow(null, ""),
+//     invoiceReferenceNumber: Joi.string().allow(null, ""),
+//     invoiceIssueDate: Joi.date().allow(null, ""),
+//     invoiceReceiptDate: Joi.date().allow(null, ""),
+//     invoiceAmount: Joi.number().allow(null),
+//     invoicePaymentTerms: Joi.string().allow(null, ""),
+//     invoiceDueDate: Joi.date().allow(null, ""),
+//     isTcp: Joi.boolean().allow(null, ""),
+//     tcpExclusion: Joi.string().allow(null, ""),
+//     peppolEnabled: Joi.boolean().allow(null, ""),
+//     rcti: Joi.boolean().allow(null, ""),
+//     creditCardPayment: Joi.boolean().allow(null, ""),
+//     creditCardNumber: Joi.string().allow(null, ""),
+//     partialPayment: Joi.boolean().allow(null, ""),
+//     paymentTerm: Joi.number().allow(null),
+//     excludedTcp: Joi.boolean().allow(null, ""),
+//     notes: Joi.string().allow(null, ""),
+//     isSb: Joi.boolean().allow(null),
+//     paymentTime: Joi.number().allow(null),
+//     createdBy: Joi.string().required(),
+//     updatedBy: Joi.string().allow(null),
+//     reportId: Joi.string().required(),
+//   });
 
-  // Validate the request body
-  await schema.validateAsync(req.body);
-}
+//   // Validate the request body
+//   await schema.validateAsync(req.body);
+// }
 
 function create(req, res, next) {
   tcpService
@@ -274,8 +288,8 @@ function bulkUpdate(req, res, next) {
           const { id, createdAt, ...recordToUpdate } = record;
 
           // Validate each record using bulkUpdateSchema
-          const reqForValidation = { body: recordToUpdate };
-          await bulkUpdateSchema(reqForValidation); // Validate the record
+          // const reqForValidation = { body: recordToUpdate };
+          // await bulkUpdateSchema(reqForValidation); // Validate the record
 
           // Save each record using tcpService
           return await tcpService.update(id, recordToUpdate, req.auth.clientId);
@@ -305,49 +319,49 @@ function bulkUpdate(req, res, next) {
   }
 }
 
-async function bulkUpdateSchema(req) {
-  const schema = Joi.object({
-    payerEntityName: Joi.string().allow(null),
-    payerEntityAbn: Joi.number().allow(null),
-    payerEntityAcnArbn: Joi.number().allow(null),
-    payeeEntityName: Joi.string().allow(null),
-    payeeEntityAbn: Joi.number().allow(null),
-    payeeEntityAcnArbn: Joi.number().allow(null),
-    paymentAmount: Joi.number().required(),
-    description: Joi.string().allow(null, ""),
-    supplyDate: Joi.date().allow(null, ""),
-    paymentDate: Joi.date().required(),
-    contractPoReferenceNumber: Joi.string().allow(null, ""),
-    contractPoPaymentTerms: Joi.string().allow(null, ""),
-    noticeForPaymentIssueDate: Joi.date().allow(null, ""),
-    noticeForPaymentTerms: Joi.string().allow(null, ""),
-    invoiceReferenceNumber: Joi.string().allow(null, ""),
-    invoiceIssueDate: Joi.date().allow(null, ""),
-    invoiceReceiptDate: Joi.date().allow(null, ""),
-    invoiceAmount: Joi.number().allow(null),
-    invoicePaymentTerms: Joi.string().allow(null, ""),
-    invoiceDueDate: Joi.date().allow(null, ""),
-    isTcp: Joi.boolean().allow(null, ""),
-    tcpExclusion: Joi.string().allow(null, ""),
-    peppolEnabled: Joi.boolean().allow(null, ""),
-    rcti: Joi.boolean().allow(null, ""),
-    creditCardPayment: Joi.boolean().allow(null, ""),
-    creditCardNumber: Joi.string().allow(null, ""),
-    partialPayment: Joi.boolean().allow(null, ""),
-    paymentTerm: Joi.number().allow(null),
-    excludedTcp: Joi.boolean().allow(null, ""),
-    notes: Joi.string().allow(null, ""),
-    isSb: Joi.boolean().allow(null),
-    paymentTime: Joi.number().allow(null),
-    createdBy: Joi.string().allow(null),
-    updatedBy: Joi.string().required(),
-    updatedAt: Joi.date().required(),
-    reportId: Joi.string().required(),
-  });
+// async function bulkUpdateSchema(req) {
+//   const schema = Joi.object({
+//     payerEntityName: Joi.string().allow(null),
+//     payerEntityAbn: Joi.number().allow(null),
+//     payerEntityAcnArbn: Joi.number().allow(null),
+//     payeeEntityName: Joi.string().allow(null),
+//     payeeEntityAbn: Joi.number().allow(null),
+//     payeeEntityAcnArbn: Joi.number().allow(null),
+//     paymentAmount: Joi.number().required(),
+//     description: Joi.string().allow(null, ""),
+//     supplyDate: Joi.date().allow(null, ""),
+//     paymentDate: Joi.date().required(),
+//     contractPoReferenceNumber: Joi.string().allow(null, ""),
+//     contractPoPaymentTerms: Joi.string().allow(null, ""),
+//     noticeForPaymentIssueDate: Joi.date().allow(null, ""),
+//     noticeForPaymentTerms: Joi.string().allow(null, ""),
+//     invoiceReferenceNumber: Joi.string().allow(null, ""),
+//     invoiceIssueDate: Joi.date().allow(null, ""),
+//     invoiceReceiptDate: Joi.date().allow(null, ""),
+//     invoiceAmount: Joi.number().allow(null),
+//     invoicePaymentTerms: Joi.string().allow(null, ""),
+//     invoiceDueDate: Joi.date().allow(null, ""),
+//     isTcp: Joi.boolean().allow(null, ""),
+//     tcpExclusion: Joi.string().allow(null, ""),
+//     peppolEnabled: Joi.boolean().allow(null, ""),
+//     rcti: Joi.boolean().allow(null, ""),
+//     creditCardPayment: Joi.boolean().allow(null, ""),
+//     creditCardNumber: Joi.string().allow(null, ""),
+//     partialPayment: Joi.boolean().allow(null, ""),
+//     paymentTerm: Joi.number().allow(null),
+//     excludedTcp: Joi.boolean().allow(null, ""),
+//     notes: Joi.string().allow(null, ""),
+//     isSb: Joi.boolean().allow(null),
+//     paymentTime: Joi.number().allow(null),
+//     createdBy: Joi.string().allow(null),
+//     updatedBy: Joi.string().required(),
+//     updatedAt: Joi.date().required(),
+//     reportId: Joi.string().required(),
+//   });
 
-  // Validate the request body
-  await schema.validateAsync(req.body);
-}
+//   // Validate the request body
+//   await schema.validateAsync(req.body);
+// }
 
 function update(req, res, next) {
   tcpService

@@ -5,11 +5,18 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const reportService = require("./report.service");
 const setClientContext = require("../middleware/set-client-context");
+const { reportSchema } = require("./report.validator");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);
 router.get("/report/:id", authorise(), setClientContext, getById);
-router.post("/", authorise(), createSchema, setClientContext, create);
+router.post(
+  "/",
+  authorise(),
+  validateRequest(reportSchema),
+  setClientContext,
+  create
+);
 router.put("/:id", authorise(), updateSchema, setClientContext, update);
 router.delete("/:id", authorise(), setClientContext, _delete);
 

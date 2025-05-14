@@ -1,30 +1,66 @@
-﻿require("rootpath")();
+﻿require("dotenv").config();
+const config = require("./helpers/config");
+
+if (!process.env.JWT_SECRET) {
+  console.warn(
+    "⚠️  JWT_SECRET is not set in the .env file. Authentication may fail."
+  );
+}
+if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
+  console.warn(
+    "⚠️  Database credentials (DB_HOST, DB_USER, DB_NAME) are missing."
+  );
+}
+
+require("rootpath")();
 const express = require("express");
 const app = express();
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
-// const helmet = require('helmet');
+const helmet = require("helmet");
+
+const rateLimit = require("express-rate-limit");
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/", apiLimiter); // Apply to all API routes
+
+const loginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: "Too many login attempts from this IP, please try again later.",
+});
+
+app.use("/api/users/authenticate", loginLimiter);
+app.use("/api/users/forgot-password", loginLimiter);
 
 // app.get("*", (req, res) => {
 //   res.sendFile(path.join(__dirname, "build", "index.html"));
 // });
 
+const allowedOrigins = [
+  "https://monochrome-compliance.com",
+  "http://localhost:3000",
+];
 app.use(
   cors({
-    origin: "http://localhost:3000", // Allow requests from the frontend
-    credentials: true, // Allow cookies and credentials
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
   })
 );
-
-// allow cors requests from any origin and with credentials
-// app.use(
-//   cors({
-//     origin: (origin, callback) => callback(null, true),
-//     credentials: true,
-//   })
-// );
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
@@ -32,7 +68,16 @@ app.use(cookieParser());
 
 // Helmet stuff to go here but I don't know enough about it yet
 // helmetjs.github.io/?ref=hackernoon.com
-// app.use(helmet());
+app.use(helmet());
+app.use((req, res, next) => {
+  if (
+    config.env === "production" &&
+    req.headers["x-forwarded-proto"] !== "https"
+  ) {
+    return res.redirect("https://" + req.headers.host + req.url);
+  }
+  next();
+});
 
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
@@ -67,9 +112,10 @@ app._router.stack.forEach((middleware) => {
 app.use(errorHandler);
 
 // start server
-const port =
-  process.env.NODE_ENV === "production" ? process.env.PORT || 80 : 4000;
-app.listen(port, () => console.log("Server listening on port " + port));
+const port = config.port;
+app.listen(port, () =>
+  console.log(`✅ Server running in ${config.env} mode on port ${port}`)
+);
 
 // run this when you need to find the pid to kill
 // sudo lsof -i -P | grep LISTEN | grep :$PORT
