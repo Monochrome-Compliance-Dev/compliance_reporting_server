@@ -1,6 +1,8 @@
 const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
 const logger = require("../helpers/logger");
+const reportService = require("../reports/report.service");
+
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -16,6 +18,8 @@ module.exports = {
   create,
   update,
   delete: _delete,
+  hasMissingIsSbFlag,
+  finaliseReport,
 };
 
 async function getAll(clientId) {
@@ -85,4 +89,18 @@ async function getTcp(id, clientId) {
   );
   if (!rows.length) throw { status: 404, message: "Tcp not found" };
   return rows[0];
+}
+
+// Check if there are any TCP records missing isSb flag (SBI completeness check)
+async function hasMissingIsSbFlag(clientId) {
+  const viewName = `client_${clientId}_tbl_tcp`;
+  const [rows] = await db.sequelize.query(
+    `SELECT COUNT(*) AS missing FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
+  );
+  return rows[0].missing > 0;
+}
+
+// Finalise report: delegate to reportService
+async function finaliseReport(clientId) {
+  return await reportService.finaliseSubmission(clientId);
 }

@@ -30,6 +30,8 @@ router.put(
 router.put("/partial", authorise(), setClientContext, partialUpdate);
 router.put("/sbi/:id", authorise(), setClientContext, sbiUpdate);
 router.delete("/:id", authorise(), setClientContext, _delete);
+router.get("/missing-isSb", authorise(), setClientContext, checkMissingIsSb);
+router.put("/submit-final", authorise(), setClientContext, submitFinalReport);
 
 module.exports = router;
 
@@ -390,4 +392,18 @@ function _delete(req, res, next) {
       console.error("Error deleting tcp:", error); // Log the error details
       next(error); // Pass the error to the global error handler
     });
+}
+
+function checkMissingIsSb(req, res, next) {
+  tcpService
+    .hasMissingIsSbFlag(req.auth.clientId)
+    .then((result) => res.json(result))
+    .catch(next);
+}
+
+function submitFinalReport(req, res, next) {
+  tcpService
+    .finaliseReport(req.auth.clientId)
+    .then((result) => res.json(result))
+    .catch(next);
 }

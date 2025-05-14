@@ -9,6 +9,7 @@ module.exports = {
   update,
   delete: _delete,
   getAllByReportId,
+  finaliseSubmission,
 };
 
 async function getAll(clientId) {
@@ -48,4 +49,36 @@ async function getById(id, clientId) {
   );
   if (!rows.length) throw { status: 404, message: "Report not found" };
   return rows[0];
+}
+
+async function finaliseSubmission(clientId) {
+  const viewName = `client_${clientId}_tbl_tcp`;
+  const [rows] = await db.sequelize.query(
+    `SELECT COUNT(*) AS count FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
+  );
+  if (rows[0].count > 0) {
+    throw { status: 400, message: "Some records are missing isSb flags" };
+  }
+
+  const [reportIds] = await db.sequelize.query(
+    `SELECT DISTINCT reportId FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false`
+  );
+
+  const now = new Date();
+  const updatePayload = {
+    reportStatus: "Submitted",
+    submittedDate: now,
+  };
+
+  for (const { reportId } of reportIds) {
+    await dbService.updateRecord(
+      clientId,
+      "report",
+      reportId,
+      updatePayload,
+      db
+    );
+  }
+
+  return { success: true, message: "Report(s) marked as Submitted" };
 }
