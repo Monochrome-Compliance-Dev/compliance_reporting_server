@@ -328,13 +328,13 @@ async function sendVerificationEmail(user, origin) {
                    <p><code>${user.verificationToken}</code></p>`;
   }
 
-  await sendEmail({
-    to: user.email,
-    subject: "Sign-up Verification API - Verify Email",
-    html: `<h4>Verify Email</h4>
-               <p>Thanks for registering!</p>
-               ${message}`,
-  });
+  // await sendEmail({
+  //   to: user.email,
+  //   subject: "Sign-up Verification API - Verify Email",
+  //   html: `<h4>Verify Email</h4>
+  //              <p>Thanks for registering!</p>
+  //              ${message}`,
+  // });
 }
 
 async function sendAlreadyRegisteredEmail(email, origin) {

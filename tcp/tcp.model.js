@@ -67,5 +67,8 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  return sequelize.define("tcp", attributes, { tableName: "tbl_tcp" });
+  return sequelize.define("tcp", attributes, {
+    tableName: "tbl_tcp",
+    timestamps: true,
+  });
 }

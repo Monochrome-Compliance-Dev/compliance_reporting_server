@@ -18,8 +18,6 @@ function model(sequelize) {
     ReportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
     code: { type: DataTypes.STRING, allowNull: false },
     reportName: { type: DataTypes.STRING, allowNull: false },
-    createdBy: { type: DataTypes.STRING(10), allowNull: false },
-    updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     submittedDate: { type: DataTypes.DATE, allowNull: true },
     submittedBy: { type: DataTypes.STRING(10), allowNull: true },
     reportStatus: {
@@ -35,7 +33,12 @@ function model(sequelize) {
       allowNull: false,
       defaultValue: "Created",
     },
+    createdBy: { type: DataTypes.STRING(10), allowNull: false },
+    updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  return sequelize.define("report", attributes, { tableName: "tbl_report" });
+  return sequelize.define("report", attributes, {
+    tableName: "tbl_report",
+    timestamps: true,
+  });
 }

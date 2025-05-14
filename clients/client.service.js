@@ -1,11 +1,4 @@
-const config = require("config.json");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
-const crypto = require("crypto");
-const { Op } = require("sequelize");
-const sendEmail = require("../helpers/send-email");
 const db = require("../helpers/db");
-const Role = require("../helpers/role");
 
 module.exports = {
   getAll,
@@ -34,6 +27,7 @@ async function create(params) {
 
   // Create views for tables locked down to the client
   await createClientViews(client.id);
+  await createClientTriggers(client.id);
   return client;
 }
 
@@ -55,6 +49,31 @@ async function update(id, params) {
 
 async function _delete(id) {
   const client = await getClient(id);
+
+  // Drop views
+  for (const tableName of tablesNames) {
+    const viewName = `client_${client.id}_${tableName}`;
+    try {
+      await db.sequelize.query(`DROP VIEW IF EXISTS \`${viewName}\`;`);
+    } catch (error) {
+      console.error(`Failed to drop view: ${viewName}`, error.message);
+    }
+  }
+
+  // Drop triggers
+  const triggerNames = ["before_insert", "before_update"];
+  for (const table of tablesNames) {
+    for (const name of triggerNames) {
+      const triggerName = `trg_client_${client.id}_${table}_${name}`;
+      try {
+        await db.sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\`;`);
+      } catch (error) {
+        console.error(`Failed to drop trigger: ${triggerName}`, error.message);
+      }
+    }
+  }
+
+  // Delete the client record
   await client.destroy();
 }
 
@@ -78,7 +97,6 @@ async function createClientViews(clientId) {
       SELECT * FROM ${tableName} WHERE clientId = ?
     `;
 
-    // Properly quote the clientId value
     const safeSql = sql.replace("?", `'${clientId}'`);
     try {
       await db.sequelize.query(safeSql); // Ensure db.sequelize is properly initialized
@@ -88,10 +106,74 @@ async function createClientViews(clientId) {
     }
   }
 
-  console.log("Client views created:", results);
   if (results.some((result) => !result.success)) {
     throw new Error("Failed to create some client views");
   }
 
   return results;
+}
+
+async function createClientTriggers(clientId) {
+  const triggerTemplates = [
+    {
+      name: `before_insert`,
+      timing: `BEFORE`,
+      event: `INSERT`,
+      logic: `
+        IF NEW.id IS NULL OR NEW.id = '' THEN
+          SET NEW.id = SUBSTRING(REPLACE(UUID(), '-', ''), 1, 10);
+        END IF;
+
+        SET NEW.clientId = @current_client_id;
+
+        IF NEW.createdAt IS NULL THEN
+          SET NEW.createdAt = NOW();
+        END IF;
+
+        IF NEW.updatedAt IS NULL THEN
+          SET NEW.updatedAt = NOW();
+        END IF;
+      `,
+    },
+    {
+      name: `before_update`,
+      timing: `BEFORE`,
+      event: `UPDATE`,
+      logic: `
+        IF NEW.clientId != OLD.clientId THEN
+          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'clientId cannot be changed';
+        END IF;
+
+        IF OLD.clientId != @current_client_id THEN
+          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unauthorized client update';
+        END IF;
+
+        SET NEW.updatedAt = NOW();
+      `,
+    },
+  ];
+
+  for (const table of tablesNames) {
+    for (const trigger of triggerTemplates) {
+      const triggerName = `trg_client_${clientId}_${table}_${trigger.name}`;
+      const sql = `
+        CREATE TRIGGER \`${triggerName}\`
+        ${trigger.timing} ${trigger.event} ON \`${table}\`
+        FOR EACH ROW
+        BEGIN
+          ${trigger.logic}
+        END;
+      `;
+
+      try {
+        await db.sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\`;`);
+        await db.sequelize.query(sql);
+      } catch (error) {
+        console.error(
+          `Failed to create trigger: ${triggerName}`,
+          error.message
+        );
+      }
+    }
+  }
 }

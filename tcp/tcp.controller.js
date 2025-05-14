@@ -1,21 +1,20 @@
 const express = require("express");
 const router = express.Router();
 const Joi = require("joi");
-const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
-const { add } = require("winston");
+const setClientContext = require("../middleware/set-client-context");
 
 // routes
-router.get("/", authorise(), getAll);
-router.get("/report/:id", authorise(), getAllByReportId);
-router.get("/tcp/:id", authorise(), getTcpByReportId);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), bulkCreate);
-router.put("/", authorise(), bulkUpdate);
-router.put("/partial", authorise(), partialUpdate);
-router.put("/sbi/:id", authorise(), sbiUpdate);
-router.delete("/:id", authorise(), _delete);
+router.get("/", authorise(), setClientContext, getAll);
+router.get("/report/:id", authorise(), setClientContext, getAllByReportId);
+router.get("/tcp/:id", authorise(), setClientContext, getTcpByReportId);
+router.get("/:id", authorise(), setClientContext, getById);
+router.post("/", authorise(), setClientContext, bulkCreate);
+router.put("/", authorise(), setClientContext, bulkUpdate);
+router.put("/partial", authorise(), setClientContext, partialUpdate);
+router.put("/sbi/:id", authorise(), setClientContext, sbiUpdate);
+router.delete("/:id", authorise(), setClientContext, _delete);
 
 module.exports = router;
 

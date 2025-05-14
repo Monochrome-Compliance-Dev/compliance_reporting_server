@@ -38,5 +38,8 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  return sequelize.define("entity", attributes, { tableName: "tbl_entity" });
+  return sequelize.define("entity", attributes, {
+    tableName: "tbl_entity",
+    timestamps: true,
+  });
 }

@@ -4,16 +4,16 @@ const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const tatService = require("./tat.service");
-const { add } = require("winston");
+const setClientContext = require("../middleware/set-client-context");
 
 // routes
-router.get("/", authorise(), getAll);
-router.get("/report/:id", authorise(), getAllByReportId);
-router.get("/tat/:id", authorise(), getTatByReportId);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), createSchema, create);
-router.put("/:id", authorise(), updateSchema, update);
-router.delete("/:id", authorise(), _delete);
+router.get("/", authorise(), setClientContext, getAll);
+router.get("/report/:id", authorise(), setClientContext, getAllByReportId);
+router.get("/tat/:id", authorise(), setClientContext, getTatByReportId);
+router.get("/:id", authorise(), setClientContext, getById);
+router.post("/", authorise(), createSchema, setClientContext, create);
+router.put("/:id", authorise(), updateSchema, setClientContext, update);
+router.delete("/:id", authorise(), setClientContext, _delete);
 
 module.exports = router;
 

@@ -3,15 +3,15 @@ const router = express.Router();
 const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const Role = require("../helpers/role");
 const reportService = require("./report.service");
+const setClientContext = require("../middleware/set-client-context");
 
 // routes
-router.get("/", authorise(), getAll);
-router.get("/report/:id", authorise(), getById);
-router.post("/", authorise(), createSchema, create);
-router.put("/:id", authorise(), updateSchema, update);
-router.delete("/:id", authorise(), _delete);
+router.get("/", authorise(), setClientContext, getAll);
+router.get("/report/:id", authorise(), setClientContext, getById);
+router.post("/", authorise(), createSchema, setClientContext, create);
+router.put("/:id", authorise(), updateSchema, setClientContext, update);
+router.delete("/:id", authorise(), setClientContext, _delete);
 
 module.exports = router;
 
@@ -36,16 +36,16 @@ function createSchema(req, res, next) {
     ReportingPeriodEndDate: Joi.string().required(),
     code: Joi.string().required(),
     reportName: Joi.string().required(),
-    createdBy: Joi.number().required(),
+    createdBy: Joi.string().required(),
     reportStatus: Joi.string().required(),
-    clientId: Joi.number().required(),
+    clientId: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }
 
 function create(req, res, next) {
   reportService
-    .create(req.body)
+    .create(req.auth.clientId, req.body)
     .then((report) => res.json(report))
     .catch((error) => {
       console.error("Error creating report:", error); // Log the error details
@@ -60,26 +60,26 @@ function updateSchema(req, res, next) {
     ReportingPeriodStartDate: Joi.string(),
     ReportingPeriodEndDate: Joi.string(),
     reportName: Joi.string(),
-    createdBy: Joi.number(),
-    updatedBy: Joi.number(),
+    createdBy: Joi.string(),
+    updatedBy: Joi.string(),
     submittedDate: Joi.date().allow(null),
-    submittedBy: Joi.number().allow(null),
+    submittedBy: Joi.string().allow(null),
     reportStatus: Joi.string(),
-    clientId: Joi.number().required(),
+    clientId: Joi.string().required(),
   });
   validateRequest(req, next, schema);
 }
 
 function update(req, res, next) {
   reportService
-    .update(req.params.id, req.body)
+    .update(req.auth.clientId, req.params.id, req.body)
     .then((report) => res.json(report))
     .catch(next);
 }
 
 function _delete(req, res, next) {
   reportService
-    .delete(req.params.id)
+    .delete(req.auth.clientId, req.params.id)
     .then(() => res.json({ message: "Report deleted successfully" }))
     .catch((error) => {
       console.error("Error deleting report:", error); // Log the error details
