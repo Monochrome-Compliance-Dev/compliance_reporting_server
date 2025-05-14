@@ -20,6 +20,7 @@ module.exports = {
   delete: _delete,
   hasMissingIsSbFlag,
   finaliseReport,
+  generateSummaryCsv,
 };
 
 async function getAll(clientId) {
@@ -103,4 +104,25 @@ async function hasMissingIsSbFlag(clientId) {
 // Finalise report: delegate to reportService
 async function finaliseReport(clientId) {
   return await reportService.finaliseSubmission(clientId);
+}
+
+async function generateSummaryCsv(clientId) {
+  const viewName = `client_${clientId}_tbl_tcp`;
+  const [rows] = await db.sequelize.query(`
+    SELECT payeeEntityName, payeeEntityAbn, paymentAmount, paymentDate, invoiceIssueDate, isSb, paymentTime
+    FROM \`${viewName}\`
+    WHERE isTcp = true AND excludedTcp = false
+  `);
+
+  const header =
+    "Payee Name,ABN,Amount,Payment Date,Invoice Date,Is Small Business,Payment Time";
+  const csv = [
+    header,
+    ...rows.map(
+      (r) =>
+        `"${r.payeeEntityName}","${r.payeeEntityAbn}",${r.paymentAmount},"${r.paymentDate}","${r.invoiceIssueDate}",${r.isSb},${r.paymentTime}`
+    ),
+  ].join("\n");
+
+  return csv;
 }

@@ -32,6 +32,12 @@ router.put("/sbi/:id", authorise(), setClientContext, sbiUpdate);
 router.delete("/:id", authorise(), setClientContext, _delete);
 router.get("/missing-isSb", authorise(), setClientContext, checkMissingIsSb);
 router.put("/submit-final", authorise(), setClientContext, submitFinalReport);
+router.get(
+  "/download-summary",
+  authorise(),
+  setClientContext,
+  downloadSummaryReport
+);
 
 module.exports = router;
 
@@ -86,13 +92,16 @@ function sbiUpdate(req, res, next) {
 
     // Wait for all records to be saved
     Promise.all(promises)
-      .then((results) =>
+      .then((results) => {
         res.json({
           success: true,
           message: "All records saved successfully",
           results,
-        })
-      )
+        });
+        logger.audit(
+          `SBI result uploaded by user ${req.auth.id} for client ${req.auth.clientId}`
+        );
+      })
       .catch((error) => {
         console.error("Error saving records:", error);
         next(error); // Pass the error to the global error handler
@@ -225,49 +234,6 @@ function bulkCreate(req, res, next) {
   }
 }
 
-// async function validateRecord(req) {
-//   const schema = Joi.object({
-//     payerEntityName: Joi.string().required(),
-//     payerEntityAbn: Joi.number().allow(null), // Changed to number
-//     payerEntityAcnArbn: Joi.number().allow(null),
-//     payeeEntityName: Joi.string().required(),
-//     payeeEntityAbn: Joi.number().allow(null), // Changed to number
-//     payeeEntityAcnArbn: Joi.number().allow(null), // Changed to number
-//     paymentAmount: Joi.number().required(), // Changed to number
-//     description: Joi.string().allow(null, ""),
-//     supplyDate: Joi.date().allow(null, ""),
-//     paymentDate: Joi.date().required(),
-//     contractPoReferenceNumber: Joi.string().allow(null, ""),
-//     contractPoPaymentTerms: Joi.string().allow(null, ""),
-//     noticeForPaymentIssueDate: Joi.date().allow(null, ""),
-//     noticeForPaymentTerms: Joi.string().allow(null, ""),
-//     invoiceReferenceNumber: Joi.string().allow(null, ""),
-//     invoiceIssueDate: Joi.date().allow(null, ""),
-//     invoiceReceiptDate: Joi.date().allow(null, ""),
-//     invoiceAmount: Joi.number().allow(null),
-//     invoicePaymentTerms: Joi.string().allow(null, ""),
-//     invoiceDueDate: Joi.date().allow(null, ""),
-//     isTcp: Joi.boolean().allow(null, ""),
-//     tcpExclusion: Joi.string().allow(null, ""),
-//     peppolEnabled: Joi.boolean().allow(null, ""),
-//     rcti: Joi.boolean().allow(null, ""),
-//     creditCardPayment: Joi.boolean().allow(null, ""),
-//     creditCardNumber: Joi.string().allow(null, ""),
-//     partialPayment: Joi.boolean().allow(null, ""),
-//     paymentTerm: Joi.number().allow(null),
-//     excludedTcp: Joi.boolean().allow(null, ""),
-//     notes: Joi.string().allow(null, ""),
-//     isSb: Joi.boolean().allow(null),
-//     paymentTime: Joi.number().allow(null),
-//     createdBy: Joi.string().required(),
-//     updatedBy: Joi.string().allow(null),
-//     reportId: Joi.string().required(),
-//   });
-
-//   // Validate the request body
-//   await schema.validateAsync(req.body);
-// }
-
 function create(req, res, next) {
   tcpService
     .create(req.body, req.auth.clientId)
@@ -328,50 +294,6 @@ function bulkUpdate(req, res, next) {
   }
 }
 
-// async function bulkUpdateSchema(req) {
-//   const schema = Joi.object({
-//     payerEntityName: Joi.string().allow(null),
-//     payerEntityAbn: Joi.number().allow(null),
-//     payerEntityAcnArbn: Joi.number().allow(null),
-//     payeeEntityName: Joi.string().allow(null),
-//     payeeEntityAbn: Joi.number().allow(null),
-//     payeeEntityAcnArbn: Joi.number().allow(null),
-//     paymentAmount: Joi.number().required(),
-//     description: Joi.string().allow(null, ""),
-//     supplyDate: Joi.date().allow(null, ""),
-//     paymentDate: Joi.date().required(),
-//     contractPoReferenceNumber: Joi.string().allow(null, ""),
-//     contractPoPaymentTerms: Joi.string().allow(null, ""),
-//     noticeForPaymentIssueDate: Joi.date().allow(null, ""),
-//     noticeForPaymentTerms: Joi.string().allow(null, ""),
-//     invoiceReferenceNumber: Joi.string().allow(null, ""),
-//     invoiceIssueDate: Joi.date().allow(null, ""),
-//     invoiceReceiptDate: Joi.date().allow(null, ""),
-//     invoiceAmount: Joi.number().allow(null),
-//     invoicePaymentTerms: Joi.string().allow(null, ""),
-//     invoiceDueDate: Joi.date().allow(null, ""),
-//     isTcp: Joi.boolean().allow(null, ""),
-//     tcpExclusion: Joi.string().allow(null, ""),
-//     peppolEnabled: Joi.boolean().allow(null, ""),
-//     rcti: Joi.boolean().allow(null, ""),
-//     creditCardPayment: Joi.boolean().allow(null, ""),
-//     creditCardNumber: Joi.string().allow(null, ""),
-//     partialPayment: Joi.boolean().allow(null, ""),
-//     paymentTerm: Joi.number().allow(null),
-//     excludedTcp: Joi.boolean().allow(null, ""),
-//     notes: Joi.string().allow(null, ""),
-//     isSb: Joi.boolean().allow(null),
-//     paymentTime: Joi.number().allow(null),
-//     createdBy: Joi.string().allow(null),
-//     updatedBy: Joi.string().required(),
-//     updatedAt: Joi.date().required(),
-//     reportId: Joi.string().required(),
-//   });
-
-//   // Validate the request body
-//   await schema.validateAsync(req.body);
-// }
-
 function update(req, res, next) {
   tcpService
     .update(req.params.id, req.body, req.auth.clientId)
@@ -404,6 +326,28 @@ function checkMissingIsSb(req, res, next) {
 function submitFinalReport(req, res, next) {
   tcpService
     .finaliseReport(req.auth.clientId)
-    .then((result) => res.json(result))
+    .then((result) => {
+      res.json(result);
+      logger.audit(
+        `Report submitted by user ${req.auth.id} for client ${req.auth.clientId}`
+      );
+    })
+    .catch(next);
+}
+
+function downloadSummaryReport(req, res, next) {
+  tcpService
+    .generateSummaryCsv(req.auth.clientId)
+    .then((csv) => {
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=summary_report.csv"
+      );
+      res.send(csv);
+      logger.audit(
+        `Summary report downloaded by user ${req.auth.id} for client ${req.auth.clientId}`
+      );
+    })
     .catch(next);
 }
