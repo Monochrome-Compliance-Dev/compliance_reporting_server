@@ -1,4 +1,6 @@
-﻿const config = require("config.json");
+﻿const os = require("os");
+const logger = require("../helpers/logger");
+const config = require("config.json");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
@@ -32,6 +34,7 @@ async function authenticate({ email, password, ipAddress }) {
     !user.isVerified ||
     !(await bcrypt.compare(password, user.passwordHash))
   ) {
+    logger.warn(`Failed login attempt for ${email}`);
     throw { status: 401, message: "Email or password is incorrect" };
   }
 
@@ -43,6 +46,9 @@ async function authenticate({ email, password, ipAddress }) {
   await refreshToken.save();
 
   // return basic details and tokens
+  logger.info(
+    `User ${user.email} authenticated from IP ${ipAddress}, device: ${os.hostname()}`
+  );
   return {
     ...basicDetails(user),
     jwtToken,
@@ -65,6 +71,9 @@ async function refreshToken({ token, ipAddress }) {
   const jwtToken = generateJwtToken(user);
 
   // return basic details and tokens
+  logger.info(
+    `Refresh token rotated for user ${user.email}, IP: ${ipAddress}, device: ${os.hostname()}`
+  );
   return {
     ...basicDetails(user),
     jwtToken,
@@ -79,6 +88,9 @@ async function revokeToken({ token, ipAddress }) {
   refreshToken.revoked = Date.now();
   refreshToken.revokedByIp = ipAddress;
   await refreshToken.save();
+  logger.info(
+    `Refresh token revoked for user ${refreshToken.userId}, IP: ${ipAddress}, device: ${os.hostname()}`
+  );
 }
 
 async function register(params, origin) {
@@ -86,6 +98,9 @@ async function register(params, origin) {
   if (await db.User.findOne({ where: { email: params.email } })) {
     // send already registered error in email to prevent user enumeration
     await sendAlreadyRegisteredEmail(params.email, origin);
+    logger.warn(
+      `Registration attempt with already registered email: ${params.email}`
+    );
     throw {
       status: 400,
       message: `Email "${params.email}" is already registered`,
@@ -108,6 +123,7 @@ async function register(params, origin) {
 
   // send email
   await sendVerificationEmail(user, origin);
+  logger.info(`New user registered: ${params.email}, device: ${os.hostname()}`);
 }
 
 async function verifyEmail({ token }) {
@@ -120,6 +136,7 @@ async function verifyEmail({ token }) {
   user.verified = Date.now();
   user.verificationToken = null;
   await user.save();
+  logger.info(`Email verified for user ${user.email}`);
 }
 
 async function forgotPassword({ email }, origin) {
@@ -135,6 +152,7 @@ async function forgotPassword({ email }, origin) {
 
   // send email
   await sendPasswordResetEmail(user, origin);
+  logger.info(`Password reset token generated for ${user.email}`);
 }
 
 async function validateResetToken({ token }) {
@@ -158,6 +176,7 @@ async function resetPassword({ token, password }) {
   user.passwordReset = Date.now();
   user.resetToken = null;
   await user.save();
+  logger.info(`Password reset successful for user ${user.email}`);
 }
 
 async function getAll() {
@@ -215,13 +234,14 @@ async function update(id, params) {
   Object.assign(user, params);
   user.updated = Date.now();
   await user.save();
-
+  logger.info(`User updated: ${user.email} (ID: ${user.id})`);
   return basicDetails(user);
 }
 
 async function _delete(id) {
   const user = await getUser(id);
   await user.destroy();
+  logger.warn(`User account deleted: ${user.email} (ID: ${user.id})`);
 }
 
 // helper functions

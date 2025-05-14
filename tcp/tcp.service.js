@@ -1,5 +1,6 @@
 const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
+const logger = require("../helpers/logger");
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -57,14 +58,19 @@ async function getById(id, clientId) {
 }
 
 async function create(params, clientId) {
-  return await dbService.createRecord(clientId, "tcp", params, db);
+  const result = await dbService.createRecord(clientId, "tcp", params, db);
+  logger.info(`TCP record created for client ${clientId}`);
+  return result;
 }
 
 async function update(id, params, clientId) {
-  return await dbService.updateRecord(clientId, "tcp", id, params, db);
+  const result = await dbService.updateRecord(clientId, "tcp", id, params, db);
+  logger.info(`TCP record ${id} updated for client ${clientId}`);
+  return result;
 }
 
 async function _delete(id, clientId) {
+  logger.warn(`TCP record ${id} deleted for client ${clientId}`);
   await dbService.deleteRecord(clientId, "tcp", id, db);
 }
 

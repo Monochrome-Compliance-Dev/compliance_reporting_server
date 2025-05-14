@@ -1,4 +1,5 @@
 const db = require("../helpers/db");
+const logger = require("../helpers/logger");
 
 module.exports = {
   getAll,
@@ -9,14 +10,17 @@ module.exports = {
 };
 
 async function getAll() {
+  logger.info(`[ClientService] Fetching all clients`);
   return await db.Client.findAll();
 }
 
 async function getById(id) {
+  logger.info(`[ClientService] Fetching client by ID: ${id}`);
   return await getClient(id);
 }
 
 async function create(params) {
+  logger.info(`[ClientService] Creating new client with ABN: ${params.abn}`);
   // validate
   if (await db.Client.findOne({ where: { abn: params.abn } })) {
     throw { status: 500, message: "Client with this ABN already exists" };
@@ -28,10 +32,12 @@ async function create(params) {
   // Create views for tables locked down to the client
   await createClientViews(client.id);
   await createClientTriggers(client.id);
+  logger.info(`Client created with ID ${client.id}`);
   return client;
 }
 
 async function update(id, params) {
+  logger.info(`[ClientService] Updating client ID: ${id}`);
   const client = await getClient(id);
 
   // validate
@@ -45,9 +51,11 @@ async function update(id, params) {
   // copy params to client and save
   Object.assign(client, params);
   await client.save();
+  logger.info(`Client with ID ${id} updated`);
 }
 
 async function _delete(id) {
+  logger.info(`[ClientService] Deleting client ID: ${id}`);
   const client = await getClient(id);
 
   // Drop views
@@ -75,6 +83,7 @@ async function _delete(id) {
 
   // Delete the client record
   await client.destroy();
+  logger.info(`Client with ID ${id} deleted`);
 }
 
 // helper functions
@@ -101,8 +110,10 @@ async function createClientViews(clientId) {
     try {
       await db.sequelize.query(safeSql); // Ensure db.sequelize is properly initialized
       results.push({ tableName, success: true });
+      logger.info(`View created: ${viewName}`);
     } catch (error) {
       results.push({ tableName, success: false, error: error.message });
+      logger.error(`Failed to create view: ${viewName}`, error);
     }
   }
 
@@ -168,11 +179,13 @@ async function createClientTriggers(clientId) {
       try {
         await db.sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\`;`);
         await db.sequelize.query(sql);
+        logger.info(`Trigger created: ${triggerName}`);
       } catch (error) {
         console.error(
           `Failed to create trigger: ${triggerName}`,
           error.message
         );
+        logger.error(`Failed to create trigger: ${triggerName}`, error);
       }
     }
   }

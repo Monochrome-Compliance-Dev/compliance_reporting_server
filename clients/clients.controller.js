@@ -5,6 +5,7 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const clientService = require("./client.service");
+const logger = require("../helpers/logger");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -16,6 +17,9 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
+  logger.info(
+    `[ClientController] Retrieved all clients by user ${req?.user?.id || "unknown"}`
+  );
   clientService
     .getAll()
     .then((entities) => res.json(entities))
@@ -23,6 +27,9 @@ function getAll(req, res, next) {
 }
 
 function getById(req, res, next) {
+  logger.info(
+    `[ClientController] Retrieved client by ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
+  );
   clientService
     .getById(req.params.id)
     .then((client) => (client ? res.json(client) : res.sendStatus(404)))
@@ -57,9 +64,15 @@ function createSchema(req, res, next) {
 }
 
 function create(req, res, next) {
+  logger.info(
+    `[ClientController] Created new client by user ${req?.user?.id || "unknown"}`
+  );
   clientService
     .create(req.body)
-    .then((client) => res.json(client))
+    .then((client) => {
+      logger.info(`Client created via API: ${client.id}`);
+      res.json(client);
+    })
     .catch((error) => {
       console.error("Error creating client:", error); // Log the error details
       next(error); // Pass the error to the global error handler
@@ -103,16 +116,28 @@ function updateSchema(req, res, next) {
 }
 
 function update(req, res, next) {
+  logger.info(
+    `[ClientController] Updated client ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
+  );
   clientService
     .update(req.params.id, req.body)
-    .then((client) => res.json(client))
+    .then((client) => {
+      logger.info(`Client updated via API: ${req.params.id}`);
+      res.json(client);
+    })
     .catch(next);
 }
 
 function _delete(req, res, next) {
+  logger.info(
+    `[ClientController] Deleted client ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
+  );
   clientService
     .delete(req.params.id)
-    .then(() => res.json({ message: "Client deleted successfully" }))
+    .then(() => {
+      logger.info(`Client deleted via API: ${req.params.id}`);
+      res.json({ message: "Client deleted successfully" });
+    })
     .catch((error) => {
       console.error("Error deleting client:", error); // Log the error details
       next(error); // Pass the error to the global error handler

@@ -66,9 +66,32 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-// Helmet stuff to go here but I don't know enough about it yet
-// helmetjs.github.io/?ref=hackernoon.com
+const winston = require("./helpers/logger");
+
 app.use(helmet());
+
+if (config.env === "production") {
+  app.use(
+    helmet.hsts({
+      maxAge: 63072000, // 2 years
+      includeSubDomains: true,
+      preload: true,
+    })
+  );
+}
+
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'", "https://monochrome-compliance.com"],
+    },
+  })
+);
+app.disable("x-powered-by");
 app.use((req, res, next) => {
   if (
     config.env === "production" &&
@@ -113,9 +136,11 @@ app.use(errorHandler);
 
 // start server
 const port = config.port;
-app.listen(port, () =>
-  console.log(`✅ Server running in ${config.env} mode on port ${port}`)
-);
+app.listen(port, () => {
+  const message = `✅ Server running in ${config.env} mode on port ${port}`;
+  console.log(message);
+  winston.info(message);
+});
 
 // run this when you need to find the pid to kill
 // sudo lsof -i -P | grep LISTEN | grep :$PORT

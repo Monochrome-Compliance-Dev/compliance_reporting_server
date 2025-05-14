@@ -8,6 +8,7 @@ module.exports = async function setClientContext(req, res, next) {
     }
 
     await db.sequelize.query(`SET @current_client_id = '${clientId}'`);
+    console.info(`Client context set to: ${clientId}`);
     next();
   } catch (err) {
     console.error("Error setting client context:", err);

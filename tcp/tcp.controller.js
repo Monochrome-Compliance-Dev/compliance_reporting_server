@@ -6,6 +6,7 @@ const tcpService = require("./tcp.service");
 const setClientContext = require("../middleware/set-client-context");
 const validateRequest = require("../middleware/validate-request");
 const { tcpSchema } = require("./tcp.validator");
+const logger = require("../helpers/logger");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);
@@ -202,13 +203,16 @@ function bulkCreate(req, res, next) {
 
     // Wait for all records to be saved
     Promise.all(promises)
-      .then((results) =>
+      .then((results) => {
+        logger.info(
+          `${results.length} TCP records created for client ${req.auth.clientId}`
+        );
         res.json({
           success: true,
           message: "All records saved successfully",
           results,
-        })
-      )
+        });
+      })
       .catch((error) => {
         console.error("Error saving records:", error);
         next(error); // Pass the error to the global error handler
@@ -302,13 +306,16 @@ function bulkUpdate(req, res, next) {
 
     // Wait for all records to be saved
     Promise.all(promises)
-      .then((results) =>
+      .then((results) => {
+        logger.info(
+          `${results.length} TCP records updated for client ${req.auth.clientId}`
+        );
         res.json({
           success: true,
           message: "All records updated successfully",
           results,
-        })
-      )
+        });
+      })
       .catch((error) => {
         console.error("Error updating records:", error);
         next(error); // Pass the error to the global error handler
@@ -373,7 +380,12 @@ function update(req, res, next) {
 function _delete(req, res, next) {
   tcpService
     .delete(req.params.id, req.auth.clientId)
-    .then(() => res.json({ message: "Tcp deleted successfully" }))
+    .then(() => {
+      logger.warn(
+        `TCP record ${req.params.id} deleted for client ${req.auth.clientId}`
+      );
+      res.json({ message: "Tcp deleted successfully" });
+    })
     .catch((error) => {
       console.error("Error deleting tcp:", error); // Log the error details
       next(error); // Pass the error to the global error handler

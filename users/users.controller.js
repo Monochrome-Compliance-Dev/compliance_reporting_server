@@ -19,6 +19,9 @@ router.post(
   validateResetToken
 );
 router.post("/reset-password", resetPasswordSchema, resetPassword);
+
+// Add logout route
+router.post("/logout", logout);
 router.get("/", authorise(Role.Admin), getAll);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(Role.Admin), createSchema, create);
@@ -41,7 +44,12 @@ function authenticate(req, res, next) {
   const { email, password } = req.body;
   const ipAddress = req.ip;
   userService
-    .authenticate({ email, password, ipAddress })
+    .authenticate({
+      email,
+      password,
+      ipAddress,
+      userAgent: req.headers["user-agent"],
+    })
     .then(({ refreshToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json(user);
@@ -56,7 +64,7 @@ function refreshToken(req, res, next) {
   if (!token || token === "undefined") return unauthorised(res);
 
   userService
-    .refreshToken({ token, ipAddress })
+    .refreshToken({ token, ipAddress, userAgent: req.headers["user-agent"] })
     .then(({ refreshToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json(user);
@@ -94,8 +102,15 @@ function revokeToken(req, res, next) {
   }
 
   userService
-    .revokeToken({ token, ipAddress })
-    .then(() => res.json({ message: "Token revoked" }))
+    .revokeToken({ token, ipAddress, userAgent: req.headers["user-agent"] })
+    .then(() => {
+      res.clearCookie("refreshToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+      });
+      res.json({ message: "Token revoked" });
+    })
     .catch(next);
 }
 
@@ -126,7 +141,7 @@ function registerSchema(req, res, next) {
 function register(req, res, next) {
   // console.log("req.body", req.body, req.get("origin"));
   userService
-    .register(req.body, req.get("origin"))
+    .register(req.body, req.get("origin"), req.headers["user-agent"])
     .then(() =>
       res.json({
         message:
@@ -146,9 +161,14 @@ function verifyEmailSchema(req, res, next) {
 function verifyEmail(req, res, next) {
   userService
     .verifyEmail(req.body)
-    .then(() =>
-      res.json({ message: "Verification successful, you can now login" })
-    )
+    .then(() => {
+      res.clearCookie("refreshToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+      });
+      res.json({ message: "Verification successful, you can now login" });
+    })
     .catch(next);
 }
 
@@ -196,9 +216,14 @@ function resetPasswordSchema(req, res, next) {
 function resetPassword(req, res, next) {
   userService
     .resetPassword(req.body)
-    .then(() =>
-      res.json({ message: "Password reset successful, you can now login" })
-    )
+    .then(() => {
+      res.clearCookie("refreshToken", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+      });
+      res.json({ message: "Password reset successful, you can now login" });
+    })
     .catch(next);
 }
 
@@ -295,9 +320,24 @@ function _delete(req, res, next) {
 }
 
 function setTokenCookie(res, token) {
+  const isProduction = process.env.NODE_ENV === "production";
+
   const cookieOptions = {
     httpOnly: true,
-    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    secure: isProduction, // Only send cookies over HTTPS
+    sameSite: isProduction ? "Strict" : "Lax", // Prevent CSRF
+    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
   };
+
   res.cookie("refreshToken", token, cookieOptions);
+}
+
+// Logout function
+function logout(req, res) {
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+  });
+  res.json({ message: "Logout successful" });
 }

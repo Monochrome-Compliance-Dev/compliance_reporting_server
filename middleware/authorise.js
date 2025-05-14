@@ -34,6 +34,10 @@ function authorise(roles = []) {
           .json({ message: "Forbidden: Tenant access denied" });
       }
 
+      logger.info(
+        `User authorised - ID: ${req.auth.id}, Role: ${user.role}, Client: ${user.clientId}, IP: ${req.ip}`
+      );
+
       const refreshTokens = await user.getRefreshTokens();
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);

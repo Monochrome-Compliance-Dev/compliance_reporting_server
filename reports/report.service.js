@@ -1,5 +1,6 @@
 const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
+const logger = require("../helpers/logger");
 
 module.exports = {
   getAll,

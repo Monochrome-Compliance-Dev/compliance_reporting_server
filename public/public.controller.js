@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Joi = require("joi");
 const { sendEmail } = require("../helpers/send-email");
+const logger = require("../helpers/logger");
 
 // routes
 router.post("/send-email", sendEmailPrep);
@@ -25,11 +26,17 @@ function sendEmailPrep(req, res) {
     html: `<p>Email sent from  : ${req.body.email}. ${req.body.message}</p>`,
   })
     .then(() => {
-      console.log("Email sent successfully");
+      logger.info("Email sent successfully", {
+        email: req.body.email,
+        subject: req.body.subject,
+      });
       res.json({ status: 200, message: "Email sent successfully" });
     })
     .catch((error) => {
-      console.error("Error sending email:", error);
+      logger.error("Error sending email", {
+        error: error.message,
+        stack: error.stack,
+      });
       res.status(500).json({ status: 500, message: "Failed to send email" });
     });
 }

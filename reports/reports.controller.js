@@ -1,3 +1,4 @@
+const logger = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
 const Joi = require("joi");
@@ -17,7 +18,13 @@ router.post(
   setClientContext,
   create
 );
-router.put("/:id", authorise(), updateSchema, setClientContext, update);
+router.put(
+  "/:id",
+  authorise(),
+  validateRequest(reportSchema),
+  setClientContext,
+  update
+);
 router.delete("/:id", authorise(), setClientContext, _delete);
 
 module.exports = router;
@@ -37,59 +44,38 @@ function getById(req, res, next) {
     .catch(next);
 }
 
-function createSchema(req, res, next) {
-  const schema = Joi.object({
-    ReportingPeriodStartDate: Joi.string().required(),
-    ReportingPeriodEndDate: Joi.string().required(),
-    code: Joi.string().required(),
-    reportName: Joi.string().required(),
-    createdBy: Joi.string().required(),
-    reportStatus: Joi.string().required(),
-    clientId: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
-}
-
 function create(req, res, next) {
   reportService
-    .create(req.body, req.auth.clientId)
+    .create(req.auth.clientId, req.body)
     .then((report) => res.json(report))
     .catch((error) => {
-      console.error("Error creating report:", error); // Log the error details
+      logger.error("Error creating report:", error);
       next(error); // Pass the error to the global error handler
     });
-}
-
-function updateSchema(req, res, next) {
-  const schema = Joi.object({
-    reportName: Joi.string(),
-    code: Joi.string().required(),
-    ReportingPeriodStartDate: Joi.string(),
-    ReportingPeriodEndDate: Joi.string(),
-    reportName: Joi.string(),
-    createdBy: Joi.string(),
-    updatedBy: Joi.string(),
-    submittedDate: Joi.date().allow(null),
-    submittedBy: Joi.string().allow(null),
-    reportStatus: Joi.string(),
-    clientId: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
 }
 
 function update(req, res, next) {
   reportService
     .update(req.params.id, req.body, req.auth.clientId)
-    .then((report) => res.json(report))
-    .catch(next);
+    .then((report) => {
+      logger.info(`Report ${req.params.id} updated by user ${req.auth.id}`);
+      res.json(report);
+    })
+    .catch((error) => {
+      logger.error(`Error updating report ${req.params.id}:`, error);
+      next(error);
+    });
 }
 
 function _delete(req, res, next) {
   reportService
     .delete(req.params.id, req.auth.clientId)
-    .then(() => res.json({ message: "Report deleted successfully" }))
+    .then(() => {
+      logger.info(`Report ${req.params.id} deleted by user ${req.auth.id}`);
+      res.json({ message: "Report deleted successfully" });
+    })
     .catch((error) => {
-      console.error("Error deleting report:", error); // Log the error details
+      logger.error(`Error deleting report ${req.params.id}:`, error);
       next(error); // Pass the error to the global error handler
     });
 }

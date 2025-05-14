@@ -17,7 +17,13 @@ const logger = winston.createLogger({
 module.exports = errorHandler;
 
 function errorHandler(err, req, res, next) {
-  logger.error(err); // Log error details
+  logger.error("Unhandled error", {
+    message: err.message,
+    stack: err.stack,
+    path: req.originalUrl,
+    method: req.method,
+    ip: req.ip,
+  });
 
   switch (true) {
     case typeof err === "string":

@@ -29,21 +29,21 @@ function getAll(req, res, next) {
 function getAllByReportId(req, res, next) {
   entityService
     .getAllByReportId(req.params.id)
-    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
+    .then((entity) => (entity ? res.json(entity) : res.status(404).end()))
     .catch(next);
 }
 
 function getEntityByReportId(req, res, next) {
   entityService
     .getEntityByReportId(req.params.id)
-    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
+    .then((entity) => (entity ? res.json(entity) : res.status(404).end()))
     .catch(next);
 }
 
 function getById(req, res, next) {
   entityService
     .getById(req.params.id)
-    .then((entity) => (entity ? res.json(entity) : res.sendSentityus(404)))
+    .then((entity) => (entity ? res.json(entity) : res.status(404).end()))
     .catch(next);
 }
 

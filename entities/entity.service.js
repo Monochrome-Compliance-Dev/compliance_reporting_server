@@ -1,5 +1,6 @@
 const db = require("../helpers/db");
 const sendEmail = require("../helpers/send-email");
+const logger = require("../helpers/logger");
 
 module.exports = {
   getAll,
@@ -45,6 +46,9 @@ async function sbiUpdate(reportId, params) {
         },
       }
     );
+    logger.info(
+      `SBI flag updated to false for entity with ABN ${params.payeeEntityAbn} under report ${reportId}`
+    );
   }
 }
 
@@ -55,6 +59,7 @@ async function getById(id) {
 async function create(params) {
   // save entity
   const entity = await db.Entity.create(params);
+  logger.info(`Entity created with ID ${entity.id}`, { entity });
   return entity;
 }
 
@@ -73,12 +78,14 @@ async function update(id, params) {
   // copy params to entity and save
   Object.assign(entity, params);
   const response = await entity.save();
+  logger.info(`Entity updated with ID ${entity.id}`, { updatedFields: params });
   return response;
 }
 
 async function _delete(id) {
   const entity = await getEntity(id);
   await entity.destroy();
+  logger.info(`Entity deleted with ID ${entity.id}`);
 }
 
 // helper functions

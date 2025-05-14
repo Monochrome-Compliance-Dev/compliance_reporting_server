@@ -2,6 +2,8 @@ const config = require("../config.json");
 const mysql = require("mysql2/promise");
 const { Sequelize } = require("sequelize");
 
+const winston = require("./logger");
+
 // Use environment variables with fallback to config.json
 const DB_HOST = process.env.DB_HOST || config.database.host;
 const DB_PORT = process.env.DB_PORT || config.database.port;
@@ -46,7 +48,7 @@ async function initialize() {
       break;
     } catch (err) {
       retries -= 1;
-      console.error("Database connection failed. Retrying...", err);
+      winston.error("Database connection failed. Retrying...", err);
       if (!retries) throw err;
       await new Promise((res) => setTimeout(res, 5000));
     }
@@ -54,7 +56,7 @@ async function initialize() {
 
   // connect to db
   await sequelize.authenticate();
-  console.log(
+  winston.info(
     "Connection to the Compliance Reporting database has been established successfully."
   );
 

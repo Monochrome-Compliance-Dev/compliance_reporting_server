@@ -1,4 +1,5 @@
 const db = require("../helpers/db");
+const winston = require("../helpers/logger");
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -41,6 +42,7 @@ async function createRecord(clientId, tableName, params, db) {
     { replacements: [id] }
   );
 
+  winston.info(`Record created in ${viewName}`, { id });
   return newRow[0];
 }
 
@@ -63,6 +65,7 @@ async function updateRecord(clientId, tableName, id, params, db) {
   console.log("Update Values:", values);
   await db.sequelize.query(sql, { replacements: values });
 
+  winston.info(`Record updated in ${viewName}`, { id });
   return { id, ...sanitizedParams };
 }
 
@@ -70,4 +73,5 @@ async function deleteRecord(clientId, tableName, id, db) {
   const viewName = `client_${clientId}_tbl_${tableName}`;
   const sql = `DELETE FROM \`${viewName}\` WHERE id = ?`;
   await db.sequelize.query(sql, { replacements: [id] });
+  winston.info(`Record deleted from ${viewName}`, { id });
 }

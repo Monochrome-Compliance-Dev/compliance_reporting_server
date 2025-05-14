@@ -6,6 +6,7 @@ const authorise = require("../middleware/authorise");
 const tatService = require("./tat.service");
 const setClientContext = require("../middleware/set-client-context");
 const { tatSchema } = require("./tat.validator");
+const logger = require("../helpers/logger");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);
@@ -86,7 +87,7 @@ function create(req, res, next) {
     .create(req.body, req.auth.clientId)
     .then((tat) => res.json(tat))
     .catch((error) => {
-      console.error("Error creating tat:", error); // Log the error details
+      logger.error("Error creating tat", { error }); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }
@@ -126,7 +127,7 @@ function _delete(req, res, next) {
     .delete(req.params.id, req.auth.clientId)
     .then(() => res.json({ message: "Tat deleted successfully" }))
     .catch((error) => {
-      console.error("Error deleting tat:", error); // Log the error details
+      logger.error("Error deleting tat", { error }); // Log the error details
       next(error); // Pass the error to the global error handler
     });
 }
