@@ -19,28 +19,28 @@ module.exports = router;
 
 function getAll(req, res, next) {
   tatService
-    .getAll()
+    .getAll(req.auth.clientId)
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getAllByReportId(req, res, next) {
   tatService
-    .getAllByReportId(req.params.id)
+    .getAllByReportId(req.params.id, req.auth.clientId)
     .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getTatByReportId(req, res, next) {
   tatService
-    .getTatByReportId(req.params.id)
+    .getTatByReportId(req.params.id, req.auth.clientId)
     .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getById(req, res, next) {
   tatService
-    .getById(req.params.id)
+    .getById(req.params.id, req.auth.clientId)
     .then((tat) => (tat ? res.json(tat) : res.sendStatus(404)))
     .catch(next);
 }
@@ -70,7 +70,7 @@ function createSchema(req, res, next) {
 
 function create(req, res, next) {
   tatService
-    .create(req.body)
+    .create(req.body, req.auth.clientId)
     .then((tat) => res.json(tat))
     .catch((error) => {
       console.error("Error creating tat:", error); // Log the error details
@@ -80,7 +80,7 @@ function create(req, res, next) {
 
 function update(req, res, next) {
   tatService
-    .update(req.params.id, req.body)
+    .update(req.params.id, req.body, req.auth.clientId)
     .then((tat) => res.json(tat))
     .catch(next);
 }
@@ -110,7 +110,7 @@ function updateSchema(req, res, next) {
 
 function _delete(req, res, next) {
   tatService
-    .delete(req.params.id)
+    .delete(req.params.id, req.auth.clientId)
     .then(() => res.json({ message: "Tat deleted successfully" }))
     .catch((error) => {
       console.error("Error deleting tat:", error); // Log the error details

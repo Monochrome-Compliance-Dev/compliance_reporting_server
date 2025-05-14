@@ -25,7 +25,7 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   reportService
-    .getById(req.params.id)
+    .getById(req.params.id, req.auth.clientId)
     .then((report) => (report ? res.json(report) : res.sendStatus(404)))
     .catch(next);
 }
@@ -45,7 +45,7 @@ function createSchema(req, res, next) {
 
 function create(req, res, next) {
   reportService
-    .create(req.auth.clientId, req.body)
+    .create(req.body, req.auth.clientId)
     .then((report) => res.json(report))
     .catch((error) => {
       console.error("Error creating report:", error); // Log the error details
@@ -72,14 +72,14 @@ function updateSchema(req, res, next) {
 
 function update(req, res, next) {
   reportService
-    .update(req.auth.clientId, req.params.id, req.body)
+    .update(req.params.id, req.body, req.auth.clientId)
     .then((report) => res.json(report))
     .catch(next);
 }
 
 function _delete(req, res, next) {
   reportService
-    .delete(req.auth.clientId, req.params.id)
+    .delete(req.params.id, req.auth.clientId)
     .then(() => res.json({ message: "Report deleted successfully" }))
     .catch((error) => {
       console.error("Error deleting report:", error); // Log the error details

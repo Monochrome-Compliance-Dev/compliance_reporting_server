@@ -20,21 +20,21 @@ module.exports = router;
 
 function getAll(req, res, next) {
   tcpService
-    .getAll()
+    .getAll(req.auth.clientId)
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getAllByReportId(req, res, next) {
   tcpService
-    .getAllByReportId(req.params.id)
+    .getAllByReportId(req.params.id, req.auth.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getTcpByReportId(req, res, next) {
   tcpService
-    .getTcpByReportId(req.params.id)
+    .getTcpByReportId(req.params.id, req.auth.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -55,7 +55,11 @@ function sbiUpdate(req, res, next) {
           await validateSbiRecord(reqForValidation);
 
           // Save each record using tcpService
-          return await tcpService.sbiUpdate(req.params.id, record);
+          return await tcpService.sbiUpdate(
+            req.params.id,
+            record,
+            req.auth.clientId
+          );
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -110,7 +114,11 @@ function partialUpdate(req, res, next) {
           await partialUpdateSchema(reqForValidation); // Validate the record
 
           // Save each record using tcpService
-          return await tcpService.update(record.id, recordToUpdate);
+          return await tcpService.update(
+            record.id,
+            recordToUpdate,
+            req.auth.clientId
+          );
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -149,7 +157,7 @@ async function partialUpdateSchema(req) {
 
 function getById(req, res, next) {
   tcpService
-    .getById(req.params.id)
+    .getById(req.params.id, req.auth.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -170,7 +178,7 @@ function bulkCreate(req, res, next) {
           await validateRecord(reqForValidation);
 
           // Save each record using tcpService
-          return await tcpService.create(record);
+          return await tcpService.create(record, req.auth.clientId);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -231,9 +239,9 @@ async function validateRecord(req) {
     notes: Joi.string().allow(null, ""),
     isSb: Joi.boolean().allow(null),
     paymentTime: Joi.number().allow(null),
-    createdBy: Joi.number().required(),
-    updatedBy: Joi.number().allow(null),
-    reportId: Joi.number().required(),
+    createdBy: Joi.string().required(),
+    updatedBy: Joi.string().allow(null),
+    reportId: Joi.string().required(),
   });
 
   // Validate the request body
@@ -242,7 +250,7 @@ async function validateRecord(req) {
 
 function create(req, res, next) {
   tcpService
-    .create(req.body)
+    .create(req.body, req.auth.clientId)
     .then((tcp) => res.json(tcp))
     .catch((error) => {
       console.error("Error creating tcp:", error); // Log the error details
@@ -270,7 +278,7 @@ function bulkUpdate(req, res, next) {
           await bulkUpdateSchema(reqForValidation); // Validate the record
 
           // Save each record using tcpService
-          return await tcpService.update(id, recordToUpdate);
+          return await tcpService.update(id, recordToUpdate, req.auth.clientId);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -343,14 +351,14 @@ async function bulkUpdateSchema(req) {
 
 function update(req, res, next) {
   tcpService
-    .update(req.params.id, req.body)
+    .update(req.params.id, req.body, req.auth.clientId)
     .then((tcp) => res.json(tcp))
     .catch(next);
 }
 
 function _delete(req, res, next) {
   tcpService
-    .delete(req.params.id)
+    .delete(req.params.id, req.auth.clientId)
     .then(() => res.json({ message: "Tcp deleted successfully" }))
     .catch((error) => {
       console.error("Error deleting tcp:", error); // Log the error details

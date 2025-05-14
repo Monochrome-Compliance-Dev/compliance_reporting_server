@@ -9,7 +9,7 @@ const clientService = require("./client.service");
 // routes
 router.get("/", authorise(), getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", createSchema, create);
+router.post("/", authorise(), createSchema, create);
 router.put("/:id", authorise(), updateSchema, update);
 router.delete("/:id", authorise(), _delete);
 
