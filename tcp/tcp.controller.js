@@ -71,7 +71,11 @@ async function patchRecord(req, res, next) {
     }
 
     const updated = await tcpService.partialUpdate(id, updates, clientId);
-    res.json(updated);
+    res.json({
+      success: true,
+      message: "Record updated successfully",
+      data: updated,
+    });
   } catch (error) {
     console.error("Error patching record:", error);
     next(error);
