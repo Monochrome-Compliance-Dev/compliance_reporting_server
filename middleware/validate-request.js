@@ -1,23 +1,46 @@
 module.exports = function validateRequest(schema) {
   return function (req, res, next) {
+    const clientId = req.auth?.clientId;
+    if (!clientId) {
+      return next("Validation error: clientId is missing from auth context");
+    }
+
     const options = {
       abortEarly: false,
       allowUnknown: true,
       stripUnknown: true,
     };
 
-    if (!Array.isArray(req.body)) {
-      return res.status(400).json({ error: "Expected an array of records" });
+    const isArray = Array.isArray(req.body);
+    const records = isArray ? req.body : [req.body];
+    const results = [];
+    const errors = [];
+
+    records.forEach((record, index) => {
+      const fullRecord = { ...record, clientId };
+      // console.log("Full Record:", fullRecord);
+      const { error, value } = schema.validate(fullRecord, options);
+      if (error) {
+        const details = error.details.map((x) => {
+          const path = x.path.join(".");
+          const val = x.context?.value;
+          const type = typeof val;
+          return `[${path}] ${x.message} | Value: "${val}" (${type})`;
+        });
+        errors.push({ index, errors: details });
+      } else {
+        results.push(value);
+      }
+    });
+
+    if (errors.length > 0) {
+      console.log("Validation errors:", JSON.stringify(errors, null, 2)); // 👈 Pretty-print to console
+      return res
+        .status(400)
+        .json({ message: "Validation failed for some records", errors });
     }
 
-    const { error, value } = schema.validate(req.body, options);
-    if (error) {
-      next(
-        `Validation error: ${error.details.map((x) => `[${x.path}] ${x.message}`).join(", ")}`
-      );
-    } else {
-      req.body = value;
-      next();
-    }
+    req.body = isArray ? results : results[0];
+    next();
   };
 };

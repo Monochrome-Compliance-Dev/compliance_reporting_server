@@ -20,30 +20,7 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
-
 const rateLimit = require("express-rate-limit");
-
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use("/api/", apiLimiter); // Apply to all API routes
-
-const loginLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 5,
-  message: "Too many login attempts from this IP, please try again later.",
-});
-
-app.use("/api/users/authenticate", loginLimiter);
-app.use("/api/users/forgot-password", loginLimiter);
-
-// app.get("*", (req, res) => {
-//   res.sendFile(path.join(__dirname, "build", "index.html"));
-// });
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
@@ -61,6 +38,28 @@ app.use(
     credentials: true,
   })
 );
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use("/api/", apiLimiter); // Apply to all API routes
+
+const loginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: "Too many login attempts from this IP, please try again later.",
+});
+
+// app.use("/api/users/authenticate", loginLimiter);
+app.use("/api/users/forgot-password", loginLimiter);
+
+// app.get("*", (req, res) => {
+//   res.sendFile(path.join(__dirname, "build", "index.html"));
+// });
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());

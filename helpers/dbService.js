@@ -23,18 +23,13 @@ async function createRecord(clientId, tableName, params, db) {
   params.createdAt = new Date();
   params.updatedAt = new Date();
 
-  // Remove clientId if present in params (view enforces it)
-  const { clientId: _, ...sanitizedParams } = params;
-
-  const fields = Object.keys(sanitizedParams).join(", ");
-  const placeholders = Object.keys(sanitizedParams)
+  const fields = Object.keys(params).join(", ");
+  const placeholders = Object.keys(params)
     .map(() => "?")
     .join(", ");
-  const values = Object.values(sanitizedParams);
+  const values = Object.values(params);
 
   const sql = `INSERT INTO \`${viewName}\` (${fields}) VALUES (${placeholders})`;
-  console.log("SQL Insert:", sql);
-  console.log("Insert Values:", values);
   await db.sequelize.query(sql, { replacements: values });
 
   const [newRow] = await db.sequelize.query(
@@ -49,16 +44,13 @@ async function createRecord(clientId, tableName, params, db) {
 async function updateRecord(clientId, tableName, id, params, db) {
   const viewName = `client_${clientId}_tbl_${tableName}`;
 
-  // Remove clientId if present
-  const { clientId: _, ...sanitizedParams } = params;
-
   // Update the timestamp
-  sanitizedParams.updatedAt = new Date();
+  params.updatedAt = new Date();
 
-  const fields = Object.keys(sanitizedParams)
+  const fields = Object.keys(params)
     .map((key) => `${key} = ?`)
     .join(", ");
-  const values = [...Object.values(sanitizedParams), id];
+  const values = [...Object.values(params), id];
 
   const sql = `UPDATE \`${viewName}\` SET ${fields} WHERE id = ?`;
   console.log("SQL Update:", sql);
@@ -66,7 +58,7 @@ async function updateRecord(clientId, tableName, id, params, db) {
   await db.sequelize.query(sql, { replacements: values });
 
   winston.info(`Record updated in ${viewName}`, { id });
-  return { id, ...sanitizedParams };
+  return { id, ...params };
 }
 
 async function deleteRecord(clientId, tableName, id, db) {

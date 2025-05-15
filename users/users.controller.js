@@ -5,44 +5,58 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
+const {
+  authSchema,
+  registerSchema,
+  _updateSchema,
+  updatePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  verifyEmailSchema,
+  validateResetTokenSchema,
+  createSchema,
+} = require("./user.validator");
 
 // routes
-router.post("/authenticate", authenticateSchema, authenticate);
+router.post("/authenticate", validateRequest(authSchema), authenticate);
 router.post("/refresh-token", refreshToken);
 router.post("/revoke-token", authorise(), revokeTokenSchema, revokeToken);
-router.post("/register", registerSchema, register);
-router.post("/verify-email", verifyEmailSchema, verifyEmail);
-router.post("/forgot-password", forgotPasswordSchema, forgotPassword);
+router.post("/register", validateRequest(registerSchema), register);
+router.post("/verify-email", validateRequest(verifyEmailSchema), verifyEmail);
+router.post(
+  "/forgot-password",
+  validateRequest(forgotPasswordSchema),
+  forgotPassword
+);
 router.post(
   "/validate-reset-token",
-  validateResetTokenSchema,
+  validateRequest(validateResetTokenSchema),
   validateResetToken
 );
-router.post("/reset-password", resetPasswordSchema, resetPassword);
+router.post(
+  "/reset-password",
+  validateRequest(resetPasswordSchema),
+  resetPassword
+);
 
 // Add logout route
 router.post("/logout", logout);
 router.get("/", authorise(Role.Admin), getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(Role.Admin), createSchema, create);
-router.put("/:id", authorise(), updateSchema, update);
+router.post("/", authorise(Role.Admin), validateRequest(createSchema), create);
+router.put("/:id", authorise(), updateSchema, update); // Need to resolve which schema to use
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 
-function authenticateSchema(req, res, next) {
-  const { email, password } = req.body;
-  const ipAddress = req.ip;
-  const schema = Joi.object({
-    email: Joi.string().required(),
-    password: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
-}
-
 function authenticate(req, res, next) {
+  console.log("Authenticate request body:", req.body);
   const { email, password } = req.body;
   const ipAddress = req.ip;
+  console.log("IP Address:", ipAddress);
+  console.log("User Agent:", req.headers["user-agent"]);
+  console.log("Request Body:", req.body);
+  console.log("Request Headers:", req.headers);
   userService
     .authenticate({
       email,
@@ -114,30 +128,6 @@ function revokeToken(req, res, next) {
     .catch(next);
 }
 
-function registerSchema(req, res, next) {
-  const schema = Joi.object({
-    firstName: Joi.string().required(),
-    lastName: Joi.string().required(),
-    email: Joi.string().email().required(),
-    phone: Joi.string().required(),
-    position: Joi.string().required(),
-    password: Joi.string().min(6).required(),
-    confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-    role: Joi.string()
-      // .valid(
-      //   Role.Admin,
-      //   Role.User,
-      //   Role.Approver,
-      //   Role.Submitter,
-      //   Role.Approver
-      // )
-      .required(),
-    active: Joi.boolean().required(),
-    clientId: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
-}
-
 function register(req, res, next) {
   // console.log("req.body", req.body, req.get("origin"));
   userService
@@ -149,13 +139,6 @@ function register(req, res, next) {
       })
     )
     .catch(next);
-}
-
-function verifyEmailSchema(req, res, next) {
-  const schema = Joi.object({
-    token: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
 }
 
 function verifyEmail(req, res, next) {
@@ -172,13 +155,6 @@ function verifyEmail(req, res, next) {
     .catch(next);
 }
 
-function forgotPasswordSchema(req, res, next) {
-  const schema = Joi.object({
-    email: Joi.string().email().required(),
-  });
-  validateRequest(req, next, schema);
-}
-
 function forgotPassword(req, res, next) {
   userService
     .forgotPassword(req.body, req.get("origin"))
@@ -190,27 +166,11 @@ function forgotPassword(req, res, next) {
     .catch(next);
 }
 
-function validateResetTokenSchema(req, res, next) {
-  const schema = Joi.object({
-    token: Joi.string().required(),
-  });
-  validateRequest(req, next, schema);
-}
-
 function validateResetToken(req, res, next) {
   userService
     .validateResetToken(req.body)
     .then(() => res.json({ message: "Token is valid" }))
     .catch(next);
-}
-
-function resetPasswordSchema(req, res, next) {
-  const schema = Joi.object({
-    token: Joi.string().required(),
-    password: Joi.string().min(6).required(),
-    confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-  });
-  validateRequest(req, next, schema);
 }
 
 function resetPassword(req, res, next) {
@@ -247,30 +207,6 @@ function getById(req, res, next) {
         : res.status(404).json({ error: "User not found", code: 404 })
     )
     .catch(next);
-}
-
-function createSchema(req, res, next) {
-  const schema = Joi.object({
-    firstName: Joi.string().required(),
-    lastName: Joi.string().required(),
-    email: Joi.string().email().required(),
-    phone: Joi.string().required(),
-    position: Joi.string().required(),
-    password: Joi.string().min(6).required(),
-    confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-    role: Joi.string()
-      // .valid(
-      //   Role.Admin,
-      //   Role.User,
-      //   Role.Approver,
-      //   Role.Submitter,
-      //   Role.Approver
-      // )
-      .required(),
-    active: Joi.boolean().required(),
-    clientId: Joi.number().required(),
-  });
-  validateRequest(req, next, schema);
 }
 
 function create(req, res, next) {

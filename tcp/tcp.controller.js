@@ -5,7 +5,11 @@ const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
 const setClientContext = require("../middleware/set-client-context");
 const validateRequest = require("../middleware/validate-request");
-const { tcpImportSchema, tcpSchema } = require("./tcp.validator");
+const {
+  tcpImportSchema,
+  tcpBulkImportSchema,
+  tcpSchema,
+} = require("./tcp.validator");
 const logger = require("../helpers/logger");
 
 // routes
@@ -16,7 +20,7 @@ router.get("/:id", authorise(), setClientContext, getById);
 router.post(
   "/",
   authorise(),
-  validateRequest(tcpImportSchema),
+  validateRequest(tcpBulkImportSchema),
   setClientContext,
   bulkCreate
 );
@@ -188,49 +192,60 @@ function getById(req, res, next) {
     .catch(next);
 }
 
-function bulkCreate(req, res, next) {
+async function bulkCreate(req, res, next) {
   try {
-    // Ensure req.body is an object and iterate through its keys
-    const records = Object.values(req.body);
+    // Ensure the incoming request is an array
+    if (!Array.isArray(req.body)) {
+      return res
+        .status(400)
+        .json({ message: "Request body must be an array." });
+    }
 
-    const promises = records.flatMap((item) => {
-      // Check if item is an array and process each object individually
-      const itemsToProcess = Array.isArray(item) ? item : [item];
+    const results = [];
 
-      return itemsToProcess.map(async (record) => {
-        try {
-          // Validate each record using createSchema
-          // const reqForValidation = { body: record };
-          // await validateRecord(reqForValidation);
-
-          // Save each record using tcpService
-          return await tcpService.create(record, req.auth.clientId);
-        } catch (error) {
-          console.error("Error processing record:", error);
-          throw error; // Propagate the error to Promise.all
-        }
-      });
-    });
-
-    // Wait for all records to be saved
-    Promise.all(promises)
-      .then((results) => {
-        logger.info(
-          `${results.length} TCP records created for client ${req.auth.clientId}`
-        );
-        res.json({
-          success: true,
-          message: "All records saved successfully",
-          results,
+    for (const record of req.body) {
+      try {
+        // Normalize numeric fields
+        const numericFields = [
+          "payerEntityAbn",
+          "payerEntityAcnArbn",
+          "payeeEntityAbn",
+          "payeeEntityAcnArbn",
+        ];
+        numericFields.forEach((field) => {
+          if (record[field] === "" || record[field] === " ") {
+            record[field] = null;
+          } else if (record[field] !== null && record[field] !== undefined) {
+            const parsed = parseInt(record[field], 10);
+            record[field] = isNaN(parsed) ? null : parsed;
+          }
         });
-      })
-      .catch((error) => {
-        console.error("Error saving records:", error);
-        next(error); // Pass the error to the global error handler
-      });
+
+        // Create the record using the service
+        const created = await tcpService.create(record, req.auth.clientId);
+        results.push(created);
+      } catch (error) {
+        console.error("Error processing record:", error);
+        return res.status(400).json({
+          success: false,
+          message: "Error saving some records.",
+          error: error.message,
+        });
+      }
+    }
+
+    logger.info(
+      `${results.length} TCP records created for client ${req.auth.clientId}`
+    );
+
+    res.json({
+      success: true,
+      message: "All records saved successfully",
+      results,
+    });
   } catch (error) {
     console.error("Error processing bulk records:", error);
-    next(error); // Pass the error to the global error handler
+    next(error);
   }
 }
 
