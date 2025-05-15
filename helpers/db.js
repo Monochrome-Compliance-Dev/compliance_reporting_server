@@ -14,13 +14,21 @@ const DB_SOCKET_PATH = process.env.DB_SOCKET_PATH || config.database.socketPath;
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   dialect: "mysql",
-  dialectOptions: { decimalNumbers: true, socketPath: DB_SOCKET_PATH },
   host: DB_HOST,
+  dialectOptions: { decimalNumbers: true, socketPath: DB_SOCKET_PATH },
   pool: {
     max: 100,
     min: 0,
     acquire: 30000,
     idle: 10000,
+  },
+  logging: console.log,
+  hooks: {
+    afterConnect: async (connection) => {
+      await connection
+        .promise()
+        .query("SET collation_connection = 'utf8mb4_0900_ai_ci'");
+    },
   },
 });
 

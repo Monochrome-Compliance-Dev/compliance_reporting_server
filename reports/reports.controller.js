@@ -1,7 +1,6 @@
 const logger = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
-const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const reportService = require("./report.service");

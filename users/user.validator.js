@@ -23,7 +23,7 @@ const registerSchema = Joi.object({
     // )
     .required(),
   active: Joi.boolean().required(),
-  clientId: Joi.number().required(),
+  clientId: Joi.string().required(),
 });
 
 const _updateSchema = Joi.object({

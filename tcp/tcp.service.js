@@ -21,6 +21,7 @@ module.exports = {
   hasMissingIsSbFlag,
   finaliseReport,
   generateSummaryCsv,
+  partialUpdate,
 };
 
 async function getAll(clientId) {
@@ -45,6 +46,12 @@ async function getTcpByReportId(reportId, clientId) {
     { replacements: [reportId] }
   );
   return rows;
+}
+
+async function partialUpdate(id, updates, clientId) {
+  const result = await dbService.updateRecord(clientId, "tcp", id, updates, db);
+  logger.info(`TCP record ${id} partially updated for client ${clientId}`);
+  return result;
 }
 
 async function sbiUpdate(reportId, params, clientId) {

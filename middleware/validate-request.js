@@ -1,10 +1,5 @@
 module.exports = function validateRequest(schema) {
   return function (req, res, next) {
-    const clientId = req.auth?.clientId;
-    if (!clientId) {
-      return next("Validation error: clientId is missing from auth context");
-    }
-
     const options = {
       abortEarly: false,
       allowUnknown: true,
@@ -17,7 +12,8 @@ module.exports = function validateRequest(schema) {
     const errors = [];
 
     records.forEach((record, index) => {
-      const fullRecord = { ...record, clientId };
+      const clientId = req?.auth?.clientId;
+      const fullRecord = clientId ? { ...record, clientId } : { ...record };
       // console.log("Full Record:", fullRecord);
       const { error, value } = schema.validate(fullRecord, options);
       if (error) {

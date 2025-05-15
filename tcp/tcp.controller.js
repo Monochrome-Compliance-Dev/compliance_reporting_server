@@ -24,6 +24,7 @@ router.post(
   setClientContext,
   bulkCreate
 );
+router.patch("/:id", authorise(), setClientContext, patchRecord);
 router.put(
   "/",
   authorise(),
@@ -57,6 +58,24 @@ function getAllByReportId(req, res, next) {
     .getAllByReportId(req.params.id, req.auth.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
+}
+
+async function patchRecord(req, res, next) {
+  try {
+    const { id } = req.params;
+    const clientId = req.auth.clientId;
+    const updates = req.body;
+
+    if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+      return res.status(400).json({ message: "Invalid request body" });
+    }
+
+    const updated = await tcpService.partialUpdate(id, updates, clientId);
+    res.json(updated);
+  } catch (error) {
+    console.error("Error patching record:", error);
+    next(error);
+  }
 }
 
 function getTcpByReportId(req, res, next) {

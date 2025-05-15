@@ -1,6 +1,5 @@
 const Joi = require("joi");
 const validator = require("validator");
-const { cli } = require("winston/lib/winston/config");
 
 const sanitize = (value) => {
   if (typeof value === "string") {
