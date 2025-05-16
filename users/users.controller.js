@@ -39,8 +39,6 @@ router.post(
   resetPassword
 );
 
-// Add logout route
-router.post("/logout", logout);
 router.get("/", authorise(Role.Admin), getAll);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(Role.Admin), validateRequest(createSchema), create);
@@ -50,13 +48,8 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function authenticate(req, res, next) {
-  console.log("Authenticate request body:", req.body);
   const { email, password } = req.body;
   const ipAddress = req.ip;
-  console.log("IP Address:", ipAddress);
-  console.log("User Agent:", req.headers["user-agent"]);
-  console.log("Request Body:", req.body);
-  console.log("Request Headers:", req.headers);
   userService
     .authenticate({
       email,
@@ -97,20 +90,21 @@ async function unauthorised(res) {
 
 function revokeTokenSchema(req, res, next) {
   const schema = Joi.object({
-    jwtToken: Joi.string().empty(""), // Validate only jwtToken
+    refreshToken: Joi.string().empty(""), // Validate only refreshToken
   });
-  validateRequest(req, next, schema);
+  return validateRequest(schema)(req, res, next);
 }
 
 function revokeToken(req, res, next) {
   const { body } = req;
 
-  const token = body.token || req.cookies.refreshToken;
+  const token = body.refreshToken || req.cookies.refreshToken;
   const ipAddress = req.ip;
 
-  if (!token) return res.status(400).json({ message: "Token is required" });
+  if (!token) {
+    return res.status(400).json({ message: "Token is required" });
+  }
 
-  // Use req.auth.ownsToken to check token ownership
   if (!req.auth.ownsToken(token) && req.auth.role !== Role.Admin) {
     return res.status(401).json({ message: "Unauthorised" });
   }
@@ -120,12 +114,17 @@ function revokeToken(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+        secure: false,
+        sameSite: "Lax",
+        path: "/",
+        domain: "localhost",
       });
       res.json({ message: "Token revoked" });
     })
-    .catch(next);
+    .catch((err) => {
+      console.error("→ revokeToken error", JSON.stringify(err, null, 2));
+      next(err);
+    });
 }
 
 function register(req, res, next) {
@@ -147,8 +146,10 @@ function verifyEmail(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+        secure: false,
+        sameSite: "Lax",
+        path: "/",
+        domain: "localhost",
       });
       res.json({ message: "Verification successful, you can now login" });
     })
@@ -179,8 +180,10 @@ function resetPassword(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+        secure: false,
+        sameSite: "Lax",
+        path: "/",
+        domain: "localhost",
       });
       res.json({ message: "Password reset successful, you can now login" });
     })
@@ -256,24 +259,11 @@ function _delete(req, res, next) {
 }
 
 function setTokenCookie(res, token) {
-  const isProduction = process.env.NODE_ENV === "production";
-
-  const cookieOptions = {
+  res.cookie("refreshToken", token, {
     httpOnly: true,
-    secure: isProduction, // Only send cookies over HTTPS
-    sameSite: isProduction ? "Strict" : "Lax", // Prevent CSRF
-    expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-  };
-
-  res.cookie("refreshToken", token, cookieOptions);
-}
-
-// Logout function
-function logout(req, res) {
-  res.clearCookie("refreshToken", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: process.env.NODE_ENV === "production" ? "Strict" : "Lax",
+    secure: false,
+    sameSite: "Lax",
+    path: "/",
+    domain: "localhost",
   });
-  res.json({ message: "Logout successful" });
 }

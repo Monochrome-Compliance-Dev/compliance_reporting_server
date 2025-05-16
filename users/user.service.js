@@ -258,25 +258,26 @@ async function getUserByToken(token) {
 }
 
 async function getRefreshToken(token) {
-  // console.log("Looking for refresh token:", token); // Log the token being queried
+  console.log("→ getRefreshToken(): querying for token:", token);
+
   const refreshToken = await db.RefreshToken.findOne({ where: { token } });
 
   if (!refreshToken) {
-    console.error("Refresh token not found:", token); // Log if the token is not found
+    console.error("→ getRefreshToken(): token not found:", token);
     throw { status: 400, message: "Invalid token: Token not found" };
   }
 
-  // Check if the token is active
   const isActive = refreshToken.expires > Date.now() && !refreshToken.revoked;
   if (!isActive) {
-    console.error("Refresh token is not active:", {
+    console.error("→ getRefreshToken(): token is not active", {
       token,
       expires: refreshToken.expires,
       revoked: refreshToken.revoked,
-    }); // Log detailed reasons for inactivity
+    });
     throw { status: 400, message: "Invalid token: Token is not active" };
   }
 
+  console.log("→ getRefreshToken(): token is valid");
   return refreshToken;
 }
 
