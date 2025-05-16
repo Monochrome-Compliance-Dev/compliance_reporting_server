@@ -4,10 +4,25 @@ const winston = require("../helpers/logger");
 
 module.exports = { sendEmail, sendAttachmentEmail };
 
-async function sendEmail({ to, subject, html, from = config.emailFrom }) {
+// Updated to support optional cc and bcc
+async function sendEmail({
+  to,
+  subject,
+  html,
+  from = config.emailFrom,
+  cc,
+  bcc,
+}) {
   const transporter = nodemailer.createTransport(config.smtpOptions);
   try {
-    await transporter.sendMail({ from, to, subject, html });
+    await transporter.sendMail({
+      from,
+      to,
+      cc,
+      bcc,
+      subject,
+      html,
+    });
     winston.info(`Email sent to ${to} with subject "${subject}"`);
     return null;
   } catch (error) {

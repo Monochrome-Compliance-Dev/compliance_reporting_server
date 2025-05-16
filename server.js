@@ -56,6 +56,8 @@ const loginLimiter = rateLimit({
 
 // app.use("/api/users/authenticate", loginLimiter);
 app.use("/api/users/forgot-password", loginLimiter);
+app.use("/api/users/reset-password", loginLimiter);
+// app, use("/api/booking", loginLimiter);
 
 // app.get("*", (req, res) => {
 //   res.sendFile(path.join(__dirname, "build", "index.html"));
@@ -109,6 +111,8 @@ app.use("/api/tcp", require("./tcp/tcp.controller"));
 app.use("/api/tat", require("./tat/tat.controller"));
 app.use("/api/entities", require("./entities/entity.controller"));
 app.use("/api/public", require("./public/public.controller"));
+app.use("/api/booking", require("./booking/booking.controller"));
+app.use("/api/tracking", require("./tracking/tracking.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

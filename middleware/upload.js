@@ -59,7 +59,7 @@ const fileFilter = async (req, file, cb) => {
     );
   }
 
-  const filePath = path.join(uploadDir, file.originalname);
+  const filePath = file.path;
 
   // Antivirus scan
   try {
