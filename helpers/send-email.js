@@ -33,10 +33,6 @@ async function sendEmail({
 }
 
 async function sendAttachmentEmail(req, res) {
-  console.log("Processing email with attachment...");
-  console.log("Form data (req.body):", req.body);
-  console.log("Uploaded file (req.file):", req.file);
-
   // Parse req.body fields explicitly
   const to = req.body.to;
   const from = req.body.from || config.emailFrom;

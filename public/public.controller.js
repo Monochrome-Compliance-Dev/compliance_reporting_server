@@ -5,6 +5,28 @@ const { sendEmail } = require("../helpers/send-email");
 const logger = require("../helpers/logger");
 const generateTrackingPixel = require("../helpers/generateTrackingPixel");
 
+const contactSchema = Joi.object({
+  name: Joi.string().required(),
+  email: Joi.string().email().required(),
+  subject: Joi.string().required(),
+  message: Joi.string().required(),
+  to: Joi.string().email().required(),
+  from: Joi.string().email().optional(),
+  cc: Joi.string().email().optional(),
+  bcc: Joi.string().email().optional(),
+});
+
+const bookingSchema = Joi.object({
+  name: Joi.string().optional(),
+  email: Joi.string().email().optional(),
+  subject: Joi.string().required(),
+  message: Joi.string().required(),
+  to: Joi.string().email().required(),
+  from: Joi.string().email().optional(),
+  cc: Joi.string().email().optional(),
+  bcc: Joi.string().email().optional(),
+});
+
 // routes
 router.post("/send-email", sendEmailPrep);
 
@@ -12,16 +34,8 @@ module.exports = router;
 
 function sendEmailPrep(req, res) {
   console.log("Received email request", req.body);
-  const schema = Joi.object({
-    name: Joi.string().required(),
-    email: Joi.string().email().required(),
-    subject: Joi.string().required(),
-    message: Joi.string().required(),
-    to: Joi.string().email().required(),
-    from: Joi.string().email().optional(),
-    cc: Joi.string().email().optional(),
-    bcc: Joi.string().email().optional(),
-  });
+  const isBooking = req.body.subject?.toLowerCase().includes("booking");
+  const schema = isBooking ? bookingSchema : contactSchema;
 
   const { error } = schema.validate(req.body);
   if (error) {
@@ -38,7 +52,11 @@ function sendEmailPrep(req, res) {
       <div style="font-family: sans-serif; line-height: 1.6; color: #333; padding: 1rem;">
         <img src="https://monochrome-compliance.com/assets/logo.png" alt="Monochrome Logo" style="margin-bottom: 1rem;" />
         <h2>${req.body.subject}</h2>
-        <p><strong>From:</strong> ${req.body.name} (${req.body.email})</p>
+       ${
+         req.body.name || req.body.email
+           ? `<p><strong>From:</strong> ${req.body.name || "Not provided"} (${req.body.email || "Not provided"})</p>`
+           : ""
+       }
         <p>${req.body.message.replace(/\n/g, "<br>")}</p>
         <hr style="margin: 2rem 0;" />
         <footer style="font-size: 0.85rem; color: #666;">
@@ -51,7 +69,7 @@ function sendEmailPrep(req, res) {
           We use tracking technology to understand when our messages are opened. This helps us improve communication and customer experience.
           </p>
         </footer>
-        <img src="${trackingPixel}" alt="" width="1" height="1" style="display: none;" />
+        <img src="${trackingPixel}" alt="" width="1" height="1" style="opacity: 0;" />
       </div>
     `,
     from: req.body.from || req.body.email,
