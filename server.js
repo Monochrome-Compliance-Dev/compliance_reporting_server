@@ -88,6 +88,7 @@ app.use(
       scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
+      fontSrc: ["'self'", "data:"],
       connectSrc: ["'self'", "https://monochrome-compliance.com"],
     },
   })
