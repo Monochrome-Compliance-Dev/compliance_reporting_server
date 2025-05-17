@@ -57,9 +57,9 @@ function authenticate(req, res, next) {
       ipAddress,
       userAgent: req.headers["user-agent"],
     })
-    .then(({ refreshToken, ...user }) => {
+    .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
-      res.json(user);
+      res.json({ ...user, jwtToken });
     })
     .catch(next);
 }
@@ -72,9 +72,9 @@ function refreshToken(req, res, next) {
 
   userService
     .refreshToken({ token, ipAddress, userAgent: req.headers["user-agent"] })
-    .then(({ refreshToken, ...user }) => {
+    .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
-      res.json(user);
+      res.json({ ...user, jwtToken });
     })
     .catch((next) => {
       if (next.status === 400) {
