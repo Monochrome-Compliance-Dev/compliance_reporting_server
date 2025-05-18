@@ -20,6 +20,7 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
+const setCspHeaders = require("./cspHeaders");
 const rateLimit = require("express-rate-limit");
 
 const allowedOrigins = [
@@ -54,10 +55,19 @@ const loginLimiter = rateLimit({
   message: "Too many login attempts from this IP, please try again later.",
 });
 
-// app.use("/api/users/authenticate", loginLimiter);
+app.use("/api/users/authenticate", loginLimiter);
 app.use("/api/users/forgot-password", loginLimiter);
 app.use("/api/users/reset-password", loginLimiter);
 // app, use("/api/booking", loginLimiter);
+
+const emailLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5,
+  message: "Too many attempts, please try again later.",
+});
+
+app.use("/api/public/send-attachment-email", emailLimiter);
+app.use("/api/booking", emailLimiter);
 
 // app.get("*", (req, res) => {
 //   res.sendFile(path.join(__dirname, "build", "index.html"));
@@ -71,6 +81,13 @@ const winston = require("./helpers/logger");
 
 app.use(helmet());
 
+// Log incoming request IPs
+app.use((req, res, next) => {
+  const ip = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+  winston.info(`Incoming request from IP: ${ip}`);
+  next();
+});
+
 if (config.env === "production") {
   app.use(
     helmet.hsts({
@@ -81,18 +98,7 @@ if (config.env === "production") {
   );
 }
 
-app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:"],
-      fontSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", "https://monochrome-compliance.com"],
-    },
-  })
-);
+app.use(setCspHeaders);
 app.disable("x-powered-by");
 app.use((req, res, next) => {
   if (
