@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const Joi = require("joi");
-const { sendEmail } = require("../helpers/send-email");
+const upload = require("../middleware/upload");
+const { sendEmail, sendAttachmentEmail } = require("../helpers/send-email");
+const { scanFile } = require("../middleware/virus-scan");
+const path = require("path");
+const fs = require("fs");
 const logger = require("../helpers/logger");
 const generateTrackingPixel = require("../helpers/generateTrackingPixel");
 
@@ -27,8 +31,44 @@ const bookingSchema = Joi.object({
   bcc: Joi.string().email().optional(),
 });
 
+// Ensure tmpUploads directory exists before handling uploads
+const tmpUploadPath = path.join(__dirname, "../tmpUploads");
+if (!fs.existsSync(tmpUploadPath)) {
+  fs.mkdirSync(tmpUploadPath, { recursive: true });
+}
+
 // routes
 router.post("/send-email", sendEmailPrep);
+
+router.post(
+  "/send-attachment-email",
+  upload.single("attachment"),
+  async (req, res, next) => {
+    try {
+      console.log("[DEBUG] File received by route:", req.file);
+      if (!req.file || !req.file.path) {
+        console.warn("[WARN] Missing file or file path in request");
+      }
+      const filePath = req.file.path;
+      const ext = path.extname(filePath).toLowerCase();
+      await scanFile(filePath, ext, req.file.originalname);
+      await sendAttachmentEmail(req, res);
+
+      // Delete file after scan and successful email send
+      fs.unlink(filePath, (err) => {
+        if (err) console.error("[WARN] Failed to delete temp file:", err);
+      });
+      if (!res.headersSent) {
+        res.json({ message: "Email sent successfully" });
+      }
+    } catch (error) {
+      console.error("Error sending email:", error);
+      if (!res.headersSent) {
+        next(error);
+      }
+    }
+  }
+);
 
 module.exports = router;
 

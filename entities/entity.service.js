@@ -5,8 +5,6 @@ const logger = require("../helpers/logger");
 module.exports = {
   getAll,
   getAllByReportId,
-  getEntityByReportId,
-  sbiUpdate,
   getById,
   create,
   update,
@@ -22,34 +20,6 @@ async function getAllByReportId(reportId) {
     where: { reportId },
   });
   return entity;
-}
-
-async function getEntityByReportId(reportId) {
-  const entity = await db.Entity.findAll({
-    where: { reportId, isEntity: true, excludedEntity: false },
-  });
-  return entity;
-}
-
-async function sbiUpdate(reportId, params) {
-  // Finds the TCP record by payeeEntityAbn and updates isSbi to false
-  const entity = await db.Entity.findAll({
-    where: { reportId, payeeEntityAbn: params.payeeEntityAbn },
-  });
-  if (entity.length > 0) {
-    await db.Entity.update(
-      { isSb: false },
-      {
-        where: {
-          reportId,
-          payeeEntityAbn: params.payeeEntityAbn,
-        },
-      }
-    );
-    logger.info(
-      `SBI flag updated to false for entity with ABN ${params.payeeEntityAbn} under report ${reportId}`
-    );
-  }
 }
 
 async function getById(id) {
