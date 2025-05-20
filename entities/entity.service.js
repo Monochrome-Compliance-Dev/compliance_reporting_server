@@ -1,6 +1,5 @@
 const db = require("../helpers/db");
-const sendEmail = require("../helpers/send-email");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 
 module.exports = {
   getAll,

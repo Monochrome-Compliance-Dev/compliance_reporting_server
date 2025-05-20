@@ -6,7 +6,7 @@ const authorise = require("../middleware/authorise");
 const tatService = require("./tat.service");
 const setClientContext = require("../middleware/set-client-context");
 const { tatSchema } = require("./tat.validator");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);

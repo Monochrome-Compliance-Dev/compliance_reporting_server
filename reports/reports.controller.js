@@ -1,4 +1,4 @@
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");

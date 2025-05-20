@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const bookingService = require("./booking.service");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const { bookingSchema, bookingUpdateSchema } = require("./booking.validator");
 
 // routes

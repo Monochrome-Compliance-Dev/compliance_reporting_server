@@ -1,7 +1,7 @@
 const { expressjwt: expressJwt } = require("express-jwt");
 const { secret } = require("../config.json");
 const db = require("../helpers/db");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 
 module.exports = authorise;
 

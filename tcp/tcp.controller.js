@@ -10,7 +10,7 @@ const {
   tcpBulkImportSchema,
   tcpSchema,
 } = require("./tcp.validator");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 
 // routes
 router.get("/", authorise(), setClientContext, getAll);

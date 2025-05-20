@@ -1,6 +1,6 @@
 const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
 
 let nanoid;

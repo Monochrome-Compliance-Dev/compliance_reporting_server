@@ -6,7 +6,7 @@ const { sendEmail, sendAttachmentEmail } = require("../helpers/send-email");
 const { scanFile } = require("../middleware/virus-scan");
 const path = require("path");
 const fs = require("fs");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const generateTrackingPixel = require("../helpers/generateTrackingPixel");
 
 const contactSchema = Joi.object({

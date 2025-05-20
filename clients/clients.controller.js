@@ -3,7 +3,7 @@ const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const clientService = require("./client.service");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const { clientSchema, clientUpdateSchema } = require("./client.validator");
 
 // routes

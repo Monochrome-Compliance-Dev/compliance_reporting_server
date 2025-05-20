@@ -1,7 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const Joi = require("joi");
-const logger = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 const path = require("path");
 const db = require("../helpers/db");
 
