@@ -50,3 +50,6 @@ config.js
 
 # Upload files
 uploads
+
+# Zip files
+*.zip

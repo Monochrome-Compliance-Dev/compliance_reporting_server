@@ -50,7 +50,11 @@ async function getTcpByReportId(reportId, clientId) {
 
 async function partialUpdate(id, updates, clientId) {
   const result = await dbService.updateRecord(clientId, "tcp", id, updates, db);
-  logger.info(`TCP record ${id} partially updated for client ${clientId}`);
+  logger.logEvent("info", "TCP record partially updated", {
+    action: "PartialUpdateTCP",
+    tcpId: id,
+    clientId,
+  });
   return result;
 }
 
@@ -71,18 +75,29 @@ async function getById(id, clientId) {
 
 async function create(params, clientId) {
   const result = await dbService.createRecord(clientId, "tcp", params, db);
-  logger.info(`TCP record created for client ${clientId}`);
+  logger.logEvent("info", "TCP record created", {
+    action: "CreateTCP",
+    clientId,
+  });
   return result;
 }
 
 async function update(id, params, clientId) {
   const result = await dbService.updateRecord(clientId, "tcp", id, params, db);
-  logger.info(`TCP record ${id} updated for client ${clientId}`);
+  logger.logEvent("info", "TCP record updated", {
+    action: "UpdateTCP",
+    tcpId: id,
+    clientId,
+  });
   return result;
 }
 
 async function _delete(id, clientId) {
-  logger.warn(`TCP record ${id} deleted for client ${clientId}`);
+  logger.logEvent("warn", "TCP record deleted", {
+    action: "DeleteTCP",
+    tcpId: id,
+    clientId,
+  });
   await dbService.deleteRecord(clientId, "tcp", id, db);
 }
 

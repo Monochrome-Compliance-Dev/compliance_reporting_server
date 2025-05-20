@@ -125,9 +125,11 @@ function sbiUpdate(req, res, next) {
           message: "All records saved successfully",
           results,
         });
-        logger.audit(
-          `SBI result uploaded by user ${req.auth.id} for client ${req.auth.clientId}`
-        );
+        logger.auditEvent("SBI result uploaded", {
+          action: "SBIUpload",
+          userId: req.auth.id,
+          clientId: req.auth.clientId,
+        });
       })
       .catch((error) => {
         console.error("Error saving records:", error);
@@ -257,9 +259,11 @@ async function bulkCreate(req, res, next) {
       }
     }
 
-    logger.info(
-      `${results.length} TCP records created for client ${req.auth.clientId}`
-    );
+    logger.logEvent("info", "Bulk TCP records created", {
+      action: "BulkCreateTCP",
+      clientId: req.auth.clientId,
+      count: results.length,
+    });
 
     res.json({
       success: true,
@@ -313,9 +317,11 @@ function bulkUpdate(req, res, next) {
     // Wait for all records to be saved
     Promise.all(promises)
       .then((results) => {
-        logger.info(
-          `${results.length} TCP records updated for client ${req.auth.clientId}`
-        );
+        logger.logEvent("info", "Bulk TCP records updated", {
+          action: "BulkUpdateTCP",
+          clientId: req.auth.clientId,
+          count: results.length,
+        });
         res.json({
           success: true,
           message: "All records updated successfully",
@@ -343,9 +349,11 @@ function _delete(req, res, next) {
   tcpService
     .delete(req.params.id, req.auth.clientId)
     .then(() => {
-      logger.warn(
-        `TCP record ${req.params.id} deleted for client ${req.auth.clientId}`
-      );
+      logger.logEvent("warn", "TCP record deleted", {
+        action: "DeleteTCP",
+        tcpId: req.params.id,
+        clientId: req.auth.clientId,
+      });
       res.json({ message: "Tcp deleted successfully" });
     })
     .catch((error) => {
@@ -366,9 +374,11 @@ function submitFinalReport(req, res, next) {
     .finaliseReport(req.auth.clientId)
     .then((result) => {
       res.json(result);
-      logger.audit(
-        `Report submitted by user ${req.auth.id} for client ${req.auth.clientId}`
-      );
+      logger.auditEvent("Report submitted", {
+        action: "SubmitFinalReport",
+        userId: req.auth.id,
+        clientId: req.auth.clientId,
+      });
     })
     .catch(next);
 }
@@ -383,9 +393,11 @@ function downloadSummaryReport(req, res, next) {
         "attachment; filename=summary_report.csv"
       );
       res.send(csv);
-      logger.audit(
-        `Summary report downloaded by user ${req.auth.id} for client ${req.auth.clientId}`
-      );
+      logger.auditEvent("Summary report downloaded", {
+        action: "DownloadSummaryReport",
+        userId: req.auth.id,
+        clientId: req.auth.clientId,
+      });
     })
     .catch(next);
 }

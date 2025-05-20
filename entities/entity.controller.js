@@ -10,7 +10,10 @@ const { entitySchema } = require("./entity.validator");
 router.post("/", validateRequest(entitySchema), create);
 
 function create(req, res, next) {
-  logger.info(`[EntityController] Creating entity`);
+  logger.logEvent("info", "Creating entity", {
+    action: "CreateEntity",
+    payload: req.body,
+  });
   entityService
     .create(req.body)
     .then(() => res.status(201).json({ message: "Entity created" }))

@@ -1,6 +1,6 @@
 const nodemailer = require("nodemailer");
 const config = require("../config.json");
-const winston = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 
 module.exports = { sendEmail, sendAttachmentEmail };
 
@@ -23,10 +23,19 @@ async function sendEmail({
       subject,
       html,
     });
-    winston.info(`Email sent to ${to} with subject "${subject}"`);
+    logger.logEvent("info", "Email sent", {
+      action: "SendEmail",
+      to,
+      subject,
+    });
     return null;
   } catch (error) {
-    winston.error("Email send failed", { error });
+    logger.logEvent("error", "Email send failed", {
+      action: "SendEmail",
+      to,
+      subject,
+      error: error.message,
+    });
     console.error("Error sending email:", error);
     return error;
   }
@@ -60,8 +69,12 @@ async function sendAttachmentEmail(req, res) {
       },
     ],
   });
-
-  winston.info(`Attachment email sent to ${to} with subject "${subject}"`);
+  logger.logEvent("info", "Attachment email sent", {
+    action: "SendAttachmentEmail",
+    to,
+    subject,
+    fileName: req.file?.originalname,
+  });
 
   res.json({ message: "Email sent successfully" });
 }

@@ -10,28 +10,41 @@ module.exports = {
 };
 
 async function getAll() {
-  logger.info("[BookingService] Fetching all bookings");
+  logger.logEvent("info", "Fetching all bookings", {
+    action: "GetAllBookings",
+  });
   return await db.Booking.findAll();
 }
 
 async function getById(id) {
-  logger.info(`[BookingService] Fetching booking by ID: ${id}`);
+  logger.logEvent("info", "Fetching booking by ID", {
+    action: "GetBooking",
+    bookingId: id,
+  });
   return await getBooking(id);
 }
 
 async function create(params) {
-  logger.info(`[BookingService] Creating booking`);
+  logger.logEvent("info", "Creating booking", {
+    action: "CreateBooking",
+  });
   // Ensure createdBy is not explicitly passed or logged
   if ("createdBy" in params) {
     delete params.createdBy;
   }
   const booking = await db.Booking.create(params);
-  logger.info(`Booking created with ID ${booking.id}`);
+  logger.logEvent("info", "Booking created", {
+    action: "CreateBooking",
+    bookingId: booking.id,
+  });
   return booking;
 }
 
 async function update(id, params) {
-  logger.info(`[BookingService] Updating booking ID: ${id}`);
+  logger.logEvent("info", "Updating booking", {
+    action: "UpdateBooking",
+    bookingId: id,
+  });
   // Ensure updatedBy is not explicitly passed or logged
   if ("updatedBy" in params) {
     delete params.updatedBy;
@@ -39,15 +52,24 @@ async function update(id, params) {
   const booking = await getBooking(id);
   Object.assign(booking, params);
   await booking.save();
-  logger.info(`Booking with ID ${id} updated`);
+  logger.logEvent("info", "Booking updated", {
+    action: "UpdateBooking",
+    bookingId: id,
+  });
   return booking;
 }
 
 async function _delete(id) {
-  logger.info(`[BookingService] Deleting booking ID: ${id}`);
+  logger.logEvent("info", "Deleting booking", {
+    action: "DeleteBooking",
+    bookingId: id,
+  });
   const booking = await getBooking(id);
   await booking.destroy();
-  logger.info(`Booking with ID ${id} deleted`);
+  logger.logEvent("info", "Booking deleted", {
+    action: "DeleteBooking",
+    bookingId: id,
+  });
 }
 
 // helper function

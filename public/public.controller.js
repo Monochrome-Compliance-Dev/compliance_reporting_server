@@ -47,7 +47,9 @@ router.post(
     try {
       console.log("[DEBUG] File received by route:", req.file);
       if (!req.file || !req.file.path) {
-        console.warn("[WARN] Missing file or file path in request");
+        logger.logEvent("warn", "Missing file or file path in request", {
+          action: "SendAttachmentEmail",
+        });
       }
       const filePath = req.file.path;
       const ext = path.extname(filePath).toLowerCase();
@@ -56,13 +58,22 @@ router.post(
 
       // Delete file after scan and successful email send
       fs.unlink(filePath, (err) => {
-        if (err) console.error("[WARN] Failed to delete temp file:", err);
+        if (err)
+          logger.logEvent("warn", "Failed to delete temp file", {
+            action: "SendAttachmentEmail",
+            file: filePath,
+            error: err.message,
+          });
       });
       if (!res.headersSent) {
         res.json({ message: "Email sent successfully" });
       }
     } catch (error) {
-      console.error("Error sending email:", error);
+      logger.logEvent("error", "Error sending email with attachment", {
+        action: "SendAttachmentEmail",
+        error: error.message,
+        stack: error.stack,
+      });
       if (!res.headersSent) {
         next(error);
       }
@@ -117,14 +128,16 @@ function sendEmailPrep(req, res) {
     bcc: req.body.bcc,
   })
     .then(() => {
-      logger.info("Email sent successfully", {
+      logger.logEvent("info", "Email sent successfully", {
+        action: "SendEmail",
         email: req.body.email,
         subject: req.body.subject,
       });
       res.json({ status: 200, message: "Email sent successfully" });
     })
     .catch((error) => {
-      logger.error("Error sending email", {
+      logger.logEvent("error", "Error sending email", {
+        action: "SendEmail",
         error: error.message,
         stack: error.stack,
       });

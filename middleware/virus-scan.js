@@ -1,3 +1,4 @@
+const { logger } = require("../helpers/logger");
 const NodeClam = require("clamscan");
 const { Readable } = require("stream");
 
@@ -18,47 +19,76 @@ const ClamScan = new NodeClam().init({
 });
 
 async function scanFile(filePath, ext, originalname) {
-  console.log(`[virus-scan] scanFile called for: ${originalname} (${ext})`);
-  console.log(`[virus-scan] filePath received: ${filePath}`);
+  logger.logEvent("info", "scanFile invoked", {
+    action: "AntivirusScan",
+    fileName: originalname,
+    filePath,
+  });
 
   try {
     const clamscan = await ClamScan;
     const { isInfected } = await clamscan.isInfected(filePath);
-    console.log(
-      `[virus-scan] Scan result for ${originalname}: ${isInfected ? "infected" : "clean"}`
-    );
+    logger.logEvent("info", "Scan result", {
+      action: "AntivirusScan",
+      fileName: originalname,
+      result: isInfected ? "infected" : "clean",
+    });
 
     if (isInfected) {
-      console.warn(`[virus-scan] File rejected: ${originalname}`);
+      logger.logEvent("warn", "File rejected by antivirus", {
+        action: "AntivirusScan",
+        fileName: originalname,
+      });
       throw new Error("File failed antivirus scan.");
     }
 
-    console.info(`[virus-scan] File passed scan: ${originalname}`);
+    logger.logEvent("info", "File passed scan", {
+      action: "AntivirusScan",
+      fileName: originalname,
+    });
   } catch (err) {
-    console.error(`[virus-scan] ClamAV error for ${originalname}:`, err);
+    logger.logEvent("error", "ClamAV scan error", {
+      action: "AntivirusScan",
+      fileName: originalname,
+      error: err.message,
+    });
     throw new Error("Antivirus scan failed.");
   }
 }
 
 async function scanFileBuffer(buffer, name) {
-  console.log(`[virus-scan] scanFileBuffer called for: ${name}`);
+  logger.logEvent("info", "scanFileBuffer invoked", {
+    action: "AntivirusScanBuffer",
+    fileName: name,
+  });
 
   try {
     const clamscan = await ClamScan;
     const stream = Readable.from(buffer); // convert buffer to stream
     const { isInfected } = await clamscan.scanStream(stream);
 
-    console.log(
-      `[virus-scan] Scan result for ${name}: ${isInfected ? "infected" : "clean"}`
-    );
+    logger.logEvent("info", "Buffer scan result", {
+      action: "AntivirusScanBuffer",
+      fileName: name,
+      result: isInfected ? "infected" : "clean",
+    });
     if (isInfected) {
-      console.warn(`[virus-scan] File rejected: ${name}`);
+      logger.logEvent("warn", "Buffer rejected by antivirus", {
+        action: "AntivirusScanBuffer",
+        fileName: name,
+      });
       throw new Error("File failed antivirus scan.");
     }
-
-    console.info(`[virus-scan] File passed scan: ${name}`);
+    logger.logEvent("info", "Buffer passed scan", {
+      action: "AntivirusScanBuffer",
+      fileName: name,
+    });
   } catch (err) {
-    console.error(`[virus-scan] ClamAV error for ${name}:`, err);
+    logger.logEvent("error", "ClamAV buffer scan error", {
+      action: "AntivirusScanBuffer",
+      fileName: name,
+      error: err.message,
+    });
     throw new Error("Antivirus scan failed.");
   }
 }

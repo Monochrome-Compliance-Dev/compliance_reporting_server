@@ -17,9 +17,10 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  logger.info(
-    `[ClientController] Retrieved all clients by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Retrieved all clients", {
+    action: "GetAllClients",
+    userId: req?.user?.id || "unknown",
+  });
   clientService
     .getAll()
     .then((entities) => res.json(entities))
@@ -27,9 +28,11 @@ function getAll(req, res, next) {
 }
 
 function getById(req, res, next) {
-  logger.info(
-    `[ClientController] Retrieved client by ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Retrieved client by ID", {
+    action: "GetClient",
+    clientId: req.params.id,
+    userId: req?.user?.id || "unknown",
+  });
   clientService
     .getById(req.params.id)
     .then((client) => (client ? res.json(client) : res.sendStatus(404)))
@@ -37,47 +40,68 @@ function getById(req, res, next) {
 }
 
 function create(req, res, next) {
-  console.log("Creating client with data:", req.body); // Log the request body
-  logger.info(
-    `[ClientController] Created new client by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Creating client", {
+    action: "CreateClient",
+    userId: req?.user?.id || "unknown",
+    payload: req.body,
+  });
   clientService
     .create(req.body)
     .then((client) => {
-      logger.info(`Client created via API: ${client.id}`);
+      logger.logEvent("info", "Client created via API", {
+        action: "CreateClient",
+        clientId: client.id,
+      });
       res.json(client);
     })
     .catch((error) => {
-      console.error("Error creating client:", error); // Log the error details
+      logger.logEvent("error", "Error creating client", {
+        action: "CreateClient",
+        error: error.message,
+      });
       next(error); // Pass the error to the global error handler
     });
 }
 
 function update(req, res, next) {
-  logger.info(
-    `[ClientController] Updated client ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Updating client", {
+    action: "UpdateClient",
+    clientId: req.params.id,
+    userId: req?.user?.id || "unknown",
+    payload: req.body,
+  });
   clientService
     .update(req.params.id, req.body)
     .then((client) => {
-      logger.info(`Client updated via API: ${req.params.id}`);
+      logger.logEvent("info", "Client updated via API", {
+        action: "UpdateClient",
+        clientId: req.params.id,
+      });
       res.json(client);
     })
     .catch(next);
 }
 
 function _delete(req, res, next) {
-  logger.info(
-    `[ClientController] Deleted client ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Deleting client", {
+    action: "DeleteClient",
+    clientId: req.params.id,
+    userId: req?.user?.id || "unknown",
+  });
   clientService
     .delete(req.params.id)
     .then(() => {
-      logger.info(`Client deleted via API: ${req.params.id}`);
+      logger.logEvent("warn", "Client deleted via API", {
+        action: "DeleteClient",
+        clientId: req.params.id,
+      });
       res.json({ message: "Client deleted successfully" });
     })
     .catch((error) => {
-      console.error("Error deleting client:", error); // Log the error details
+      logger.logEvent("error", "Error deleting client", {
+        action: "DeleteClient",
+        error: error.message,
+      });
       next(error); // Pass the error to the global error handler
     });
 }

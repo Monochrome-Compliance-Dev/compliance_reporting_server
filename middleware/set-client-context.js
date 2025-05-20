@@ -1,3 +1,4 @@
+const { logger } = require("../helpers/logger");
 const db = require("../helpers/db");
 
 module.exports = async function setClientContext(req, res, next) {
@@ -8,10 +9,16 @@ module.exports = async function setClientContext(req, res, next) {
     }
 
     await db.sequelize.query(`SET @current_client_id = '${clientId}'`);
-    console.info(`Client context set to: ${clientId}`);
+    logger.logEvent("info", "Client context set", {
+      action: "SetClientContext",
+      clientId,
+    });
     next();
   } catch (err) {
-    console.error("Error setting client context:", err);
+    logger.logEvent("error", "Error setting client context", {
+      action: "SetClientContext",
+      error: err.message,
+    });
     res.status(500).json({ message: "Failed to set client context" });
   }
 };

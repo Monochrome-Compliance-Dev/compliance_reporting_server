@@ -1,5 +1,5 @@
 const db = require("../helpers/db");
-const winston = require("../helpers/logger");
+const { logger } = require("../helpers/logger");
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -37,7 +37,12 @@ async function createRecord(clientId, tableName, params, db) {
     { replacements: [id] }
   );
 
-  winston.info(`Record created in ${viewName}`, { id });
+  logger.logEvent("info", "Record created", {
+    action: "CreateRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+  });
   return newRow[0];
 }
 
@@ -53,11 +58,22 @@ async function updateRecord(clientId, tableName, id, params, db) {
   const values = [...Object.values(params), id];
 
   const sql = `UPDATE \`${viewName}\` SET ${fields} WHERE id = ?`;
-  console.log("SQL Update:", sql);
-  console.log("Update Values:", values);
+  logger.logEvent("info", "Executing record update", {
+    action: "UpdateRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+    sql,
+    values,
+  });
   await db.sequelize.query(sql, { replacements: values });
 
-  winston.info(`Record updated in ${viewName}`, { id });
+  logger.logEvent("info", "Record updated", {
+    action: "UpdateRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+  });
   return { id, ...params };
 }
 
@@ -65,5 +81,10 @@ async function deleteRecord(clientId, tableName, id, db) {
   const viewName = `client_${clientId}_tbl_${tableName}`;
   const sql = `DELETE FROM \`${viewName}\` WHERE id = ?`;
   await db.sequelize.query(sql, { replacements: [id] });
-  winston.info(`Record deleted from ${viewName}`, { id });
+  logger.logEvent("warn", "Record deleted", {
+    action: "DeleteRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+  });
 }

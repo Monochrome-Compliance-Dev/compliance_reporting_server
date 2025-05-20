@@ -87,7 +87,11 @@ function create(req, res, next) {
     .create(req.body, req.auth.clientId)
     .then((tat) => res.json(tat))
     .catch((error) => {
-      logger.error("Error creating tat", { error }); // Log the error details
+      logger.logEvent("error", "Error creating TAT record", {
+        action: "CreateTAT",
+        error: error.message,
+        clientId: req.auth.clientId,
+      });
       next(error); // Pass the error to the global error handler
     });
 }
@@ -127,7 +131,12 @@ function _delete(req, res, next) {
     .delete(req.params.id, req.auth.clientId)
     .then(() => res.json({ message: "Tat deleted successfully" }))
     .catch((error) => {
-      logger.error("Error deleting tat", { error }); // Log the error details
+      logger.logEvent("error", "Error deleting TAT record", {
+        action: "DeleteTAT",
+        error: error.message,
+        clientId: req.auth.clientId,
+        tatId: req.params.id,
+      });
       next(error); // Pass the error to the global error handler
     });
 }

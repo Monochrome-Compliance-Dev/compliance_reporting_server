@@ -2,14 +2,18 @@
 const config = require("./helpers/config");
 
 if (!process.env.JWT_SECRET) {
-  console.warn(
-    "⚠️  JWT_SECRET is not set in the .env file. Authentication may fail."
+  logger.logEvent(
+    "warn",
+    "JWT_SECRET is not set in the .env file. Authentication may fail.",
+    {
+      action: "StartupCheck",
+    }
   );
 }
 if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
-  console.warn(
-    "⚠️  Database credentials (DB_HOST, DB_USER, DB_NAME) are missing."
-  );
+  logger.logEvent("warn", "Database credentials are missing", {
+    action: "StartupCheck",
+  });
 }
 
 require("rootpath")();
@@ -77,14 +81,17 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-const winston = require("./helpers/logger");
+const { logger } = require("./helpers/logger");
 
 app.use(helmet());
 
 // Log incoming request IPs
 app.use((req, res, next) => {
   const ip = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
-  winston.info(`Incoming request from IP: ${ip}`);
+  logger.logEvent("info", "Incoming request", {
+    action: "RequestIPLog",
+    ip,
+  });
   next();
 });
 
@@ -124,15 +131,19 @@ app.use("/api/tracking", require("./tracking/tracking.controller"));
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {
   if (middleware.route) {
-    console.log(
-      `Route: ${middleware.route.path}, Methods: ${Object.keys(middleware.route.methods).join(", ")}`
-    );
+    logger.logEvent("info", "Registered route", {
+      action: "RouteRegistration",
+      path: middleware.route?.path,
+      methods: Object.keys(middleware.route?.methods || {}).join(", "),
+    });
   } else if (middleware.name === "router") {
     middleware.handle.stack.forEach((handler) => {
       if (handler.route) {
-        console.log(
-          `Route: ${handler.route.path}, Methods: ${Object.keys(handler.route.methods).join(", ")}`
-        );
+        logger.logEvent("info", "Registered route", {
+          action: "RouteRegistration",
+          path: handler.route?.path,
+          methods: Object.keys(handler.route?.methods || {}).join(", "),
+        });
       }
     });
   }
@@ -148,8 +159,11 @@ app.use(errorHandler);
 const port = config.port;
 app.listen(port, () => {
   const message = `✅ Server running in ${config.env} mode on port ${port}`;
-  console.log(message);
-  winston.info(message);
+  logger.logEvent("info", message, {
+    action: "ServerStart",
+    port,
+    env: config.env,
+  });
 });
 
 // run this when you need to find the pid to kill

@@ -52,17 +52,30 @@ async function getById(id) {
 }
 
 async function create(params, clientId) {
-  logger.info("Creating new TAT record", { clientId, params });
+  logger.logEvent("info", "Creating new TAT record", {
+    action: "CreateTAT",
+    clientId,
+    ...params,
+  });
   return await dbService.createRecord(clientId, "tat", params, db);
 }
 
 async function update(id, params, clientId) {
-  logger.info("Updating TAT record", { id, clientId, params });
+  logger.logEvent("info", "Updating TAT record", {
+    action: "UpdateTAT",
+    tatId: id,
+    clientId,
+    ...params,
+  });
   return await dbService.updateRecord(clientId, "tat", id, params, db);
 }
 
 async function _delete(id, clientId) {
-  logger.warn("Deleting TAT record", { id, clientId });
+  logger.logEvent("warn", "Deleting TAT record", {
+    action: "DeleteTAT",
+    tatId: id,
+    clientId,
+  });
   await dbService.deleteRecord(clientId, "tat", id, db);
 }
 

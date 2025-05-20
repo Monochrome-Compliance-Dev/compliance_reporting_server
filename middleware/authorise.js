@@ -21,22 +21,32 @@ function authorise(roles = []) {
       const user = await db.User.findByPk(req.auth.id);
 
       if (!user || (roles.length && !roles.includes(user.role))) {
-        logger.warn(`Unauthorised access attempt by user ID: ${req.auth.id}`);
+        logger.logEvent("warn", "Unauthorised access attempt", {
+          action: "AuthoriseAccessCheck",
+          userId: req.auth.id,
+        });
         return res.status(401).json({ message: "Unauthorised" });
       }
 
       if (user.clientId !== req.auth.clientId) {
-        logger.warn(
-          `Unauthorised access - User ID: ${req.auth.id}, Role: ${user?.role}, Client: ${user?.clientId}`
-        );
+        logger.logEvent("warn", "Forbidden access: client mismatch", {
+          action: "AuthoriseAccessCheck",
+          userId: req.auth.id,
+          role: user?.role,
+          clientId: user?.clientId,
+        });
         return res
           .status(403)
           .json({ message: "Forbidden: Tenant access denied" });
       }
 
-      logger.info(
-        `User authorised - ID: ${req.auth.id}, Role: ${user.role}, Client: ${user.clientId}, IP: ${req.ip}`
-      );
+      logger.logEvent("info", "User authorised", {
+        action: "AuthoriseAccessGranted",
+        userId: req.auth.id,
+        role: user.role,
+        clientId: user.clientId,
+        ip: req.ip,
+      });
 
       const refreshTokens = await user.getRefreshTokens();
       req.auth.ownsToken = (token) =>

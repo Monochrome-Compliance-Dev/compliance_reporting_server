@@ -15,9 +15,11 @@ router.delete("/:id", _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  logger.info(
-    `[BookingController] Retrieved all bookings by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Retrieved all bookings", {
+    action: "GetAllBookings",
+    userId: req?.user?.id || "unknown",
+    ip: req.ip,
+  });
   bookingService
     .getAll()
     .then((entities) => res.json(entities))
@@ -25,9 +27,12 @@ function getAll(req, res, next) {
 }
 
 function getById(req, res, next) {
-  logger.info(
-    `[BookingController] Retrieved booking by ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Retrieved booking by ID", {
+    action: "GetBooking",
+    bookingId: req.params.id,
+    userId: req?.user?.id || "unknown",
+    ip: req.ip,
+  });
   bookingService
     .getById(req.params.id)
     .then((booking) => (booking ? res.json(booking) : res.sendStatus(404)))
@@ -35,44 +40,66 @@ function getById(req, res, next) {
 }
 
 function create(req, res, next) {
-  logger.info(`[BookingController] Created new booking`);
+  logger.logEvent("info", "Creating new booking", {
+    action: "CreateBooking",
+    userAgent: req.headers["user-agent"],
+  });
   bookingService
     .create(req.body)
     .then((booking) => {
-      logger.info(`Booking created via API: ${booking.id}`);
+      logger.logEvent("info", "Booking created", {
+        action: "CreateBooking",
+        bookingId: booking.id,
+      });
       res.json(booking);
     })
     .catch((error) => {
-      logger.error("Error creating booking:", error);
+      logger.logEvent("error", "Error creating booking", {
+        action: "CreateBooking",
+        error: error.message,
+      });
       next(error);
     });
 }
 
 function update(req, res, next) {
-  logger.info(
-    `[BookingController] Updated booking ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Updating booking", {
+    action: "UpdateBooking",
+    bookingId: req.params.id,
+    userId: req?.user?.id || "unknown",
+  });
   bookingService
     .update(req.params.id, req.body)
     .then((booking) => {
-      logger.info(`Booking updated via API: ${req.params.id}`);
+      logger.logEvent("info", "Booking updated", {
+        action: "UpdateBooking",
+        bookingId: req.params.id,
+      });
       res.json(booking);
     })
     .catch(next);
 }
 
 function _delete(req, res, next) {
-  logger.info(
-    `[BookingController] Deleted booking ID: ${req.params.id} by user ${req?.user?.id || "unknown"}`
-  );
+  logger.logEvent("info", "Deleting booking", {
+    action: "DeleteBooking",
+    bookingId: req.params.id,
+    userId: req?.user?.id || "unknown",
+  });
   bookingService
     .delete(req.params.id)
     .then(() => {
-      logger.info(`Booking deleted via API: ${req.params.id}`);
+      logger.logEvent("info", "Booking deleted", {
+        action: "DeleteBooking",
+        bookingId: req.params.id,
+      });
       res.json({ message: "Booking deleted successfully" });
     })
     .catch((error) => {
-      logger.error("Error deleting booking:", error);
+      logger.logEvent("error", "Error deleting booking", {
+        action: "DeleteBooking",
+        error: error.message,
+      });
       next(error);
     });
 }

@@ -29,12 +29,24 @@ router.get("/pixel", async (req, res) => {
       geoCity: data.city,
     };
   } catch (err) {
-    logger.warn(`Geo lookup failed for ${ip}: ${err.message}`);
+    logger.logEvent("warn", "Geo lookup failed", {
+      action: "GeoLookup",
+      ip,
+      error: err.message,
+    });
   }
 
-  logger.info(
-    `[TrackingPixel] Open tracked for ${email || "unknown"} from IP ${ip} at ${time}`
-  );
+  logger.logEvent("info", "Email open tracked", {
+    action: "EmailOpen",
+    email: email || "unknown",
+    ip,
+    userAgent: ua,
+    referer,
+    origin,
+    host,
+    campaignId,
+    time,
+  });
 
   await db.Tracking.create({
     email,

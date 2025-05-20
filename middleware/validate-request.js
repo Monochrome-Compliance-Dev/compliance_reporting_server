@@ -1,3 +1,4 @@
+const { logger } = require("../helpers/logger");
 module.exports = function validateRequest(schema) {
   return function (req, res, next) {
     const options = {
@@ -30,7 +31,12 @@ module.exports = function validateRequest(schema) {
     });
 
     if (errors.length > 0) {
-      console.log("Validation errors:", JSON.stringify(errors, null, 2)); // 👈 Pretty-print to console
+      logger.logEvent("warn", "Validation failed", {
+        action: "ValidateRequest",
+        path: req.originalUrl,
+        clientId: req?.auth?.clientId || "unknown",
+        errors,
+      });
       return res
         .status(400)
         .json({ message: "Validation failed for some records", errors });

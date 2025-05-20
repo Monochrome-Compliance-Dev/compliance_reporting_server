@@ -5,6 +5,7 @@ const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const Role = require("../helpers/role");
 const userService = require("./user.service");
+const { logger } = require("../helpers/logger");
 const {
   authSchema,
   registerSchema,
@@ -60,6 +61,13 @@ function authenticate(req, res, next) {
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json({ ...user, jwtToken });
+      logger.logEvent("info", "User login successful", {
+        action: "Authenticate",
+        userId: user.id,
+        email: user.email,
+        ip: ipAddress,
+        device: req.headers["user-agent"],
+      });
     })
     .catch(next);
 }
@@ -75,6 +83,13 @@ function refreshToken(req, res, next) {
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json({ ...user, jwtToken });
+      logger.logEvent("info", "Refresh token issued", {
+        action: "RefreshToken",
+        userId: user.id,
+        email: user.email,
+        ip: ipAddress,
+        device: req.headers["user-agent"],
+      });
     })
     .catch((next) => {
       if (next.status === 400) {
@@ -119,6 +134,13 @@ function revokeToken(req, res, next) {
         path: "/",
         domain: "localhost",
       });
+      logger.logEvent("info", "Refresh token revoked via controller", {
+        action: "RevokeToken",
+        token,
+        ip: ipAddress,
+        userId: req.auth.id,
+        device: req.headers["user-agent"],
+      });
       res.json({ message: "Token revoked" });
     })
     .catch((err) => {
@@ -137,6 +159,13 @@ function register(req, res, next) {
           "Registration successful, please check your email for verification instructions",
       })
     )
+    .then(() => {
+      logger.logEvent("info", "User registered via controller", {
+        action: "Register",
+        email: req.body.email,
+        device: req.headers["user-agent"],
+      });
+    })
     .catch(next);
 }
 
@@ -164,6 +193,12 @@ function forgotPassword(req, res, next) {
         message: "Please check your email for password reset instructions",
       })
     )
+    .then(() => {
+      logger.logEvent("info", "Forgot password requested", {
+        action: "ForgotPassword",
+        email: req.body.email,
+      });
+    })
     .catch(next);
 }
 
@@ -187,6 +222,12 @@ function resetPassword(req, res, next) {
       });
       res.json({ message: "Password reset successful, you can now login" });
     })
+    .then(() => {
+      logger.logEvent("info", "Password reset completed", {
+        action: "ResetPassword",
+        email: req.body.email,
+      });
+    })
     .catch(next);
 }
 
@@ -204,11 +245,18 @@ function getById(req, res, next) {
 
   userService
     .getById(req.params.id)
-    .then((user) =>
-      user
-        ? res.json(user)
-        : res.status(404).json({ error: "User not found", code: 404 })
-    )
+    .then((user) => {
+      if (user) {
+        logger.logEvent("info", "Fetched user by ID", {
+          action: "GetUser",
+          userId: req.params.id,
+          requestedBy: req.user.id,
+        });
+        res.json(user);
+      } else {
+        res.status(404).json({ error: "User not found", code: 404 });
+      }
+    })
     .catch(next);
 }
 
@@ -254,7 +302,14 @@ function _delete(req, res, next) {
 
   userService
     .delete(req.params.id)
-    .then(() => res.json({ message: "User deleted successfully" }))
+    .then(() => {
+      res.json({ message: "User deleted successfully" });
+      logger.logEvent("warn", "User deleted via controller", {
+        action: "DeleteUser",
+        userId: req.params.id,
+        requestedBy: req.user.id,
+      });
+    })
     .catch(next);
 }
 

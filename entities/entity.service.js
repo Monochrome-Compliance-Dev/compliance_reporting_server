@@ -29,7 +29,10 @@ async function getById(id) {
 async function create(params) {
   // save entity
   const entity = await db.Entity.create(params);
-  logger.info(`Entity created with ID ${entity.id}`, { entity });
+  logger.logEvent("info", "Entity created", {
+    action: "CreateEntity",
+    entityId: entity.id,
+  });
   return entity;
 }
 
@@ -48,14 +51,21 @@ async function update(id, params) {
   // copy params to entity and save
   Object.assign(entity, params);
   const response = await entity.save();
-  logger.info(`Entity updated with ID ${entity.id}`, { updatedFields: params });
+  logger.logEvent("info", "Entity updated", {
+    action: "UpdateEntity",
+    entityId: entity.id,
+    updatedFields: params,
+  });
   return response;
 }
 
 async function _delete(id) {
   const entity = await getEntity(id);
   await entity.destroy();
-  logger.info(`Entity deleted with ID ${entity.id}`);
+  logger.logEvent("warn", "Entity deleted", {
+    action: "DeleteEntity",
+    entityId: entity.id,
+  });
 }
 
 // helper functions

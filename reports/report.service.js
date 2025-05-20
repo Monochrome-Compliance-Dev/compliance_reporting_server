@@ -28,15 +28,39 @@ async function getAllByReportId(reportId, clientId) {
 }
 
 async function create(clientId, params) {
-  return await dbService.createRecord(clientId, "report", params, db);
+  const result = await dbService.createRecord(clientId, "report", params, db);
+  logger.logEvent("info", "Report created", {
+    action: "CreateReport",
+    clientId,
+    ...params,
+  });
+  return result;
 }
 
 async function update(clientId, id, params) {
-  return await dbService.updateRecord(clientId, "report", id, params, db);
+  const result = await dbService.updateRecord(
+    clientId,
+    "report",
+    id,
+    params,
+    db
+  );
+  logger.logEvent("info", "Report updated", {
+    action: "UpdateReport",
+    clientId,
+    reportId: id,
+    ...params,
+  });
+  return result;
 }
 
 async function _delete(clientId, id) {
   await dbService.deleteRecord(clientId, "report", id, db);
+  logger.logEvent("warn", "Report deleted", {
+    action: "DeleteReport",
+    clientId,
+    reportId: id,
+  });
 }
 
 async function getById(id, clientId) {
@@ -57,6 +81,14 @@ async function finaliseSubmission(clientId) {
     `SELECT COUNT(*) AS count FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
   );
   if (rows[0].count > 0) {
+    logger.logEvent(
+      "warn",
+      "Report submission blocked due to missing isSb flags",
+      {
+        action: "FinaliseSubmissionBlocked",
+        clientId,
+      }
+    );
     throw { status: 400, message: "Some records are missing isSb flags" };
   }
 
@@ -79,6 +111,12 @@ async function finaliseSubmission(clientId) {
       db
     );
   }
+
+  logger.logEvent("info", "Reports finalised", {
+    action: "FinaliseSubmission",
+    clientId,
+    reportIds: reportIds.map((r) => r.reportId),
+  });
 
   return { success: true, message: "Report(s) marked as Submitted" };
 }

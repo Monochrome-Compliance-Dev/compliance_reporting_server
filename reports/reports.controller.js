@@ -48,7 +48,11 @@ function create(req, res, next) {
     .create(req.auth.clientId, req.body)
     .then((report) => res.json(report))
     .catch((error) => {
-      logger.error("Error creating report:", error);
+      logger.logEvent("error", "Error creating report", {
+        action: "CreateReport",
+        clientId: req.auth.clientId,
+        error: error.message,
+      });
       next(error); // Pass the error to the global error handler
     });
 }
@@ -57,11 +61,21 @@ function update(req, res, next) {
   reportService
     .update(req.params.id, req.body, req.auth.clientId)
     .then((report) => {
-      logger.info(`Report ${req.params.id} updated by user ${req.auth.id}`);
+      logger.logEvent("info", "Report updated", {
+        action: "UpdateReport",
+        reportId: req.params.id,
+        clientId: req.auth.clientId,
+        userId: req.auth.id,
+      });
       res.json(report);
     })
     .catch((error) => {
-      logger.error(`Error updating report ${req.params.id}:`, error);
+      logger.logEvent("error", "Error updating report", {
+        action: "UpdateReport",
+        reportId: req.params.id,
+        clientId: req.auth.clientId,
+        error: error.message,
+      });
       next(error);
     });
 }
@@ -70,11 +84,21 @@ function _delete(req, res, next) {
   reportService
     .delete(req.params.id, req.auth.clientId)
     .then(() => {
-      logger.info(`Report ${req.params.id} deleted by user ${req.auth.id}`);
+      logger.logEvent("warn", "Report deleted", {
+        action: "DeleteReport",
+        reportId: req.params.id,
+        clientId: req.auth.clientId,
+        userId: req.auth.id,
+      });
       res.json({ message: "Report deleted successfully" });
     })
     .catch((error) => {
-      logger.error(`Error deleting report ${req.params.id}:`, error);
+      logger.logEvent("error", "Error deleting report", {
+        action: "DeleteReport",
+        reportId: req.params.id,
+        clientId: req.auth.clientId,
+        error: error.message,
+      });
       next(error); // Pass the error to the global error handler
     });
 }
