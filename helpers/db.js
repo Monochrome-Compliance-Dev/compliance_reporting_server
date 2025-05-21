@@ -1,21 +1,29 @@
-const config = require("../config.json");
+const config = require("./config");
 const mysql = require("mysql2/promise");
 const { Sequelize } = require("sequelize");
 
 const { logger } = require("./logger");
 
-// Use environment variables with fallback to config.json
-const DB_HOST = process.env.DB_HOST || config.database.host;
-const DB_PORT = process.env.DB_PORT || config.database.port;
-const DB_USER = process.env.DB_USER || config.database.user;
-const DB_PASSWORD = process.env.DB_PASSWORD || config.database.password;
-const DB_NAME = process.env.DB_NAME || config.database.database;
-const DB_SOCKET_PATH = process.env.DB_SOCKET_PATH || config.database.socketPath;
+// Use environment variables with fallback to config.js
+const DB_HOST = process.env.DB_HOST || config.db.host;
+const DB_PORT = process.env.DB_PORT || config.db.port;
+const DB_USER = process.env.DB_USER || config.db.user;
+const DB_PASSWORD = process.env.DB_PASSWORD || config.db.password;
+const DB_NAME = process.env.DB_NAME || config.db.name;
+const DB_SOCKET_PATH = process.env.DB_SOCKET_PATH || config.db.socketPath;
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   dialect: "mysql",
   host: DB_HOST,
-  dialectOptions: { decimalNumbers: true, socketPath: DB_SOCKET_PATH },
+  dialectOptions: {
+    decimalNumbers: true,
+    socketPath: DB_SOCKET_PATH,
+    charset: "utf8mb4", // ✅ override here
+  },
+  define: {
+    charset: "utf8mb4",
+    collate: "utf8mb4_0900_ai_ci",
+  },
   pool: {
     max: 100,
     min: 0,
@@ -45,14 +53,16 @@ async function initialize() {
   let retries = 5;
   while (retries) {
     try {
-      const connection = await mysql.createConnection({
+      const pool = mysql.createPool({
         host: DB_HOST,
         port: DB_PORT,
         user: DB_USER,
         password: DB_PASSWORD,
         socketPath: DB_SOCKET_PATH,
+        charset: "utf8mb4",
       });
-      await connection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;`);
+      await pool.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;`);
+      await pool.end();
       break;
     } catch (err) {
       retries -= 1;

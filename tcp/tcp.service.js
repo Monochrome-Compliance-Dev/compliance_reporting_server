@@ -2,12 +2,13 @@ const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
 const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
+let nanoid = () => "xxxxxxxxxx"; // fallback for test
 
-let nanoid;
-(async () => {
-  const { nanoid: importedNanoid } = await import("nanoid");
-  nanoid = importedNanoid;
-})();
+if (process.env.NODE_ENV !== "test") {
+  import("nanoid").then((mod) => {
+    nanoid = mod.nanoid;
+  });
+}
 
 module.exports = {
   getAll,

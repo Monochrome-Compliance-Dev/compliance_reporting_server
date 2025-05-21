@@ -26,6 +26,7 @@ const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
 const setCspHeaders = require("./cspHeaders");
 const rateLimit = require("express-rate-limit");
+const PORT = process.env.PORT || 4000;
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
@@ -156,16 +157,20 @@ app._router.stack.forEach((middleware) => {
 // global error handler
 app.use(errorHandler);
 
-// start server
+// start server unless in test mode
 const port = config.port;
-app.listen(port, () => {
-  const message = `✅ Server running in ${config.env} mode on port ${port}`;
-  logger.logEvent("info", message, {
-    action: "ServerStart",
-    port,
-    env: config.env,
+if (config.env !== "test") {
+  app.listen(port, () => {
+    const message = `✅ Server running in ${config.env} mode on port ${port}`;
+    logger.logEvent("info", message, {
+      action: "ServerStart",
+      port,
+      env: config.env,
+    });
   });
-});
+}
+
+module.exports = app;
 
 // run this when you need to find the pid to kill
 // sudo lsof -i -P | grep LISTEN | grep :$PORT

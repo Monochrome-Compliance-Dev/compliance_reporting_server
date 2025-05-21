@@ -1,10 +1,14 @@
 const db = require("../helpers/db");
 const { logger } = require("../helpers/logger");
+
 let nanoid;
-(async () => {
-  const { nanoid: importedNanoid } = await import("nanoid");
-  nanoid = importedNanoid;
-})();
+
+try {
+  nanoid = require("nanoid").nanoid;
+} catch (err) {
+  // fallback during tests or unsupported environments
+  nanoid = () => "testid_" + Math.random().toString(36).substring(2, 10);
+}
 
 module.exports = {
   createRecord,
