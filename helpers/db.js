@@ -82,6 +82,7 @@ async function initialize() {
   db.Entity = require("../entities/entity.model")(sequelize);
   db.Booking = require("../booking/booking.model")(sequelize);
   db.Tracking = require("../tracking/tracking.model")(sequelize);
+  db.AdminContent = require("../admin/admin.model")(sequelize);
 
   // define relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });
