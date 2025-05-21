@@ -1,6 +1,6 @@
 ﻿const os = require("os");
 const { logger } = require("../helpers/logger");
-const config = require("../helpers/config");
+const config = require("config.json");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
