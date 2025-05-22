@@ -19,10 +19,6 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
     decimalNumbers: true,
     socketPath: DB_SOCKET_PATH,
     charset: "utf8mb4", // ✅ override here
-    connectTimeout: 60000,
-  },
-  retry: {
-    max: 3,
   },
   define: {
     charset: "utf8mb4",
@@ -113,14 +109,5 @@ async function initialize() {
   db.Report.hasMany(db.Tat, { onDelete: "CASCADE" });
 
   // sync all models with database
-  try {
-    await sequelize.sync();
-  } catch (err) {
-    logger.logEvent("error", "Sequelize sync failed", {
-      action: "SequelizeSync",
-      error: err.message,
-      stack: err.stack,
-    });
-    throw err;
-  }
+  await sequelize.sync();
 }

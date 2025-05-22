@@ -14,7 +14,7 @@ router.post(
   saveBlog
 );
 router.post("/save-faq", authorise(), validateRequest(saveFaqSchema), saveFaq);
-router.get("/", getAllContent);
+router.get("/content", getAllContent);
 router.get("/content/:slug", getContentBySlug);
 
 module.exports = router;
