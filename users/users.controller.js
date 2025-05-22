@@ -18,6 +18,12 @@ const {
   createSchema,
 } = require("./user.validator");
 
+const setPasswordSchema = Joi.object({
+  token: Joi.string().required(),
+  password: Joi.string().min(6).required(),
+  confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
+});
+
 // routes
 router.post("/authenticate", validateRequest(authSchema), authenticate);
 router.post("/refresh-token", refreshToken);
@@ -39,6 +45,7 @@ router.post(
   validateRequest(resetPasswordSchema),
   resetPassword
 );
+router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
 
 router.get("/", authorise(Role.Admin), getAll);
 router.get("/:id", authorise(), getById);
@@ -227,6 +234,16 @@ function resetPassword(req, res, next) {
         action: "ResetPassword",
         email: req.body.email,
       });
+    })
+    .catch(next);
+}
+
+function setPassword(req, res, next) {
+  userService
+    .setPassword(req.body)
+    .then(({ refreshToken, jwtToken, ...user }) => {
+      setTokenCookie(res, refreshToken);
+      res.json({ ...user, jwtToken });
     })
     .catch(next);
 }
