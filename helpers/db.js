@@ -40,9 +40,13 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   },
 });
 
-module.exports = db = {
+const db = {
   sequelize,
 };
+
+db.AdminContent = require("../admin/admin.model")(sequelize);
+
+module.exports = db;
 
 initialize();
 
@@ -92,7 +96,6 @@ async function initialize() {
   db.Entity = require("../entities/entity.model")(sequelize);
   db.Booking = require("../booking/booking.model")(sequelize);
   db.Tracking = require("../tracking/tracking.model")(sequelize);
-  db.AdminContent = require("../admin/admin.model")(sequelize);
 
   // define relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });

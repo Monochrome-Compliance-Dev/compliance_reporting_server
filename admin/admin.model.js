@@ -31,6 +31,25 @@ function model(sequelize) {
       type: DataTypes.TEXT("long"),
       allowNull: false,
     },
+    description: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    date: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    tags: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const raw = this.getDataValue("tags");
+        return raw ? raw.split(",").map((tag) => tag.trim()) : [];
+      },
+      set(val) {
+        this.setDataValue("tags", Array.isArray(val) ? val.join(",") : val);
+      },
+    },
     createdBy: {
       type: DataTypes.STRING,
       allowNull: true,
