@@ -49,6 +49,7 @@ async function update(id, params) {
   logger.logEvent("info", "Updating client", {
     action: "UpdateClient",
     clientId: id,
+    paymentConfirmed: params?.paymentConfirmed,
   });
   const client = await getClient(id);
 

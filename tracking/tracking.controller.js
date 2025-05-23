@@ -61,4 +61,33 @@ router.get("/pixel", async (req, res) => {
   res.sendFile(path.resolve(__dirname, "../public/pixel.png"));
 });
 
+router.post("/honeypot", async (req, res) => {
+  const ip =
+    req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
+  const ua = req.headers["user-agent"] || "unknown";
+  const referer = req.headers["referer"] || "unknown";
+  const origin = req.headers["origin"] || "unknown";
+  const host = req.headers["host"] || "unknown";
+
+  try {
+    await db.Tracking.create({
+      ipAddress: ip,
+      userAgent: ua,
+      referer,
+      origin,
+      host,
+      campaignId: "honeypot",
+    });
+
+    res.status(204).end();
+  } catch (err) {
+    logger.logEvent("error", "Failed to log honeypot attempt", {
+      action: "LogHoneypotFail",
+      error: err.message,
+      ip,
+    });
+    res.status(500).json({ message: "Failed to record honeypot event" });
+  }
+});
+
 module.exports = router;

@@ -44,6 +44,7 @@ function model(sequelize) {
     headEntityAbn: { type: DataTypes.STRING, allowNull: true },
     headEntityAcn: { type: DataTypes.STRING, allowNull: true },
     active: { type: DataTypes.BOOLEAN, defaultValue: true },
+    paymentConfirmed: { type: DataTypes.BOOLEAN, defaultValue: false },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };

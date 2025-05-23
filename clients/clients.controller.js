@@ -10,7 +10,6 @@ const { clientSchema, clientUpdateSchema } = require("./client.validator");
 router.get("/", authorise(), getAll);
 router.get("/:id", authorise(), getById);
 router.post("/", validateRequest(clientSchema), create);
-// router.post("/", authorise(), validateRequest(clientSchema), create);
 router.put("/:id", authorise(), validateRequest(clientUpdateSchema), update);
 router.delete("/:id", authorise(), _delete);
 
@@ -42,7 +41,9 @@ function getById(req, res, next) {
 function create(req, res, next) {
   logger.logEvent("info", "Creating client", {
     action: "CreateClient",
-    userId: req?.user?.id || "unknown",
+    userId: req?.user?.id || "anonymous",
+    ip: req.ip,
+    userAgent: req.headers["user-agent"],
     payload: req.body,
   });
   clientService
@@ -76,6 +77,7 @@ function update(req, res, next) {
       logger.logEvent("info", "Client updated via API", {
         action: "UpdateClient",
         clientId: req.params.id,
+        paymentConfirmed: req.body?.paymentConfirmed,
       });
       res.json(client);
     })

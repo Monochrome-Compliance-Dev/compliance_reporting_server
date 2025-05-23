@@ -1,5 +1,4 @@
 const Joi = require("../middleware/joiSanitizer");
-const { update } = require("./client.service");
 
 const clientSchema = Joi.object({
   businessName: Joi.string().required(),
@@ -30,6 +29,7 @@ const clientSchema = Joi.object({
     .length(10)
     .message("Created by must be a string of length 10")
     .required(),
+  paymentConfirmed: Joi.boolean().default(false),
 });
 
 const clientUpdateSchema = Joi.object({
@@ -64,6 +64,7 @@ const clientUpdateSchema = Joi.object({
     .length(10)
     .message("Updated by must be a string of length 10")
     .required(),
+  paymentConfirmed: Joi.boolean(),
 });
 
 module.exports = { clientSchema, clientUpdateSchema };

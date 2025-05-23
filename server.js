@@ -63,7 +63,8 @@ const loginLimiter = rateLimit({
 app.use("/api/users/authenticate", loginLimiter);
 app.use("/api/users/forgot-password", loginLimiter);
 app.use("/api/users/reset-password", loginLimiter);
-// app, use("/api/booking", loginLimiter);
+app.use("/api/booking", loginLimiter);
+app.use("/api/clients/register", loginLimiter);
 
 const emailLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
