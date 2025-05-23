@@ -10,8 +10,13 @@ const { clientSchema, clientUpdateSchema } = require("./client.validator");
 router.get("/", authorise(), getAll);
 router.get("/:id", authorise(), getById);
 router.post("/", validateRequest(clientSchema), create);
-router.put("/:id", authorise(), validateRequest(clientUpdateSchema), update);
-router.delete("/:id", authorise(), _delete);
+router.put(
+  "/:id",
+  authorise(["Admin", "Boss"]),
+  validateRequest(clientUpdateSchema),
+  update
+);
+router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 
 module.exports = router;
 

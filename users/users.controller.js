@@ -9,8 +9,6 @@ const { logger } = require("../helpers/logger");
 const {
   authSchema,
   registerSchema,
-  _updateSchema,
-  updatePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailSchema,
@@ -47,11 +45,16 @@ router.post(
 );
 router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
 
-router.get("/", authorise(Role.Admin), getAll);
+router.get("/", authorise(["Admin", "Audit", "Boss"]), getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(Role.Admin), validateRequest(createSchema), create);
+router.post(
+  "/",
+  authorise(["Admin", "Boss"]),
+  validateRequest(createSchema),
+  create
+);
 router.put("/:id", authorise(), updateSchema, update); // Need to resolve which schema to use
-router.delete("/:id", authorise(), _delete);
+router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 
 module.exports = router;
 
@@ -256,7 +259,7 @@ function getAll(req, res, next) {
 }
 
 function getById(req, res, next) {
-  if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
+  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
     return res.status(401).json({ error: "Unauthorised", code: 401 });
   }
 
@@ -293,7 +296,7 @@ function updateSchema(req, res, next) {
     confirmPassword: Joi.string().valid(Joi.ref("password")).empty(""),
   };
 
-  if (req.user.role === Role.Admin) {
+  if (req.user.role === "Admin") {
     schemaRules.role = Joi.string().valid(Role.Admin, Role.User).empty("");
   }
 
@@ -302,7 +305,7 @@ function updateSchema(req, res, next) {
 }
 
 function update(req, res, next) {
-  if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
+  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
     return res.status(401).json({ message: "Unauthorised" });
   }
 
@@ -313,7 +316,7 @@ function update(req, res, next) {
 }
 
 function _delete(req, res, next) {
-  if (Number(req.params.id) !== req.user.id && req.user.role !== Role.Admin) {
+  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
     return res.status(401).json({ message: "Unauthorised" });
   }
 

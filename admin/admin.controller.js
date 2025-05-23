@@ -9,11 +9,16 @@ const { saveBlogSchema, saveFaqSchema } = require("./admin.validator");
 // routes
 router.post(
   "/save-blog",
-  authorise(),
+  authorise(["Admin", "Boss"]),
   validateRequest(saveBlogSchema),
   saveBlog
 );
-router.post("/save-faq", authorise(), validateRequest(saveFaqSchema), saveFaq);
+router.post(
+  "/save-faq",
+  authorise(["Admin", "Boss"]),
+  validateRequest(saveFaqSchema),
+  saveFaq
+);
 router.get("/content", getAllContent);
 router.get("/content/:slug", getContentBySlug);
 

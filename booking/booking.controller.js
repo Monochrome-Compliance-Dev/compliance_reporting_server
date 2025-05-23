@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
+const authorise = require("../middleware/authorise");
 const bookingService = require("./booking.service");
 const { logger } = require("../helpers/logger");
 const { bookingSchema, bookingUpdateSchema } = require("./booking.validator");
@@ -9,8 +10,13 @@ const { bookingSchema, bookingUpdateSchema } = require("./booking.validator");
 router.get("/", getAll);
 router.get("/:id", getById);
 router.post("/", validateRequest(bookingSchema), create); // no authorisation required
-router.put("/:id", validateRequest(bookingUpdateSchema), update);
-router.delete("/:id", _delete);
+router.put(
+  "/:id",
+  authorise(["Admin", "Boss"]),
+  validateRequest(bookingUpdateSchema),
+  update
+);
+router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 
 module.exports = router;
 

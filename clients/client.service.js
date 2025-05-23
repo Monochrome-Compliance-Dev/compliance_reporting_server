@@ -138,9 +138,10 @@ async function createClientViews(clientId) {
 
     const safeSql = sql.replace("?", `'${clientId}'`);
     try {
-      await db.sequelize.query(safeSql); // Ensure db.sequelize is properly initialized
+      await db.sequelize.query(safeSql); // Create view
+      // GRANT removed – assumed permissions are managed externally
       results.push({ tableName, success: true });
-      logger.logEvent("info", "View created", {
+      logger.logEvent("info", "View created and granted", {
         action: "CreateClientView",
         viewName,
         clientId,

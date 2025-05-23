@@ -40,6 +40,18 @@ function authorise(roles = []) {
           .json({ message: "Forbidden: Tenant access denied" });
       }
 
+      // Prevent write access for Audit role
+      const writeMethods = ["POST", "PUT", "PATCH", "DELETE"];
+      if (user.role === "Audit" && writeMethods.includes(req.method)) {
+        logger.logEvent("warn", "Write attempt by Audit role", {
+          action: "ReadOnlyEnforced",
+          userId: req.auth.id,
+          method: req.method,
+          path: req.originalUrl,
+        });
+        return res.status(403).json({ message: "Forbidden: Read-only access" });
+      }
+
       logger.logEvent("info", "User authorised", {
         action: "AuthoriseAccessGranted",
         userId: req.auth.id,
