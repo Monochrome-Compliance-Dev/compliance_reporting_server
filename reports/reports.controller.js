@@ -46,7 +46,10 @@ function getById(req, res, next) {
 function create(req, res, next) {
   reportService
     .create(req.auth.clientId, req.body)
-    .then((report) => res.json(report))
+    .then((report) => {
+      console.log("report: ", report);
+      res.json(report);
+    })
     .catch((error) => {
       logger.logEvent("error", "Error creating report", {
         action: "CreateReport",
