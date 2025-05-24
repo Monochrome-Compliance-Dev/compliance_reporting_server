@@ -24,6 +24,7 @@ router.post(
   setClientContext,
   bulkCreate
 );
+router.patch("/bulk-patch", authorise(), setClientContext, bulkPatchUpdate);
 router.patch("/:id", authorise(), setClientContext, patchRecord);
 router.put(
   "/",
@@ -400,4 +401,60 @@ function downloadSummaryReport(req, res, next) {
       });
     })
     .catch(next);
+}
+
+// Bulk partial update route handler
+async function bulkPatchUpdate(req, res, next) {
+  logger.logEvent("info", "Incoming bulk patch request", {
+    clientId: req.auth.clientId,
+  }); // log start of request
+  try {
+    if (!Array.isArray(req.body)) {
+      logger.logEvent("warn", "Invalid request body for bulk patch", {
+        clientId: req.auth.clientId,
+      });
+      return res
+        .status(400)
+        .json({ message: "Request body must be an array." });
+    }
+
+    const clientId = req.auth.clientId;
+
+    const updatePromises = req.body.map(async (record) => {
+      const { id, ...updates } = record;
+      if (!id || typeof updates !== "object" || Array.isArray(updates)) {
+        logger.logEvent("warn", "Invalid record structure in bulk patch", {
+          clientId,
+        });
+        throw new Error(
+          "Each record must have an id and updates must be an object"
+        );
+      }
+      // NOTE: patchRecord is called here for each record
+      return tcpService.patchRecord(id, updates, clientId);
+    });
+
+    const results = await Promise.all(updatePromises);
+
+    // Only log the updated IDs to avoid circular references in results
+    logger.logEvent("info", "Bulk patch update successful", {
+      action: "BulkPatchUpdateTCP",
+      clientId: req.auth.clientId,
+      count: results.length,
+      updatedIds: results.map((r) => r.id),
+    });
+
+    res.json({
+      success: true,
+      message: "All records patch updated successfully",
+      results,
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error in bulk patch update", {
+      clientId: req.auth.clientId,
+      error: error.message,
+    });
+    console.error("Error bulk patch updating records:", error);
+    next(error);
+  }
 }

@@ -1,3 +1,4 @@
+const { cli } = require("winston/lib/winston/config");
 const db = require("../helpers/db");
 const dbService = require("../helpers/dbService");
 const { logger } = require("../helpers/logger");
@@ -23,6 +24,7 @@ module.exports = {
   finaliseReport,
   generateSummaryCsv,
   partialUpdate,
+  patchRecord,
 };
 
 async function getAll(clientId) {
@@ -148,4 +150,29 @@ async function generateSummaryCsv(clientId) {
   ].join("\n");
 
   return csv;
+}
+
+async function patchRecord(id, update, clientId) {
+  try {
+    logger.logEvent("info", "TCP PATCH update requested", {
+      action: "patchRecordTCP",
+      clientId,
+    });
+
+    const result = dbService.patchRecord(clientId, "tcp", id, update, db);
+
+    logger.logEvent("info", "Bulk PATCH update completed", {
+      action: "patchRecordTCP",
+      clientId,
+    });
+
+    return result;
+  } catch (error) {
+    logger.logEvent("error", "Bulk PATCH update failed", {
+      action: "patchRecordTCP",
+      clientId,
+      error: error.message,
+    });
+    throw error;
+  }
 }

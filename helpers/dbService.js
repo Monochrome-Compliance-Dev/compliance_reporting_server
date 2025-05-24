@@ -11,6 +11,7 @@ module.exports = {
   createRecord,
   updateRecord,
   deleteRecord,
+  patchRecord,
 };
 
 async function createRecord(clientId, tableName, params, db) {
@@ -88,4 +89,35 @@ async function deleteRecord(clientId, tableName, id, db) {
     clientId,
     recordId: id,
   });
+}
+
+async function patchRecord(clientId, tableName, id, params, db) {
+  const viewName = `client_${clientId}_tbl_${tableName}`;
+
+  // Update the timestamp
+  params.updatedAt = new Date();
+
+  const fields = Object.keys(params)
+    .map((key) => `${key} = ?`)
+    .join(", ");
+  const values = [...Object.values(params), id];
+
+  const sql = `UPDATE \`${viewName}\` SET ${fields} WHERE id = ?`;
+  logger.logEvent("info", "Executing record patch", {
+    action: "PatchRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+    sql,
+    values,
+  });
+  await db.sequelize.query(sql, { replacements: values });
+
+  logger.logEvent("info", "Record patched", {
+    action: "PatchRecord",
+    table: tableName,
+    clientId,
+    recordId: id,
+  });
+  return { id, ...params };
 }
