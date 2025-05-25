@@ -23,7 +23,7 @@ async function createRecord(clientId, tableName, params, db) {
 
   // Add createdAt and updatedAt fields
   params.createdAt = new Date();
-  params.updatedAt = new Date();
+  if (tableName !== "tcp_audit") params.updatedAt = new Date();
 
   const fields = Object.keys(params).join(", ");
   const placeholders = Object.keys(params)

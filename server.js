@@ -130,6 +130,7 @@ app.use("/api/public", require("./public/public.controller"));
 app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
+app.use("/api/audit", require("./audit/audit.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

@@ -123,7 +123,7 @@ async function getClient(id) {
   return client;
 }
 
-const tablesNames = ["tbl_report", "tbl_tat", "tbl_tcp"];
+const tablesNames = ["tbl_report", "tbl_tat", "tbl_tcp", "tbl_tcp_audit"];
 
 async function createClientViews(clientId) {
   const results = [];

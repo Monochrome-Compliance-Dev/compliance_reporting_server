@@ -32,22 +32,70 @@ function getAll(req, res, next) {
   const clientId = req.auth.clientId; // Assumes clientId is embedded in the JWT and available on req.user
   reportService
     .getAll(clientId)
-    .then((reports) => res.json(reports))
-    .catch(next);
+    .then((reports) => {
+      logger.logEvent("info", "Fetched all reports", {
+        action: "GetAllReports",
+        clientId,
+        userId: req.auth.id,
+        count: Array.isArray(reports) ? reports.length : undefined,
+      });
+      res.json(reports);
+    })
+    .catch((error) => {
+      logger.logEvent("error", "Error fetching all reports", {
+        action: "GetAllReports",
+        clientId,
+        userId: req.auth.id,
+        error: error.message,
+      });
+      next(error);
+    });
 }
 
 function getById(req, res, next) {
   reportService
     .getById(req.params.id, req.auth.clientId)
-    .then((report) => (report ? res.json(report) : res.sendStatus(404)))
-    .catch(next);
+    .then((report) => {
+      if (report) {
+        logger.logEvent("info", "Fetched report by ID", {
+          action: "GetReportById",
+          reportId: req.params.id,
+          clientId: req.auth.clientId,
+          userId: req.auth.id,
+        });
+        res.json(report);
+      } else {
+        logger.logEvent("warn", "Report not found", {
+          action: "GetReportById",
+          reportId: req.params.id,
+          clientId: req.auth.clientId,
+          userId: req.auth.id,
+        });
+        res.sendStatus(404);
+      }
+    })
+    .catch((error) => {
+      logger.logEvent("error", "Error fetching report by ID", {
+        action: "GetReportById",
+        reportId: req.params.id,
+        clientId: req.auth.clientId,
+        userId: req.auth.id,
+        error: error.message,
+      });
+      next(error);
+    });
 }
 
 function create(req, res, next) {
   reportService
     .create(req.auth.clientId, req.body)
     .then((report) => {
-      console.log("report: ", report);
+      logger.logEvent("info", "Report created", {
+        action: "CreateReport",
+        reportId: report.id,
+        clientId: req.auth.clientId,
+        userId: req.auth.id,
+      });
       res.json(report);
     })
     .catch((error) => {

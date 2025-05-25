@@ -14,17 +14,47 @@ module.exports = {
 
 async function getAll(clientId) {
   const viewName = `client_${clientId}_tbl_report`;
-  const [rows] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
-  return rows;
+  try {
+    const [rows] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
+    logger.logEvent("info", "Fetched all reports", {
+      action: "GetAllReports",
+      clientId,
+      count: Array.isArray(rows) ? rows.length : undefined,
+    });
+    return rows;
+  } catch (error) {
+    logger.logEvent("error", "Error fetching all reports", {
+      action: "GetAllReports",
+      clientId,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function getAllByReportId(reportId, clientId) {
   const viewName = `client_${clientId}_tbl_report`;
-  const [rows] = await db.sequelize.query(
-    `SELECT * FROM \`${viewName}\` WHERE reportId = ?`,
-    { replacements: [reportId] }
-  );
-  return rows;
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT * FROM \`${viewName}\` WHERE reportId = ?`,
+      { replacements: [reportId] }
+    );
+    logger.logEvent("info", "Fetched reports by reportId", {
+      action: "GetAllByReportId",
+      clientId,
+      reportId,
+      count: Array.isArray(rows) ? rows.length : undefined,
+    });
+    return rows;
+  } catch (error) {
+    logger.logEvent("error", "Error fetching reports by reportId", {
+      action: "GetAllByReportId",
+      clientId,
+      reportId,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function create(clientId, params) {
@@ -66,14 +96,36 @@ async function _delete(clientId, id) {
 
 async function getById(id, clientId) {
   const viewName = `client_${clientId}_tbl_report`;
-  const [rows] = await db.sequelize.query(
-    `SELECT * FROM \`${viewName}\` WHERE id = ?`,
-    {
-      replacements: [id],
+  try {
+    const [rows] = await db.sequelize.query(
+      `SELECT * FROM \`${viewName}\` WHERE id = ?`,
+      {
+        replacements: [id],
+      }
+    );
+    if (!rows.length) {
+      logger.logEvent("warn", "Report not found", {
+        action: "GetReportById",
+        clientId,
+        reportId: id,
+      });
+      throw { status: 404, message: "Report not found" };
     }
-  );
-  if (!rows.length) throw { status: 404, message: "Report not found" };
-  return rows[0];
+    logger.logEvent("info", "Fetched report by ID", {
+      action: "GetReportById",
+      clientId,
+      reportId: id,
+    });
+    return rows[0];
+  } catch (error) {
+    logger.logEvent("error", "Error fetching report by ID", {
+      action: "GetReportById",
+      clientId,
+      reportId: id,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function finaliseSubmission(clientId) {

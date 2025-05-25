@@ -25,6 +25,7 @@ module.exports = {
   generateSummaryCsv,
   partialUpdate,
   patchRecord,
+  getCurrentFieldValue,
 };
 
 async function getAll(clientId) {
@@ -175,4 +176,14 @@ async function patchRecord(id, update, clientId) {
     });
     throw error;
   }
+}
+
+async function getCurrentFieldValue(clientId, tcpId, field_name) {
+  const viewName = `client_${clientId}_tbl_tcp`;
+  const [rows] = await db.sequelize.query(
+    `SELECT \`${field_name}\` FROM \`${viewName}\` WHERE id = ? LIMIT 1`,
+    { replacements: [tcpId] }
+  );
+  if (!rows.length) return null;
+  return rows[0][field_name] !== undefined ? rows[0][field_name] : null;
 }

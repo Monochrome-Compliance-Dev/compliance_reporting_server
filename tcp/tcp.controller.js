@@ -61,21 +61,68 @@ function getAllByReportId(req, res, next) {
     .catch(next);
 }
 
+// Patch a single TCP record and create audit entries for changed fields
 async function patchRecord(req, res, next) {
   try {
     const { id } = req.params;
     const clientId = req.auth.clientId;
+    const userId = req.auth.id;
     const updates = req.body;
+    const auditService = require("../audit/audit.service");
+    let nanoid;
+    // Lazy load nanoid if not already loaded
+    if (!nanoid) {
+      const { nanoid: importedNanoid } = await import("nanoid");
+      nanoid = importedNanoid;
+    }
 
     if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
       return res.status(400).json({ message: "Invalid request body" });
     }
 
+    // Fetch the old record before updating
+    const oldRecord = await tcpService.getById(id, clientId);
+    if (!oldRecord) {
+      return res.status(404).json({ message: "Record not found" });
+    }
+
+    // Patch the record
     const updated = await tcpService.partialUpdate(id, updates, clientId);
+
+    // For each changed field, create an audit entry, skipping 'updatedAt'
+    const now = new Date();
+    const auditEntries = [];
+    for (const [field, newValue] of Object.entries(updates)) {
+      if (field === "updatedAt") continue; // Skip updatedAt field
+      const oldValue = oldRecord[field];
+      if (oldValue !== newValue) {
+        // Only audit if the value actually changed
+        const auditEntry = {
+          id: nanoid(10),
+          tcpId: id,
+          fieldName: field,
+          oldValue: oldValue,
+          newValue: newValue,
+          step: updates.step || null,
+          user_id: userId,
+          createdAt: now,
+          action: "update",
+        };
+        try {
+          await auditService.create(clientId, auditEntry);
+          auditEntries.push(auditEntry);
+        } catch (err) {
+          // Log but do not fail the patch if audit fails
+          console.error("Failed to create audit entry:", err);
+        }
+      }
+    }
+
     res.json({
       success: true,
       message: "Record updated successfully",
       data: updated,
+      audits: auditEntries,
     });
   } catch (error) {
     console.error("Error patching record:", error);
@@ -218,6 +265,7 @@ function getById(req, res, next) {
     .catch(next);
 }
 
+// Bulk create with audit entries for each created record
 async function bulkCreate(req, res, next) {
   try {
     // Ensure the incoming request is an array
@@ -227,7 +275,13 @@ async function bulkCreate(req, res, next) {
         .json({ message: "Request body must be an array." });
     }
 
+    const auditService = require("../audit/audit.service");
+    const { nanoid: importedNanoid } = await import("nanoid");
+    const nanoid = importedNanoid;
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
     const results = [];
+    const auditEntriesAll = [];
 
     for (const record of req.body) {
       try {
@@ -248,8 +302,34 @@ async function bulkCreate(req, res, next) {
         });
 
         // Create the record using the service
-        const created = await tcpService.create(record, req.auth.clientId);
+        const created = await tcpService.create(record, clientId);
         results.push(created);
+
+        // For each field in the created record, create an audit entry, skipping 'updatedAt'
+        const now = new Date();
+        for (const [field, value] of Object.entries(created)) {
+          if (field === "updatedAt") continue; // Skip updatedAt field
+          // Only audit fields that are not undefined
+          if (typeof value !== "undefined") {
+            const auditEntry = {
+              id: nanoid(10),
+              tcpId: created.id,
+              fieldName: field,
+              oldValue: null,
+              newValue: value,
+              step: created.step || null,
+              user_id: userId,
+              createdAt: now,
+              action: "create",
+            };
+            try {
+              await auditService.create(clientId, auditEntry);
+              auditEntriesAll.push(auditEntry);
+            } catch (err) {
+              console.error("Failed to create audit entry:", err);
+            }
+          }
+        }
       } catch (error) {
         console.error("Error processing record:", error);
         return res.status(400).json({
@@ -262,7 +342,7 @@ async function bulkCreate(req, res, next) {
 
     logger.logEvent("info", "Bulk TCP records created", {
       action: "BulkCreateTCP",
-      clientId: req.auth.clientId,
+      clientId: clientId,
       count: results.length,
     });
 
@@ -270,6 +350,7 @@ async function bulkCreate(req, res, next) {
       success: true,
       message: "All records saved successfully",
       results,
+      audits: auditEntriesAll,
     });
   } catch (error) {
     console.error("Error processing bulk records:", error);
@@ -277,90 +358,127 @@ async function bulkCreate(req, res, next) {
   }
 }
 
-function create(req, res, next) {
-  tcpService
-    .create(req.body, req.auth.clientId)
-    .then((tcp) => res.json(tcp))
-    .catch((error) => {
-      console.error("Error creating tcp:", error); // Log the error details
-      next(error); // Pass the error to the global error handler
-    });
-}
-
-function bulkUpdate(req, res, next) {
+// PUT: Bulk update with audit trail for each field change
+async function bulkUpdate(req, res, next) {
   try {
+    const auditService = require("../audit/audit.service");
+    const { nanoid: importedNanoid } = await import("nanoid");
+    const nanoid = importedNanoid;
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
     // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
-    // console.log("Records to update:", records);
-
-    const promises = records.flatMap((item) => {
-      // Check if item is an array and process each object individually
+    const auditEntriesAll = [];
+    const results = [];
+    for (const item of records) {
       const itemsToProcess = Array.isArray(item) ? item : [item];
-
-      return itemsToProcess.map(async (record) => {
+      for (const record of itemsToProcess) {
         try {
-          // Exclude id and createdAt fields from the record
           const { id, createdAt, ...recordToUpdate } = record;
-
-          // Validate each record using bulkUpdateSchema
-          // const reqForValidation = { body: recordToUpdate };
-          // await bulkUpdateSchema(reqForValidation); // Validate the record
-
+          // Fetch old record before update
+          const oldRecord = await tcpService.getById(id, clientId);
           // Save each record using tcpService
-          return await tcpService.update(id, recordToUpdate, req.auth.clientId);
+          const updated = await tcpService.update(id, recordToUpdate, clientId);
+          results.push(updated);
+          // For each changed field, create an audit entry, skipping 'updatedAt'
+          const now = new Date();
+          for (const [field, newValue] of Object.entries(recordToUpdate)) {
+            if (field === "updatedAt") continue; // Skip updatedAt field
+            const oldValue = oldRecord ? oldRecord[field] : undefined;
+            if (oldValue !== newValue) {
+              const auditEntry = {
+                id: nanoid(10),
+                tcpId: id,
+                fieldName: field,
+                oldValue: oldValue,
+                newValue: newValue,
+                step: recordToUpdate.step || null,
+                user_id: userId,
+                createdAt: now,
+                action: "update",
+              };
+              try {
+                await auditService.create(clientId, auditEntry);
+                auditEntriesAll.push(auditEntry);
+              } catch (err) {
+                console.error("Failed to create audit entry:", err);
+              }
+            }
+          }
         } catch (error) {
           console.error("Error processing record:", error);
-          throw error; // Propagate the error to Promise.all
+          throw error;
         }
-      });
+      }
+    }
+    logger.logEvent("info", "Bulk TCP records updated", {
+      action: "BulkUpdateTCP",
+      clientId: req.auth.clientId,
+      count: results.length,
     });
-
-    // Wait for all records to be saved
-    Promise.all(promises)
-      .then((results) => {
-        logger.logEvent("info", "Bulk TCP records updated", {
-          action: "BulkUpdateTCP",
-          clientId: req.auth.clientId,
-          count: results.length,
-        });
-        res.json({
-          success: true,
-          message: "All records updated successfully",
-          results,
-        });
-      })
-      .catch((error) => {
-        console.error("Error updating records:", error);
-        next(error); // Pass the error to the global error handler
-      });
+    res.json({
+      success: true,
+      message: "All records updated successfully",
+      results,
+      audits: auditEntriesAll,
+    });
   } catch (error) {
     console.error("Error processing bulk records:", error);
-    next(error); // Pass the error to the global error handler
+    next(error);
   }
 }
 
-function update(req, res, next) {
-  tcpService
-    .update(req.params.id, req.body, req.auth.clientId)
-    .then((tcp) => res.json(tcp))
-    .catch(next);
-}
-
-function _delete(req, res, next) {
-  tcpService
-    .delete(req.params.id, req.auth.clientId)
-    .then(() => {
-      logger.logEvent("warn", "TCP record deleted", {
-        action: "DeleteTCP",
-        tcpId: req.params.id,
-        clientId: req.auth.clientId,
-      });
-      res.json({ message: "Tcp deleted successfully" });
-    })
-    .catch((error) => {
-      console.error("Error deleting tcp:", error); // Log the error details
-      next(error); // Pass the error to the global error handler
+// DELETE: Delete a record and audit deletion
+async function _delete(req, res, next) {
+  try {
+    const auditService = require("../audit/audit.service");
+    const { nanoid: importedNanoid } = await import("nanoid");
+    const nanoid = importedNanoid;
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const id = req.params.id;
+    // Fetch the old record before deletion
+    const oldRecord = await tcpService.getById(id, clientId);
+    await tcpService.delete(id, clientId);
+    logger.logEvent("warn", "TCP record deleted", {
+      action: "DeleteTCP",
+      tcpId: id,
+      clientId,
     });
+    // Audit all fields as deleted (newValue: null)
+    const now = new Date();
+    const auditEntries = [];
+    if (oldRecord) {
+      for (const [field, oldValue] of Object.entries(oldRecord)) {
+        if (typeof oldValue !== "undefined") {
+          const auditEntry = {
+            id: nanoid(10),
+            tcpId: id,
+            fieldName: field,
+            oldValue: oldValue,
+            newValue: null,
+            step: oldRecord.step || null,
+            user_id: userId,
+            createdAt: now,
+            action: "delete",
+          };
+          try {
+            await auditService.create(clientId, auditEntry);
+            auditEntries.push(auditEntry);
+          } catch (err) {
+            console.error("Failed to create audit entry:", err);
+          }
+        }
+      }
+    }
+    res.json({
+      message: "Tcp deleted successfully",
+      audits: auditEntries,
+    });
+  } catch (error) {
+    console.error("Error deleting tcp:", error);
+    next(error);
+  }
 }
 
 function checkMissingIsSb(req, res, next) {
@@ -403,7 +521,7 @@ function downloadSummaryReport(req, res, next) {
     .catch(next);
 }
 
-// Bulk partial update route handler
+// Bulk partial update route handler with audit entries for each updated field
 async function bulkPatchUpdate(req, res, next) {
   logger.logEvent("info", "Incoming bulk patch request", {
     clientId: req.auth.clientId,
@@ -418,7 +536,12 @@ async function bulkPatchUpdate(req, res, next) {
         .json({ message: "Request body must be an array." });
     }
 
+    const auditService = require("../audit/audit.service");
+    const { nanoid: importedNanoid } = await import("nanoid");
+    const nanoid = importedNanoid;
     const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const auditEntriesAll = [];
 
     const updatePromises = req.body.map(async (record) => {
       const { id, ...updates } = record;
@@ -430,8 +553,42 @@ async function bulkPatchUpdate(req, res, next) {
           "Each record must have an id and updates must be an object"
         );
       }
-      // NOTE: patchRecord is called here for each record
-      return tcpService.patchRecord(id, updates, clientId);
+      // Remove 'step' field from updates
+      const { step, ...filteredUpdates } = updates;
+      // Fetch old record before patching
+      const oldRecord = await tcpService.getById(id, clientId);
+      // Patch the record
+      const updated = await tcpService.patchRecord(
+        id,
+        filteredUpdates,
+        clientId
+      );
+      // For each changed field, create an audit entry, skipping 'updatedAt'
+      const now = new Date();
+      for (const [field, newValue] of Object.entries(filteredUpdates)) {
+        if (field === "updatedAt") continue; // Skip updatedAt field
+        const oldValue = oldRecord ? oldRecord[field] : undefined;
+        if (oldValue !== newValue) {
+          const auditEntry = {
+            id: nanoid(10),
+            tcpId: id,
+            fieldName: field,
+            oldValue: oldValue,
+            newValue: newValue,
+            step: step || null,
+            createdBy: userId,
+            createdAt: now,
+            action: "update",
+          };
+          try {
+            await auditService.create(clientId, auditEntry);
+            auditEntriesAll.push(auditEntry);
+          } catch (err) {
+            console.error("Failed to create audit entry:", err);
+          }
+        }
+      }
+      return updated;
     });
 
     const results = await Promise.all(updatePromises);
@@ -448,6 +605,7 @@ async function bulkPatchUpdate(req, res, next) {
       success: true,
       message: "All records patch updated successfully",
       results,
+      audits: auditEntriesAll,
     });
   } catch (error) {
     logger.logEvent("error", "Error in bulk patch update", {
