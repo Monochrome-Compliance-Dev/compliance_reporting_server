@@ -1,4 +1,4 @@
-const { DataTypes } = require("sequelize");
+const { DataTypes, INTEGER } = require("sequelize");
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -20,10 +20,12 @@ function model(sequelize) {
     reportName: { type: DataTypes.STRING, allowNull: false },
     submittedDate: { type: DataTypes.DATE, allowNull: true },
     submittedBy: { type: DataTypes.STRING(10), allowNull: true },
+    currentStep: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     reportStatus: {
       type: DataTypes.ENUM(
         "Created",
         "Cancelled",
+        "In Progress",
         "Updated",
         "Received",
         "Accepted",

@@ -5,10 +5,12 @@ const reportSchema = Joi.object({
   ReportingPeriodEndDate: Joi.date().required(),
   code: Joi.string().alphanum().max(50).sanitize().required(),
   reportName: Joi.string().max(255).sanitize().required(),
+  currentStep: Joi.number().integer().min(0).max(100).required(),
   reportStatus: Joi.string()
     .valid(
       "Created",
       "Cancelled",
+      "In Progress",
       "Updated",
       "Received",
       "Accepted",
