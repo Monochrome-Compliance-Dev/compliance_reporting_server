@@ -5,14 +5,7 @@ const { logger } = require("../helpers/logger");
 module.exports = { sendEmail, sendAttachmentEmail };
 
 // Updated to support optional cc and bcc
-async function sendEmail({
-  to,
-  subject,
-  html,
-  from = config.emailFrom,
-  cc,
-  bcc,
-}) {
+async function sendEmail({ to, subject, html, from, cc, bcc }) {
   const transporter = nodemailer.createTransport(config.smtpOptions);
   try {
     await transporter.sendMail({

@@ -8,6 +8,7 @@ const { Op } = require("sequelize");
 const { sendEmail } = require("../helpers/send-email");
 const db = require("../helpers/db");
 const Role = require("../helpers/role");
+const { get } = require("http");
 
 module.exports = {
   authenticate,
@@ -19,6 +20,7 @@ module.exports = {
   validateResetToken,
   resetPassword,
   getAll,
+  getAllByClientId,
   getById,
   create,
   update,
@@ -216,6 +218,13 @@ async function resetPassword({ token, password }) {
 
 async function getAll() {
   const users = await db.User.findAll();
+  return users.map((x) => basicDetails(x));
+}
+
+async function getAllByClientId(clientId) {
+  const users = await db.User.findAll({
+    where: { clientId },
+  });
   return users.map((x) => basicDetails(x));
 }
 

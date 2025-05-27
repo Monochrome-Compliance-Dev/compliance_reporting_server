@@ -46,6 +46,7 @@ router.post(
 router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
 
 router.get("/", authorise(["Admin", "Audit", "Boss"]), getAll);
+router.get("/by-client", authorise(["Admin", "Boss"]), getAllByClientId);
 router.get("/:id", authorise(), getById);
 router.post(
   "/",
@@ -255,6 +256,28 @@ function getAll(req, res, next) {
   userService
     .getAll()
     .then((users) => res.json(users))
+    .catch(next);
+}
+
+function getAllByClientId(req, res, next) {
+  const clientId = req.auth.clientId;
+
+  userService
+    .getAllByClientId(clientId)
+    .then((users) => {
+      if (users.length > 0) {
+        logger.logEvent("info", "Fetched users by client ID", {
+          action: "GetUsersByClient",
+          clientId,
+          requestedBy: req.auth.id,
+        });
+        res.json(users);
+      } else {
+        res
+          .status(404)
+          .json({ error: "No users found for this client", code: 404 });
+      }
+    })
     .catch(next);
 }
 
