@@ -133,8 +133,7 @@ async function createClientViews(clientId) {
 
     const sql = `
       CREATE OR REPLACE VIEW \`${viewName}\` AS
-      SELECT * FROM ${tableName} WHERE clientId = ?
-    `;
+      SELECT * FROM ${tableName}`;
 
     const safeSql = sql.replace("?", `'${clientId}'`);
     try {

@@ -16,7 +16,7 @@ function model(sequelize) {
     },
     businessName: { type: DataTypes.STRING, allowNull: false },
     abn: { type: DataTypes.STRING, allowNull: false },
-    acn: { type: DataTypes.STRING, allowNull: false },
+    acn: { type: DataTypes.STRING, allowNull: true },
     addressline1: { type: DataTypes.STRING, allowNull: false },
     addressline2: { type: DataTypes.STRING, allowNull: true },
     addressline3: { type: DataTypes.STRING, allowNull: true },

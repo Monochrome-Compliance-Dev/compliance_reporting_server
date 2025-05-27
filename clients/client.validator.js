@@ -3,7 +3,7 @@ const Joi = require("../middleware/joiSanitizer");
 const clientSchema = Joi.object({
   businessName: Joi.string().required(),
   abn: Joi.string().required(),
-  acn: Joi.string().required(),
+  acn: Joi.string().optional().allow(null, ""),
   addressline1: Joi.string().required(),
   city: Joi.string().required(),
   state: Joi.string().required(),
@@ -35,7 +35,7 @@ const clientSchema = Joi.object({
 const clientUpdateSchema = Joi.object({
   businessName: Joi.string(),
   abn: Joi.string(),
-  acn: Joi.string(),
+  acn: Joi.string().allow(null, ""),
   addressline1: Joi.string(),
   addressline2: Joi.string(),
   addressline3: Joi.string(),
