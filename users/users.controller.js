@@ -9,6 +9,7 @@ const { logger } = require("../helpers/logger");
 const {
   authSchema,
   registerSchema,
+  registerFirstUserSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailSchema,
@@ -27,6 +28,11 @@ router.post("/authenticate", validateRequest(authSchema), authenticate);
 router.post("/refresh-token", refreshToken);
 router.post("/revoke-token", authorise(), revokeTokenSchema, revokeToken);
 router.post("/register", validateRequest(registerSchema), register);
+router.post(
+  "/register-first-user",
+  validateRequest(registerFirstUserSchema),
+  registerFirsUser
+);
 router.post("/verify-email", validateRequest(verifyEmailSchema), verifyEmail);
 router.post(
   "/forgot-password",
@@ -173,6 +179,25 @@ function register(req, res, next) {
     .then(() => {
       logger.logEvent("info", "User registered via controller", {
         action: "Register",
+        email: req.body.email,
+        device: req.headers["user-agent"],
+      });
+    })
+    .catch(next);
+}
+
+function registerFirsUser(req, res, next) {
+  userService
+    .registerFirstUser(req.body, req.get("origin"), req.headers["user-agent"])
+    .then(() =>
+      res.json({
+        message:
+          "First user registration successful, please check your email for your welcome pack",
+      })
+    )
+    .then(() => {
+      logger.logEvent("info", "First user registered via controller", {
+        action: "RegisterFirstUser",
         email: req.body.email,
         device: req.headers["user-agent"],
       });

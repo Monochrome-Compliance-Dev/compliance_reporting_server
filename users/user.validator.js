@@ -26,6 +26,19 @@ const registerSchema = Joi.object({
   clientId: Joi.string().required(),
 });
 
+const registerFirstUserSchema = Joi.object({
+  firstName: Joi.string().required(),
+  lastName: Joi.string().required(),
+  email: Joi.string().email().required(),
+  phone: Joi.string().required(),
+  position: Joi.string().required(),
+  password: Joi.string().min(6).required(),
+  confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
+  role: Joi.string().required(),
+  active: Joi.boolean().required(),
+  clientId: Joi.string().required(),
+});
+
 const _updateSchema = Joi.object({
   firstName: Joi.string().empty(""),
   lastName: Joi.string().empty(""),
@@ -60,6 +73,7 @@ const validateResetTokenSchema = Joi.object({
 module.exports = {
   authSchema,
   registerSchema,
+  registerFirstUserSchema,
   _updateSchema,
   updatePasswordSchema,
   forgotPasswordSchema,

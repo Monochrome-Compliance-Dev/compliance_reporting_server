@@ -206,6 +206,26 @@ async function createClientTriggers(clientId) {
   ];
 
   for (const table of tablesNames) {
+    // Check if table has clientId column
+    let hasClientIdColumn = false;
+    try {
+      const [results] = await db.sequelize.query(
+        `SHOW COLUMNS FROM \`${table}\` LIKE 'clientId';`
+      );
+      hasClientIdColumn = results.length > 0;
+    } catch (error) {
+      logger.logEvent("error", "Failed to check columns for table", {
+        action: "CheckTableColumns",
+        tableName: table,
+        error: error.message,
+      });
+      continue; // Skip this table on error
+    }
+
+    if (!hasClientIdColumn) {
+      continue; // Skip creating triggers for tables without clientId column
+    }
+
     for (const trigger of triggerTemplates) {
       const triggerName = `trg_client_${clientId}_${table}_${trigger.name}`;
       const sql = `

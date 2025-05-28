@@ -1,5 +1,5 @@
 const { expressjwt: expressJwt } = require("express-jwt");
-const { secret } = require("../config.json");
+const { jwtSecret: secret } = require("../helpers/config");
 const db = require("../helpers/db");
 const { logger } = require("../helpers/logger");
 
@@ -11,7 +11,6 @@ function authorise(roles = []) {
   if (typeof roles === "string") {
     roles = [roles];
   }
-
   return [
     // authenticate JWT token and attach user to request object (req.auth)
     expressJwt({ secret, algorithms: ["HS256"] }),

@@ -1,6 +1,6 @@
 ﻿const os = require("os");
 const { logger } = require("../helpers/logger");
-const config = require("config.json");
+const config = require("../helpers/config");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
@@ -8,13 +8,13 @@ const { Op } = require("sequelize");
 const { sendEmail } = require("../helpers/send-email");
 const db = require("../helpers/db");
 const Role = require("../helpers/role");
-const { get } = require("http");
 
 module.exports = {
   authenticate,
   refreshToken,
   revokeToken,
   register,
+  registerFirstUser,
   verifyEmail,
   forgotPassword,
   validateResetToken,
@@ -28,9 +28,11 @@ module.exports = {
 };
 
 async function authenticate({ email, password, ipAddress }) {
+  console.log("Authenticating user:", email, password, ipAddress);
   const user = await db.User.scope("withHash").findOne({
     where: { email },
   });
+  console.log("User found:", user ? user.email : "No user found");
   if (
     !user ||
     !user.isVerified ||
@@ -145,6 +147,43 @@ async function register(params, origin) {
   await sendVerificationEmail(user, origin);
   logger.logEvent("info", "New user registered", {
     action: "Register",
+    userId: user.id,
+    email: user.email,
+    device: os.hostname(),
+  });
+}
+
+async function registerFirstUser(params, origin) {
+  // validate
+  if (await db.User.findOne({ where: { email: params.email } })) {
+    // send already registered error in email to prevent user enumeration
+    await sendAlreadyRegisteredEmail(params.email, origin);
+    logger.logEvent("warn", "Duplicate first user registration attempt", {
+      action: "RegisterFirstUser",
+      email: params.email,
+      device: os.hostname(),
+    });
+    throw {
+      status: 400,
+      message: `Email "${params.email}" is already registered`,
+    };
+  }
+
+  // create user object
+  const user = new db.User(params);
+  user.role = Role.Admin;
+  user.verified = Date.now();
+
+  // hash password
+  user.passwordHash = await hash(params.password);
+
+  // save user
+  await user.save();
+
+  // send email
+  await sendFirstUserWelcomeEmail(user, origin);
+  logger.logEvent("info", "First user registered", {
+    action: "RegisterFirstUser",
     userId: user.id,
     email: user.email,
     device: os.hostname(),
@@ -310,26 +349,36 @@ async function getUserByToken(token) {
 }
 
 async function getRefreshToken(token) {
-  console.log("→ getRefreshToken(): querying for token:", token);
+  logger.logEvent("debug", "Querying for refresh token", {
+    action: "GetRefreshToken",
+    partialToken: token.slice(0, 6) + "...",
+  });
 
   const refreshToken = await db.RefreshToken.findOne({ where: { token } });
 
   if (!refreshToken) {
-    console.error("→ getRefreshToken(): token not found:", token);
+    logger.logEvent("warn", "Refresh token not found", {
+      action: "GetRefreshToken",
+      partialToken: token.slice(0, 6) + "...",
+    });
     throw { status: 400, message: "Invalid token: Token not found" };
   }
 
   const isActive = refreshToken.expires > Date.now() && !refreshToken.revoked;
   if (!isActive) {
-    console.error("→ getRefreshToken(): token is not active", {
-      token,
+    logger.logEvent("warn", "Refresh token is not active", {
+      action: "GetRefreshToken",
+      partialToken: token.slice(0, 6) + "...",
       expires: refreshToken.expires,
       revoked: refreshToken.revoked,
     });
     throw { status: 400, message: "Invalid token: Token is not active" };
   }
 
-  console.log("→ getRefreshToken(): token is valid");
+  logger.logEvent("debug", "Refresh token is valid", {
+    action: "GetRefreshToken",
+    partialToken: token.slice(0, 6) + "...",
+  });
   return refreshToken;
 }
 
@@ -341,7 +390,7 @@ function generateJwtToken(user) {
   // create a jwt token containing the user id that expires in 15 minutes
   return jwt.sign(
     { id: user.id, role: user.role, clientId: user.clientId },
-    config.secret,
+    config.jwtSecret,
     {
       expiresIn: "15m",
     }
@@ -394,20 +443,36 @@ function basicDetails(user) {
 async function sendVerificationEmail(user, origin) {
   if (origin) {
     const verifyUrl = `${origin}/user/verify-email?token=${user.verificationToken}`;
-    message = `<p>Please click the below link to verify your email address:</p>
+    message = `<p>Please click the below link to verify your email address and create your password:</p>
                    <p><a href="${verifyUrl}">${verifyUrl}</a></p>`;
   } else {
-    message = `<p>Please use the below token to verify your email address with the <code>/user/verify-email</code> api route:</p>
+    message = `<p>Please use the below token to verify your email address and create your password with the <code>/user/verify-email</code> api route:</p>
                    <p><code>${user.verificationToken}</code></p>`;
   }
 
-  // await sendEmail({
-  //   to: user.email,
-  //   subject: "Sign-up Verification API - Verify Email",
-  //   html: `<h4>Verify Email</h4>
-  //              <p>Thanks for registering!</p>
-  //              ${message}`,
-  // });
+  await sendEmail({
+    to: user.email,
+    subject: "Sign-up Verification API - Verify Email",
+    html: `<h4>Verify Email</h4>
+               <p>Thanks for registering!</p>
+               ${message}`,
+  });
+}
+
+async function sendFirstUserWelcomeEmail(user, origin) {
+  let message;
+  if (origin) {
+    message = `<p>Welcome to the system! Please visit the <a href="${origin}/user/login">login page</a> to access your account.</p>`;
+  } else {
+    message = `<p>Welcome to the system! You can log in using the <code>/user/login</code> api route.</p>`;
+  }
+
+  await sendEmail({
+    to: user.email,
+    subject: "Sign-up Verification API - Welcome",
+    html: `<h4>Welcome to Monochrome Compliance!</h4>
+               ${message}`,
+  });
 }
 
 async function sendAlreadyRegisteredEmail(email, origin) {

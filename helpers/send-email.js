@@ -1,15 +1,26 @@
 const nodemailer = require("nodemailer");
-const config = require("../config.json");
 const { logger } = require("../helpers/logger");
 
 module.exports = { sendEmail, sendAttachmentEmail };
 
+const smtpOptions = {
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT),
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+  secure: true, // true for port 465, false for other ports
+};
+
+const emailFrom = process.env.SMTP_FROM;
+
 // Updated to support optional cc and bcc
 async function sendEmail({ to, subject, html, from, cc, bcc }) {
-  const transporter = nodemailer.createTransport(config.smtpOptions);
+  const transporter = nodemailer.createTransport(smtpOptions);
   try {
     await transporter.sendMail({
-      from,
+      from: from || emailFrom,
       to,
       cc,
       bcc,
@@ -37,7 +48,7 @@ async function sendEmail({ to, subject, html, from, cc, bcc }) {
 async function sendAttachmentEmail(req, res) {
   // Parse req.body fields explicitly
   const to = req.body.to;
-  const from = req.body.from || config.emailFrom;
+  const from = req.body.from || emailFrom;
   const subject = req.body.subject;
   const html = req.body.html;
 

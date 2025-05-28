@@ -11,7 +11,6 @@ const generateTrackingPixel = require("../helpers/generateTrackingPixel");
 
 const contactSchema = Joi.object({
   name: Joi.string().required(),
-  company: Joi.string().required(),
   email: Joi.string().email().required(),
   subject: Joi.string().required(),
   message: Joi.string().required(),

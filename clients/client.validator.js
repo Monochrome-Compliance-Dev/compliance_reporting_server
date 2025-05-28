@@ -23,6 +23,12 @@ const clientSchema = Joi.object({
     .pattern(/^[0-9\s\-\(\)]+$/)
     .message("Contact phone must be a valid phone number")
     .required(),
+  controllingCorporationName: Joi.string().allow(null, ""),
+  controllingCorporationAbn: Joi.string().allow(null, ""),
+  controllingCorporationAcn: Joi.string().allow(null, ""),
+  headEntityName: Joi.string().allow(null, ""),
+  headEntityAbn: Joi.string().allow(null, ""),
+  headEntityAcn: Joi.string().allow(null, ""),
   active: Joi.boolean().default(true),
   createdBy: Joi.string()
     .alphanum()
@@ -58,6 +64,12 @@ const clientUpdateSchema = Joi.object({
   contactPhone: Joi.string()
     .pattern(/^[0-9\s\-\(\)]+$/)
     .message("Contact phone must be a valid phone number"),
+  controllingCorporationName: Joi.string().allow(null, ""),
+  controllingCorporationAbn: Joi.string().allow(null, ""),
+  controllingCorporationAcn: Joi.string().allow(null, ""),
+  headEntityName: Joi.string().allow(null, ""),
+  headEntityAbn: Joi.string().allow(null, ""),
+  headEntityAcn: Joi.string().allow(null, ""),
   active: Joi.boolean().default(true),
   updatedBy: Joi.string()
     .alphanum()
