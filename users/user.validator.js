@@ -11,8 +11,8 @@ const registerSchema = Joi.object({
   email: Joi.string().email().required(),
   phone: Joi.string().required(),
   position: Joi.string().required(),
-  password: Joi.string().min(6).required(),
-  confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
+  // password: Joi.string().min(6).required(),
+  // confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
   role: Joi.string()
     // .valid(
     //   Role.Admin,
@@ -32,7 +32,7 @@ const registerFirstUserSchema = Joi.object({
   email: Joi.string().email().required(),
   phone: Joi.string().required(),
   position: Joi.string().required(),
-  password: Joi.string().min(6).required(),
+  password: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
   role: Joi.string().required(),
   active: Joi.boolean().required(),
@@ -43,13 +43,13 @@ const _updateSchema = Joi.object({
   firstName: Joi.string().empty(""),
   lastName: Joi.string().empty(""),
   email: Joi.string().email().empty(""),
-  password: Joi.string().min(6).empty(""),
+  password: Joi.string().min(8).empty(""),
   confirmPassword: Joi.string().valid(Joi.ref("password")).empty(""),
 }).with("password", "confirmPassword");
 
 const updatePasswordSchema = Joi.object({
   oldPassword: Joi.string().required(),
-  newPassword: Joi.string().min(6).required(),
+  newPassword: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("newPassword")).required(),
 }).with("newPassword", "confirmPassword");
 
@@ -58,13 +58,15 @@ const forgotPasswordSchema = Joi.object({
 });
 
 const resetPasswordSchema = Joi.object({
-  password: Joi.string().min(6).required(),
+  password: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
 }).with("password", "confirmPassword");
 
 const verifyEmailSchema = Joi.object({
   token: Joi.string().required(),
-});
+  password: Joi.string().min(8).required(),
+  confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
+}).with("password", "confirmPassword");
 
 const validateResetTokenSchema = Joi.object({
   token: Joi.string().required(),

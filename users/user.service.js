@@ -131,14 +131,7 @@ async function register(params, origin) {
 
   // create user object
   const user = new db.User(params);
-
-  // first registered user is an admin
-  const isFirstUser = (await db.User.count()) === 0;
-  user.role = isFirstUser ? Role.Admin : Role.User;
   user.verificationToken = randomTokenString();
-
-  // hash password
-  user.passwordHash = await hash(params.password);
 
   // save user
   await user.save();
@@ -190,7 +183,8 @@ async function registerFirstUser(params, origin) {
   });
 }
 
-async function verifyEmail({ token }) {
+async function verifyEmail(params) {
+  const { token, password } = params;
   const user = await db.User.findOne({
     where: { verificationToken: token },
   });
@@ -199,12 +193,17 @@ async function verifyEmail({ token }) {
 
   user.verified = Date.now();
   user.verificationToken = null;
+
+  // hash password
+  user.passwordHash = await hash(password);
+
   await user.save();
   logger.logEvent("info", "Email verified", {
     action: "VerifyEmail",
     userId: user.id,
     email: user.email,
   });
+  return basicDetails(user);
 }
 
 async function forgotPassword({ email }, origin) {

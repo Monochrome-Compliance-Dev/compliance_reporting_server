@@ -1,7 +1,7 @@
 const nodemailer = require("nodemailer");
 const { logger } = require("../helpers/logger");
 
-module.exports = { sendEmail, sendAttachmentEmail };
+module.exports = { sendEmail, sendAttachmentEmail, sendSes };
 
 const smtpOptions = {
   host: process.env.SMTP_HOST,
@@ -14,6 +14,33 @@ const smtpOptions = {
 };
 
 const emailFrom = process.env.SMTP_FROM;
+
+async function sendSes({ to, subject, html, from, cc, bcc }) {
+  const transporter = nodemailer.createTransport(smtpOptions);
+  try {
+    await transporter.sendMail({
+      from: from || emailFrom,
+      to: "contact@monochrome-compliance.com",
+      subject: subject,
+      html,
+    });
+    logger.logEvent("info", "SES Email sent", {
+      action: "SendSesEmail",
+      to,
+      subject,
+    });
+    return null;
+  } catch (error) {
+    logger.logEvent("error", "SES Email send failed", {
+      action: "SendSesEmail",
+      to,
+      subject,
+      error: error.message,
+    });
+    console.error("Error sending SES email:", error);
+    return error;
+  }
+}
 
 // Updated to support optional cc and bcc
 async function sendEmail({ to, subject, html, from, cc, bcc }) {

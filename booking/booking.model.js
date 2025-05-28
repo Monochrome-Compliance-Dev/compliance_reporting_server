@@ -1,15 +1,9 @@
 const { DataTypes } = require("sequelize");
-
-const isTest = process.env.NODE_ENV === "test";
-
-// Fully replace nanoid with a static fallback for tests
-const _nanoid = isTest
-  ? () => "test_" + Math.random().toString(36).substring(2, 10)
-  : (...args) => {
-      throw new Error(
-        "nanoid not available at model runtime — load it before calling"
-      );
-    };
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = model;
 
@@ -17,7 +11,7 @@ function model(sequelize) {
   const attributes = {
     id: {
       type: DataTypes.STRING(10),
-      defaultValue: () => _nanoid(10),
+      defaultValue: () => nanoid(10),
       primaryKey: true,
     },
     name: { type: DataTypes.STRING, allowNull: false },

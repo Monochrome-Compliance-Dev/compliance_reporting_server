@@ -216,7 +216,7 @@ function verifyEmail(req, res, next) {
         path: "/",
         domain: "localhost",
       });
-      res.json({ message: "Verification successful, you can now login" });
+      res.json({ message: "Verification successful, you can now login", user });
     })
     .catch(next);
 }
