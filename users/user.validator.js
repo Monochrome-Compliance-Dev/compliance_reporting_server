@@ -62,11 +62,15 @@ const resetPasswordSchema = Joi.object({
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
 }).with("password", "confirmPassword");
 
+const verifyTokenSchema = Joi.object({
+  token: Joi.string().required(),
+});
+
 const verifyEmailSchema = Joi.object({
   token: Joi.string().required(),
   password: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-}).with("password", "confirmPassword");
+});
 
 const validateResetTokenSchema = Joi.object({
   token: Joi.string().required(),
@@ -81,6 +85,7 @@ module.exports = {
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailSchema,
+  verifyTokenSchema,
   validateResetTokenSchema,
   createSchema: registerSchema,
 };

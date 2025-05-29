@@ -13,6 +13,7 @@ const {
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailSchema,
+  verifyTokenSchema,
   validateResetTokenSchema,
   createSchema,
 } = require("./user.validator");
@@ -34,6 +35,7 @@ router.post(
   registerFirsUser
 );
 router.post("/verify-email", validateRequest(verifyEmailSchema), verifyEmail);
+router.post("/verify-token", validateRequest(verifyTokenSchema), verifyToken);
 router.post(
   "/forgot-password",
   validateRequest(forgotPasswordSchema),
@@ -208,10 +210,27 @@ function registerFirsUser(req, res, next) {
     .catch(next);
 }
 
+function verifyToken(req, res, next) {
+  userService
+    .verifyToken(req.body.token)
+    .then(() => {
+      res.json({ status: 200, message: "Token is valid" });
+    })
+    .catch((err) => {
+      logger.logEvent("error", "Token verification failed", {
+        action: "VerifyToken",
+        error: err.message,
+        stack: err.stack,
+      });
+      res.status(400).json({ status: 400, message: "Token is invalid" });
+    });
+}
+
 function verifyEmail(req, res, next) {
+  console.log("req.body", req.body);
   userService
     .verifyEmail(req.body)
-    .then(() => {
+    .then((user) => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
@@ -222,7 +241,7 @@ function verifyEmail(req, res, next) {
             ? process.env.COOKIE_DOMAIN_PROD
             : process.env.COOKIE_DOMAIN_DEV,
       });
-      res.json({ message: "Verification successful, you can now login", user });
+      res.json(user);
     })
     .catch(next);
 }

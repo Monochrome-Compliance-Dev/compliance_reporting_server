@@ -15,6 +15,7 @@ module.exports = {
   revokeToken,
   register,
   registerFirstUser,
+  verifyToken,
   verifyEmail,
   forgotPassword,
   validateResetToken,
@@ -181,6 +182,24 @@ async function registerFirstUser(params, origin) {
     email: user.email,
     device: os.hostname(),
   });
+}
+
+async function verifyToken(token) {
+  const user = await db.User.findOne({
+    where: { verificationToken: token },
+  });
+  if (!user) throw { status: 401, message: "Verification failed" };
+  if (user.verified) {
+    throw { status: 400, message: "Email already verified" };
+  }
+
+  logger.logEvent("info", "Verification token validated", {
+    action: "VerifyToken",
+    userId: user.id,
+    email: user.email,
+    device: os.hostname(),
+  });
+  return;
 }
 
 async function verifyEmail(params) {
