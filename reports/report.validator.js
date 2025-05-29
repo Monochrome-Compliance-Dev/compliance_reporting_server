@@ -19,8 +19,8 @@ const reportSchema = Joi.object({
     )
     .sanitize()
     .required(),
-  createdBy: Joi.string().alphanum().length(10).required(),
-  id: Joi.string().alphanum().max(10), // Optional for create; required for update
+  createdBy: Joi.string().length(10).required(),
+  id: Joi.string().max(10), // Optional for create; required for update
   createdAt: Joi.date().optional(),
   updatedAt: Joi.date().optional(),
 });

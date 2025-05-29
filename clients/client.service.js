@@ -133,7 +133,7 @@ async function createClientViews(clientId) {
 
     const sql = `
       CREATE OR REPLACE VIEW \`${viewName}\` AS
-      SELECT * FROM ${tableName}`;
+      SELECT * FROM ${tableName} WHERE clientId = '${clientId}'`;
 
     const safeSql = sql.replace("?", `'${clientId}'`);
     try {
@@ -171,7 +171,7 @@ async function createClientTriggers(clientId) {
       name: `before_insert`,
       timing: `BEFORE`,
       event: `INSERT`,
-      logic: `
+      baseLogic: `
         IF NEW.id IS NULL OR NEW.id = '' THEN
           SET NEW.id = SUBSTRING(REPLACE(UUID(), '-', ''), 1, 10);
         END IF;
@@ -181,17 +181,13 @@ async function createClientTriggers(clientId) {
         IF NEW.createdAt IS NULL THEN
           SET NEW.createdAt = NOW();
         END IF;
-
-        IF NEW.updatedAt IS NULL THEN
-          SET NEW.updatedAt = NOW();
-        END IF;
       `,
     },
     {
       name: `before_update`,
       timing: `BEFORE`,
       event: `UPDATE`,
-      logic: `
+      baseLogic: `
         IF NEW.clientId != OLD.clientId THEN
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'clientId cannot be changed';
         END IF;
@@ -199,8 +195,6 @@ async function createClientTriggers(clientId) {
         IF OLD.clientId != @current_client_id THEN
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unauthorized client update';
         END IF;
-
-        SET NEW.updatedAt = NOW();
       `,
     },
   ];
@@ -228,12 +222,28 @@ async function createClientTriggers(clientId) {
 
     for (const trigger of triggerTemplates) {
       const triggerName = `trg_client_${clientId}_${table}_${trigger.name}`;
+
+      let logic = trigger.baseLogic;
+      if (trigger.name === "before_insert") {
+        if (table !== "tbl_tcp_audit") {
+          logic += `
+            IF NEW.updatedAt IS NULL THEN SET NEW.updatedAt = NOW(); END IF;
+          `;
+        }
+      } else if (trigger.name === "before_update") {
+        if (table !== "tbl_tcp_audit") {
+          logic += `
+            SET NEW.updatedAt = NOW();
+          `;
+        }
+      }
+
       const sql = `
         CREATE TRIGGER \`${triggerName}\`
         ${trigger.timing} ${trigger.event} ON \`${table}\`
         FOR EACH ROW
         BEGIN
-          ${trigger.logic}
+          ${logic}
         END;
       `;
 

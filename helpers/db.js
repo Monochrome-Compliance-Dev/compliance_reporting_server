@@ -114,6 +114,8 @@ async function initialize() {
   db.Report.hasMany(db.Tat, { onDelete: "CASCADE" });
   db.Tcp.hasMany(db.Audit, { onDelete: "CASCADE" });
   db.Audit.belongsTo(db.Tcp, { onDelete: "CASCADE" });
+  db.Client.hasMany(db.Audit, { onDelete: "CASCADE" });
+  db.Audit.belongsTo(db.Client, { onDelete: "CASCADE" });
 
   // sync all models with database
   await sequelize.sync();

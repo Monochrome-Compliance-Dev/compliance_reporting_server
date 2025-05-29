@@ -64,7 +64,6 @@ async function create(clientId, params) {
     clientId,
     ...params,
   });
-  console.log("Report created:", result);
   return result;
 }
 
