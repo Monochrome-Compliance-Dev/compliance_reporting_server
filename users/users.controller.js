@@ -146,10 +146,13 @@ function revokeToken(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "Lax",
         path: "/",
-        domain: "localhost",
+        domain:
+          process.env.NODE_ENV === "production"
+            ? process.env.COOKIE_DOMAIN_PROD
+            : process.env.COOKIE_DOMAIN_DEV,
       });
       logger.logEvent("info", "Refresh token revoked via controller", {
         action: "RevokeToken",
@@ -211,10 +214,13 @@ function verifyEmail(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "Lax",
         path: "/",
-        domain: "localhost",
+        domain:
+          process.env.NODE_ENV === "production"
+            ? process.env.COOKIE_DOMAIN_PROD
+            : process.env.COOKIE_DOMAIN_DEV,
       });
       res.json({ message: "Verification successful, you can now login", user });
     })
@@ -251,10 +257,13 @@ function resetPassword(req, res, next) {
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "Lax",
         path: "/",
-        domain: "localhost",
+        domain:
+          process.env.NODE_ENV === "production"
+            ? process.env.COOKIE_DOMAIN_PROD
+            : process.env.COOKIE_DOMAIN_DEV,
       });
       res.json({ message: "Password reset successful, you can now login" });
     })
@@ -384,9 +393,12 @@ function _delete(req, res, next) {
 function setTokenCookie(res, token) {
   res.cookie("refreshToken", token, {
     httpOnly: true,
-    secure: false,
+    secure: process.env.NODE_ENV === "production",
     sameSite: "Lax",
     path: "/",
-    domain: "localhost",
+    domain:
+      process.env.NODE_ENV === "production"
+        ? process.env.COOKIE_DOMAIN_PROD
+        : process.env.COOKIE_DOMAIN_DEV,
   });
 }

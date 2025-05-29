@@ -1,4 +1,12 @@
-﻿require("dotenv").config();
+﻿// If NODE_ENV is already set (like by AWS), do not overwrite it
+process.env.NODE_ENV = process.env.NODE_ENV || "development";
+
+// Load .env only if not in production
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
+
+console.log("Running in environment:", process.env.NODE_ENV);
 const config = require("./helpers/config");
 
 if (!process.env.JWT_SECRET) {
