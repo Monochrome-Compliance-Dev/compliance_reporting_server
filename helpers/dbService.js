@@ -15,13 +15,15 @@ module.exports = {
 };
 
 async function createRecord(clientId, tableName, params, db) {
-  const viewName = `client_${clientId}_tbl_${tableName}`;
+  const viewName = `tbl_${tableName}`;
 
-  // Ensure ID is generated and applied directly
   const id = params.id || nanoid(10);
   params.id = id;
 
-  // Add createdAt and updatedAt fields
+  // Ensure clientId is set forcibly
+  params.clientId = clientId;
+  console.log("-----------------------Client ID:", params.clientId);
+
   params.createdAt = new Date();
   if (tableName !== "tcp_audit") params.updatedAt = new Date();
 
@@ -32,12 +34,23 @@ async function createRecord(clientId, tableName, params, db) {
   const values = Object.values(params);
 
   const sql = `INSERT INTO \`${viewName}\` (${fields}) VALUES (${placeholders})`;
+  console.log("-------------------------Executing SQL:", sql);
   await db.sequelize.query(sql, { replacements: values });
 
   const [newRow] = await db.sequelize.query(
     `SELECT * FROM \`${viewName}\` WHERE id = ?`,
     { replacements: [id] }
   );
+
+  if (!newRow.length) {
+    logger.logEvent("warn", "No record found after insert", {
+      action: "CreateRecord",
+      table: tableName,
+      clientId,
+      recordId: id,
+    });
+    return null;
+  }
 
   logger.logEvent("info", "Record created", {
     action: "CreateRecord",
@@ -51,8 +64,10 @@ async function createRecord(clientId, tableName, params, db) {
 async function updateRecord(clientId, tableName, id, params, db) {
   const viewName = `client_${clientId}_tbl_${tableName}`;
 
-  // Update the timestamp
-  params.updatedAt = new Date();
+  // Update the timestamp if table is not tcp_audit
+  if (tableName !== "tcp_audit") {
+    params.updatedAt = new Date();
+  }
 
   const fields = Object.keys(params)
     .map((key) => `${key} = ?`)
@@ -94,8 +109,10 @@ async function deleteRecord(clientId, tableName, id, db) {
 async function patchRecord(clientId, tableName, id, params, db) {
   const viewName = `client_${clientId}_tbl_${tableName}`;
 
-  // Update the timestamp
-  params.updatedAt = new Date();
+  // Update the timestamp if table is not tcp_audit
+  if (tableName !== "tcp_audit") {
+    params.updatedAt = new Date();
+  }
 
   const fields = Object.keys(params)
     .map((key) => `${key} = ?`)

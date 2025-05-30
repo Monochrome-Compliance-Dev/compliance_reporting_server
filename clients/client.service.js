@@ -176,8 +176,6 @@ async function createClientTriggers(clientId) {
           SET NEW.id = SUBSTRING(REPLACE(UUID(), '-', ''), 1, 10);
         END IF;
 
-        SET NEW.clientId = @current_client_id;
-
         IF NEW.createdAt IS NULL THEN
           SET NEW.createdAt = NOW();
         END IF;
@@ -192,7 +190,7 @@ async function createClientTriggers(clientId) {
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'clientId cannot be changed';
         END IF;
 
-        IF OLD.clientId != @current_client_id THEN
+        IF OLD.clientId != ${clientId} THEN
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unauthorized client update';
         END IF;
       `,
@@ -202,11 +200,17 @@ async function createClientTriggers(clientId) {
   for (const table of tablesNames) {
     // Check if table has clientId column
     let hasClientIdColumn = false;
+    let hasUpdatedAtColumn = false;
     try {
-      const [results] = await db.sequelize.query(
+      const [clientIdResults] = await db.sequelize.query(
         `SHOW COLUMNS FROM \`${table}\` LIKE 'clientId';`
       );
-      hasClientIdColumn = results.length > 0;
+      hasClientIdColumn = clientIdResults.length > 0;
+
+      const [updatedAtResults] = await db.sequelize.query(
+        `SHOW COLUMNS FROM \`${table}\` LIKE 'updatedAt';`
+      );
+      hasUpdatedAtColumn = updatedAtResults.length > 0;
     } catch (error) {
       logger.logEvent("error", "Failed to check columns for table", {
         action: "CheckTableColumns",
@@ -225,13 +229,18 @@ async function createClientTriggers(clientId) {
 
       let logic = trigger.baseLogic;
       if (trigger.name === "before_insert") {
+        // For all tables, the clientId enforcement is removed from triggers,
+        // so no setting of NEW.clientId here.
+
         if (table !== "tbl_tcp_audit") {
           logic += `
             IF NEW.updatedAt IS NULL THEN SET NEW.updatedAt = NOW(); END IF;
           `;
         }
-      } else if (trigger.name === "before_update") {
-        if (table !== "tbl_tcp_audit") {
+      }
+
+      if (trigger.name === "before_update") {
+        if (hasUpdatedAtColumn) {
           logic += `
             SET NEW.updatedAt = NOW();
           `;

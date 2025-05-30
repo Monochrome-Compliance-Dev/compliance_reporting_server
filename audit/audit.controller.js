@@ -2,9 +2,6 @@ const express = require("express");
 const router = express.Router();
 const authorise = require("../middleware/authorise");
 const auditService = require("./audit.service");
-const setClientContext = require("../middleware/set-client-context");
-const validateRequest = require("../middleware/validate-request");
-const { auditSchema } = require("./audit.validator");
 const { logger } = require("../helpers/logger");
 let nanoid;
 (async () => {
@@ -12,11 +9,9 @@ let nanoid;
   nanoid = importedNanoid;
 })();
 
-const tcpService = require("../tcp/tcp.service");
-
 // routes
-router.get("/", authorise(), setClientContext, getAll);
-router.get("/:id", authorise(), setClientContext, getById);
+router.get("/", authorise(), getAll);
+router.get("/:id", authorise(), getById);
 // Only allow GET routes for audit, POST logic is moved to TCP controller
 
 module.exports = router;
@@ -46,12 +41,13 @@ async function getAll(req, res, next) {
 }
 
 async function getById(req, res, next) {
+  const clientId = req.auth.clientId;
   auditService
-    .getById(req.params.id, req.auth.clientId)
+    .getById(req.params.id, clientId)
     .then((audit) => {
       logger.logEvent("info", "Fetched audit by ID", {
         action: "GetAuditById",
-        clientId: req.auth.clientId,
+        clientId,
         auditId: req.params.id,
       });
       res.json(audit);
@@ -59,7 +55,7 @@ async function getById(req, res, next) {
     .catch((error) => {
       logger.logEvent("error", "Error fetching audit by ID", {
         action: "GetAuditById",
-        clientId: req.auth.clientId,
+        clientId,
         auditId: req.params.id,
         error: error.message,
       });

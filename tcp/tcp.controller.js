@@ -3,7 +3,6 @@ const router = express.Router();
 const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
-const setClientContext = require("../middleware/set-client-context");
 const validateRequest = require("../middleware/validate-request");
 const {
   tcpImportSchema,
@@ -13,37 +12,20 @@ const {
 const { logger } = require("../helpers/logger");
 
 // routes
-router.get("/", authorise(), setClientContext, getAll);
-router.get("/report/:id", authorise(), setClientContext, getAllByReportId);
-router.get("/tcp/:id", authorise(), setClientContext, getTcpByReportId);
-router.get("/:id", authorise(), setClientContext, getById);
-router.post(
-  "/",
-  authorise(),
-  validateRequest(tcpBulkImportSchema),
-  setClientContext,
-  bulkCreate
-);
-router.patch("/bulk-patch", authorise(), setClientContext, bulkPatchUpdate);
-router.patch("/:id", authorise(), setClientContext, patchRecord);
-router.put(
-  "/",
-  authorise(),
-  validateRequest(tcpSchema),
-  setClientContext,
-  bulkUpdate
-);
-router.put("/partial", authorise(), setClientContext, partialUpdate);
-router.put("/sbi/:id", authorise(), setClientContext, sbiUpdate);
-router.delete("/:id", authorise(), setClientContext, _delete);
-router.get("/missing-isSb", authorise(), setClientContext, checkMissingIsSb);
-router.put("/submit-final", authorise(), setClientContext, submitFinalReport);
-router.get(
-  "/download-summary",
-  authorise(),
-  setClientContext,
-  downloadSummaryReport
-);
+router.get("/", authorise(), getAll);
+router.get("/report/:id", authorise(), getAllByReportId);
+router.get("/tcp/:id", authorise(), getTcpByReportId);
+router.get("/:id", authorise(), getById);
+router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
+router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
+router.patch("/:id", authorise(), patchRecord);
+router.put("/", authorise(), validateRequest(tcpSchema), bulkUpdate);
+router.put("/partial", authorise(), partialUpdate);
+router.put("/sbi/:id", authorise(), sbiUpdate);
+router.delete("/:id", authorise(), _delete);
+router.get("/missing-isSb", authorise(), checkMissingIsSb);
+router.put("/submit-final", authorise(), submitFinalReport);
+router.get("/download-summary", authorise(), downloadSummaryReport);
 
 module.exports = router;
 
@@ -523,6 +505,7 @@ function downloadSummaryReport(req, res, next) {
 
 // Bulk partial update route handler with audit entries for each updated field
 async function bulkPatchUpdate(req, res, next) {
+  console.log("Received bulk patch request:", req.body);
   logger.logEvent("info", "Incoming bulk patch request", {
     clientId: req.auth.clientId,
   }); // log start of request
@@ -581,6 +564,11 @@ async function bulkPatchUpdate(req, res, next) {
             action: "update",
           };
           try {
+            console.log(
+              "Creating audit entry for clientId:",
+              auditEntry,
+              clientId
+            );
             await auditService.create(clientId, auditEntry);
             auditEntriesAll.push(auditEntry);
           } catch (err) {

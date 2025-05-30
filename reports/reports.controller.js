@@ -4,27 +4,14 @@ const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 const reportService = require("./report.service");
-const setClientContext = require("../middleware/set-client-context");
 const { reportSchema } = require("./report.validator");
 
 // routes
-router.get("/", authorise(), setClientContext, getAll);
-router.get("/report/:id", authorise(), setClientContext, getById);
-router.post(
-  "/",
-  authorise(),
-  validateRequest(reportSchema),
-  setClientContext,
-  create
-);
-router.put(
-  "/:id",
-  authorise(),
-  validateRequest(reportSchema),
-  setClientContext,
-  update
-);
-router.delete("/:id", authorise(), setClientContext, _delete);
+router.get("/", authorise(), getAll);
+router.get("/report/:id", authorise(), getById);
+router.post("/", authorise(), validateRequest(reportSchema), create);
+router.put("/:id", authorise(), validateRequest(reportSchema), update);
+router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 

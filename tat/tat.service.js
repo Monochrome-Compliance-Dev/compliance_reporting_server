@@ -13,7 +13,7 @@ module.exports = {
 };
 
 async function getAll(clientId) {
-  const viewName = `client_${clientId}_tbl_tbl_tat`;
+  const viewName = `client_${clientId}_tbl_tat`;
   const [rows] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
   return rows;
 }
@@ -36,8 +36,8 @@ async function getTatByReportId(reportId, clientId) {
   return rows;
 }
 
-async function sbiUpdate(reportId, params) {
-  const viewName = `client_${clientId}_tbl_tbl_tat`;
+async function sbiUpdate(reportId, params, clientId) {
+  const viewName = `client_${clientId}_tbl_tat`;
   const sql = `
     UPDATE \`${viewName}\` SET isSb = false 
     WHERE reportId = ? AND payeeEntityAbn = ?
@@ -47,8 +47,8 @@ async function sbiUpdate(reportId, params) {
   });
 }
 
-async function getById(id) {
-  return await getTat(id);
+async function getById(id, clientId) {
+  return await getTat(id, clientId);
 }
 
 async function create(params, clientId) {
@@ -80,13 +80,11 @@ async function _delete(id, clientId) {
 }
 
 // helper functions
-async function getTat(id) {
-  const viewName = `client_${clientId}_tbl_tbl_tat`;
+async function getTat(id, clientId) {
+  const viewName = `client_${clientId}_tbl_tat`;
   const [rows] = await db.sequelize.query(
-    "SELECT * FROM \`${viewName}\` WHERE id = ?",
-    {
-      replacements: [id],
-    }
+    `SELECT * FROM \`${viewName}\` WHERE id = ?`,
+    { replacements: [id] }
   );
   if (!rows.length) throw { status: 404, message: "Tat not found" };
   return rows[0];

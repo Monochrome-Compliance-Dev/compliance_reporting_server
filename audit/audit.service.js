@@ -49,12 +49,22 @@ async function getById(id, clientId) {
 
 async function create(clientId, params) {
   try {
+    // No need to manually add clientId here since dbService.createRecord ensures it
     const result = await dbService.createRecord(
       clientId,
       "tcp_audit",
       params,
       db
     );
+    if (!result) {
+      logger.logEvent("warn", "No audit entry returned by DB insert", {
+        action: "CreateAudit",
+        clientId,
+        params,
+      });
+      throw new Error("Audit entry creation failed: no record returned");
+    }
+    console.log("Audit entry created:", result);
     logger.logEvent("info", "Audit entry created", {
       action: "CreateAudit",
       clientId,
