@@ -10,18 +10,12 @@ console.log("Running in environment:", process.env.NODE_ENV);
 const config = require("./helpers/config");
 
 if (!process.env.JWT_SECRET) {
-  logger.logEvent(
-    "warn",
-    "JWT_SECRET is not set in the .env file. Authentication may fail.",
-    {
-      action: "StartupCheck",
-    }
+  console.warn(
+    "⚠️ JWT_SECRET is not set in the .env file. Authentication may fail."
   );
 }
 if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
-  logger.logEvent("warn", "Database credentials are missing", {
-    action: "StartupCheck",
-  });
+  console.warn("⚠️ Database credentials are missing");
 }
 
 require("rootpath")();
@@ -132,7 +126,6 @@ app.use("/api/users", require("./users/users.controller"));
 app.use("/api/clients", require("./clients/clients.controller"));
 app.use("/api/reports", require("./reports/reports.controller"));
 app.use("/api/tcp", require("./tcp/tcp.controller"));
-app.use("/api/tat", require("./tat/tat.controller"));
 app.use("/api/entities", require("./entities/entity.controller"));
 app.use("/api/public", require("./public/public.controller"));
 app.use("/api/booking", require("./booking/booking.controller"));
@@ -184,4 +177,4 @@ module.exports = app;
 
 // run this when you need to find the pid to kill
 // sudo lsof -i -P | grep LISTEN | grep :$PORT
-// mysql.server restart
+// (Postgres) Restart: brew services restart postgresql

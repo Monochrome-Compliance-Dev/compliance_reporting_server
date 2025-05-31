@@ -1,5 +1,4 @@
 const db = require("../helpers/db");
-const dbService = require("../helpers/dbService");
 const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
 let nanoid = () => "xxxxxxxxxx"; // fallback for test
@@ -27,117 +26,115 @@ module.exports = {
   getCurrentFieldValue,
 };
 
-async function getAll(clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
-  return rows;
+async function getAll() {
+  return await db.Tcp.findAll();
 }
 
-async function getAllByReportId(reportId, clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(
-    `SELECT * FROM \`${viewName}\` WHERE reportId = ?`,
-    { replacements: [reportId] }
-  );
-  return rows;
+async function getAllByReportId(reportId) {
+  return await db.Tcp.findAll({ where: { reportId } });
 }
 
-async function getTcpByReportId(reportId, clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(
-    `SELECT * FROM \`${viewName}\` WHERE reportId = ? AND isTcp = true AND excludedTcp = false`,
-    { replacements: [reportId] }
-  );
-  return rows;
+async function getTcpByReportId(reportId) {
+  return await db.Tcp.findAll({
+    where: {
+      reportId,
+      isTcp: true,
+      excludedTcp: false,
+    },
+  });
 }
 
-async function partialUpdate(id, updates, clientId) {
-  const result = await dbService.updateRecord(clientId, "tcp", id, updates, db);
+async function partialUpdate(id, updates) {
+  await db.Tcp.update(updates, { where: { id } });
   logger.logEvent("info", "TCP record partially updated", {
     action: "PartialUpdateTCP",
     tcpId: id,
-    clientId,
   });
-  return result;
+  return db.Tcp.findOne({ where: { id } });
 }
 
-async function sbiUpdate(reportId, params, clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const sql = `
-    UPDATE \`${viewName}\` SET isSb = false 
-    WHERE reportId = ? AND payeeEntityAbn = ?
-  `;
-  await db.sequelize.query(sql, {
-    replacements: [reportId, params.payeeEntityAbn],
-  });
+async function sbiUpdate(reportId, params) {
+  await db.Tcp.update(
+    { isSb: false },
+    {
+      where: {
+        reportId: reportId,
+        payeeEntityAbn: params.payeeEntityAbn,
+      },
+    }
+  );
 }
 
-async function getById(id, clientId) {
-  return await getTcp(id, clientId);
+async function getById(id) {
+  return await getTcp(id);
 }
 
-async function create(params, clientId) {
-  const result = await dbService.createRecord(clientId, "tcp", params, db);
+async function create(params) {
+  const result = await db.Tcp.create(params);
   logger.logEvent("info", "TCP record created", {
     action: "CreateTCP",
-    clientId,
   });
   return result;
 }
 
-async function update(id, params, clientId) {
-  const result = await dbService.updateRecord(clientId, "tcp", id, params, db);
+async function update(id, params) {
+  await db.Tcp.update(params, { where: { id } });
   logger.logEvent("info", "TCP record updated", {
     action: "UpdateTCP",
     tcpId: id,
-    clientId,
   });
-  return result;
+  return db.Tcp.findOne({ where: { id } });
 }
 
-async function _delete(id, clientId) {
+async function _delete(id) {
   logger.logEvent("warn", "TCP record deleted", {
     action: "DeleteTCP",
     tcpId: id,
-    clientId,
   });
-  await dbService.deleteRecord(clientId, "tcp", id, db);
+  await db.Tcp.destroy({ where: { id } });
 }
 
 // helper functions
-async function getTcp(id, clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(
-    `SELECT * FROM \`${viewName}\` WHERE id = ?`,
-    {
-      replacements: [id],
-    }
-  );
-  if (!rows.length) throw { status: 404, message: "Tcp not found" };
-  return rows[0];
+async function getTcp(id) {
+  const record = await db.Tcp.findOne({ where: { id } });
+  if (!record) throw { status: 404, message: "Tcp not found" };
+  return record;
 }
 
 // Check if there are any TCP records missing isSb flag (SBI completeness check)
-async function hasMissingIsSbFlag(clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(
-    `SELECT COUNT(*) AS missing FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
-  );
-  return rows[0].missing > 0;
+async function hasMissingIsSbFlag() {
+  const count = await db.Tcp.count({
+    where: {
+      isTcp: true,
+      excludedTcp: false,
+      isSb: null,
+    },
+  });
+  return count > 0;
 }
 
 // Finalise report: delegate to reportService
-async function finaliseReport(clientId) {
-  return await reportService.finaliseSubmission(clientId);
+async function finaliseReport() {
+  return await reportService.finaliseSubmission();
 }
 
-async function generateSummaryCsv(clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(`
-    SELECT payeeEntityName, payeeEntityAbn, paymentAmount, paymentDate, invoiceIssueDate, isSb, paymentTime
-    FROM \`${viewName}\`
-    WHERE isTcp = true AND excludedTcp = false
-  `);
+async function generateSummaryCsv() {
+  const rows = await db.Tcp.findAll({
+    attributes: [
+      "payeeEntityName",
+      "payeeEntityAbn",
+      "paymentAmount",
+      "paymentDate",
+      "invoiceIssueDate",
+      "isSb",
+      "paymentTime",
+    ],
+    where: {
+      isTcp: true,
+      excludedTcp: false,
+    },
+    raw: true,
+  });
 
   const header =
     "Payee Name,ABN,Amount,Payment Date,Invoice Date,Is Small Business,Payment Time";
@@ -152,37 +149,48 @@ async function generateSummaryCsv(clientId) {
   return csv;
 }
 
-async function patchRecord(id, update, clientId) {
+async function patchRecord(id, update) {
   try {
     logger.logEvent("info", "TCP PATCH update requested", {
       action: "patchRecordTCP",
-      clientId,
     });
-
-    const result = dbService.patchRecord(clientId, "tcp", id, update, db);
-
+    await db.Tcp.update(update, { where: { id } });
     logger.logEvent("info", "Bulk PATCH update completed", {
       action: "patchRecordTCP",
-      clientId,
     });
-
-    return result;
+    return db.Tcp.findOne({ where: { id } });
   } catch (error) {
     logger.logEvent("error", "Bulk PATCH update failed", {
       action: "patchRecordTCP",
-      clientId,
       error: error.message,
     });
     throw error;
   }
 }
 
-async function getCurrentFieldValue(clientId, tcpId, field_name) {
-  const viewName = `client_${clientId}_tbl_tcp`;
-  const [rows] = await db.sequelize.query(
-    `SELECT \`${field_name}\` FROM \`${viewName}\` WHERE id = ? LIMIT 1`,
-    { replacements: [tcpId] }
-  );
-  if (!rows.length) return null;
-  return rows[0][field_name] !== undefined ? rows[0][field_name] : null;
+async function getCurrentFieldValue(tcpId, field_name) {
+  // Note: field_name is not parameterized for column names, so validate/sanitize if used from user input!
+  // Only allow access to certain fields, or ensure field_name is safe!
+  const allowedFields = [
+    "payeeEntityName",
+    "payeeEntityAbn",
+    "paymentAmount",
+    "paymentDate",
+    "invoiceIssueDate",
+    "isSb",
+    "paymentTime",
+    "isTcp",
+    "excludedTcp",
+    // Add more allowed fields as needed
+  ];
+  if (!allowedFields.includes(field_name)) {
+    throw new Error("Invalid field_name requested");
+  }
+  const row = await db.Tcp.findOne({
+    attributes: [field_name],
+    where: { id: tcpId },
+    raw: true,
+  });
+  if (!row) return null;
+  return row[field_name] !== undefined ? row[field_name] : null;
 }

@@ -16,13 +16,11 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  const clientId = req.auth.clientId; // Assumes clientId is embedded in the JWT and available on req.user
   reportService
-    .getAll(clientId)
+    .getAll()
     .then((reports) => {
       logger.logEvent("info", "Fetched all reports", {
         action: "GetAllReports",
-        clientId,
         userId: req.auth.id,
         count: Array.isArray(reports) ? reports.length : undefined,
       });
@@ -31,7 +29,6 @@ function getAll(req, res, next) {
     .catch((error) => {
       logger.logEvent("error", "Error fetching all reports", {
         action: "GetAllReports",
-        clientId,
         userId: req.auth.id,
         error: error.message,
       });
@@ -41,13 +38,12 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   reportService
-    .getById(req.params.id, req.auth.clientId)
+    .getById(req.params.id)
     .then((report) => {
       if (report) {
         logger.logEvent("info", "Fetched report by ID", {
           action: "GetReportById",
           reportId: req.params.id,
-          clientId: req.auth.clientId,
           userId: req.auth.id,
         });
         res.json(report);
@@ -55,7 +51,6 @@ function getById(req, res, next) {
         logger.logEvent("warn", "Report not found", {
           action: "GetReportById",
           reportId: req.params.id,
-          clientId: req.auth.clientId,
           userId: req.auth.id,
         });
         res.sendStatus(404);
@@ -65,7 +60,6 @@ function getById(req, res, next) {
       logger.logEvent("error", "Error fetching report by ID", {
         action: "GetReportById",
         reportId: req.params.id,
-        clientId: req.auth.clientId,
         userId: req.auth.id,
         error: error.message,
       });
@@ -75,12 +69,11 @@ function getById(req, res, next) {
 
 function create(req, res, next) {
   reportService
-    .create(req.auth.clientId, req.body)
+    .create(req.body)
     .then((report) => {
       logger.logEvent("info", "Report created", {
         action: "CreateReport",
         reportId: report.id,
-        clientId: req.auth.clientId,
         userId: req.auth.id,
       });
       res.json(report);
@@ -88,7 +81,6 @@ function create(req, res, next) {
     .catch((error) => {
       logger.logEvent("error", "Error creating report", {
         action: "CreateReport",
-        clientId: req.auth.clientId,
         error: error.message,
       });
       next(error); // Pass the error to the global error handler
@@ -97,12 +89,11 @@ function create(req, res, next) {
 
 function update(req, res, next) {
   reportService
-    .update(req.params.id, req.body, req.auth.clientId)
+    .update(req.params.id, req.body)
     .then((report) => {
       logger.logEvent("info", "Report updated", {
         action: "UpdateReport",
         reportId: req.params.id,
-        clientId: req.auth.clientId,
         userId: req.auth.id,
       });
       res.json(report);
@@ -111,7 +102,6 @@ function update(req, res, next) {
       logger.logEvent("error", "Error updating report", {
         action: "UpdateReport",
         reportId: req.params.id,
-        clientId: req.auth.clientId,
         error: error.message,
       });
       next(error);
@@ -120,12 +110,11 @@ function update(req, res, next) {
 
 function _delete(req, res, next) {
   reportService
-    .delete(req.params.id, req.auth.clientId)
+    .delete(req.params.id)
     .then(() => {
       logger.logEvent("warn", "Report deleted", {
         action: "DeleteReport",
         reportId: req.params.id,
-        clientId: req.auth.clientId,
         userId: req.auth.id,
       });
       res.json({ message: "Report deleted successfully" });
@@ -134,7 +123,6 @@ function _delete(req, res, next) {
       logger.logEvent("error", "Error deleting report", {
         action: "DeleteReport",
         reportId: req.params.id,
-        clientId: req.auth.clientId,
         error: error.message,
       });
       next(error); // Pass the error to the global error handler

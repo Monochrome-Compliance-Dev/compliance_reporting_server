@@ -31,14 +31,14 @@ module.exports = router;
 
 function getAll(req, res, next) {
   tcpService
-    .getAll(req.auth.clientId)
+    .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getAllByReportId(req, res, next) {
   tcpService
-    .getAllByReportId(req.params.id, req.auth.clientId)
+    .getAllByReportId(req.params.id)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -47,7 +47,6 @@ function getAllByReportId(req, res, next) {
 async function patchRecord(req, res, next) {
   try {
     const { id } = req.params;
-    const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const updates = req.body;
     const auditService = require("../audit/audit.service");
@@ -63,13 +62,13 @@ async function patchRecord(req, res, next) {
     }
 
     // Fetch the old record before updating
-    const oldRecord = await tcpService.getById(id, clientId);
+    const oldRecord = await tcpService.getById(id);
     if (!oldRecord) {
       return res.status(404).json({ message: "Record not found" });
     }
 
     // Patch the record
-    const updated = await tcpService.partialUpdate(id, updates, clientId);
+    const updated = await tcpService.partialUpdate(id, updates);
 
     // For each changed field, create an audit entry, skipping 'updatedAt'
     const now = new Date();
@@ -91,7 +90,7 @@ async function patchRecord(req, res, next) {
           action: "update",
         };
         try {
-          await auditService.create(clientId, auditEntry);
+          await auditService.create(req.auth.clientId, auditEntry);
           auditEntries.push(auditEntry);
         } catch (err) {
           // Log but do not fail the patch if audit fails
@@ -114,7 +113,7 @@ async function patchRecord(req, res, next) {
 
 function getTcpByReportId(req, res, next) {
   tcpService
-    .getTcpByReportId(req.params.id, req.auth.clientId)
+    .getTcpByReportId(req.params.id)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -135,11 +134,7 @@ function sbiUpdate(req, res, next) {
           await validateSbiRecord(reqForValidation);
 
           // Save each record using tcpService
-          return await tcpService.sbiUpdate(
-            req.params.id,
-            record,
-            req.auth.clientId
-          );
+          return await tcpService.sbiUpdate(req.params.id, record);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -199,11 +194,7 @@ function partialUpdate(req, res, next) {
           await partialUpdateSchema(reqForValidation); // Validate the record
 
           // Save each record using tcpService
-          return await tcpService.update(
-            record.id,
-            recordToUpdate,
-            req.auth.clientId
-          );
+          return await tcpService.update(record.id, recordToUpdate);
         } catch (error) {
           console.error("Error processing record:", error);
           throw error; // Propagate the error to Promise.all
@@ -242,7 +233,7 @@ async function partialUpdateSchema(req) {
 
 function getById(req, res, next) {
   tcpService
-    .getById(req.params.id, req.auth.clientId)
+    .getById(req.params.id)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -284,7 +275,7 @@ async function bulkCreate(req, res, next) {
         });
 
         // Create the record using the service
-        const created = await tcpService.create(record, clientId);
+        const created = await tcpService.create(record);
         results.push(created);
 
         // For each field in the created record, create an audit entry, skipping 'updatedAt'
@@ -358,9 +349,9 @@ async function bulkUpdate(req, res, next) {
         try {
           const { id, createdAt, ...recordToUpdate } = record;
           // Fetch old record before update
-          const oldRecord = await tcpService.getById(id, clientId);
+          const oldRecord = await tcpService.getById(id);
           // Save each record using tcpService
-          const updated = await tcpService.update(id, recordToUpdate, clientId);
+          const updated = await tcpService.update(id, recordToUpdate);
           results.push(updated);
           // For each changed field, create an audit entry, skipping 'updatedAt'
           const now = new Date();
@@ -420,8 +411,8 @@ async function _delete(req, res, next) {
     const userId = req.auth.id;
     const id = req.params.id;
     // Fetch the old record before deletion
-    const oldRecord = await tcpService.getById(id, clientId);
-    await tcpService.delete(id, clientId);
+    const oldRecord = await tcpService.getById(id);
+    await tcpService.delete(id);
     logger.logEvent("warn", "TCP record deleted", {
       action: "DeleteTCP",
       tcpId: id,
@@ -465,14 +456,14 @@ async function _delete(req, res, next) {
 
 function checkMissingIsSb(req, res, next) {
   tcpService
-    .hasMissingIsSbFlag(req.auth.clientId)
+    .hasMissingIsSbFlag()
     .then((result) => res.json(result))
     .catch(next);
 }
 
 function submitFinalReport(req, res, next) {
   tcpService
-    .finaliseReport(req.auth.clientId)
+    .finaliseReport()
     .then((result) => {
       res.json(result);
       logger.auditEvent("Report submitted", {
@@ -486,7 +477,7 @@ function submitFinalReport(req, res, next) {
 
 function downloadSummaryReport(req, res, next) {
   tcpService
-    .generateSummaryCsv(req.auth.clientId)
+    .generateSummaryCsv()
     .then((csv) => {
       res.setHeader("Content-Type", "text/csv");
       res.setHeader(
@@ -539,13 +530,9 @@ async function bulkPatchUpdate(req, res, next) {
       // Remove 'step' field from updates
       const { step, ...filteredUpdates } = updates;
       // Fetch old record before patching
-      const oldRecord = await tcpService.getById(id, clientId);
+      const oldRecord = await tcpService.getById(id);
       // Patch the record
-      const updated = await tcpService.patchRecord(
-        id,
-        filteredUpdates,
-        clientId
-      );
+      const updated = await tcpService.patchRecord(id, filteredUpdates);
       // For each changed field, create an audit entry, skipping 'updatedAt'
       const now = new Date();
       for (const [field, newValue] of Object.entries(filteredUpdates)) {

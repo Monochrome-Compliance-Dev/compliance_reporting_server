@@ -17,9 +17,10 @@ async function getAll() {
 async function getById(id) {
   logger.logEvent("info", "Fetching client by ID", {
     action: "GetClient",
-    clientId: id,
   });
-  return await getClient(id);
+  const client = await db.Client.findOne({ where: { id } });
+  if (!client) throw { status: 404, message: "Client not found" };
+  return client;
 }
 
 async function create(params) {
@@ -35,12 +36,8 @@ async function create(params) {
   // save client
   const client = await db.Client.create(params);
 
-  // Create views for tables locked down to the client
-  await createClientViews(client.id);
-  await createClientTriggers(client.id);
   logger.logEvent("info", "Client created", {
     action: "CreateClient",
-    clientId: client.id,
   });
   return client;
 }
@@ -48,232 +45,29 @@ async function create(params) {
 async function update(id, params) {
   logger.logEvent("info", "Updating client", {
     action: "UpdateClient",
-    clientId: id,
     paymentConfirmed: params?.paymentConfirmed,
   });
-  const client = await getClient(id);
-
-  // validate
-  // if (
-  //   params.businessName !== client.businessName &&
-  //   (await db.Client.findOne({ where: { businessName: params.businessName } }))
-  // ) {
-  //   throw "Client with this ABN already exists";
-  // }
+  const client = await db.Client.findOne({ where: { id } });
+  if (!client) throw { status: 404, message: "Client not found" };
 
   // copy params to client and save
   Object.assign(client, params);
   await client.save();
   logger.logEvent("info", "Client updated", {
     action: "UpdateClient",
-    clientId: id,
   });
 }
 
 async function _delete(id) {
   logger.logEvent("info", "Deleting client", {
     action: "DeleteClient",
-    clientId: id,
   });
-  const client = await getClient(id);
-
-  // Drop views
-  for (const tableName of tablesNames) {
-    const viewName = `client_${client.id}_${tableName}`;
-    try {
-      await db.sequelize.query(`DROP VIEW IF EXISTS \`${viewName}\`;`);
-    } catch (error) {
-      logger.logEvent("error", "Failed to drop view", {
-        action: "DropClientView",
-        viewName,
-        error: error.message,
-      });
-    }
-  }
-
-  // Drop triggers
-  const triggerNames = ["before_insert", "before_update"];
-  for (const table of tablesNames) {
-    for (const name of triggerNames) {
-      const triggerName = `trg_client_${client.id}_${table}_${name}`;
-      try {
-        await db.sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\`;`);
-      } catch (error) {
-        logger.logEvent("error", "Failed to drop trigger", {
-          action: "DropClientTrigger",
-          triggerName,
-          error: error.message,
-        });
-      }
-    }
-  }
+  const client = await db.Client.findOne({ where: { id } });
+  if (!client) throw { status: 404, message: "Client not found" };
 
   // Delete the client record
   await client.destroy();
   logger.logEvent("warn", "Client deleted", {
     action: "DeleteClient",
-    clientId: id,
   });
-}
-
-// helper functions
-async function getClient(id) {
-  const client = await db.Client.findByPk(id);
-  if (!client) throw { status: 404, message: "Client not found" };
-  return client;
-}
-
-const tablesNames = ["tbl_report", "tbl_tat", "tbl_tcp", "tbl_tcp_audit"];
-
-async function createClientViews(clientId) {
-  const results = [];
-
-  for (const tableName of tablesNames) {
-    const viewName = `client_${clientId}_${tableName}`;
-
-    const sql = `
-      CREATE OR REPLACE VIEW \`${viewName}\` AS
-      SELECT * FROM ${tableName} WHERE clientId = '${clientId}'`;
-
-    const safeSql = sql.replace("?", `'${clientId}'`);
-    try {
-      await db.sequelize.query(safeSql); // Create view
-      // GRANT removed – assumed permissions are managed externally
-      results.push({ tableName, success: true });
-      logger.logEvent("info", "View created and granted", {
-        action: "CreateClientView",
-        viewName,
-        clientId,
-        tableName,
-      });
-    } catch (error) {
-      results.push({ tableName, success: false, error: error.message });
-      logger.logEvent("error", "Failed to create view", {
-        action: "CreateClientView",
-        viewName,
-        clientId,
-        tableName,
-        error: error.message,
-      });
-    }
-  }
-
-  if (results.some((result) => !result.success)) {
-    throw new Error("Failed to create some client views");
-  }
-
-  return results;
-}
-
-async function createClientTriggers(clientId) {
-  const triggerTemplates = [
-    {
-      name: `before_insert`,
-      timing: `BEFORE`,
-      event: `INSERT`,
-      baseLogic: `
-        IF NEW.id IS NULL OR NEW.id = '' THEN
-          SET NEW.id = SUBSTRING(REPLACE(UUID(), '-', ''), 1, 10);
-        END IF;
-
-        IF NEW.createdAt IS NULL THEN
-          SET NEW.createdAt = NOW();
-        END IF;
-      `,
-    },
-    {
-      name: `before_update`,
-      timing: `BEFORE`,
-      event: `UPDATE`,
-      baseLogic: `
-        IF NEW.clientId != OLD.clientId THEN
-          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'clientId cannot be changed';
-        END IF;
-
-        IF OLD.clientId != ${clientId} THEN
-          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Unauthorized client update';
-        END IF;
-      `,
-    },
-  ];
-
-  for (const table of tablesNames) {
-    // Check if table has clientId column
-    let hasClientIdColumn = false;
-    let hasUpdatedAtColumn = false;
-    try {
-      const [clientIdResults] = await db.sequelize.query(
-        `SHOW COLUMNS FROM \`${table}\` LIKE 'clientId';`
-      );
-      hasClientIdColumn = clientIdResults.length > 0;
-
-      const [updatedAtResults] = await db.sequelize.query(
-        `SHOW COLUMNS FROM \`${table}\` LIKE 'updatedAt';`
-      );
-      hasUpdatedAtColumn = updatedAtResults.length > 0;
-    } catch (error) {
-      logger.logEvent("error", "Failed to check columns for table", {
-        action: "CheckTableColumns",
-        tableName: table,
-        error: error.message,
-      });
-      continue; // Skip this table on error
-    }
-
-    if (!hasClientIdColumn) {
-      continue; // Skip creating triggers for tables without clientId column
-    }
-
-    for (const trigger of triggerTemplates) {
-      const triggerName = `trg_client_${clientId}_${table}_${trigger.name}`;
-
-      let logic = trigger.baseLogic;
-      if (trigger.name === "before_insert") {
-        // For all tables, the clientId enforcement is removed from triggers,
-        // so no setting of NEW.clientId here.
-
-        if (table !== "tbl_tcp_audit") {
-          logic += `
-            IF NEW.updatedAt IS NULL THEN SET NEW.updatedAt = NOW(); END IF;
-          `;
-        }
-      }
-
-      if (trigger.name === "before_update") {
-        if (hasUpdatedAtColumn) {
-          logic += `
-            SET NEW.updatedAt = NOW();
-          `;
-        }
-      }
-
-      const sql = `
-        CREATE TRIGGER \`${triggerName}\`
-        ${trigger.timing} ${trigger.event} ON \`${table}\`
-        FOR EACH ROW
-        BEGIN
-          ${logic}
-        END;
-      `;
-
-      try {
-        await db.sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\`;`);
-        await db.sequelize.query(sql);
-        logger.logEvent("info", "Trigger created", {
-          action: "CreateClientTrigger",
-          triggerName,
-          clientId,
-          tableName: table,
-        });
-      } catch (error) {
-        logger.logEvent("error", "Failed to create trigger", {
-          action: "CreateClientTrigger",
-          triggerName,
-          clientId,
-          tableName: table,
-          error: error.message,
-        });
-      }
-    }
-  }
 }

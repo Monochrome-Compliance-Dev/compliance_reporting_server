@@ -44,17 +44,15 @@ function getById(req, res, next) {
 }
 
 function create(req, res, next) {
-  const clientId = req.auth.clientId; // Explicitly grab from auth
   logger.logEvent("info", "Creating client", {
     action: "CreateClient",
     userId: req?.user?.id || "anonymous",
     ip: req.ip,
     userAgent: req.headers["user-agent"],
     payload: req.body,
-    clientId,
   });
   clientService
-    .create({ ...req.body, clientId }) // Explicitly pass clientId
+    .create(req.body)
     .then((client) => {
       logger.logEvent("info", "Client created via API", {
         action: "CreateClient",
@@ -72,7 +70,6 @@ function create(req, res, next) {
 }
 
 function update(req, res, next) {
-  const clientId = req.auth.clientId;
   logger.logEvent("info", "Updating client", {
     action: "UpdateClient",
     clientId: req.params.id,
@@ -80,7 +77,7 @@ function update(req, res, next) {
     payload: req.body,
   });
   clientService
-    .update(req.params.id, { ...req.body, clientId }) // Explicitly pass clientId
+    .update(req.params.id, req.body)
     .then((client) => {
       logger.logEvent("info", "Client updated via API", {
         action: "UpdateClient",

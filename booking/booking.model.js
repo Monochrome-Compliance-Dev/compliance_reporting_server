@@ -28,7 +28,5 @@ function model(sequelize) {
   return sequelize.define("booking", attributes, {
     tableName: "tbl_booking",
     timestamps: true,
-    charset: "utf8mb4",
-    collate: "utf8mb4_0900_ai_ci",
   });
 }

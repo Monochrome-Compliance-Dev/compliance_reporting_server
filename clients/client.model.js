@@ -52,7 +52,5 @@ function model(sequelize) {
   return sequelize.define("client", attributes, {
     tableName: "tbl_client",
     timestamps: true,
-    charset: "utf8mb4",
-    collate: "utf8mb4_0900_ai_ci",
   });
 }

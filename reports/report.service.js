@@ -1,5 +1,4 @@
 const db = require("../helpers/db");
-const dbService = require("../helpers/dbService");
 const { logger } = require("../helpers/logger");
 
 module.exports = {
@@ -12,36 +11,28 @@ module.exports = {
   finaliseSubmission,
 };
 
-async function getAll(clientId) {
-  const viewName = `client_${clientId}_tbl_report`;
+async function getAll() {
   try {
-    const [rows] = await db.sequelize.query(`SELECT * FROM \`${viewName}\``);
+    const rows = await db.Report.findAll();
     logger.logEvent("info", "Fetched all reports", {
       action: "GetAllReports",
-      clientId,
       count: Array.isArray(rows) ? rows.length : undefined,
     });
     return rows;
   } catch (error) {
     logger.logEvent("error", "Error fetching all reports", {
       action: "GetAllReports",
-      clientId,
       error: error.message,
     });
     throw error;
   }
 }
 
-async function getAllByReportId(reportId, clientId) {
-  const viewName = `client_${clientId}_tbl_report`;
+async function getAllByReportId(reportId) {
   try {
-    const [rows] = await db.sequelize.query(
-      `SELECT * FROM \`${viewName}\` WHERE reportId = ?`,
-      { replacements: [reportId] }
-    );
+    const rows = await db.Report.findAll({ where: { reportId } });
     logger.logEvent("info", "Fetched reports by reportId", {
       action: "GetAllByReportId",
-      clientId,
       reportId,
       count: Array.isArray(rows) ? rows.length : undefined,
     });
@@ -49,7 +40,6 @@ async function getAllByReportId(reportId, clientId) {
   } catch (error) {
     logger.logEvent("error", "Error fetching reports by reportId", {
       action: "GetAllByReportId",
-      clientId,
       reportId,
       error: error.message,
     });
@@ -57,69 +47,52 @@ async function getAllByReportId(reportId, clientId) {
   }
 }
 
-async function create(clientId, params) {
-  const result = await dbService.createRecord(clientId, "report", params, db);
+async function create(params) {
+  const result = await db.Report.create(params);
   logger.logEvent("info", "Report created", {
     action: "CreateReport",
-    clientId,
     ...params,
   });
   return result;
 }
 
-async function update(clientId, id, params) {
-  const result = await dbService.updateRecord(
-    clientId,
-    "report",
-    id,
-    params,
-    db
-  );
+async function update(id, params) {
+  await db.Report.update(params, { where: { id } });
+  const result = await db.Report.findOne({ where: { id } });
   logger.logEvent("info", "Report updated", {
     action: "UpdateReport",
-    clientId,
     reportId: id,
     ...params,
   });
   return result;
 }
 
-async function _delete(clientId, id) {
-  await dbService.deleteRecord(clientId, "report", id, db);
+async function _delete(id) {
+  await db.Report.destroy({ where: { id } });
   logger.logEvent("warn", "Report deleted", {
     action: "DeleteReport",
-    clientId,
     reportId: id,
   });
 }
 
-async function getById(id, clientId) {
-  const viewName = `client_${clientId}_tbl_report`;
+async function getById(id) {
   try {
-    const [rows] = await db.sequelize.query(
-      `SELECT * FROM \`${viewName}\` WHERE id = ?`,
-      {
-        replacements: [id],
-      }
-    );
-    if (!rows.length) {
+    const report = await db.Report.findOne({ where: { id } });
+    if (!report) {
       logger.logEvent("warn", "Report not found", {
         action: "GetReportById",
-        clientId,
         reportId: id,
       });
       throw { status: 404, message: "Report not found" };
     }
     logger.logEvent("info", "Fetched report by ID", {
       action: "GetReportById",
-      clientId,
       reportId: id,
     });
-    return rows[0];
+    return report;
   } catch (error) {
     logger.logEvent("error", "Error fetching report by ID", {
       action: "GetReportById",
-      clientId,
       reportId: id,
       error: error.message,
     });
@@ -127,10 +100,10 @@ async function getById(id, clientId) {
   }
 }
 
-async function finaliseSubmission(clientId) {
-  const viewName = `client_${clientId}_tbl_tcp`;
+async function finaliseSubmission() {
+  const viewName = `client_${db.sequelize.config.database}_tbl_tcp`;
   const [rows] = await db.sequelize.query(
-    `SELECT COUNT(*) AS count FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
+    `SELECT COUNT(*) AS count FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
   );
   if (rows[0].count > 0) {
     logger.logEvent(
@@ -138,14 +111,13 @@ async function finaliseSubmission(clientId) {
       "Report submission blocked due to missing isSb flags",
       {
         action: "FinaliseSubmissionBlocked",
-        clientId,
       }
     );
     throw { status: 400, message: "Some records are missing isSb flags" };
   }
 
   const [reportIds] = await db.sequelize.query(
-    `SELECT DISTINCT reportId FROM \`${viewName}\` WHERE isTcp = true AND excludedTcp = false`
+    `SELECT DISTINCT reportId FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false`
   );
 
   const now = new Date();
@@ -155,18 +127,11 @@ async function finaliseSubmission(clientId) {
   };
 
   for (const { reportId } of reportIds) {
-    await dbService.updateRecord(
-      clientId,
-      "report",
-      reportId,
-      updatePayload,
-      db
-    );
+    await db.Report.update(updatePayload, { where: { id: reportId } });
   }
 
   logger.logEvent("info", "Reports finalised", {
     action: "FinaliseSubmission",
-    clientId,
     reportIds: reportIds.map((r) => r.reportId),
   });
 

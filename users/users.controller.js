@@ -32,7 +32,7 @@ router.post("/register", validateRequest(registerSchema), register);
 router.post(
   "/register-first-user",
   validateRequest(registerFirstUserSchema),
-  registerFirsUser
+  registerFirstUser
 );
 router.post("/verify-email", validateRequest(verifyEmailSchema), verifyEmail);
 router.post("/verify-token", validateRequest(verifyTokenSchema), verifyToken);
@@ -172,7 +172,6 @@ function revokeToken(req, res, next) {
 }
 
 function register(req, res, next) {
-  // console.log("req.body", req.body, req.get("origin"));
   userService
     .register(req.body, req.get("origin"), req.headers["user-agent"])
     .then(() =>
@@ -191,7 +190,7 @@ function register(req, res, next) {
     .catch(next);
 }
 
-function registerFirsUser(req, res, next) {
+function registerFirstUser(req, res, next) {
   userService
     .registerFirstUser(req.body, req.get("origin"), req.headers["user-agent"])
     .then(() =>
@@ -227,7 +226,6 @@ function verifyToken(req, res, next) {
 }
 
 function verifyEmail(req, res, next) {
-  console.log("req.body", req.body);
   userService
     .verifyEmail(req.body)
     .then((user) => {

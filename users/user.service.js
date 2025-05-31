@@ -36,7 +36,7 @@ async function authenticate({ email, password, ipAddress }) {
   console.log("User found:", user ? user.email : "No user found");
   if (
     !user ||
-    !user.isVerified ||
+    !user.verified ||
     !(await bcrypt.compare(password, user.passwordHash))
   ) {
     logger.logEvent("warn", "Failed login attempt", {
@@ -362,8 +362,9 @@ async function getUser(id) {
 }
 
 async function getUserByToken(token) {
-  const { userId } = await db.RefreshToken.findOne({ where: { token } });
-  return await getUser(userId);
+  const refreshToken = await db.RefreshToken.findOne({ where: { token } });
+  if (!refreshToken) throw { status: 404, message: "Refresh token not found" };
+  return await getUser(refreshToken.userId);
 }
 
 async function getRefreshToken(token) {
@@ -440,7 +441,7 @@ function basicDetails(user) {
     position,
     created,
     updated,
-    isVerified,
+    verified,
     clientId,
   } = user;
   return {
@@ -453,12 +454,13 @@ function basicDetails(user) {
     role,
     created,
     updated,
-    isVerified,
+    isVerified: !!verified,
     clientId,
   };
 }
 
 async function sendVerificationEmail(user, origin) {
+  let message;
   if (origin) {
     const verifyUrl = `${origin}/user/verify-email?token=${user.verificationToken}`;
     message = `<p>Please click the below link to verify your email address and create your password:</p>

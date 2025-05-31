@@ -31,7 +31,6 @@ function model(sequelize) {
       allowNull: false,
       defaultValue: DataTypes.NOW,
     },
-    userAgent: { type: DataTypes.TEXT },
     referer: { type: DataTypes.TEXT },
     host: { type: DataTypes.STRING },
     origin: { type: DataTypes.STRING },
@@ -44,7 +43,5 @@ function model(sequelize) {
   return sequelize.define("tracking", attributes, {
     tableName: "tbl_tracking",
     timestamps: false,
-    charset: "utf8mb4",
-    collate: "utf8mb4_0900_ai_ci",
   });
 }

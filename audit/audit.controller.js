@@ -17,13 +17,12 @@ router.get("/:id", authorise(), getById);
 module.exports = router;
 
 async function getAll(req, res, next) {
-  const clientId = req.auth.clientId; // Assumes clientId is embedded in the JWT and available on req.auth
   auditService
-    .getAll(clientId)
+    .getAll()
     .then((audits) => {
       logger.logEvent("info", "Fetched all audits", {
         action: "GetAllAudits",
-        clientId,
+        clientId: req.auth.clientId,
         userId: req.auth.id,
         count: Array.isArray(audits) ? audits.length : undefined,
       });
@@ -32,7 +31,7 @@ async function getAll(req, res, next) {
     .catch((error) => {
       logger.logEvent("error", "Error fetching all audits", {
         action: "GetAllAudits",
-        clientId,
+        clientId: req.auth.clientId,
         userId: req.auth.id,
         error: error.message,
       });
@@ -41,13 +40,12 @@ async function getAll(req, res, next) {
 }
 
 async function getById(req, res, next) {
-  const clientId = req.auth.clientId;
   auditService
-    .getById(req.params.id, clientId)
+    .getById(req.params.id)
     .then((audit) => {
       logger.logEvent("info", "Fetched audit by ID", {
         action: "GetAuditById",
-        clientId,
+        clientId: req.auth.clientId,
         auditId: req.params.id,
       });
       res.json(audit);
@@ -55,7 +53,7 @@ async function getById(req, res, next) {
     .catch((error) => {
       logger.logEvent("error", "Error fetching audit by ID", {
         action: "GetAuditById",
-        clientId,
+        clientId: req.auth.clientId,
         auditId: req.params.id,
         error: error.message,
       });

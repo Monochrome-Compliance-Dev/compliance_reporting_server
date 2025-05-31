@@ -1,29 +1,17 @@
 const config = require("./config");
-const mysql = require("mysql2/promise");
 const { Sequelize } = require("sequelize");
-
 const { logger } = require("./logger");
 
-// Use environment variables with fallback to config.js
 const DB_HOST = process.env.DB_HOST || config.db.host;
 const DB_PORT = process.env.DB_PORT || config.db.port;
 const DB_USER = process.env.DB_USER || config.db.user;
 const DB_PASSWORD = process.env.DB_PASSWORD || config.db.password;
 const DB_NAME = process.env.DB_NAME || config.db.name;
-const DB_SOCKET_PATH = process.env.DB_SOCKET_PATH || config.db.socketPath;
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
-  dialect: "mysql",
+  dialect: "postgres",
   host: DB_HOST,
-  dialectOptions: {
-    decimalNumbers: true,
-    socketPath: DB_SOCKET_PATH,
-    charset: "utf8mb4", // ✅ override here
-  },
-  define: {
-    charset: "utf8mb4",
-    collate: "utf8mb4_0900_ai_ci",
-  },
+  port: DB_PORT,
   pool: {
     max: 100,
     min: 0,
@@ -31,42 +19,20 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
     idle: 10000,
   },
   logging: console.log,
-  hooks: {
-    afterConnect: async (connection) => {
-      await connection
-        .promise()
-        .query("SET collation_connection = 'utf8mb4_0900_ai_ci'");
-    },
-  },
 });
 
 const db = {
   sequelize,
 };
 
-db.AdminContent = require("../admin/admin.model")(sequelize);
-
-module.exports = db;
-
-initialize();
-
-// mysql: counting number of tickets which are open per day basis
-// https://dba.stackexchange.com/questions/101249/mysql-counting-number-of-tickets-which-are-open-per-day-basis
-
 async function initialize() {
   let retries = 5;
   while (retries) {
     try {
-      const pool = mysql.createPool({
-        host: DB_HOST,
-        port: DB_PORT,
-        user: DB_USER,
-        password: DB_PASSWORD,
-        socketPath: DB_SOCKET_PATH,
-        charset: "utf8mb4",
+      await sequelize.authenticate();
+      logger.logEvent("info", "Database connection established", {
+        action: "DatabaseInit",
       });
-      await pool.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;`);
-      await pool.end();
       break;
     } catch (err) {
       retries -= 1;
@@ -80,43 +46,36 @@ async function initialize() {
     }
   }
 
-  // connect to db
-  await sequelize.authenticate();
-  logger.logEvent("info", "Database connection established", {
-    action: "DatabaseInit",
-  });
-
-  // init models and add them to the exported db object
+  // Init models
   db.User = require("../users/user.model")(sequelize);
   db.RefreshToken = require("../users/refresh-token.model")(sequelize);
   db.Client = require("../clients/client.model")(sequelize);
   db.Report = require("../reports/report.model")(sequelize);
   db.Tcp = require("../tcp/tcp.model")(sequelize);
-  db.Tat = require("../tat/tat.model")(sequelize);
   db.Entity = require("../entities/entity.model")(sequelize);
   db.Booking = require("../booking/booking.model")(sequelize);
   db.Tracking = require("../tracking/tracking.model")(sequelize);
   db.Audit = require("../audit/audit.model")(sequelize);
   db.AdminContent = require("../admin/admin.model")(sequelize);
 
-  // define relationships
+  // Relationships
   db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });
   db.RefreshToken.belongsTo(db.User);
   db.User.belongsTo(db.Client);
   db.Client.hasMany(db.User);
   db.Client.hasMany(db.Report, { onDelete: "CASCADE" });
-  db.Client.hasMany(db.Tat, { onDelete: "CASCADE" });
   db.Client.hasMany(db.Tcp, { onDelete: "CASCADE" });
   db.Report.belongsTo(db.Client);
   db.Tcp.belongsTo(db.Report, { onDelete: "CASCADE" });
   db.Report.hasMany(db.Tcp, { onDelete: "CASCADE" });
-  db.Tat.belongsTo(db.Report, { onDelete: "CASCADE" });
-  db.Report.hasMany(db.Tat, { onDelete: "CASCADE" });
   db.Tcp.hasMany(db.Audit, { onDelete: "CASCADE" });
   db.Audit.belongsTo(db.Tcp, { onDelete: "CASCADE" });
   db.Client.hasMany(db.Audit, { onDelete: "CASCADE" });
   db.Audit.belongsTo(db.Client, { onDelete: "CASCADE" });
 
-  // sync all models with database
+  // Sync models
   await sequelize.sync();
 }
+
+module.exports = db;
+initialize();

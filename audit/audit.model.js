@@ -53,7 +53,5 @@ function model(sequelize) {
   return sequelize.define("audit", attributes, {
     tableName: "tbl_tcp_audit",
     timestamps: false,
-    charset: "utf8mb4",
-    collate: "utf8mb4_0900_ai_ci",
   });
 }
