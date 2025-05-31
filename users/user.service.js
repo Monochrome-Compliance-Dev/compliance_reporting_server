@@ -29,12 +29,10 @@ module.exports = {
 };
 
 async function authenticate({ email, password, ipAddress }, options = {}) {
-  console.log("Authenticating user:", email, password, ipAddress);
   const user = await db.User.scope("withHash").findOne({
     where: { email },
     ...options,
   });
-  console.log("User found:", user ? user.email : "No user found");
   if (
     !user ||
     !user.verified ||
