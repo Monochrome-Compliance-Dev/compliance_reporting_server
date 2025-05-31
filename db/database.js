@@ -69,7 +69,8 @@ async function initialise() {
     files.forEach((file) => {
       if (file.endsWith(".model.js")) {
         const model = require(path.join(modelPath, file))(sequelize);
-        db[model.name] = model;
+        const name = model.name.charAt(0).toUpperCase() + model.name.slice(1);
+        db[name] = model;
       }
     });
   });
