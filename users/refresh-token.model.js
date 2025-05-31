@@ -1,4 +1,4 @@
-const { DataTypes } = require('sequelize');
+const { DataTypes } = require("sequelize");
 
 module.exports = model;
 
@@ -27,12 +27,22 @@ function model(sequelize) {
         return !this.revoked && !this.isExpired;
       },
     },
+    // Foreign key for User
+    userId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const options = {
-    // disable default timestamp fields (createdAt and updatedAt)
     timestamps: false,
   };
 
-  return sequelize.define('refreshToken', attributes, options);
+  const RefreshToken = sequelize.define("refreshToken", attributes, options);
+
+  RefreshToken.associate = (models) => {
+    RefreshToken.belongsTo(models.User, {
+      foreignKey: "userId",
+      onDelete: "CASCADE",
+    });
+  };
+
+  return RefreshToken;
 }

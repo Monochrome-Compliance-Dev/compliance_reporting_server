@@ -1,4 +1,4 @@
-const db = require("../helpers/db");
+const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 
 module.exports = {

@@ -39,20 +39,33 @@ function model(sequelize) {
         return !!(this.verified || this.passwordReset);
       },
     },
+    // Foreign key for Client
+    clientId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const options = {
-    // disable default timestamp fields (createdAt and updatedAt)
     timestamps: false,
     defaultScope: {
-      // exclude password hash by default
       attributes: { exclude: ["passwordHash"] },
     },
     scopes: {
-      // include hash with this scope
       withHash: { attributes: {} },
     },
   };
 
-  return sequelize.define("user", attributes, options);
+  const User = sequelize.define("user", attributes, options);
+
+  User.associate = (models) => {
+    // user - refreshToken
+    User.hasMany(models.RefreshToken, {
+      foreignKey: "userId",
+      onDelete: "CASCADE",
+    });
+
+    // user - client
+    User.belongsTo(models.Client, { foreignKey: "clientId" });
+    models.Client.hasMany(User, { foreignKey: "clientId" });
+  };
+
+  return User;
 }

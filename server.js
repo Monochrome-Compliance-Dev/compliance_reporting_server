@@ -28,7 +28,13 @@ const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
 const setCspHeaders = require("./cspHeaders");
 const rateLimit = require("express-rate-limit");
-const PORT = process.env.PORT || 4000;
+const { logger } = require("./helpers/logger");
+
+// Middleware to set clientId for RLS
+const setClientIdRLS = require("./middleware/setClientIdRLS");
+const authenticateUser = require("./middleware/authorise");
+
+const PORT = process.env.PORT || 5432;
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
@@ -77,16 +83,9 @@ const emailLimiter = rateLimit({
 app.use("/api/public/send-attachment-email", emailLimiter);
 app.use("/api/booking", emailLimiter);
 
-// app.get("*", (req, res) => {
-//   res.sendFile(path.join(__dirname, "build", "index.html"));
-// });
-
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
-
-const { logger } = require("./helpers/logger");
-
 app.use(helmet());
 
 // Log incoming request IPs
@@ -111,6 +110,8 @@ if (config.env === "production") {
 
 app.use(setCspHeaders);
 app.disable("x-powered-by");
+
+// Enforce HTTPS in production
 app.use((req, res, next) => {
   if (
     config.env === "production" &&
@@ -120,6 +121,12 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Use authentication middleware
+app.use(authenticateUser);
+
+// Set RLS clientId for every request
+app.use(setClientIdRLS);
 
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
@@ -154,9 +161,6 @@ app._router.stack.forEach((middleware) => {
   }
 });
 
-// swagger docs route
-// app.use("/api-docs", require("helpers/swagger"));
-
 // global error handler
 app.use(errorHandler);
 
@@ -174,7 +178,3 @@ if (config.env !== "test") {
 }
 
 module.exports = app;
-
-// run this when you need to find the pid to kill
-// sudo lsof -i -P | grep LISTEN | grep :$PORT
-// (Postgres) Restart: brew services restart postgresql

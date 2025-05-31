@@ -14,8 +14,6 @@ function model(sequelize) {
       defaultValue: () => nanoid(10),
       primaryKey: true,
     },
-
-    // Audit fields
     fieldName: {
       type: DataTypes.STRING(50),
       allowNull: false,
@@ -37,8 +35,6 @@ function model(sequelize) {
       type: DataTypes.STRING(20),
       allowNull: true,
     },
-
-    // Metadata fields
     createdAt: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -48,10 +44,35 @@ function model(sequelize) {
       type: DataTypes.STRING(10),
       allowNull: false,
     },
+    // Foreign keys
+    tcpId: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+    },
+    clientId: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+    },
   };
 
-  return sequelize.define("audit", attributes, {
+  const Audit = sequelize.define("audit", attributes, {
     tableName: "tbl_tcp_audit",
     timestamps: false,
   });
+
+  Audit.associate = (models) => {
+    Audit.belongsTo(models.Tcp, { foreignKey: "tcpId", onDelete: "CASCADE" });
+    models.Tcp.hasMany(Audit, { foreignKey: "tcpId", onDelete: "CASCADE" });
+
+    Audit.belongsTo(models.Client, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+    models.Client.hasMany(Audit, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+  };
+
+  return Audit;
 }

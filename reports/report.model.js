@@ -37,10 +37,28 @@ function model(sequelize) {
     },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
+    // Foreign key for Client
+    clientId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
-  return sequelize.define("report", attributes, {
+  const Report = sequelize.define("report", attributes, {
     tableName: "tbl_report",
     timestamps: true,
   });
+
+  Report.associate = (models) => {
+    Report.belongsTo(models.Client, { foreignKey: "clientId" });
+    models.Client.hasMany(Report, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+
+    Report.hasMany(models.Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
+    models.Tcp.belongsTo(Report, {
+      foreignKey: "reportId",
+      onDelete: "CASCADE",
+    });
+  };
+
+  return Report;
 }

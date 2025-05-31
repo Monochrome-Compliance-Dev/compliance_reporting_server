@@ -6,7 +6,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { Op } = require("sequelize");
 const { sendEmail } = require("../helpers/send-email");
-const db = require("../helpers/db");
+const db = require("../db/database");
 const Role = require("../helpers/role");
 
 module.exports = {

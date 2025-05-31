@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { logger } = require("../helpers/logger");
 const path = require("path");
-const db = require("../helpers/db");
+const db = require("../db/database");
 
 // routes
 // Log pixel loads to logger

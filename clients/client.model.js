@@ -49,8 +49,24 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  return sequelize.define("client", attributes, {
+  const Client = sequelize.define("client", attributes, {
     tableName: "tbl_client",
     timestamps: true,
   });
+
+  // Correct relationships
+  Client.associate = (models) => {
+    Client.hasMany(models.User, { foreignKey: "clientId" });
+    Client.hasMany(models.Report, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+    Client.hasMany(models.Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
+    Client.hasMany(models.Audit, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+  };
+
+  return Client;
 }

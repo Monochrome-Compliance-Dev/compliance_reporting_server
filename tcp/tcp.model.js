@@ -15,12 +15,12 @@ function model(sequelize) {
       primaryKey: true,
     },
     payerEntityName: { type: DataTypes.STRING, allowNull: false },
-    payerEntityAbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
-    payerEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
+    payerEntityAbn: { type: DataTypes.BIGINT, allowNull: true },
+    payerEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true },
     payeeEntityName: { type: DataTypes.STRING, allowNull: false },
-    payeeEntityAbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
-    payeeEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true }, // Changed to BIGINT for numbers
-    paymentAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: false }, // Changed to DECIMAL for monetary values
+    payeeEntityAbn: { type: DataTypes.BIGINT, allowNull: true },
+    payeeEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true },
+    paymentAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: false },
     description: { type: DataTypes.STRING, allowNull: true },
     supplyDate: { type: DataTypes.DATE, allowNull: true },
     paymentDate: { type: DataTypes.DATE, allowNull: false },
@@ -31,11 +31,11 @@ function model(sequelize) {
     invoiceReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     invoiceIssueDate: { type: DataTypes.DATE, allowNull: true },
     invoiceReceiptDate: { type: DataTypes.DATE, allowNull: true },
-    invoiceAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: true }, // Changed to DECIMAL for monetary values
+    invoiceAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
     invoicePaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
-    isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true }, // Field to track TCP selection
-    tcpExclusionComment: { type: DataTypes.TEXT, allowNull: true }, // Field to store reviewer comments
+    isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    tcpExclusionComment: { type: DataTypes.TEXT, allowNull: true },
     peppolEnabled: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -65,10 +65,29 @@ function model(sequelize) {
     explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
+    // Foreign keys
+    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    reportId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
-  return sequelize.define("tcp", attributes, {
+  const Tcp = sequelize.define("tcp", attributes, {
     tableName: "tbl_tcp",
     timestamps: true,
   });
+
+  Tcp.associate = (models) => {
+    Tcp.belongsTo(models.Client, { foreignKey: "clientId" });
+    models.Client.hasMany(Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
+
+    Tcp.belongsTo(models.Report, {
+      foreignKey: "reportId",
+      onDelete: "CASCADE",
+    });
+    models.Report.hasMany(Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
+
+    Tcp.hasMany(models.Audit, { foreignKey: "tcpId", onDelete: "CASCADE" });
+    models.Audit.belongsTo(Tcp, { foreignKey: "tcpId", onDelete: "CASCADE" });
+  };
+
+  return Tcp;
 }

@@ -28,7 +28,7 @@ function model(sequelize) {
       unique: true,
     },
     content: {
-      type: DataTypes.TEXT("long"),
+      type: DataTypes.TEXT,
       allowNull: false,
     },
     description: {
@@ -60,8 +60,10 @@ function model(sequelize) {
     },
   };
 
-  return sequelize.define("adminContent", attributes, {
+  const AdminContent = sequelize.define("adminContent", attributes, {
     tableName: "tbl_admin_content",
     timestamps: true,
   });
+
+  return AdminContent;
 }
