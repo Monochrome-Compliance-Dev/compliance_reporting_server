@@ -9,10 +9,17 @@ const setClientIdRLS = async (req, res, next) => {
       return next();
     }
 
-    // Set the current client ID in Postgres for RLS
-    await sequelize.query(`SET app.current_client_id = '${clientId}';`);
+    // Set the current client ID in Postgres for RLS using SET LOCAL for safety within transactions
+    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}';`);
     next();
   } catch (error) {
+    // Handle error gracefully if app.current_client_id parameter is missing
+    if (error.message.includes("unrecognized configuration parameter")) {
+      console.warn(
+        "RLS parameter app.current_client_id not found in database, skipping SET LOCAL."
+      );
+      return next();
+    }
     console.error("Error setting RLS clientId:", error);
     res.status(500).json({ message: "Error setting RLS" });
   }
