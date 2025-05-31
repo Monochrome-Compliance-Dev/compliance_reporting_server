@@ -3,7 +3,7 @@ const { sequelize } = require("../db/database"); // adjust to your Sequelize ins
 
 const setClientIdRLS = async (req, res, next) => {
   try {
-    const clientId = req.user.clientId; // adjust if your user/session structure differs
+    const clientId = req.auth?.clientId; // updated to use req.auth
     if (!clientId) {
       console.warn("No clientId found for RLS - skipping.");
       return next();

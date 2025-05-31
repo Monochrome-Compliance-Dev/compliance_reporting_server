@@ -104,7 +104,7 @@ async function initialise() {
   }
 
   // Sync models
-  await sequelize.sync({ alter: true });
+  await sequelize.sync();
 
   // Initialise RLS policies (if using them)
   await initialiseRLS();

@@ -32,7 +32,6 @@ const { logger } = require("./helpers/logger");
 
 // Middleware to set clientId for RLS
 const setClientIdRLS = require("./middleware/setClientIdRLS");
-const authenticateUser = require("./middleware/authorise");
 
 const PORT = process.env.PORT || 5432;
 
@@ -121,9 +120,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-// Use authentication middleware
-app.use(authenticateUser);
 
 // Set RLS clientId for every request
 app.use(setClientIdRLS);
