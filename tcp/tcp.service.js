@@ -26,34 +26,36 @@ module.exports = {
   getCurrentFieldValue,
 };
 
-async function getAll() {
-  return await db.Tcp.findAll();
+// Accept optional options param, default to empty object, and pass to sequelize queries for RLS/transactions
+async function getAll(options = {}) {
+  return await db.Tcp.findAll(options);
 }
 
-async function getAllByReportId(reportId) {
-  return await db.Tcp.findAll({ where: { reportId } });
+async function getAllByReportId(reportId, options = {}) {
+  return await db.Tcp.findAll({ where: { reportId }, ...options });
 }
 
-async function getTcpByReportId(reportId) {
+async function getTcpByReportId(reportId, options = {}) {
   return await db.Tcp.findAll({
     where: {
       reportId,
       isTcp: true,
       excludedTcp: false,
     },
+    ...options,
   });
 }
 
-async function partialUpdate(id, updates) {
-  await db.Tcp.update(updates, { where: { id } });
+async function partialUpdate(id, updates, options = {}) {
+  await db.Tcp.update(updates, { where: { id }, ...options });
   logger.logEvent("info", "TCP record partially updated", {
     action: "PartialUpdateTCP",
     tcpId: id,
   });
-  return db.Tcp.findOne({ where: { id } });
+  return db.Tcp.findOne({ where: { id }, ...options });
 }
 
-async function sbiUpdate(reportId, params) {
+async function sbiUpdate(reportId, params, options = {}) {
   await db.Tcp.update(
     { isSb: false },
     {
@@ -61,64 +63,67 @@ async function sbiUpdate(reportId, params) {
         reportId: reportId,
         payeeEntityAbn: params.payeeEntityAbn,
       },
+      ...options,
     }
   );
 }
 
-async function getById(id) {
-  return await getTcp(id);
+async function getById(id, options = {}) {
+  return await getTcp(id, options);
 }
 
-async function create(params) {
-  const result = await db.Tcp.create(params);
+async function create(params, options = {}) {
+  const result = await db.Tcp.create(params, options);
   logger.logEvent("info", "TCP record created", {
     action: "CreateTCP",
   });
   return result;
 }
 
-async function update(id, params) {
-  await db.Tcp.update(params, { where: { id } });
+async function update(id, params, options = {}) {
+  await db.Tcp.update(params, { where: { id }, ...options });
   logger.logEvent("info", "TCP record updated", {
     action: "UpdateTCP",
     tcpId: id,
   });
-  return db.Tcp.findOne({ where: { id } });
+  return db.Tcp.findOne({ where: { id }, ...options });
 }
 
-async function _delete(id) {
+async function _delete(id, options = {}) {
   logger.logEvent("warn", "TCP record deleted", {
     action: "DeleteTCP",
     tcpId: id,
   });
-  await db.Tcp.destroy({ where: { id } });
+  await db.Tcp.destroy({ where: { id }, ...options });
 }
 
 // helper functions
-async function getTcp(id) {
-  const record = await db.Tcp.findOne({ where: { id } });
+async function getTcp(id, options = {}) {
+  const record = await db.Tcp.findOne({ where: { id }, ...options });
   if (!record) throw { status: 404, message: "Tcp not found" };
   return record;
 }
 
 // Check if there are any TCP records missing isSb flag (SBI completeness check)
-async function hasMissingIsSbFlag() {
+async function hasMissingIsSbFlag(options = {}) {
   const count = await db.Tcp.count({
     where: {
       isTcp: true,
       excludedTcp: false,
       isSb: null,
     },
+    ...options,
   });
   return count > 0;
 }
 
 // Finalise report: delegate to reportService
-async function finaliseReport() {
-  return await reportService.finaliseSubmission();
+async function finaliseReport(options = {}) {
+  // If reportService.finaliseSubmission needs transaction, pass options
+  return await reportService.finaliseSubmission(options);
 }
 
-async function generateSummaryCsv() {
+async function generateSummaryCsv(options = {}) {
   const rows = await db.Tcp.findAll({
     attributes: [
       "payeeEntityName",
@@ -134,6 +139,7 @@ async function generateSummaryCsv() {
       excludedTcp: false,
     },
     raw: true,
+    ...options,
   });
 
   const header =
@@ -149,16 +155,16 @@ async function generateSummaryCsv() {
   return csv;
 }
 
-async function patchRecord(id, update) {
+async function patchRecord(id, update, options = {}) {
   try {
     logger.logEvent("info", "TCP PATCH update requested", {
       action: "patchRecordTCP",
     });
-    await db.Tcp.update(update, { where: { id } });
+    await db.Tcp.update(update, { where: { id }, ...options });
     logger.logEvent("info", "Bulk PATCH update completed", {
       action: "patchRecordTCP",
     });
-    return db.Tcp.findOne({ where: { id } });
+    return db.Tcp.findOne({ where: { id }, ...options });
   } catch (error) {
     logger.logEvent("error", "Bulk PATCH update failed", {
       action: "patchRecordTCP",
@@ -168,7 +174,7 @@ async function patchRecord(id, update) {
   }
 }
 
-async function getCurrentFieldValue(tcpId, field_name) {
+async function getCurrentFieldValue(tcpId, field_name, options = {}) {
   // Note: field_name is not parameterized for column names, so validate/sanitize if used from user input!
   // Only allow access to certain fields, or ensure field_name is safe!
   const allowedFields = [
@@ -190,6 +196,7 @@ async function getCurrentFieldValue(tcpId, field_name) {
     attributes: [field_name],
     where: { id: tcpId },
     raw: true,
+    ...options,
   });
   if (!row) return null;
   return row[field_name] !== undefined ? row[field_name] : null;

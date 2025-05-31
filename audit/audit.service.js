@@ -7,9 +7,12 @@ module.exports = {
   create,
 };
 
-async function getAll() {
+async function getAll(options = {}) {
   try {
-    const result = await db.TcpAudit.findAll();
+    const result = await db.Audit.findAll({
+      transaction: options.transaction,
+      ...options,
+    });
     logger.logEvent("info", "Fetched all audits", {
       action: "GetAllAudits",
       count: Array.isArray(result) ? result.length : undefined,
@@ -24,9 +27,13 @@ async function getAll() {
   }
 }
 
-async function getById(id) {
+async function getById(id, options = {}) {
   try {
-    const result = await db.TcpAudit.findOne({ where: { id } });
+    const result = await db.Audit.findOne({
+      where: { id },
+      transaction: options.transaction,
+      ...options,
+    });
     logger.logEvent("info", "Fetched audit by ID", {
       action: "GetAuditById",
       auditId: id,
@@ -42,9 +49,11 @@ async function getById(id) {
   }
 }
 
-async function create(params) {
+async function create(params, options = {}) {
   try {
-    const result = await db.TcpAudit.create(params);
+    const result = await db.Audit.create(params, {
+      transaction: options.transaction,
+    });
     if (!result) {
       logger.logEvent("warn", "No audit entry returned by DB insert", {
         action: "CreateAudit",
@@ -52,7 +61,6 @@ async function create(params) {
       });
       throw new Error("Audit entry creation failed: no record returned");
     }
-    console.log("Audit entry created:", result);
     logger.logEvent("info", "Audit entry created", {
       action: "CreateAudit",
       auditId: result.id,

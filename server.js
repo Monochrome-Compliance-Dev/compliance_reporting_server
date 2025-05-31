@@ -157,6 +157,29 @@ app._router.stack.forEach((middleware) => {
   }
 });
 
+// --- BEGIN: Check Postgres custom GUC app.current_client_id on startup ---
+const { sequelize } = require("./db/database");
+
+async function verifyAppClientIdGUC() {
+  try {
+    const [[{ current_client_id }]] = await sequelize.query(
+      "SELECT current_setting('app.current_client_id', true) AS current_client_id;"
+    );
+    console.log(
+      "✅ Verified: app.current_client_id is available with value:",
+      current_client_id
+    );
+  } catch (error) {
+    console.error(
+      "❌ Postgres custom GUC app.current_client_id not found or not accessible:",
+      error.message
+    );
+  }
+}
+// Run this check on server startup
+verifyAppClientIdGUC();
+// --- END: Check Postgres custom GUC app.current_client_id on startup ---
+
 // global error handler
 app.use(errorHandler);
 

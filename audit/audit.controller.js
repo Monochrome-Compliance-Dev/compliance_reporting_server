@@ -18,7 +18,7 @@ module.exports = router;
 
 async function getAll(req, res, next) {
   auditService
-    .getAll()
+    .getAll({ transaction: req.dbTransaction })
     .then((audits) => {
       logger.logEvent("info", "Fetched all audits", {
         action: "GetAllAudits",
@@ -26,6 +26,7 @@ async function getAll(req, res, next) {
         userId: req.auth.id,
         count: Array.isArray(audits) ? audits.length : undefined,
       });
+      req.dbTransaction.commit();
       res.json(audits);
     })
     .catch((error) => {
@@ -35,19 +36,21 @@ async function getAll(req, res, next) {
         userId: req.auth.id,
         error: error.message,
       });
-      next(error); // Pass the error to the global error handler
+      req.dbTransaction.rollback();
+      next(error);
     });
 }
 
 async function getById(req, res, next) {
   auditService
-    .getById(req.params.id)
+    .getById(req.params.id, { transaction: req.dbTransaction })
     .then((audit) => {
       logger.logEvent("info", "Fetched audit by ID", {
         action: "GetAuditById",
         clientId: req.auth.clientId,
         auditId: req.params.id,
       });
+      req.dbTransaction.commit();
       res.json(audit);
     })
     .catch((error) => {
@@ -57,7 +60,8 @@ async function getById(req, res, next) {
         auditId: req.params.id,
         error: error.message,
       });
-      next(error); // Pass the error to the global error handler
+      req.dbTransaction.rollback();
+      next(error);
     });
 }
 

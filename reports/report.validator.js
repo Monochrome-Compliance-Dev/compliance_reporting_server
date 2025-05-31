@@ -23,6 +23,7 @@ const reportSchema = Joi.object({
   id: Joi.string().max(10), // Optional for create; required for update
   createdAt: Joi.date().optional(),
   updatedAt: Joi.date().optional(),
+  clientId: Joi.string().length(10).required(),
 });
 
 module.exports = { reportSchema };

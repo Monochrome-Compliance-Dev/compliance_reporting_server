@@ -24,20 +24,6 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   schema: process.env.DB_SCHEMA || "public", // Use environment variable or default to 'public'
 });
 
-// after creating sequelize
-sequelize.afterConnect(async (connection) => {
-  try {
-    // Create the custom GUC (it will do nothing if already set)
-    await connection.query("SET app.current_client_id = '';", { raw: true });
-    console.log("Custom GUC app.current_client_id set for new connection");
-  } catch (error) {
-    console.error(
-      "Error setting custom GUC app.current_client_id:",
-      error.message
-    );
-  }
-});
-
 const db = {
   sequelize,
   Sequelize,

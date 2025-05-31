@@ -9,11 +9,26 @@ const setClientIdRLS = async (req, res, next) => {
       return next();
     }
 
-    // Set the current client ID in Postgres for RLS using SET LOCAL for safety within transactions
-    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}';`);
+    const safeClientId = clientId.replace(/[^a-zA-Z0-9-_]/g, "");
+
+    // If no existing transaction, create a new one
+    if (!req.dbTransaction) {
+      req.dbTransaction = await sequelize.transaction();
+    }
+
+    // Use the same transaction for SET LOCAL
+    await sequelize.query(
+      `SET LOCAL app.current_client_id = '${safeClientId}'`,
+      { transaction: req.dbTransaction }
+    );
+
+    console.log(
+      "RLS session variable set and transaction started for clientId:",
+      safeClientId
+    );
+
     next();
   } catch (error) {
-    // Handle error gracefully if app.current_client_id parameter is missing
     if (error.message.includes("unrecognized configuration parameter")) {
       console.warn(
         "RLS parameter app.current_client_id not found in database, skipping SET LOCAL."

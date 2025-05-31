@@ -28,10 +28,11 @@ module.exports = {
   delete: _delete,
 };
 
-async function authenticate({ email, password, ipAddress }) {
+async function authenticate({ email, password, ipAddress }, options = {}) {
   console.log("Authenticating user:", email, password, ipAddress);
   const user = await db.User.scope("withHash").findOne({
     where: { email },
+    ...options,
   });
   console.log("User found:", user ? user.email : "No user found");
   if (
@@ -53,7 +54,7 @@ async function authenticate({ email, password, ipAddress }) {
   const refreshToken = generateRefreshToken(user, ipAddress);
 
   // save refresh token
-  await refreshToken.save();
+  await refreshToken.save(options);
 
   // return basic details and tokens
   logger.logEvent("info", "User authenticated", {
@@ -70,16 +71,16 @@ async function authenticate({ email, password, ipAddress }) {
   };
 }
 
-async function refreshToken({ token, ipAddress }) {
-  const refreshToken = await getRefreshToken(token);
-  const user = await refreshToken.getUser();
+async function refreshToken({ token, ipAddress }, options = {}) {
+  const refreshToken = await getRefreshToken(token, options);
+  const user = await refreshToken.getUser(options);
   const newRefreshToken = generateRefreshToken(user, ipAddress);
 
   refreshToken.revoked = Date.now();
   refreshToken.revokedByIp = ipAddress;
   refreshToken.replacedByToken = newRefreshToken.token;
-  await refreshToken.save();
-  await newRefreshToken.save();
+  await refreshToken.save(options);
+  await newRefreshToken.save(options);
 
   // generate new jwt
   const jwtToken = generateJwtToken(user);
@@ -99,13 +100,13 @@ async function refreshToken({ token, ipAddress }) {
   };
 }
 
-async function revokeToken({ token, ipAddress }) {
-  const refreshToken = await getRefreshToken(token);
+async function revokeToken({ token, ipAddress }, options = {}) {
+  const refreshToken = await getRefreshToken(token, options);
 
   // revoke token and save
   refreshToken.revoked = Date.now();
   refreshToken.revokedByIp = ipAddress;
-  await refreshToken.save();
+  await refreshToken.save(options);
   logger.logEvent("info", "Refresh token revoked", {
     action: "RevokeToken",
     userId: refreshToken.userId,
@@ -114,9 +115,9 @@ async function revokeToken({ token, ipAddress }) {
   });
 }
 
-async function register(params, origin) {
+async function register(params, origin, options = {}) {
   // validate
-  if (await db.User.findOne({ where: { email: params.email } })) {
+  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
     // send already registered error in email to prevent user enumeration
     await sendAlreadyRegisteredEmail(params.email, origin);
     logger.logEvent("warn", "Duplicate registration attempt", {
@@ -135,7 +136,7 @@ async function register(params, origin) {
   user.verificationToken = randomTokenString();
 
   // save user
-  await user.save();
+  await user.save(options);
 
   // send email
   await sendVerificationEmail(user, origin);
@@ -147,9 +148,9 @@ async function register(params, origin) {
   });
 }
 
-async function registerFirstUser(params, origin) {
+async function registerFirstUser(params, origin, options = {}) {
   // validate
-  if (await db.User.findOne({ where: { email: params.email } })) {
+  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
     // send already registered error in email to prevent user enumeration
     await sendAlreadyRegisteredEmail(params.email, origin);
     logger.logEvent("warn", "Duplicate first user registration attempt", {
@@ -172,7 +173,7 @@ async function registerFirstUser(params, origin) {
   user.passwordHash = await hash(params.password);
 
   // save user
-  await user.save();
+  await user.save(options);
 
   // send email
   await sendFirstUserWelcomeEmail(user, origin);
@@ -184,9 +185,10 @@ async function registerFirstUser(params, origin) {
   });
 }
 
-async function verifyToken(token) {
+async function verifyToken(token, options = {}) {
   const user = await db.User.findOne({
     where: { verificationToken: token },
+    ...options,
   });
   if (!user) throw { status: 401, message: "Verification failed" };
   if (user.verified) {
@@ -202,10 +204,11 @@ async function verifyToken(token) {
   return;
 }
 
-async function verifyEmail(params) {
+async function verifyEmail(params, options = {}) {
   const { token, password } = params;
   const user = await db.User.findOne({
     where: { verificationToken: token },
+    ...options,
   });
 
   if (!user) throw { status: 401, message: "Verification failed" };
@@ -216,7 +219,7 @@ async function verifyEmail(params) {
   // hash password
   user.passwordHash = await hash(password);
 
-  await user.save();
+  await user.save(options);
   logger.logEvent("info", "Email verified", {
     action: "VerifyEmail",
     userId: user.id,
@@ -225,8 +228,8 @@ async function verifyEmail(params) {
   return basicDetails(user);
 }
 
-async function forgotPassword({ email }, origin) {
-  const user = await db.User.findOne({ where: { email } });
+async function forgotPassword({ email }, origin, options = {}) {
+  const user = await db.User.findOne({ where: { email }, ...options });
 
   // always return ok response to prevent email enumeration
   if (!user) return;
@@ -234,7 +237,7 @@ async function forgotPassword({ email }, origin) {
   // create reset token that expires after 24 hours
   user.resetToken = randomTokenString();
   user.resetTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await user.save();
+  await user.save(options);
 
   // send email
   await sendPasswordResetEmail(user, origin);
@@ -245,12 +248,13 @@ async function forgotPassword({ email }, origin) {
   });
 }
 
-async function validateResetToken({ token }) {
+async function validateResetToken({ token }, options = {}) {
   const user = await db.User.findOne({
     where: {
       resetToken: token,
       resetTokenExpires: { [Op.gt]: Date.now() },
     },
+    ...options,
   });
 
   if (!user) throw { status: 401, message: "Invalid token" };
@@ -258,14 +262,14 @@ async function validateResetToken({ token }) {
   return user;
 }
 
-async function resetPassword({ token, password }) {
-  const user = await validateResetToken({ token });
+async function resetPassword({ token, password }, options = {}) {
+  const user = await validateResetToken({ token }, options);
 
   // update password and remove reset token
   user.passwordHash = await hash(password);
   user.passwordReset = Date.now();
   user.resetToken = null;
-  await user.save();
+  await user.save(options);
   logger.logEvent("info", "Password reset successful", {
     action: "ResetPassword",
     userId: user.id,
@@ -273,26 +277,27 @@ async function resetPassword({ token, password }) {
   });
 }
 
-async function getAll() {
-  const users = await db.User.findAll();
+async function getAll(options = {}) {
+  const users = await db.User.findAll({ ...options });
   return users.map((x) => basicDetails(x));
 }
 
-async function getAllByClientId(clientId) {
+async function getAllByClientId(clientId, options = {}) {
   const users = await db.User.findAll({
     where: { clientId },
+    ...options,
   });
   return users.map((x) => basicDetails(x));
 }
 
-async function getById(id) {
-  const user = await getUser(id);
+async function getById(id, options = {}) {
+  const user = await getUser(id, options);
   return basicDetails(user);
 }
 
-async function create(params) {
+async function create(params, options = {}) {
   // validate
-  if (await db.User.findOne({ where: { email: params.email } })) {
+  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
     throw {
       status: 500,
       message: 'Email "' + params.email + '" is already registered',
@@ -306,19 +311,19 @@ async function create(params) {
   user.passwordHash = await hash(params.password);
 
   // save user
-  await user.save();
+  await user.save(options);
 
   return basicDetails(user);
 }
 
-async function update(id, params) {
-  const user = await getUser(id);
+async function update(id, params, options = {}) {
+  const user = await getUser(id, options);
 
   // validate (if email was changed)
   if (
     params.email &&
     user.email !== params.email &&
-    (await db.User.findOne({ where: { email: params.email } }))
+    (await db.User.findOne({ where: { email: params.email }, ...options }))
   ) {
     throw {
       status: 500,
@@ -334,7 +339,7 @@ async function update(id, params) {
   // copy params to user and save
   Object.assign(user, params);
   user.updated = Date.now();
-  await user.save();
+  await user.save(options);
   logger.logEvent("info", "User updated", {
     action: "UpdateUser",
     userId: user.id,
@@ -343,9 +348,9 @@ async function update(id, params) {
   return basicDetails(user);
 }
 
-async function _delete(id) {
-  const user = await getUser(id);
-  await user.destroy();
+async function _delete(id, options = {}) {
+  const user = await getUser(id, options);
+  await user.destroy(options);
   logger.logEvent("warn", "User account deleted", {
     action: "DeleteUser",
     userId: user.id,
@@ -355,25 +360,31 @@ async function _delete(id) {
 
 // helper functions
 
-async function getUser(id) {
-  const user = await db.User.findByPk(id);
+async function getUser(id, options = {}) {
+  const user = await db.User.findByPk(id, options);
   if (!user) throw { status: 404, message: "User not found" };
   return user;
 }
 
-async function getUserByToken(token) {
-  const refreshToken = await db.RefreshToken.findOne({ where: { token } });
+async function getUserByToken(token, options = {}) {
+  const refreshToken = await db.RefreshToken.findOne({
+    where: { token },
+    ...options,
+  });
   if (!refreshToken) throw { status: 404, message: "Refresh token not found" };
-  return await getUser(refreshToken.userId);
+  return await getUser(refreshToken.userId, options);
 }
 
-async function getRefreshToken(token) {
+async function getRefreshToken(token, options = {}) {
   logger.logEvent("debug", "Querying for refresh token", {
     action: "GetRefreshToken",
     partialToken: token.slice(0, 6) + "...",
   });
 
-  const refreshToken = await db.RefreshToken.findOne({ where: { token } });
+  const refreshToken = await db.RefreshToken.findOne({
+    where: { token },
+    ...options,
+  });
 
   if (!refreshToken) {
     logger.logEvent("warn", "Refresh token not found", {

@@ -76,6 +76,7 @@ function authenticate(req, res, next) {
       password,
       ipAddress,
       userAgent: req.headers["user-agent"],
+      options: { transaction: req.dbTransaction },
     })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
@@ -98,7 +99,12 @@ function refreshToken(req, res, next) {
   if (!token || token === "undefined") return unauthorised(res);
 
   userService
-    .refreshToken({ token, ipAddress, userAgent: req.headers["user-agent"] })
+    .refreshToken({
+      token,
+      ipAddress,
+      userAgent: req.headers["user-agent"],
+      options: { transaction: req.dbTransaction },
+    })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json({ ...user, jwtToken });
@@ -144,7 +150,12 @@ function revokeToken(req, res, next) {
   }
 
   userService
-    .revokeToken({ token, ipAddress, userAgent: req.headers["user-agent"] })
+    .revokeToken({
+      token,
+      ipAddress,
+      userAgent: req.headers["user-agent"],
+      options: { transaction: req.dbTransaction },
+    })
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
@@ -173,7 +184,9 @@ function revokeToken(req, res, next) {
 
 function register(req, res, next) {
   userService
-    .register(req.body, req.get("origin"), req.headers["user-agent"])
+    .register(req.body, req.get("origin"), req.headers["user-agent"], {
+      transaction: req.dbTransaction,
+    })
     .then(() =>
       res.json({
         message:
@@ -192,7 +205,9 @@ function register(req, res, next) {
 
 function registerFirstUser(req, res, next) {
   userService
-    .registerFirstUser(req.body, req.get("origin"), req.headers["user-agent"])
+    .registerFirstUser(req.body, req.get("origin"), req.headers["user-agent"], {
+      transaction: req.dbTransaction,
+    })
     .then(() =>
       res.json({
         message:
@@ -211,7 +226,7 @@ function registerFirstUser(req, res, next) {
 
 function verifyToken(req, res, next) {
   userService
-    .verifyToken(req.body.token)
+    .verifyToken(req.body.token, { transaction: req.dbTransaction })
     .then(() => {
       res.json({ status: 200, message: "Token is valid" });
     })
@@ -227,7 +242,7 @@ function verifyToken(req, res, next) {
 
 function verifyEmail(req, res, next) {
   userService
-    .verifyEmail(req.body)
+    .verifyEmail(req.body, { transaction: req.dbTransaction })
     .then((user) => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
@@ -246,7 +261,9 @@ function verifyEmail(req, res, next) {
 
 function forgotPassword(req, res, next) {
   userService
-    .forgotPassword(req.body, req.get("origin"))
+    .forgotPassword(req.body, req.get("origin"), {
+      transaction: req.dbTransaction,
+    })
     .then(() =>
       res.json({
         message: "Please check your email for password reset instructions",
@@ -263,14 +280,14 @@ function forgotPassword(req, res, next) {
 
 function validateResetToken(req, res, next) {
   userService
-    .validateResetToken(req.body)
+    .validateResetToken(req.body, { transaction: req.dbTransaction })
     .then(() => res.json({ message: "Token is valid" }))
     .catch(next);
 }
 
 function resetPassword(req, res, next) {
   userService
-    .resetPassword(req.body)
+    .resetPassword(req.body, { transaction: req.dbTransaction })
     .then(() => {
       res.clearCookie("refreshToken", {
         httpOnly: true,
@@ -295,7 +312,7 @@ function resetPassword(req, res, next) {
 
 function setPassword(req, res, next) {
   userService
-    .setPassword(req.body)
+    .setPassword(req.body, { transaction: req.dbTransaction })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
       res.json({ ...user, jwtToken });
@@ -305,7 +322,7 @@ function setPassword(req, res, next) {
 
 function getAll(req, res, next) {
   userService
-    .getAll()
+    .getAll({ transaction: req.dbTransaction })
     .then((users) => res.json(users))
     .catch(next);
 }
@@ -314,7 +331,7 @@ function getAllByClientId(req, res, next) {
   const clientId = req.auth.clientId;
 
   userService
-    .getAllByClientId(clientId)
+    .getAllByClientId(clientId, { transaction: req.dbTransaction })
     .then((users) => {
       if (users.length > 0) {
         logger.logEvent("info", "Fetched users by client ID", {
@@ -338,7 +355,7 @@ function getById(req, res, next) {
   }
 
   userService
-    .getById(req.params.id)
+    .getById(req.params.id, { transaction: req.dbTransaction })
     .then((user) => {
       if (user) {
         logger.logEvent("info", "Fetched user by ID", {
@@ -356,7 +373,7 @@ function getById(req, res, next) {
 
 function create(req, res, next) {
   userService
-    .create(req.body)
+    .create(req.body, { transaction: req.dbTransaction })
     .then((user) => res.json(user))
     .catch(next);
 }
@@ -384,7 +401,7 @@ function update(req, res, next) {
   }
 
   userService
-    .update(req.params.id, req.body)
+    .update(req.params.id, req.body, { transaction: req.dbTransaction })
     .then((user) => res.json(user))
     .catch(next);
 }
@@ -395,7 +412,7 @@ function _delete(req, res, next) {
   }
 
   userService
-    .delete(req.params.id)
+    .delete(req.params.id, { transaction: req.dbTransaction })
     .then(() => {
       res.json({ message: "User deleted successfully" });
       logger.logEvent("warn", "User deleted via controller", {

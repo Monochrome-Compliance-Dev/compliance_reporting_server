@@ -11,9 +11,12 @@ module.exports = {
   finaliseSubmission,
 };
 
-async function getAll() {
+async function getAll(options = {}) {
   try {
-    const rows = await db.Report.findAll();
+    const rows = await db.Report.findAll({
+      ...options,
+      transaction: options.transaction,
+    });
     logger.logEvent("info", "Fetched all reports", {
       action: "GetAllReports",
       count: Array.isArray(rows) ? rows.length : undefined,
@@ -28,9 +31,13 @@ async function getAll() {
   }
 }
 
-async function getAllByReportId(reportId) {
+async function getAllByReportId(reportId, options = {}) {
   try {
-    const rows = await db.Report.findAll({ where: { reportId } });
+    const rows = await db.Report.findAll({
+      where: { reportId },
+      ...options,
+      transaction: options.transaction,
+    });
     logger.logEvent("info", "Fetched reports by reportId", {
       action: "GetAllByReportId",
       reportId,
@@ -47,8 +54,12 @@ async function getAllByReportId(reportId) {
   }
 }
 
-async function create(params) {
-  const result = await db.Report.create(params);
+async function create(params, options = {}) {
+  console.log("Creating report with data:", params);
+  const result = await db.Report.create(params, {
+    ...options,
+    transaction: options.transaction,
+  });
   logger.logEvent("info", "Report created", {
     action: "CreateReport",
     ...params,
@@ -56,9 +67,17 @@ async function create(params) {
   return result;
 }
 
-async function update(id, params) {
-  await db.Report.update(params, { where: { id } });
-  const result = await db.Report.findOne({ where: { id } });
+async function update(id, params, options = {}) {
+  await db.Report.update(params, {
+    where: { id },
+    ...options,
+    transaction: options.transaction,
+  });
+  const result = await db.Report.findOne({
+    where: { id },
+    ...options,
+    transaction: options.transaction,
+  });
   logger.logEvent("info", "Report updated", {
     action: "UpdateReport",
     reportId: id,
@@ -67,17 +86,25 @@ async function update(id, params) {
   return result;
 }
 
-async function _delete(id) {
-  await db.Report.destroy({ where: { id } });
+async function _delete(id, options = {}) {
+  await db.Report.destroy({
+    where: { id },
+    ...options,
+    transaction: options.transaction,
+  });
   logger.logEvent("warn", "Report deleted", {
     action: "DeleteReport",
     reportId: id,
   });
 }
 
-async function getById(id) {
+async function getById(id, options = {}) {
   try {
-    const report = await db.Report.findOne({ where: { id } });
+    const report = await db.Report.findOne({
+      where: { id },
+      ...options,
+      transaction: options.transaction,
+    });
     if (!report) {
       logger.logEvent("warn", "Report not found", {
         action: "GetReportById",
@@ -127,7 +154,9 @@ async function finaliseSubmission() {
   };
 
   for (const { reportId } of reportIds) {
-    await db.Report.update(updatePayload, { where: { id: reportId } });
+    await db.Report.update(updatePayload, {
+      where: { id: reportId },
+    });
   }
 
   logger.logEvent("info", "Reports finalised", {

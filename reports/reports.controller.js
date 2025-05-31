@@ -17,7 +17,7 @@ module.exports = router;
 
 function getAll(req, res, next) {
   reportService
-    .getAll()
+    .getAll({ transaction: req.dbTransaction })
     .then((reports) => {
       logger.logEvent("info", "Fetched all reports", {
         action: "GetAllReports",
@@ -38,7 +38,7 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   reportService
-    .getById(req.params.id)
+    .getById(req.params.id, { transaction: req.dbTransaction }) // Add the transaction here
     .then((report) => {
       if (report) {
         logger.logEvent("info", "Fetched report by ID", {
@@ -67,35 +67,39 @@ function getById(req, res, next) {
     });
 }
 
-function create(req, res, next) {
-  reportService
-    .create(req.body)
-    .then((report) => {
-      logger.logEvent("info", "Report created", {
-        action: "CreateReport",
-        reportId: report.id,
-        userId: req.auth.id,
-      });
-      res.json(report);
-    })
-    .catch((error) => {
-      logger.logEvent("error", "Error creating report", {
-        action: "CreateReport",
-        error: error.message,
-      });
-      next(error); // Pass the error to the global error handler
+async function create(req, res, next) {
+  console.log("Creating report with data:", req.body, req.auth);
+  try {
+    const report = await reportService.create(req.body, {
+      transaction: req.dbTransaction,
     });
+    logger.logEvent("info", "Report created", {
+      action: "CreateReport",
+      reportId: report.id,
+      userId: req.auth.id,
+    });
+    await req.dbTransaction.commit();
+    res.json(report);
+  } catch (error) {
+    logger.logEvent("error", "Error creating report", {
+      action: "CreateReport",
+      error: error.message,
+    });
+    await req.dbTransaction.rollback();
+    next(error);
+  }
 }
 
 function update(req, res, next) {
   reportService
-    .update(req.params.id, req.body)
+    .update(req.params.id, req.body, { transaction: req.dbTransaction })
     .then((report) => {
       logger.logEvent("info", "Report updated", {
         action: "UpdateReport",
         reportId: req.params.id,
         userId: req.auth.id,
       });
+      req.dbTransaction.commit();
       res.json(report);
     })
     .catch((error) => {
@@ -104,19 +108,21 @@ function update(req, res, next) {
         reportId: req.params.id,
         error: error.message,
       });
+      req.dbTransaction.rollback();
       next(error);
     });
 }
 
 function _delete(req, res, next) {
   reportService
-    .delete(req.params.id)
+    .delete(req.params.id, { transaction: req.dbTransaction })
     .then(() => {
       logger.logEvent("warn", "Report deleted", {
         action: "DeleteReport",
         reportId: req.params.id,
         userId: req.auth.id,
       });
+      req.dbTransaction.commit();
       res.json({ message: "Report deleted successfully" });
     })
     .catch((error) => {
@@ -125,6 +131,7 @@ function _delete(req, res, next) {
         reportId: req.params.id,
         error: error.message,
       });
-      next(error); // Pass the error to the global error handler
+      req.dbTransaction.rollback();
+      next(error);
     });
 }
