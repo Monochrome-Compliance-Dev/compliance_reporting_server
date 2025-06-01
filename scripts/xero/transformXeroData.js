@@ -1,3 +1,4 @@
+const { transformInvoices } = require("./transformInvoices");
 const fs = require("fs");
 const path = require("path");
 
@@ -59,23 +60,13 @@ const fieldMapping = {
   invoiceDueDate: (invoice) => invoice.DueDateString || "",
 };
 
-// Transform function using fieldMapping
-const transformInvoices = (invoices) => {
-  return invoices.map((invoice) => {
-    const transformed = {};
-    for (const [targetField, mappingFn] of Object.entries(fieldMapping)) {
-      transformed[targetField] =
-        typeof mappingFn === "function" ? mappingFn(invoice) : mappingFn;
-    }
-    return transformed;
-  });
-};
-
 // Only take first 5 invoices for testing
 const invoicesToTest = xeroData.invoices.slice(0, 5);
 
 // Transform function using fieldMapping
-const transformedData = transformInvoices(invoicesToTest);
+const transformedData = transformInvoices(invoicesToTest, {
+  contactMap: xeroData.contactMap || {},
+});
 
 // Log out the first 5 records from each of the invoices, payments, and purchaseOrders arrays
 console.log("========== RAW XERO DATA DUMP ==========");
