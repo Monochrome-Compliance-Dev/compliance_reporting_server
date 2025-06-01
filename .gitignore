@@ -46,7 +46,7 @@ config.js
 .DS_Store
 
 # Environment variables
-.env.*
+.env*
 
 # Upload files
 uploads

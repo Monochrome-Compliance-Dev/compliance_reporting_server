@@ -1,66 +1,71 @@
-const { DataTypes, Model } = require("sequelize");
-const sequelize = require("../config/database");
+const { DataTypes } = require("sequelize");
 
-class XeroToken extends Model {
-  get isExpired() {
-    return Date.now() >= this.expires;
-  }
-
-  get isActive() {
-    return !this.revoked && !this.isExpired;
-  }
-}
-
-XeroToken.init(
-  {
-    access_token: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    refresh_token: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    expires: {
-      type: DataTypes.DATE,
-      allowNull: false,
-    },
-    created: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-    },
-    createdByIp: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    revoked: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    revokedByIp: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    replacedByToken: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    clientId: {
-      type: DataTypes.STRING(10),
-      allowNull: false,
-      references: {
-        model: "clients",
-        key: "id",
+// This model definition function expects a sequelize instance and returns the model
+function defineXeroTokenModel(sequelize) {
+  const XeroToken = sequelize.define(
+    "XeroToken",
+    {
+      id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true,
+      },
+      access_token: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
+      refresh_token: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
+      expires: {
+        type: DataTypes.DATE,
+        allowNull: false,
+      },
+      created: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW,
+      },
+      createdByIp: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      revoked: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      revokedByIp: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      replacedByToken: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      clientId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+        references: {
+          model: "tbl_client",
+          key: "id",
+        },
       },
     },
-  },
-  {
-    sequelize,
-    modelName: "XeroToken",
-    tableName: "xero_tokens",
-    timestamps: false,
-  }
-);
+    {
+      tableName: "xero_tokens",
+      timestamps: false,
+      getterMethods: {
+        isExpired() {
+          return Date.now() >= new Date(this.expires).getTime();
+        },
+        isActive() {
+          return !this.revoked && !this.isExpired;
+        },
+      },
+    }
+  );
+  return XeroToken;
+}
 
-module.exports = XeroToken;
+module.exports = defineXeroTokenModel;

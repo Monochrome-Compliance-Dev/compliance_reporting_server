@@ -1,9 +1,14 @@
 ﻿// If NODE_ENV is already set (like by AWS), do not overwrite it
 process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
-// Load .env only if not in production
-if (process.env.NODE_ENV !== "production") {
-  require("dotenv").config();
+// Load appropriate .env file based on NODE_ENV
+const dotenv = require("dotenv");
+if (process.env.NODE_ENV === "production") {
+  dotenv.config({ path: ".env.production" });
+} else if (process.env.NODE_ENV === "development") {
+  dotenv.config({ path: ".env.development" });
+} else {
+  dotenv.config({ path: ".env" });
 }
 
 console.log("Running in environment:", process.env.NODE_ENV);
@@ -135,6 +140,7 @@ app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
 app.use("/api/audit", require("./audit/audit.controller"));
+app.use("/api/xero", require("./xero/xero.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

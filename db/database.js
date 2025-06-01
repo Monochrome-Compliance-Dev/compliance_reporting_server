@@ -61,6 +61,7 @@ async function initialise() {
     "../tracking",
     "../audit",
     "../admin",
+    "../xero",
   ];
 
   modelDirs.forEach((dir) => {
@@ -102,6 +103,36 @@ async function initialise() {
   if (db.Client && db.Audit) {
     db.Client.hasMany(db.Audit, { onDelete: "CASCADE" });
     db.Audit.belongsTo(db.Client, { onDelete: "CASCADE" });
+  }
+
+  // Xero Token relationship
+  if (db.Client && db.XeroToken) {
+    db.Client.hasMany(db.XeroToken, { onDelete: "CASCADE" });
+    db.XeroToken.belongsTo(db.Client);
+  }
+
+  // Xero Invoice relationship
+  if (db.Client && db.XeroInvoice) {
+    db.Client.hasMany(db.XeroInvoice, { onDelete: "CASCADE" });
+    db.XeroInvoice.belongsTo(db.Client);
+  }
+
+  // Xero Payment relationship
+  if (db.Client && db.XeroPayment) {
+    db.Client.hasMany(db.XeroPayment, { onDelete: "CASCADE" });
+    db.XeroPayment.belongsTo(db.Client);
+  }
+
+  // Xero Contact relationship
+  if (db.Client && db.XeroContact) {
+    db.Client.hasMany(db.XeroContact, { onDelete: "CASCADE" });
+    db.XeroContact.belongsTo(db.Client);
+  }
+
+  // Xero Organisation relationship
+  if (db.Client && db.XeroOrganisation) {
+    db.Client.hasMany(db.XeroOrganisation, { onDelete: "CASCADE" });
+    db.XeroOrganisation.belongsTo(db.Client);
   }
 
   // Sync models

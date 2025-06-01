@@ -1,57 +1,73 @@
 const { DataTypes } = require("sequelize");
-const sequelize = require("../db/sequelize"); // adjust path if needed
 
-const XeroPayment = sequelize.define(
-  "XeroPayment",
-  {
-    clientId: {
-      type: DataTypes.STRING(10),
-      allowNull: false,
+module.exports = (sequelize) => {
+  const XeroInvoice = sequelize.define(
+    "XeroInvoice",
+    {
+      id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true,
+      },
+      clientId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+        references: {
+          model: "tbl_client",
+          key: "clientId",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
+      },
+      invoiceId: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+      },
+      invoiceNumber: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      invoiceDate: {
+        type: DataTypes.DATEONLY,
+        allowNull: false,
+      },
+      dueDate: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
+      totalAmount: {
+        type: DataTypes.DECIMAL(18, 2),
+        allowNull: false,
+      },
+      contactName: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      contactEmail: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      status: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      createdAt: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW,
+      },
+      updatedAt: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW,
+      },
     },
-    paymentId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-    },
-    paymentAmount: {
-      type: DataTypes.DECIMAL(18, 2),
-      allowNull: false,
-    },
-    paymentDate: {
-      type: DataTypes.DATEONLY,
-      allowNull: false,
-    },
-    payeeEntityName: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    payeeEntityAbn: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    payeeEntityAcnArbn: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    description: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    createdAt: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-    },
-    updatedAt: {
-      type: DataTypes.DATE,
-      allowNull: false,
-      defaultValue: DataTypes.NOW,
-    },
-  },
-  {
-    tableName: "xero_payments",
-    timestamps: true,
-  }
-);
+    {
+      tableName: "xero_invoices",
+      timestamps: true,
+    }
+  );
 
-module.exports = XeroPayment;
+  return XeroInvoice;
+};
