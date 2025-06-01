@@ -1,3 +1,5 @@
+const Joi = require("joi");
+
 const xeroOrganisationSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
   organisationId: Joi.string().optional(),
@@ -5,7 +7,6 @@ const xeroOrganisationSchema = Joi.object({
   organisationLegalName: Joi.string().optional(),
   organisationAbn: Joi.string().optional(),
 });
-const Joi = require("joi");
 
 const xeroTokenSchema = Joi.object({
   access_token: Joi.string().required(),
@@ -55,10 +56,17 @@ const xeroContactSchema = Joi.object({
   paymentTerms: Joi.string().optional(),
 });
 
+const credentialsSchema = Joi.object({
+  clientId: Joi.string().length(10).required(),
+  username: Joi.string().required(),
+  password: Joi.string().required(),
+});
+
 module.exports = {
   xeroTokenSchema,
   xeroInvoiceSchema,
   xeroPaymentSchema,
   xeroContactSchema,
   xeroOrganisationSchema,
+  credentialsSchema,
 };

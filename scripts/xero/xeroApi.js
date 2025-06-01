@@ -21,5 +21,16 @@ const get = async (url) => {
   }
 };
 
+// Wrapper function for POST requests
+const post = async (url, data, config = {}) => {
+  try {
+    const response = await xeroApi.post(url, data, config);
+    return response.data;
+  } catch (error) {
+    console.error(`Error POST ${url}:`, error.response?.data || error.message);
+    throw error;
+  }
+};
+
 // Export for reuse
-module.exports = { get };
+module.exports = { get, post };
