@@ -91,7 +91,6 @@ async function handleOAuthCallback(req, res) {
 
     let { access_token: accessToken } = tokenData;
     if (typeof accessToken !== "string") {
-      console.log("Fixing accessToken to string:", accessToken);
       accessToken = String(accessToken);
     }
 
@@ -101,7 +100,6 @@ async function handleOAuthCallback(req, res) {
       const connections = await xeroService.getConnections(accessToken);
       tenantId = connections?.[0]?.tenantId;
       if (typeof tenantId !== "string") {
-        console.log("Fixing tenantId to string:", tenantId);
         tenantId = String(tenantId);
       }
     } catch (err) {
