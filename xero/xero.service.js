@@ -215,6 +215,7 @@ async function refreshToken() {
 
 /**
  * Fetch contacts from Xero API and save them to the database.
+ * Enhanced logging for API responses, errors, retries, and upserts.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
 async function fetchContacts(accessToken, tenantId, clientId, reportId) {
@@ -228,63 +229,248 @@ async function fetchContacts(accessToken, tenantId, clientId, reportId) {
     const invoices = await db.XeroInvoice.findAll({ where: { clientId } });
     const payments = await db.XeroPayment.findAll({ where: { clientId } });
 
+    logger.logEvent(
+      "debug",
+      "Number of invoices and payments before processing",
+      {
+        action: "FetchContacts",
+        clientId,
+        reportId,
+        invoiceCount: invoices.length,
+        paymentCount: payments.length,
+      }
+    );
+
     const contactIdsSet = new Set();
     // Extract ContactID from nested Contact object in invoices
-    for (const invoice of invoices) {
+    for (let i = 0; i < invoices.length; i++) {
+      const invoice = invoices[i];
       const contact = invoice.Contact || {};
       const contactId = contact.ContactID || null;
+      logger.logEvent(
+        "debug",
+        "[fetchContacts] Extracted contactId from invoice",
+        { contactId, clientId, reportId, iteration: i, source: "invoice" }
+      );
       if (contactId) {
         contactIdsSet.add(contactId);
       }
     }
+    logger.logEvent("debug", "Number of payments before processing", {
+      action: "FetchContacts",
+      clientId,
+      reportId,
+      paymentCount: payments.length,
+    });
     // Extract ContactID from nested Invoice.Contact object in payments
-    for (const payment of payments) {
+    for (let i = 0; i < payments.length; i++) {
+      const payment = payments[i];
       const invoice = payment.Invoice || {};
       const contact = invoice.Contact || {};
       const contactId = contact.ContactID || null;
+      logger.logEvent(
+        "debug",
+        "[fetchContacts] Extracted contactId from payment",
+        { contactId, clientId, reportId, iteration: i, source: "payment" }
+      );
       if (contactId) {
         contactIdsSet.add(contactId);
       }
     }
     const contactIds = Array.from(contactIdsSet);
 
+    logger.logEvent(
+      "debug",
+      "[fetchContacts] Final list of contactIds to fetch",
+      { contactIds, clientId, reportId }
+    );
+
     const limit = pLimit(5);
 
-    const fetchAndSaveContact = async (contactId) => {
+    // Wrap retryFetch to add retry logging
+    async function retryFetchWithLogging(fetchFn, contactId) {
+      let lastError;
+      for (let i = 0; i < 3; i++) {
+        try {
+          return await fetchFn();
+        } catch (error) {
+          lastError = error;
+          const isRetryable = i < 2 && error.response?.status === 504;
+          logger.logEvent(
+            isRetryable ? "warn" : "error",
+            isRetryable
+              ? `Retrying API call after 504 error (attempt ${i + 1})`
+              : `API call failed and will not be retried`,
+            {
+              action: "FetchContacts",
+              clientId,
+              reportId,
+              contactId,
+              retryAttempt: i + 1,
+              error: error.message,
+              status: error.response?.status,
+              apiErrorBody: error.response?.data,
+            }
+          );
+          if (isRetryable) {
+            await new Promise((r) => setTimeout(r, 1000));
+          } else {
+            throw error;
+          }
+        }
+      }
+      throw lastError;
+    }
+
+    const fetchAndSaveContact = async (contactId, idx) => {
+      logger.logEvent("info", `Starting fetch for contact ${contactId}`, {
+        action: "FetchContacts",
+        clientId,
+        reportId,
+        contactId,
+        iteration: idx,
+      });
       try {
-        const data = await retryFetch(() =>
-          get(`/Contacts/${contactId}`, accessToken, tenantId)
-        );
-        const contact = data.Contact;
-        if (contact) {
-          await db.XeroContact.upsert({
+        let response;
+        try {
+          response = await retryFetchWithLogging(
+            () => get(`/Contacts/${contactId}`, accessToken, tenantId),
+            contactId
+          );
+        } catch (apiError) {
+          // Log error with as much info as possible
+          logger.logEvent("error", `API error fetching contact ${contactId}`, {
+            action: "FetchContacts",
             clientId,
             reportId,
-            ContactID: contact.ContactID,
-            Name: contact.Name || "",
-            CompanyNumber: contact.CompanyNumber || null,
-            TaxNumber: contact.TaxNumber || null,
-            DAYSAFTERBILLDATE: contact.DaysaAfterBillDate || null,
-            DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth || null,
-            OFCURRENTMONTH: contact.OfCurrentMonth || null,
-            OFFOLLOWINGMONTH: contact.OfFollowingMonth || null,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            contactId,
+            error: apiError.message,
+            status: apiError.response?.status,
+            apiErrorBody: apiError.response?.data,
+            iteration: idx,
+          });
+          if (
+            apiError.response?.data?.Warnings ||
+            apiError.response?.data?.Errors
+          ) {
+            logger.logEvent("warn", "API error contains warnings/errors", {
+              clientId,
+              reportId,
+              contactId,
+              warnings: apiError.response?.data?.Warnings,
+              errors: apiError.response?.data?.Errors,
+              iteration: idx,
+            });
+          }
+          return;
+        }
+        // Log the full API response status and body
+        logger.logEvent(
+          "debug",
+          `API call response status: ${response?.status ?? "n/a"}`,
+          { contactId, clientId, reportId, iteration: idx }
+        );
+        logger.logEvent("debug", "API response body", {
+          responseBody: response,
+          contactId,
+          clientId,
+          reportId,
+          iteration: idx,
+        });
+
+        // Xero SDKs may return the body as .Contact or .Contacts, depending on endpoint
+        const contact =
+          response?.Contact ||
+          (response?.Contacts && Array.isArray(response.Contacts)
+            ? response.Contacts[0]
+            : null);
+        if (
+          !response ||
+          (!contact && !response?.Contact && !response?.Contacts)
+        ) {
+          logger.logEvent(
+            "warn",
+            "API response is empty or missing expected fields for contact",
+            { contactId, clientId, reportId, response, iteration: idx }
+          );
+        }
+        if (response?.Warnings || response?.Errors) {
+          logger.logEvent("warn", "API response contains warnings/errors", {
+            clientId,
+            reportId,
+            contactId,
+            warnings: response?.Warnings,
+            errors: response?.Errors,
+            iteration: idx,
+          });
+        }
+        logger.logEvent("info", `Fetched data for contact ${contactId}`, {
+          action: "FetchContacts",
+          clientId,
+          reportId,
+          contactId,
+          contactData: contact,
+          iteration: idx,
+        });
+        if (contact) {
+          try {
+            await db.XeroContact.upsert({
+              clientId,
+              reportId,
+              ContactID: contact.ContactID,
+              Name: contact.Name || "",
+              CompanyNumber: contact.CompanyNumber || null,
+              TaxNumber: contact.TaxNumber || null,
+              DAYSAFTERBILLDATE: contact.DaysaAfterBillDate || null,
+              DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth || null,
+              OFCURRENTMONTH: contact.OfCurrentMonth || null,
+              OFFOLLOWINGMONTH: contact.OfFollowingMonth || null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
+            logger.logEvent(
+              "info",
+              `Contact ${contactId} upserted successfully`,
+              {
+                action: "FetchContacts",
+                clientId,
+                reportId,
+                contactId,
+                iteration: idx,
+              }
+            );
+          } catch (error) {
+            logger.logEvent("error", "Error during contact upsert", {
+              error: error.message,
+              contactId,
+              clientId,
+              reportId,
+              iteration: idx,
+            });
+          }
+        } else {
+          logger.logEvent("warn", `No contact found for ${contactId}`, {
+            action: "FetchContacts",
+            clientId,
+            reportId,
+            contactId,
+            iteration: idx,
           });
         }
       } catch (error) {
-        logger.logEvent("error", `Error fetching contact ${contactId}`, {
+        logger.logEvent("error", `Unexpected error in fetchAndSaveContact`, {
           action: "FetchContacts",
           clientId,
           reportId,
           contactId,
           error: error.message,
+          iteration: idx,
         });
       }
     };
 
     await Promise.all(
-      contactIds.map((id) => limit(() => fetchAndSaveContact(id)))
+      contactIds.map((id, idx) => limit(() => fetchAndSaveContact(id, idx)))
     );
 
     logger.logEvent("info", "Contacts fetched and saved", {
