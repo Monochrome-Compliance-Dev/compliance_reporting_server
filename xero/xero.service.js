@@ -53,7 +53,7 @@ async function exchangeAuthCodeForTokens(code, state, req) {
     try {
       const parsedState = JSON.parse(state);
       clientId = parsedState.clientId || req.auth.clientId;
-      reportId = parsedState.reportId || null;
+      reportId = parsedState.reportId || req.query?.reportId || null;
     } catch (e) {
       logger.logEvent("warn", "State parsing failed, using req.auth.clientId", {
         action: "ExchangeAuthCodeForTokens",

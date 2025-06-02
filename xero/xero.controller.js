@@ -5,7 +5,7 @@ const router = express.Router();
 const xeroService = require("./xero.service");
 const authorise = require("../middleware/authorise");
 
-router.get("/connect", authorise(), generateAuthUrl);
+router.get("/connect/:reportId", authorise(), generateAuthUrl);
 router.get("/callback", handleOAuthCallback);
 
 module.exports = router;
@@ -29,7 +29,7 @@ function generateAuthUrl(req, res) {
 
     const state = JSON.stringify({
       clientId: req.auth?.clientId,
-      reportId: req.body?.reportId,
+      reportId: req.params?.reportId,
     });
 
     const params = new URLSearchParams({
@@ -93,9 +93,8 @@ async function handleOAuthCallback(req, res) {
       return res.status(500).send("Failed to exchange code for tokens.");
     }
 
-    const frontendUrl =
-      process.env.XERO_REDIRECT_URI || "http://localhost:3000";
-    return res.redirect(`${frontendUrl}/reports/ptrs`);
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000"; // Default to localhost if not set
+    return res.redirect(`${frontendUrl}/reports/ptrs/${reportId}`);
   } catch (err) {
     logger.logEvent("error", "Error in OAuth callback", {
       action: "OAuthCallback",
