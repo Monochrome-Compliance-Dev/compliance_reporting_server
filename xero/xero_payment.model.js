@@ -1,8 +1,8 @@
 const { DataTypes } = require("sequelize");
 
 module.exports = (sequelize) => {
-  const XeroInvoice = sequelize.define(
-    "XeroInvoice",
+  const XeroPayment = sequelize.define(
+    "XeroPayment",
     {
       id: {
         type: DataTypes.UUID,
@@ -14,42 +14,35 @@ module.exports = (sequelize) => {
         allowNull: false,
         references: {
           model: "tbl_client",
-          key: "clientId",
+          key: "id",
         },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      invoiceId: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true,
+      reportId: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+        references: {
+          model: "tbl_report",
+          key: "id",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
       },
-      invoiceNumber: {
-        type: DataTypes.STRING,
+      PaymentID: {
+        type: DataTypes.STRING(50),
         allowNull: false,
       },
-      invoiceDate: {
-        type: DataTypes.DATEONLY,
-        allowNull: false,
-      },
-      dueDate: {
-        type: DataTypes.DATEONLY,
+      Amount: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: true,
       },
-      totalAmount: {
-        type: DataTypes.DECIMAL(18, 2),
-        allowNull: false,
-      },
-      contactName: {
-        type: DataTypes.STRING,
+      Status: {
+        type: DataTypes.STRING(50),
         allowNull: true,
       },
-      contactEmail: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      status: {
-        type: DataTypes.STRING,
+      Invoice: {
+        type: DataTypes.JSONB,
         allowNull: true,
       },
       createdAt: {
@@ -64,10 +57,10 @@ module.exports = (sequelize) => {
       },
     },
     {
-      tableName: "xero_invoices",
+      tableName: "xero_payments",
       timestamps: true,
     }
   );
 
-  return XeroInvoice;
+  return XeroPayment;
 };

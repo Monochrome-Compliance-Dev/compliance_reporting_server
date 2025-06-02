@@ -77,14 +77,10 @@ async function handleOAuthCallback(req, res) {
 
     const { clientId, reportId } = parsedState;
 
+    // 1️⃣ Exchange the code for tokens
     let tokenData;
     try {
-      tokenData = await xeroService.exchangeAuthCodeForTokens(
-        code,
-        state,
-        clientId
-      );
-      console.log("Received token data from Xero:", tokenData);
+      tokenData = await xeroService.exchangeAuthCodeForTokens(code, state, req);
     } catch (err) {
       logger.logEvent("error", "Failed to exchange code for tokens", {
         action: "OAuthCallback",
@@ -93,7 +89,90 @@ async function handleOAuthCallback(req, res) {
       return res.status(500).send("Failed to exchange code for tokens.");
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000"; // Default to localhost if not set
+    let { access_token: accessToken } = tokenData;
+    if (typeof accessToken !== "string") {
+      console.log("Fixing accessToken to string:", accessToken);
+      accessToken = String(accessToken);
+    }
+
+    // New step: get connections to obtain tenantId
+    let tenantId;
+    try {
+      const connections = await xeroService.getConnections(accessToken);
+      tenantId = connections?.[0]?.tenantId;
+      if (typeof tenantId !== "string") {
+        console.log("Fixing tenantId to string:", tenantId);
+        tenantId = String(tenantId);
+      }
+    } catch (err) {
+      logger.logEvent("error", "Failed to get connections", {
+        action: "OAuthCallback",
+        error: err.message,
+      });
+      return res.status(500).send("Failed to get connections.");
+    }
+
+    // Added check to ensure tenantId is retrieved properly
+    if (!tenantId) {
+      logger.logEvent(
+        "error",
+        "Tenant ID is missing after connection retrieval",
+        { action: "OAuthCallback" }
+      );
+      return res
+        .status(500)
+        .send("Failed to retrieve Tenant ID from connections.");
+    }
+
+    try {
+      await xeroService.fetchOrganisationDetails({
+        accessToken,
+        tenantId,
+        clientId,
+        reportId,
+      });
+
+      await xeroService.fetchInvoices(
+        accessToken,
+        tenantId,
+        clientId,
+        reportId
+      );
+
+      await xeroService.fetchPayments(
+        accessToken,
+        tenantId,
+        clientId,
+        reportId
+      );
+
+      await xeroService.fetchContacts(
+        accessToken,
+        tenantId,
+        clientId,
+        reportId
+      );
+
+      console.log("Xero data fetched and saved successfully.");
+    } catch (fetchErr) {
+      logger.logEvent("error", "Error fetching Xero data", {
+        action: "OAuthCallback-FetchingData",
+        error: fetchErr.message,
+      });
+      console.log(`Error fetching data: ${fetchErr.message}`);
+    }
+
+    // Ensure accessToken and tenantId are strings before redirect
+    if (typeof accessToken !== "string") {
+      accessToken = String(accessToken);
+    }
+    if (typeof tenantId !== "string") {
+      tenantId = String(tenantId);
+    }
+
+    // 3️⃣ Redirect user to the frontend with updates
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const updatesParam = encodeURIComponent(JSON.stringify([]));
     return res.redirect(`${frontendUrl}/reports/ptrs/${reportId}`);
   } catch (err) {
     logger.logEvent("error", "Error in OAuth callback", {

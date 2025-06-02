@@ -14,27 +14,51 @@ const XeroContact = (sequelize) => {
         allowNull: false,
         references: {
           model: "tbl_client",
-          key: "clientId",
+          key: "id",
         },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
       },
-      contactId: {
-        type: DataTypes.STRING,
+      reportId: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+        references: {
+          model: "tbl_report",
+          key: "id",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
+      },
+      ContactID: {
+        type: DataTypes.STRING(255),
         allowNull: false,
         unique: true,
       },
-      contactName: {
+      Name: {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      contactAbn: {
+      CompanyNumber: {
         type: DataTypes.STRING,
         allowNull: true,
       },
-      contactAcnArbn: {
+      TaxNumber: {
         type: DataTypes.STRING,
         allowNull: true,
       },
-      paymentTerms: {
+      DAYSAFTERBILLDATE: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      DAYSAFTERBILLMONTH: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      OFCURRENTMONTH: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      OFFOLLOWINGMONTH: {
         type: DataTypes.STRING,
         allowNull: true,
       },

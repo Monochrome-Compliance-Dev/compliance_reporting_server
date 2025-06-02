@@ -1,0 +1,25 @@
+const organisationFieldMapping = {
+  organisationId: "OrganisationID",
+  organisationName: "Name",
+  organisationLegalName: "LegalName",
+  organisationPaysTax: "PaysTax",
+  organisationVersion: "Version",
+  organisationType: "OrganisationType",
+  organisationBaseCurrency: "BaseCurrency",
+  organisationCountryCode: "CountryCode",
+  organisationTaxNumber: "TaxNumber",
+  organisationIsDemo: "IsDemoCompany",
+  organisationStatus: "OrganisationStatus",
+  organisationRegistrationNumber: "RegistrationNumber",
+  financialYearEndDay: "FinancialYearEndDay",
+  financialYearEndMonth: "FinancialYearEndMonth",
+  createdAt: (data) => data.CreatedDateUTC || new Date().toISOString(),
+  updatedAt: (data) => data.UpdatedDateUTC || new Date().toISOString(),
+  organisationShortCode: "ShortCode",
+  apiKey: "APIKey",
+  addresses: "Addresses",
+  phones: "Phones",
+  externalLinks: "ExternalLinks",
+};
+
+module.exports = organisationFieldMapping;

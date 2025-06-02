@@ -22,11 +22,6 @@ const setClientIdRLS = async (req, res, next) => {
       { transaction: req.dbTransaction }
     );
 
-    console.log(
-      "RLS session variable set and transaction started for clientId:",
-      safeClientId
-    );
-
     next();
   } catch (error) {
     if (error.message.includes("unrecognized configuration parameter")) {

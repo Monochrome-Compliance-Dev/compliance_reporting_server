@@ -1,12 +1,62 @@
 const { logger } = require("../helpers/logger");
-const { get, post } = require("../scripts/xero/xeroApi");
+const { get, post } = require("./xeroApi");
 const defineXeroTokenModel = require("./xero_tokens.model");
 const db = require("../db/database");
 const pLimit = require("p-limit");
 const querystring = require("querystring");
+const { transformData } = require("../utils/dataTransformer");
+const organisationFieldMapping = require("../utils/mappings/xeroOrganisationMapping");
 
 // Ensure XeroToken model is initialized with the sequelize instance from db
 const XeroToken = defineXeroTokenModel(db.sequelize);
+
+/**
+ * Retry helper for GET requests.
+ * @param {Function} fetchFn - Function that returns a promise
+ * @param {number} retries - Number of retries
+ * @param {number} delay - Delay between retries (ms)
+ */
+async function retryFetch(fetchFn, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fetchFn();
+    } catch (error) {
+      if (i < retries - 1 && error.response?.status === 504) {
+        logger.logEvent("warn", `Retrying after 504 error (attempt ${i + 1})`, {
+          action: "RetryFetch",
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Get connections (tenants) from Xero API.
+ * @param {string} accessToken
+ */
+async function getConnections(accessToken) {
+  logger.logEvent("info", "Fetching Xero connections (tenants)", {
+    action: "GetConnections",
+  });
+  try {
+    const data = await get("/connections", accessToken.toString());
+    logger.logEvent("info", "Xero connections retrieved", {
+      action: "GetConnections",
+      count: Array.isArray(data) ? data.length : 0,
+      data,
+    });
+    return data;
+  } catch (error) {
+    logger.logEvent("error", "Error fetching Xero connections", {
+      action: "GetConnections",
+      error: error.message,
+    });
+    throw error;
+  }
+}
 
 module.exports = {
   refreshToken,
@@ -16,6 +66,7 @@ module.exports = {
   fetchOrganisationDetails,
   getTransformedData,
   exchangeAuthCodeForTokens,
+  getConnections, // Newly added
 };
 
 async function exchangeAuthCodeForTokens(code, state, req) {
@@ -166,7 +217,7 @@ async function refreshToken() {
  * Fetch contacts from Xero API and save them to the database.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
-async function fetchContacts({ accessToken, tenantId, clientId, reportId }) {
+async function fetchContacts(accessToken, tenantId, clientId, reportId) {
   logger.logEvent("info", "Fetching contacts from Xero", {
     action: "FetchContacts",
     clientId,
@@ -178,14 +229,21 @@ async function fetchContacts({ accessToken, tenantId, clientId, reportId }) {
     const payments = await db.XeroPayment.findAll({ where: { clientId } });
 
     const contactIdsSet = new Set();
+    // Extract ContactID from nested Contact object in invoices
     for (const invoice of invoices) {
-      if (invoice.Contact && invoice.Contact.ContactID) {
-        contactIdsSet.add(invoice.Contact.ContactID);
+      const contact = invoice.Contact || {};
+      const contactId = contact.ContactID || null;
+      if (contactId) {
+        contactIdsSet.add(contactId);
       }
     }
+    // Extract ContactID from nested Invoice.Contact object in payments
     for (const payment of payments) {
-      if (payment.Contact && payment.Contact.ContactID) {
-        contactIdsSet.add(payment.Contact.ContactID);
+      const invoice = payment.Invoice || {};
+      const contact = invoice.Contact || {};
+      const contactId = contact.ContactID || null;
+      if (contactId) {
+        contactIdsSet.add(contactId);
       }
     }
     const contactIds = Array.from(contactIdsSet);
@@ -194,13 +252,24 @@ async function fetchContacts({ accessToken, tenantId, clientId, reportId }) {
 
     const fetchAndSaveContact = async (contactId) => {
       try {
-        const data = await get(`/Contacts/${contactId}`);
+        const data = await retryFetch(() =>
+          get(`/Contacts/${contactId}`, accessToken, tenantId)
+        );
         const contact = data.Contact;
         if (contact) {
           await db.XeroContact.upsert({
-            ...contact,
             clientId,
             reportId,
+            ContactID: contact.ContactID,
+            Name: contact.Name || "",
+            CompanyNumber: contact.CompanyNumber || null,
+            TaxNumber: contact.TaxNumber || null,
+            DAYSAFTERBILLDATE: contact.DaysaAfterBillDate || null,
+            DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth || null,
+            OFCURRENTMONTH: contact.OfCurrentMonth || null,
+            OFFOLLOWINGMONTH: contact.OfFollowingMonth || null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
           });
         }
       } catch (error) {
@@ -240,24 +309,43 @@ async function fetchContacts({ accessToken, tenantId, clientId, reportId }) {
  * Extract data from Xero and store in DB for the given client.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
-async function fetchInvoices({ accessToken, tenantId, clientId, reportId }) {
-  logger.logEvent("info", "Extracting data from Xero", {
+async function fetchInvoices(accessToken, tenantId, clientId, reportId) {
+  logger.logEvent("info", "Extracting invoice data from Xero", {
     action: "ExtractXeroData",
     clientId,
     reportId,
   });
   try {
-    // Example: extract Invoices
-    const data = await get("/Invoices");
+    const data = await retryFetch(() =>
+      get("/Invoices", accessToken, tenantId)
+    );
     const invoices = data.Invoices || [];
-    // Save invoices to DB with clientId and reportId for RLS and auditing
+    console.log("Invoices data from Xero:", invoices?.length);
+
     for (const invoice of invoices) {
-      await db.XeroInvoice.upsert({
-        ...invoice,
+      const invoiceRecord = {
+        // id,
         clientId,
         reportId,
-      });
+        InvoiceID: invoice.InvoiceID || null,
+        InvoiceNumber: invoice.InvoiceNumber || null,
+        Reference: invoice.Reference || null,
+        Type: invoice.Type || null,
+        Contact: invoice.Contact || null,
+        DateString: invoice.Date || null,
+        DueDateString: invoice.DueDate || null,
+        Payments: invoice.Payments || null,
+        Status: invoice.Status || null,
+        AmountPaid: invoice.AmountPaid || null,
+        AmountDue: invoice.AmountDue || null,
+        AmountCredited: invoice.AmountCredited || null,
+        Total: invoice.Total || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      await db.XeroInvoice.upsert(invoiceRecord);
     }
+
     logger.logEvent("info", "Xero data extracted and saved", {
       action: "ExtractXeroData",
       clientId,
@@ -266,7 +354,7 @@ async function fetchInvoices({ accessToken, tenantId, clientId, reportId }) {
     });
     return invoices;
   } catch (error) {
-    logger.logEvent("error", "Error extracting data from Xero", {
+    logger.logEvent("error", "Error extracting invoice data from Xero", {
       action: "ExtractXeroData",
       clientId,
       reportId,
@@ -311,24 +399,34 @@ async function getTransformedData({ clientId, reportId }) {
 
 /**
  * Fetch payments from Xero API and save them to the database.
+ * Includes all relevant fields as per the Xero API dump and transformation logic.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
-async function fetchPayments({ accessToken, tenantId, clientId, reportId }) {
+async function fetchPayments(accessToken, tenantId, clientId, reportId) {
   logger.logEvent("info", "Extracting payments from Xero", {
     action: "ExtractXeroPayments",
     clientId,
     reportId,
   });
   try {
-    const data = await get("/Payments");
+    const data = await retryFetch(() =>
+      get("/Payments", accessToken, tenantId)
+    );
     const payments = data.Payments || [];
+    console.log("Payments data from Xero:", payments?.length);
     // Save payments to DB with clientId and reportId for RLS and auditing
     for (const payment of payments) {
-      await db.XeroPayment.upsert({
-        ...payment,
+      const paymentRecord = {
+        // id: payment.id || null,
         clientId,
         reportId,
-      });
+        PaymentID: payment.PaymentID || null,
+        Amount: payment.Amount || null,
+        Status: payment.Status || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      await db.XeroPayment.upsert(paymentRecord);
     }
     logger.logEvent("info", "Xero payments extracted and saved", {
       action: "ExtractXeroPayments",
@@ -363,23 +461,32 @@ async function fetchOrganisationDetails({
     clientId,
     reportId,
   });
+
   try {
-    const data = await get("/Organisation");
+    const data = await retryFetch(() =>
+      get("/Organisation", accessToken, tenantId)
+    );
     const organisations = data.Organisations || [];
+    console.log("Organisations data from Xero:", organisations?.length);
     // Save organisation details to DB with clientId and reportId for RLS and auditing
     for (const org of organisations) {
-      await db.XeroOrganisation.upsert({
-        ...org,
+      const orgRecord = {
         clientId,
         reportId,
-      });
+        organisationId: org.OrganisationID,
+        organisationName: org.Name,
+        organisationLegalName: org.LegalName,
+        organisationAbn: org.ABN || null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      await db.XeroOrganisation.upsert(orgRecord);
     }
-    logger.logEvent("info", "Xero organisation details extracted and saved", {
-      action: "ExtractXeroOrganisationDetails",
-      clientId,
-      reportId,
-      count: organisations.length,
+    await db.XeroOrganisation.findAll({
+      where: { clientId, reportId },
     });
+    // await db.sequelize.query("COMMIT;");
+    // console.log("Transaction committed manually.");
     return organisations;
   } catch (error) {
     logger.logEvent(

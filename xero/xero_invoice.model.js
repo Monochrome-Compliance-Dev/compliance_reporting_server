@@ -19,49 +19,66 @@ const XeroInvoice = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      invoiceReferenceNumber: {
-        type: DataTypes.STRING,
+      reportId: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+        references: {
+          model: "tbl_report",
+          key: "id",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
+      },
+      InvoiceID: {
+        type: DataTypes.STRING(255),
+        allowNull: false,
+        unique: true,
+      },
+      InvoiceNumber: {
+        type: DataTypes.STRING(50),
         allowNull: true,
       },
-      invoiceIssueDate: {
-        type: DataTypes.DATEONLY,
+      Reference: {
+        type: DataTypes.STRING(50),
         allowNull: true,
       },
-      invoiceDueDate: {
-        type: DataTypes.DATEONLY,
+      Type: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
+      Contact: {
+        type: DataTypes.JSONB,
+        allowNull: false,
+      },
+      DateString: { type: DataTypes.STRING, allowNull: false },
+      DueDateString: { type: DataTypes.STRING, allowNull: true },
+      Payments: {
+        type: DataTypes.JSONB,
         allowNull: true,
       },
-      invoiceAmount: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: true,
+      Status: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
-      invoicePaymentTerms: {
-        type: DataTypes.STRING,
+      AmountPaid: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: true,
+        defaultValue: 0.0,
       },
-      payeeEntityName: {
-        type: DataTypes.STRING,
+      AmountDue: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: true,
+        defaultValue: 0.0,
       },
-      payeeEntityAbn: {
-        type: DataTypes.STRING,
+      AmountCredited: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: true,
+        defaultValue: 0.0,
       },
-      payeeEntityAcnArbn: {
-        type: DataTypes.STRING,
+      Total: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: true,
-      },
-      paymentAmount: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: true,
-      },
-      paymentDate: {
-        type: DataTypes.DATEONLY,
-        allowNull: true,
-      },
-      description: {
-        type: DataTypes.TEXT,
-        allowNull: true,
+        defaultValue: 0.0,
       },
       createdAt: {
         type: DataTypes.DATE,

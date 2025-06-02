@@ -1,7 +1,9 @@
 const Joi = require("joi");
+const { report } = require("./xero.controller");
 
 const xeroOrganisationSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
+  reportId: Joi.string().required(),
   organisationId: Joi.string().optional(),
   organisationName: Joi.string().optional(),
   organisationLegalName: Joi.string().optional(),
@@ -22,6 +24,7 @@ const xeroTokenSchema = Joi.object({
 
 const xeroInvoiceSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
+  reportId: Joi.string().required(),
   invoiceReferenceNumber: Joi.string().optional(),
   invoiceIssueDate: Joi.date().optional(),
   invoiceDueDate: Joi.date().optional(),
@@ -37,6 +40,7 @@ const xeroInvoiceSchema = Joi.object({
 
 const xeroPaymentSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
+  reportId: Joi.string().required(),
   paymentReferenceNumber: Joi.string().optional(),
   paymentAmount: Joi.number().optional(),
   paymentDate: Joi.date().optional(),
@@ -49,6 +53,7 @@ const xeroPaymentSchema = Joi.object({
 
 const xeroContactSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
+  reportId: Joi.string().required(),
   contactId: Joi.string().optional(),
   contactName: Joi.string().optional(),
   contactAbn: Joi.string().optional(),

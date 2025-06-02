@@ -2,8 +2,6 @@
 const { sequelize } = require("../db/database"); // update with your Sequelize instance
 
 module.exports = async (req, res, next) => {
-  console.log("Injecting clientId into request body", req.auth, req.body);
-
   const clientId = req.auth?.clientId;
   if (!clientId) {
     console.error("Middleware error: clientId missing in req.auth");
@@ -22,10 +20,6 @@ module.exports = async (req, res, next) => {
     );
     req.dbTransaction = transaction;
     req.body.clientId = safeClientId;
-    console.log(
-      "RLS session variable set and transaction started for clientId:",
-      safeClientId
-    );
     next();
   } catch (error) {
     console.error("Middleware RLS error:", error.message);

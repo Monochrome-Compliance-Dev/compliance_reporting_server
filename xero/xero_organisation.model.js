@@ -14,7 +14,17 @@ const XeroOrganisation = (sequelize) => {
         allowNull: false,
         references: {
           model: "tbl_client",
-          key: "clientId",
+          key: "id",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
+      },
+      reportId: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+        references: {
+          model: "tbl_report",
+          key: "id",
         },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
@@ -49,6 +59,7 @@ const XeroOrganisation = (sequelize) => {
     },
     {
       tableName: "xero_organisations",
+      schema: "public",
       timestamps: true,
     }
   );
