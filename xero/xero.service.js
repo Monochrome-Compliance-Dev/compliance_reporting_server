@@ -557,7 +557,11 @@ async function fetchPayments(
   try {
     // Use retryWithExponentialBackoff and extractErrorDetails utility
     const data = await retryWithExponentialBackoff(() =>
-      get("/Payments", accessToken, tenantId)
+      get("/Payments", accessToken, tenantId, {
+        params: {
+          where: `Date >= DateTime(${startDate}) && Date <= DateTime(${endDate})`,
+        },
+      })
     );
     const payments = data.Payments || [];
     console.log("Payments data from Xero:", payments?.length);
