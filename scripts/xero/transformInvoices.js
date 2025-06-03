@@ -9,22 +9,16 @@ const transformInvoices = (invoices, contactMap) => {
   return invoices.map((invoice) => {
     const transformed = {};
 
-    // Get contact-specific details if present
-    const contactId = invoice.Contact?.ContactID;
-    const contactDetails = contactMap[contactId] || {};
-
-    // Base mapping with updated placeholders and fallbacks
-    transformed.payeeEntityName = invoice.Contact?.Name || "PLACEHOLDER";
-    transformed.payeeEntityAbn = contactDetails.ABN || "PLACEHOLDER";
-    transformed.payeeEntityAcnArbn = contactDetails.ACN || "PLACEHOLDER";
-
     transformed.paymentAmount = Array.isArray(invoice.Payments)
       ? invoice.Payments.reduce((sum, p) => sum + (p.Amount || 0), 0)
       : 0;
 
-    transformed.description = invoice.Reference || "PLACEHOLDER";
+    transformed.description =
+      Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0
+        ? invoice.LineItems[0].Description || "NONE PROVIDED"
+        : "NONE PROVIDED";
 
-    transformed.supplyDate = "PLACEHOLDER";
+    transformed.supplyDate = "NONE PROVIDED";
 
     transformed.paymentDate =
       Array.isArray(invoice.Payments) && invoice.Payments.length > 0
@@ -34,22 +28,20 @@ const transformInvoices = (invoices, contactMap) => {
         : "";
 
     // Contract-level info
-    transformed.contractPoReferenceNumber = "PLACEHOLDER";
-    transformed.contractPoPaymentTerms =
-      contactDetails.PaymentTerms || "PLACEHOLDER";
+    transformed.contractPoReferenceNumber = "NONE PROVIDED";
 
     // Notice - placeholder
-    transformed.noticeForPaymentIssueDate = "PLACEHOLDER";
-    transformed.noticeForPaymentTerms = "PLACEHOLDER";
+    transformed.noticeForPaymentIssueDate = "NONE PROVIDED";
+    transformed.noticeForPaymentTerms = "NONE PROVIDED";
 
     // Invoice-level info
-    transformed.invoiceReferenceNumber = invoice.InvoiceNumber || "PLACEHOLDER";
-    transformed.invoiceIssueDate = invoice.DateString || "PLACEHOLDER";
+    transformed.invoiceReferenceNumber =
+      invoice.InvoiceNumber || "NONE PROVIDED";
+    transformed.invoiceIssueDate = invoice.DateString || "NONE PROVIDED";
     transformed.invoiceReceiptDate = "PlACEHOLDER";
-    transformed.invoiceAmount = invoice.Total || "PLACEHOLDER";
-    transformed.invoicePaymentTerms =
-      contactDetails.PaymentTerms || "PLACEHOLDER";
-    transformed.invoiceDueDate = invoice.DueDateString || "PLACEHOLDER";
+    transformed.invoiceAmount = invoice.Total || "NONE PROVIDED";
+    transformed.invoicePaymentTerms = "NONE PROVIDED";
+    transformed.invoiceDueDate = invoice.DueDateString || "NONE PROVIDED";
 
     return transformed;
   });

@@ -1,4 +1,4 @@
-const xeroData = require("../../docs/xeroApiDump.json");
+// const xeroData = require("../../docs/xeroApiDump.json");
 const { logger } = require("../../helpers/logger");
 const { transformOrganisation } = require("./transformOrganisation");
 const { transformContact } = require("./transformContact");
@@ -37,4 +37,4 @@ async function transformXeroData(xeroData) {
 
 module.exports = { transformXeroData };
 
-transformXeroData(xeroData).then(() => console.log("Transform complete."));
+// transformXeroData(xeroData).then(() => console.log("Transform complete."));
