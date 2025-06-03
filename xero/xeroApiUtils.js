@@ -2,11 +2,20 @@
  * Utility functions for Xero API calls - retry, pagination, header handling, rate-limiting, and error handling
  */
 
+module.exports = {
+  rateLimitHandler,
+  extractErrorDetails,
+  logApiCall,
+  retryWithExponentialBackoff,
+  paginateXeroApi,
+  prepareHeaders,
+};
+
 /**
  * Handles Xero API rate limits by pausing execution based on the Retry-After header.
  * @param {Object} headers - Response headers from the Xero API.
  */
-export async function rateLimitHandler(headers) {
+async function rateLimitHandler(headers) {
   const retryAfter = headers?.["retry-after"] || 60; // default to 60 seconds
   console.warn(`Rate limit hit. Pausing for ${retryAfter} seconds...`);
   await new Promise((res) => setTimeout(res, retryAfter * 1000));
@@ -17,7 +26,7 @@ export async function rateLimitHandler(headers) {
  * @param {Error} error
  * @returns {string|Object}
  */
-export function extractErrorDetails(error) {
+function extractErrorDetails(error) {
   if (!error) return "Unknown error";
   return error.response?.data || error.message || JSON.stringify(error);
 }
@@ -28,7 +37,7 @@ export function extractErrorDetails(error) {
  * @param {string} [method='GET']
  * @param {string} [status='SUCCESS']
  */
-export function logApiCall(endpoint, method = "GET", status = "SUCCESS") {
+function logApiCall(endpoint, method = "GET", status = "SUCCESS") {
   console.log(`[Xero API] ${method} ${endpoint} - Status: ${status}`);
 }
 
@@ -38,11 +47,7 @@ export function logApiCall(endpoint, method = "GET", status = "SUCCESS") {
  * @param {number} [retries=3] - Number of retry attempts.
  * @param {number} [baseDelay=1000] - Initial delay in ms.
  */
-export async function retryWithExponentialBackoff(
-  fn,
-  retries = 3,
-  baseDelay = 1000
-) {
+async function retryWithExponentialBackoff(fn, retries = 3, baseDelay = 1000) {
   let attempt = 0;
   while (attempt < retries) {
     try {
@@ -74,7 +79,7 @@ export async function retryWithExponentialBackoff(
  * @param {Function} fetchPageFn - Function to fetch a page, takes page number.
  * @param {Function} processPageFn - Function to process the API response.
  */
-export async function paginateXeroApi(fetchPageFn, processPageFn) {
+async function paginateXeroApi(fetchPageFn, processPageFn) {
   let page = 1;
   let hasMore = true;
 
@@ -100,12 +105,10 @@ export async function paginateXeroApi(fetchPageFn, processPageFn) {
  * @param {string} tenantId
  * @returns {Object}
  */
-export function prepareHeaders(accessToken, tenantId) {
+function prepareHeaders(accessToken, tenantId) {
   return {
     Authorization: `Bearer ${accessToken}`,
     "Xero-tenant-id": tenantId,
     "Content-Type": "application/json",
   };
 }
-
-// Future expansions: more robust rate-limit logic, concurrency limiting, etc.

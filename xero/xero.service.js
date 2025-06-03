@@ -1,5 +1,13 @@
 const { logger } = require("../helpers/logger");
 const { get, post } = require("./xeroApi");
+const {
+  retryWithExponentialBackoff,
+  paginateXeroApi,
+  extractErrorDetails,
+  prepareHeaders,
+  rateLimitHandler,
+  logApiCall,
+} = require("./xeroApiUtils");
 const defineXeroTokenModel = require("./xero_tokens.model");
 const db = require("../db/database");
 const pLimit = require("p-limit");
@@ -34,14 +42,13 @@ async function exchangeAuthCodeForTokens(code, state, req) {
       client_secret: process.env.XERO_CLIENT_SECRET,
     });
 
-    const tokenData = await post(
-      "https://identity.xero.com/connect/token",
-      params,
-      {
+    // Use retryWithExponentialBackoff for robust token exchange
+    const tokenData = await retryWithExponentialBackoff(() =>
+      post("https://identity.xero.com/connect/token", params, {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
         },
-      }
+      })
     );
 
     logger.logEvent("info", "Auth code exchanged for tokens successfully", {
@@ -117,10 +124,9 @@ async function refreshToken() {
     action: "RefreshToken",
   });
   try {
-    const tokenData = await post(
-      "https://identity.xero.com/connect/token",
-      null,
-      {
+    // Use retryWithExponentialBackoff for robust token refresh
+    const tokenData = await retryWithExponentialBackoff(() =>
+      post("https://identity.xero.com/connect/token", null, {
         params: {
           grant_type: "refresh_token",
           refresh_token: "your_refresh_token_here", // Replace with actual refresh token
@@ -130,7 +136,7 @@ async function refreshToken() {
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
         },
-      }
+      })
     );
 
     logger.logEvent("info", "Token refreshed successfully", {
@@ -219,41 +225,7 @@ async function fetchContacts(
 
     const limit = pLimit(5);
 
-    // Wrap retryFetch to add retry logging
-    async function retryFetchWithLogging(fetchFn, contactId) {
-      let lastError;
-      for (let i = 0; i < 3; i++) {
-        try {
-          return await fetchFn();
-        } catch (error) {
-          lastError = error;
-          const isRetryable = i < 2 && error.response?.status === 504;
-          logger.logEvent(
-            isRetryable ? "warn" : "error",
-            isRetryable
-              ? `Retrying API call after 504 error (attempt ${i + 1})`
-              : `API call failed and will not be retried`,
-            {
-              action: "FetchContacts",
-              clientId,
-              reportId,
-              contactId,
-              retryAttempt: i + 1,
-              error: error.message,
-              status: error.response?.status,
-              apiErrorBody: error.response?.data,
-            }
-          );
-          if (isRetryable) {
-            await new Promise((r) => setTimeout(r, 1000));
-          } else {
-            throw error;
-          }
-        }
-      }
-      throw lastError;
-    }
-
+    // Use rate-limiting and error extraction utilities for each contact fetch
     const fetchAndSaveContact = async (contactId, idx) => {
       logger.logEvent("info", `Starting fetch for contact ${contactId}`, {
         action: "FetchContacts",
@@ -265,18 +237,17 @@ async function fetchContacts(
       try {
         let response;
         try {
-          response = await retryFetchWithLogging(
-            () => get(`/Contacts/${contactId}`, accessToken, tenantId),
-            contactId
+          response = await retryWithExponentialBackoff(() =>
+            get(`/Contacts/${contactId}`, accessToken, tenantId)
           );
         } catch (apiError) {
-          // Log error with as much info as possible
+          // Use extractErrorDetails utility
           logger.logEvent("error", `API error fetching contact ${contactId}`, {
             action: "FetchContacts",
             clientId,
             reportId,
             contactId,
-            error: apiError.message,
+            error: extractErrorDetails(apiError),
             status: apiError.response?.status,
             apiErrorBody: apiError.response?.data,
             iteration: idx,
@@ -296,7 +267,6 @@ async function fetchContacts(
           }
           return;
         }
-        // Log the full API response status and body
         logger.logEvent(
           "debug",
           `API call response status: ${response?.status ?? "n/a"}`,
@@ -373,7 +343,7 @@ async function fetchContacts(
             );
           } catch (error) {
             logger.logEvent("error", "Error during contact upsert", {
-              error: error.message,
+              error: extractErrorDetails(error),
               contactId,
               clientId,
               reportId,
@@ -395,7 +365,7 @@ async function fetchContacts(
           clientId,
           reportId,
           contactId,
-          error: error.message,
+          error: extractErrorDetails(error),
           iteration: idx,
         });
       }
@@ -453,45 +423,56 @@ async function fetchInvoices(
     });
     const invoiceIds = Array.from(invoiceIdsSet);
 
+    // Use rate-limiting and error extraction utilities for each invoice fetch
     const limit = pLimit(5);
     await Promise.all(
       invoiceIds.map((id) =>
         limit(async () => {
-          const data = await retryFetch(() =>
-            get(`/Invoices/${id}`, accessToken, tenantId)
-          );
-          // Xero returns {Invoices: [invoice]} or {Invoice: {...}} depending on API
-          let invoice = null;
-          if (data?.Invoice) {
-            invoice = data.Invoice;
-          } else if (
-            Array.isArray(data?.Invoices) &&
-            data.Invoices.length > 0
-          ) {
-            invoice = data.Invoices[0];
-          }
-          if (invoice) {
-            const invoiceRecord = {
+          try {
+            const data = await retryWithExponentialBackoff(() =>
+              get(`/Invoices/${id}`, accessToken, tenantId)
+            );
+            // Xero returns {Invoices: [invoice]} or {Invoice: {...}} depending on API
+            let invoice = null;
+            if (data?.Invoice) {
+              invoice = data.Invoice;
+            } else if (
+              Array.isArray(data?.Invoices) &&
+              data.Invoices.length > 0
+            ) {
+              invoice = data.Invoices[0];
+            }
+            if (invoice) {
+              const invoiceRecord = {
+                clientId,
+                reportId,
+                InvoiceID: invoice.InvoiceID || null,
+                InvoiceNumber: invoice.InvoiceNumber || null,
+                Reference: invoice.Reference || null,
+                LineItems: invoice.LineItems || null,
+                Type: invoice.Type || null,
+                Contact: invoice.Contact || null,
+                DateString: invoice.Date || null,
+                DueDateString: invoice.DueDate || null,
+                Payments: invoice.Payments || null,
+                Status: invoice.Status || null,
+                AmountPaid: invoice.AmountPaid || null,
+                AmountDue: invoice.AmountDue || null,
+                AmountCredited: invoice.AmountCredited || null,
+                Total: invoice.Total || null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+              await db.XeroInvoice.upsert(invoiceRecord);
+            }
+          } catch (error) {
+            logger.logEvent("error", "Error extracting invoice from Xero", {
+              action: "ExtractXeroData",
               clientId,
               reportId,
-              InvoiceID: invoice.InvoiceID || null,
-              InvoiceNumber: invoice.InvoiceNumber || null,
-              Reference: invoice.Reference || null,
-              LineItems: invoice.LineItems || null,
-              Type: invoice.Type || null,
-              Contact: invoice.Contact || null,
-              DateString: invoice.Date || null,
-              DueDateString: invoice.DueDate || null,
-              Payments: invoice.Payments || null,
-              Status: invoice.Status || null,
-              AmountPaid: invoice.AmountPaid || null,
-              AmountDue: invoice.AmountDue || null,
-              AmountCredited: invoice.AmountCredited || null,
-              Total: invoice.Total || null,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            };
-            await db.XeroInvoice.upsert(invoiceRecord);
+              error: extractErrorDetails(error),
+              invoiceId: id,
+            });
           }
         })
       )
@@ -574,15 +555,14 @@ async function fetchPayments(
     endDate,
   });
   try {
-    const data = await retryFetch(() =>
+    // Use retryWithExponentialBackoff and extractErrorDetails utility
+    const data = await retryWithExponentialBackoff(() =>
       get("/Payments", accessToken, tenantId)
     );
     const payments = data.Payments || [];
     console.log("Payments data from Xero:", payments?.length);
-    // Save payments to DB with clientId and reportId for RLS and auditing
     for (const payment of payments) {
       const paymentRecord = {
-        // id: payment.id || null,
         clientId,
         reportId,
         PaymentID: payment.PaymentID || null,
@@ -593,7 +573,16 @@ async function fetchPayments(
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      await db.XeroPayment.upsert(paymentRecord);
+      try {
+        await db.XeroPayment.upsert(paymentRecord);
+      } catch (error) {
+        logger.logEvent("error", "Error during payment upsert", {
+          error: extractErrorDetails(error),
+          paymentId: payment.PaymentID,
+          clientId,
+          reportId,
+        });
+      }
     }
     logger.logEvent("info", "Xero payments extracted and saved", {
       action: "ExtractXeroPayments",
@@ -630,12 +619,12 @@ async function fetchOrganisationDetails({
   });
 
   try {
-    const data = await retryFetch(() =>
+    // Use retryWithExponentialBackoff and extractErrorDetails utility
+    const data = await retryWithExponentialBackoff(() =>
       get("/Organisation", accessToken, tenantId)
     );
     const organisations = data.Organisations || [];
     console.log("Organisations data from Xero:", organisations?.length);
-    // Save organisation details to DB with clientId and reportId for RLS and auditing
     for (const org of organisations) {
       const orgRecord = {
         clientId,
@@ -647,13 +636,20 @@ async function fetchOrganisationDetails({
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      await db.XeroOrganisation.upsert(orgRecord);
+      try {
+        await db.XeroOrganisation.upsert(orgRecord);
+      } catch (error) {
+        logger.logEvent("error", "Error during organisation upsert", {
+          error: extractErrorDetails(error),
+          organisationId: org.OrganisationID,
+          clientId,
+          reportId,
+        });
+      }
     }
     await db.XeroOrganisation.findAll({
       where: { clientId, reportId },
     });
-    // await db.sequelize.query("COMMIT;");
-    // console.log("Transaction committed manually.");
     return organisations;
   } catch (error) {
     logger.logEvent(
@@ -671,29 +667,6 @@ async function fetchOrganisationDetails({
 }
 
 /**
- * Retry helper for GET requests.
- * @param {Function} fetchFn - Function that returns a promise
- * @param {number} retries - Number of retries
- * @param {number} delay - Delay between retries (ms)
- */
-async function retryFetch(fetchFn, retries = 3, delay = 1000) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fetchFn();
-    } catch (error) {
-      if (i < retries - 1 && error.response?.status === 504) {
-        logger.logEvent("warn", `Retrying after 504 error (attempt ${i + 1})`, {
-          action: "RetryFetch",
-        });
-        await new Promise((r) => setTimeout(r, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
-
-/**
  * Get connections (tenants) from Xero API.
  * @param {string} accessToken
  */
@@ -702,7 +675,10 @@ async function getConnections(accessToken) {
     action: "GetConnections",
   });
   try {
-    const data = await get("/connections", accessToken.toString());
+    // Use retryWithExponentialBackoff and extractErrorDetails utility
+    const data = await retryWithExponentialBackoff(() =>
+      get("/connections", accessToken.toString())
+    );
     logger.logEvent("info", "Xero connections retrieved", {
       action: "GetConnections",
       count: Array.isArray(data) ? data.length : 0,
