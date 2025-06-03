@@ -25,7 +25,22 @@ if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
 
 require("rootpath")();
 const express = require("express");
+const { WebSocketServer } = require("ws");
+const http = require("http");
 const app = express();
+const server = http.createServer(app);
+
+// Make sendWebSocketUpdate globally available
+global.sendWebSocketUpdate = function (update) {
+  console.log("Sending WebSocket update:", update);
+  wss.clients.forEach((client) => {
+    console.log("Checking client readyState:", client.readyState);
+    if (client.readyState === 1) {
+      client.send(JSON.stringify(update));
+    }
+  });
+};
+
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
@@ -94,7 +109,7 @@ app.use(helmet());
 
 // Log incoming request IPs
 app.use((req, res, next) => {
-  const ip = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
   logger.logEvent("info", "Incoming request", {
     action: "RequestIPLog",
     ip,
@@ -113,6 +128,23 @@ if (config.env === "production") {
 }
 
 app.use(setCspHeaders);
+
+// Set up WebSocket server
+const wss = new WebSocketServer({ server });
+wss.on("connection", (ws) => {
+  console.log("WebSocket client connected");
+
+  ws.on("message", (message) => {
+    console.log("Received from client:", message);
+  });
+
+  ws.on("close", () => {
+    console.log("WebSocket connection closed");
+  });
+
+  ws.send(JSON.stringify({ message: "Connected to WebSocket updates!" }));
+});
+
 app.disable("x-powered-by");
 
 // Enforce HTTPS in production
@@ -192,7 +224,7 @@ app.use(errorHandler);
 // start server unless in test mode
 const port = config.port;
 if (config.env !== "test") {
-  app.listen(port, () => {
+  server.listen(port, () => {
     const message = `✅ Server running in ${config.env} mode on port ${port}`;
     logger.logEvent("info", message, {
       action: "ServerStart",

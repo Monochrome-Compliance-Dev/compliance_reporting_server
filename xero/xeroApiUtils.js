@@ -9,6 +9,8 @@ module.exports = {
   retryWithExponentialBackoff,
   paginateXeroApi,
   prepareHeaders,
+  handle500Error,
+  handleXeroApiError, // newly added export
 };
 
 /**
@@ -42,6 +44,42 @@ function logApiCall(endpoint, method = "GET", status = "SUCCESS") {
 }
 
 /**
+ * Handle 500 errors explicitly: log and return error details for service-level handling.
+ * @param {Error} error
+ * @returns {Object} error details for further handling
+ */
+function handle500Error(error) {
+  const errorDetails = extractErrorDetails(error);
+  console.error("❌ Critical 500 error:", errorDetails);
+  return {
+    status: "error",
+    message: `Critical 500 error: ${errorDetails}`,
+    code: 500,
+  };
+}
+
+function handleXeroApiError(error) {
+  const statusCode = error.response?.status || error.statusCode || 500;
+  const errorDetails = extractErrorDetails(error);
+
+  if (statusCode === 500) {
+    console.error("❌ 500 Internal Server Error:", errorDetails);
+  } else if (statusCode === 429) {
+    console.warn("⚠️ Rate limit reached:", errorDetails);
+  } else {
+    console.error(`❌ HTTP ${statusCode} error:`, errorDetails);
+  }
+
+  if (global.sendWebSocketUpdate) {
+    global.sendWebSocketUpdate({
+      status: "error",
+      message: `Error fetching data from Xero: ${errorDetails}`,
+      code: statusCode,
+    });
+  }
+}
+
+/**
  * Retries a function with exponential backoff and Xero API rate-limit handling.
  * @param {Function} fn - The function to execute.
  * @param {number} [retries=3] - Number of retry attempts.
@@ -57,6 +95,8 @@ async function retryWithExponentialBackoff(fn, retries = 3, baseDelay = 1000) {
       if (statusCode === 429) {
         // Handle rate limit (429 Too Many Requests)
         await rateLimitHandler(error.response?.headers);
+      } else if (statusCode === 500) {
+        handle500Error(error);
       } else if (attempt === retries - 1) {
         // Last attempt, rethrow
         throw error;
