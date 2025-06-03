@@ -4,6 +4,9 @@ const router = express.Router();
 
 const xeroService = require("./xero.service");
 const authorise = require("../middleware/authorise");
+const { transformXeroData } = require("../scripts/xero/transformXeroData");
+const { saveTransformedDataToTcp } = require("../tcp/tcp.service");
+const tcpService = require("../tcp/tcp.service");
 
 router.get("/connect/:reportId", authorise(), generateAuthUrl);
 router.get("/callback", handleOAuthCallback);
@@ -122,36 +125,49 @@ async function handleOAuthCallback(req, res) {
         .send("Failed to retrieve Tenant ID from connections.");
     }
 
+    // Hardcoding the start and end dates for testing purposes
+    const startDate = "2025-03-01";
+    const endDate = "2025-03-31";
+
     try {
-      await xeroService.fetchOrganisationDetails({
+      const organisation = await xeroService.fetchOrganisationDetails({
         accessToken,
         tenantId,
         clientId,
         reportId,
       });
 
-      await xeroService.fetchInvoices(
+      const payments = await xeroService.fetchPayments(
         accessToken,
         tenantId,
         clientId,
-        reportId
+        reportId,
+        startDate,
+        endDate
       );
 
-      await xeroService.fetchPayments(
+      const invoices = await xeroService.fetchInvoices(
         accessToken,
         tenantId,
         clientId,
-        reportId
+        reportId,
+        payments
       );
 
-      await xeroService.fetchContacts(
+      const contacts = await xeroService.fetchContacts(
         accessToken,
         tenantId,
         clientId,
-        reportId
+        reportId,
+        payments
       );
 
-      console.log("Xero data fetched and saved successfully.");
+      console.log("Xero data fetched and saved successfully to xero_[tables].");
+
+      const xeroData = { organisation, invoices, payments, contacts };
+      const transformedXeroData = await transformXeroData(xeroData);
+      await tcpService.saveTransformedDataToTcp(transformedXeroData);
+      console.log("All Xero data saved successfully to tcp table.");
     } catch (fetchErr) {
       logger.logEvent("error", "Error fetching Xero data", {
         action: "OAuthCallback-FetchingData",

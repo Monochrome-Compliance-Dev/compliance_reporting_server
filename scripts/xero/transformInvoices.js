@@ -14,25 +14,17 @@ const transformInvoices = (invoices, contactMap) => {
     const contactDetails = contactMap[contactId] || {};
 
     // Base mapping with updated placeholders and fallbacks
-    transformed.payerEntityName =
-      "PAYER_ENTITY_NAME_PLACEHOLDER" || invoice.PayerEntityName || "";
-    transformed.payerEntityAbn = "PAYER_ENTITY_ABN_PLACEHOLDER";
-    transformed.payerEntityAcnArbn = "PAYER_ENTITY_ACN_ARBN_PLACEHOLDER";
-
-    transformed.payeeEntityName =
-      "PAYEE_ENTITY_NAME_PLACEHOLDER" || invoice.Contact?.Name || "";
-    transformed.payeeEntityAbn =
-      contactDetails.ABN || "PAYEE_ENTITY_ABN_PLACEHOLDER";
-    transformed.payeeEntityAcnArbn =
-      contactDetails.ACN || "PAYEE_ENTITY_ACN_ARBN_PLACEHOLDER";
+    transformed.payeeEntityName = invoice.Contact?.Name || "PLACEHOLDER";
+    transformed.payeeEntityAbn = contactDetails.ABN || "PLACEHOLDER";
+    transformed.payeeEntityAcnArbn = contactDetails.ACN || "PLACEHOLDER";
 
     transformed.paymentAmount = Array.isArray(invoice.Payments)
       ? invoice.Payments.reduce((sum, p) => sum + (p.Amount || 0), 0)
       : 0;
 
-    transformed.description = invoice.Reference || "";
+    transformed.description = invoice.Reference || "PLACEHOLDER";
 
-    transformed.supplyDate = invoice.DateString || "";
+    transformed.supplyDate = "PLACEHOLDER";
 
     transformed.paymentDate =
       Array.isArray(invoice.Payments) && invoice.Payments.length > 0
@@ -42,22 +34,22 @@ const transformInvoices = (invoices, contactMap) => {
         : "";
 
     // Contract-level info
-    transformed.contractPoReferenceNumber = invoice.Reference || "";
+    transformed.contractPoReferenceNumber = "PLACEHOLDER";
     transformed.contractPoPaymentTerms =
-      contactDetails.PaymentTerms || "Unknown Terms";
+      contactDetails.PaymentTerms || "PLACEHOLDER";
 
     // Notice - placeholder
-    transformed.noticeForPaymentIssueDate = "";
-    transformed.noticeForPaymentTerms = "";
+    transformed.noticeForPaymentIssueDate = "PLACEHOLDER";
+    transformed.noticeForPaymentTerms = "PLACEHOLDER";
 
     // Invoice-level info
-    transformed.invoiceReferenceNumber = invoice.InvoiceNumber || "";
-    transformed.invoiceIssueDate = invoice.DateString || "";
-    transformed.invoiceReceiptDate = "";
-    transformed.invoiceAmount = invoice.Total || 0;
+    transformed.invoiceReferenceNumber = invoice.InvoiceNumber || "PLACEHOLDER";
+    transformed.invoiceIssueDate = invoice.DateString || "PLACEHOLDER";
+    transformed.invoiceReceiptDate = "PlACEHOLDER";
+    transformed.invoiceAmount = invoice.Total || "PLACEHOLDER";
     transformed.invoicePaymentTerms =
-      contactDetails.PaymentTerms || "Unknown Terms";
-    transformed.invoiceDueDate = invoice.DueDateString || "";
+      contactDetails.PaymentTerms || "PLACEHOLDER";
+    transformed.invoiceDueDate = invoice.DueDateString || "PLACEHOLDER";
 
     return transformed;
   });

@@ -55,16 +55,33 @@ async function getAllByReportId(reportId, options = {}) {
 }
 
 async function create(params, options = {}) {
-  console.log("Creating report with data:", params);
-  const result = await db.Report.create(params, {
-    ...options,
-    transaction: options.transaction,
-  });
-  logger.logEvent("info", "Report created", {
-    action: "CreateReport",
-    ...params,
-  });
-  return result;
+  const t = await db.sequelize.transaction();
+  try {
+    await db.sequelize.query(
+      `SET LOCAL app.current_client_id = '${params.clientId}'`,
+      { transaction: t }
+    );
+
+    const result = await db.Report.create(params, {
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+    logger.logEvent("info", "Report created & committed", {
+      action: "CreateReport",
+      ...params,
+    });
+
+    return result;
+  } catch (error) {
+    await t.rollback();
+    logger.logEvent("error", "Error creating report, rolled back", {
+      action: "CreateReport",
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function update(id, params, options = {}) {

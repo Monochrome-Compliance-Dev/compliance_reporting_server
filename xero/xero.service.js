@@ -4,59 +4,9 @@ const defineXeroTokenModel = require("./xero_tokens.model");
 const db = require("../db/database");
 const pLimit = require("p-limit");
 const querystring = require("querystring");
-const { transformData } = require("../utils/dataTransformer");
-const organisationFieldMapping = require("../utils/mappings/xeroOrganisationMapping");
 
 // Ensure XeroToken model is initialized with the sequelize instance from db
 const XeroToken = defineXeroTokenModel(db.sequelize);
-
-/**
- * Retry helper for GET requests.
- * @param {Function} fetchFn - Function that returns a promise
- * @param {number} retries - Number of retries
- * @param {number} delay - Delay between retries (ms)
- */
-async function retryFetch(fetchFn, retries = 3, delay = 1000) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fetchFn();
-    } catch (error) {
-      if (i < retries - 1 && error.response?.status === 504) {
-        logger.logEvent("warn", `Retrying after 504 error (attempt ${i + 1})`, {
-          action: "RetryFetch",
-        });
-        await new Promise((r) => setTimeout(r, delay));
-      } else {
-        throw error;
-      }
-    }
-  }
-}
-
-/**
- * Get connections (tenants) from Xero API.
- * @param {string} accessToken
- */
-async function getConnections(accessToken) {
-  logger.logEvent("info", "Fetching Xero connections (tenants)", {
-    action: "GetConnections",
-  });
-  try {
-    const data = await get("/connections", accessToken.toString());
-    logger.logEvent("info", "Xero connections retrieved", {
-      action: "GetConnections",
-      count: Array.isArray(data) ? data.length : 0,
-      data,
-    });
-    return data;
-  } catch (error) {
-    logger.logEvent("error", "Error fetching Xero connections", {
-      action: "GetConnections",
-      error: error.message,
-    });
-    throw error;
-  }
-}
 
 module.exports = {
   refreshToken,
@@ -66,7 +16,8 @@ module.exports = {
   fetchOrganisationDetails,
   getTransformedData,
   exchangeAuthCodeForTokens,
-  getConnections, // Newly added
+  getConnections,
+  getAllXeroData,
 };
 
 async function exchangeAuthCodeForTokens(code, state, req) {
@@ -218,17 +169,19 @@ async function refreshToken() {
  * Enhanced logging for API responses, errors, retries, and upserts.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
-async function fetchContacts(accessToken, tenantId, clientId, reportId) {
+async function fetchContacts(
+  accessToken,
+  tenantId,
+  clientId,
+  reportId,
+  payments
+) {
   logger.logEvent("info", "Fetching contacts from Xero", {
     action: "FetchContacts",
     clientId,
     reportId,
   });
   try {
-    // Collect unique ContactIDs from invoices and payments for the client
-    const invoices = await db.XeroInvoice.findAll({ where: { clientId } });
-    const payments = await db.XeroPayment.findAll({ where: { clientId } });
-
     logger.logEvent(
       "debug",
       "Number of invoices and payments before processing",
@@ -236,32 +189,11 @@ async function fetchContacts(accessToken, tenantId, clientId, reportId) {
         action: "FetchContacts",
         clientId,
         reportId,
-        invoiceCount: invoices.length,
         paymentCount: payments.length,
       }
     );
 
     const contactIdsSet = new Set();
-    // Extract ContactID from nested Contact object in invoices
-    for (let i = 0; i < invoices.length; i++) {
-      const invoice = invoices[i];
-      const contact = invoice.Contact || {};
-      const contactId = contact.ContactID || null;
-      logger.logEvent(
-        "debug",
-        "[fetchContacts] Extracted contactId from invoice",
-        { contactId, clientId, reportId, iteration: i, source: "invoice" }
-      );
-      if (contactId) {
-        contactIdsSet.add(contactId);
-      }
-    }
-    logger.logEvent("debug", "Number of payments before processing", {
-      action: "FetchContacts",
-      clientId,
-      reportId,
-      paymentCount: payments.length,
-    });
     // Extract ContactID from nested Invoice.Contact object in payments
     for (let i = 0; i < payments.length; i++) {
       const payment = payments[i];
@@ -493,52 +425,89 @@ async function fetchContacts(accessToken, tenantId, clientId, reportId) {
 
 /**
  * Extract data from Xero and store in DB for the given client.
- * @param {Object} options - { accessToken, tenantId, clientId, reportId }
+ * @param {Object} options - { accessToken, tenantId, clientId, reportId, payments }
  */
-async function fetchInvoices(accessToken, tenantId, clientId, reportId) {
-  logger.logEvent("info", "Extracting invoice data from Xero", {
-    action: "ExtractXeroData",
-    clientId,
-    reportId,
-  });
-  try {
-    const data = await retryFetch(() =>
-      get("/Invoices", accessToken, tenantId)
-    );
-    const invoices = data.Invoices || [];
-    console.log("Invoices data from Xero:", invoices?.length);
-
-    for (const invoice of invoices) {
-      const invoiceRecord = {
-        // id,
-        clientId,
-        reportId,
-        InvoiceID: invoice.InvoiceID || null,
-        InvoiceNumber: invoice.InvoiceNumber || null,
-        Reference: invoice.Reference || null,
-        Type: invoice.Type || null,
-        Contact: invoice.Contact || null,
-        DateString: invoice.Date || null,
-        DueDateString: invoice.DueDate || null,
-        Payments: invoice.Payments || null,
-        Status: invoice.Status || null,
-        AmountPaid: invoice.AmountPaid || null,
-        AmountDue: invoice.AmountDue || null,
-        AmountCredited: invoice.AmountCredited || null,
-        Total: invoice.Total || null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      await db.XeroInvoice.upsert(invoiceRecord);
-    }
-
-    logger.logEvent("info", "Xero data extracted and saved", {
+async function fetchInvoices(
+  accessToken,
+  tenantId,
+  clientId,
+  reportId,
+  payments
+) {
+  logger.logEvent(
+    "info",
+    "Extracting invoice data from Xero via payment invoiceIds",
+    {
       action: "ExtractXeroData",
       clientId,
       reportId,
-      count: invoices.length,
+    }
+  );
+  try {
+    // Extract unique InvoiceIDs from payments
+    const invoiceIdsSet = new Set();
+    payments.forEach((payment) => {
+      if (payment.Invoice?.InvoiceID) {
+        invoiceIdsSet.add(payment.Invoice.InvoiceID);
+      }
     });
-    return invoices;
+    const invoiceIds = Array.from(invoiceIdsSet);
+
+    const limit = pLimit(5);
+    await Promise.all(
+      invoiceIds.map((id) =>
+        limit(async () => {
+          const data = await retryFetch(() =>
+            get(`/Invoices/${id}`, accessToken, tenantId)
+          );
+          // Xero returns {Invoices: [invoice]} or {Invoice: {...}} depending on API
+          let invoice = null;
+          if (data?.Invoice) {
+            invoice = data.Invoice;
+          } else if (
+            Array.isArray(data?.Invoices) &&
+            data.Invoices.length > 0
+          ) {
+            invoice = data.Invoices[0];
+          }
+          if (invoice) {
+            const invoiceRecord = {
+              clientId,
+              reportId,
+              InvoiceID: invoice.InvoiceID || null,
+              InvoiceNumber: invoice.InvoiceNumber || null,
+              Reference: invoice.Reference || null,
+              LineItems: invoice.LineItems || null,
+              Type: invoice.Type || null,
+              Contact: invoice.Contact || null,
+              DateString: invoice.Date || null,
+              DueDateString: invoice.DueDate || null,
+              Payments: invoice.Payments || null,
+              Status: invoice.Status || null,
+              AmountPaid: invoice.AmountPaid || null,
+              AmountDue: invoice.AmountDue || null,
+              AmountCredited: invoice.AmountCredited || null,
+              Total: invoice.Total || null,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+            await db.XeroInvoice.upsert(invoiceRecord);
+          }
+        })
+      )
+    );
+
+    logger.logEvent(
+      "info",
+      "Xero data extracted and saved via invoiceId loop",
+      {
+        action: "ExtractXeroData",
+        clientId,
+        reportId,
+        count: invoiceIds.length,
+      }
+    );
+    return invoiceIds;
   } catch (error) {
     logger.logEvent("error", "Error extracting invoice data from Xero", {
       action: "ExtractXeroData",
@@ -554,7 +523,8 @@ async function fetchInvoices(accessToken, tenantId, clientId, reportId) {
  * Get transformed data for the current client.
  * @param {Object} options - { clientId, reportId }
  */
-async function getTransformedData({ clientId, reportId }) {
+async function getTransformedData(clientId, reportId, db) {
+  // async function getTransformedData(clientId, reportId) { // db is passed in for testing purposes
   logger.logEvent("info", "Retrieving transformed data for client", {
     action: "GetTransformedData",
     clientId,
@@ -588,11 +558,20 @@ async function getTransformedData({ clientId, reportId }) {
  * Includes all relevant fields as per the Xero API dump and transformation logic.
  * @param {Object} options - { accessToken, tenantId, clientId, reportId }
  */
-async function fetchPayments(accessToken, tenantId, clientId, reportId) {
+async function fetchPayments(
+  accessToken,
+  tenantId,
+  clientId,
+  reportId,
+  startDate,
+  endDate
+) {
   logger.logEvent("info", "Extracting payments from Xero", {
     action: "ExtractXeroPayments",
     clientId,
     reportId,
+    startDate,
+    endDate,
   });
   try {
     const data = await retryFetch(() =>
@@ -608,7 +587,9 @@ async function fetchPayments(accessToken, tenantId, clientId, reportId) {
         reportId,
         PaymentID: payment.PaymentID || null,
         Amount: payment.Amount || null,
+        Date: payment.Date,
         Status: payment.Status || null,
+        Invoice: payment.Invoice || null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -687,4 +668,103 @@ async function fetchOrganisationDetails({
     );
     throw error;
   }
+}
+
+/**
+ * Retry helper for GET requests.
+ * @param {Function} fetchFn - Function that returns a promise
+ * @param {number} retries - Number of retries
+ * @param {number} delay - Delay between retries (ms)
+ */
+async function retryFetch(fetchFn, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fetchFn();
+    } catch (error) {
+      if (i < retries - 1 && error.response?.status === 504) {
+        logger.logEvent("warn", `Retrying after 504 error (attempt ${i + 1})`, {
+          action: "RetryFetch",
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Get connections (tenants) from Xero API.
+ * @param {string} accessToken
+ */
+async function getConnections(accessToken) {
+  logger.logEvent("info", "Fetching Xero connections (tenants)", {
+    action: "GetConnections",
+  });
+  try {
+    const data = await get("/connections", accessToken.toString());
+    logger.logEvent("info", "Xero connections retrieved", {
+      action: "GetConnections",
+      count: Array.isArray(data) ? data.length : 0,
+      data,
+    });
+    return data;
+  } catch (error) {
+    logger.logEvent("error", "Error fetching Xero connections", {
+      action: "GetConnections",
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Fetch all Xero data for a client and reportId.
+ * @param {Object} options - { clientId, reportId }
+ * @returns {Promise<Object>} - { organisations, invoices, payments, contacts }
+ */
+async function getAllXeroData(clientId, reportId, db) {
+  // async function getAllXeroData(clientId, reportId) { // db is passed in for testing purposes
+  logger.logEvent("info", "Fetching all Xero data for client and report", {
+    action: "GetAllXeroData",
+    clientId,
+    reportId,
+  });
+  // Fetch all records from each table filtered by clientId and reportId
+  const [organisations, invoices, payments, contacts] = await Promise.all([
+    db.XeroOrganisation.findAll({ where: { clientId, reportId } }),
+    db.XeroInvoice.findAll({ where: { clientId, reportId } }),
+    db.XeroPayment.findAll({ where: { clientId, reportId } }),
+    db.XeroContact.findAll({ where: { clientId, reportId } }),
+  ]);
+  logger.logEvent("info", "Fetched XeroOrganisation records", {
+    action: "GetAllXeroData",
+    clientId,
+    reportId,
+    count: organisations.length,
+  });
+  logger.logEvent("info", "Fetched XeroInvoice records", {
+    action: "GetAllXeroData",
+    clientId,
+    reportId,
+    count: invoices.length,
+  });
+  logger.logEvent("info", "Fetched XeroPayment records", {
+    action: "GetAllXeroData",
+    clientId,
+    reportId,
+    count: payments.length,
+  });
+  logger.logEvent("info", "Fetched XeroContact records", {
+    action: "GetAllXeroData",
+    clientId,
+    reportId,
+    count: contacts.length,
+  });
+  return {
+    organisations,
+    invoices,
+    payments,
+    contacts,
+  };
 }

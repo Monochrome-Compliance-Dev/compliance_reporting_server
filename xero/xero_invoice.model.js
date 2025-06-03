@@ -42,6 +42,10 @@ const XeroInvoice = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: true,
       },
+      LineItems: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+      },
       Type: {
         type: DataTypes.STRING(50),
         allowNull: false,
