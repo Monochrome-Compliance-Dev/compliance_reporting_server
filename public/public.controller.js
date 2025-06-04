@@ -128,7 +128,7 @@ function sendEmailSesPrep(req, res) {
     bcc: req.body.bcc,
   })
     .then(() => {
-      logger.logEvent("info", "Email sent successfully", {
+      logger.logEvent("info", "Email trigger sent to SES successfully", {
         action: "SendEmail",
         email: req.body.email,
         subject: req.body.subject,
