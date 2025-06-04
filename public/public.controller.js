@@ -56,7 +56,7 @@ router.post(
   upload.single("attachment"),
   async (req, res, next) => {
     try {
-      console.log("[DEBUG] File received by route:", req.file);
+      // console.log("[DEBUG] File received by route:", req.file);
       if (!req.file || !req.file.path) {
         logger.logEvent("warn", "Missing file or file path in request", {
           action: "SendAttachmentEmail",
@@ -65,7 +65,35 @@ router.post(
       const filePath = req.file.path;
       const ext = path.extname(filePath).toLowerCase();
       await scanFile(filePath, ext, req.file.originalname);
-      await sendAttachmentEmail(req, res);
+      // await sendAttachmentEmail(req, res);
+      await sendSes({
+        to: req.body.to,
+        subject: req.body.topic + " " + new Date().toISOString(),
+        html: `
+      <ul style="font-family: sans-serif; font-size: 1rem; color: #333;">
+        <li><strong>subject:</strong> ${req.body.subject || "Not provided"}</li>
+        <li><strong>message:</strong> ${req.body.message || "Not provided"}</li>
+        <li><strong>name:</strong> ${req.body.name || "Not provided"}</li>
+        <li><strong>email:</strong> ${req.body.email || "Not provided"}</li>
+        <li><strong>date:</strong> ${req.body.date || "Not provided"}</li>
+        <li><strong>time:</strong> ${req.body.time || "Not provided"}</li>
+        <li><strong>company:</strong> ${req.body.company || "Not provided"}</li>
+        <li><strong>from:</strong> ${req.body.from || req.body.email || "Not provided"}</li>
+        <li><strong>cc:</strong> ${req.body.cc || "Not provided"}</li>
+        <li><strong>bcc:</strong> ${req.body.bcc || "Not provided"}</li>
+      </ul>
+    `,
+        from: req.body.from || req.body.email,
+        cc: req.body.cc,
+        bcc: req.body.bcc,
+        attachments: [
+          {
+            filename: req.file.originalname,
+            path: req.file.path, // Use the file path saved by multer
+            contentType: req.file.mimetype,
+          },
+        ],
+      });
 
       // Delete file after scan and successful email send
       fs.unlink(filePath, (err) => {

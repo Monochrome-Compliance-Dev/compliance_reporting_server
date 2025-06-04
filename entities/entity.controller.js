@@ -16,7 +16,9 @@ function create(req, res, next) {
   });
   entityService
     .create(req.body)
-    .then(() => res.status(201).json({ message: "Entity created" }))
+    .then((entity) =>
+      res.status(201).json({ id: entity.id, message: "Entity created" })
+    )
     .catch(next);
 }
 

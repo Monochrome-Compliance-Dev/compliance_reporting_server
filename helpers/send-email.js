@@ -15,7 +15,7 @@ const smtpOptions = {
 
 const emailFrom = process.env.SMTP_FROM;
 
-async function sendSes({ to, subject, html, from, cc, bcc }) {
+async function sendSes({ to, subject, html, from, cc, bcc, attachments }) {
   const transporter = nodemailer.createTransport(smtpOptions);
   try {
     await transporter.sendMail({
@@ -23,6 +23,7 @@ async function sendSes({ to, subject, html, from, cc, bcc }) {
       to: "contact@monochrome-compliance.com",
       subject: subject,
       html,
+      attachments,
     });
     logger.logEvent("info", "SES Email sent", {
       action: "SendSesEmail",
@@ -85,7 +86,7 @@ async function sendAttachmentEmail(req, res) {
       .json({ message: "Missing required fields or attachment" });
   }
 
-  const transporter = nodemailer.createTransport(config.smtpOptions);
+  const transporter = nodemailer.createTransport(smtpOptions);
 
   await transporter.sendMail({
     from,

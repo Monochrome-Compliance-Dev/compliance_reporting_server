@@ -50,6 +50,7 @@ config.js
 
 # Upload files
 uploads
+tmpUploads
 
 # Zip files
 *.zip
