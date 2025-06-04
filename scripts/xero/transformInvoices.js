@@ -12,21 +12,20 @@ const transformInvoices = (invoices) => {
 
     transformed.description =
       Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0
-        ? invoice.LineItems[0].Description || "NONE PROVIDED"
-        : "NONE PROVIDED";
+        ? invoice.LineItems[0].Description || ""
+        : "";
 
-    transformed.supplyDate = "NONE PROVIDED";
-    transformed.contractPoReferenceNumber = "NONE PROVIDED";
-    transformed.noticeForPaymentIssueDate = "NONE PROVIDED";
-    transformed.noticeForPaymentTerms = "NONE PROVIDED";
+    transformed.supplyDate = "";
+    transformed.contractPoReferenceNumber = "";
+    transformed.noticeForPaymentIssueDate = "";
+    transformed.noticeForPaymentTerms = "";
 
-    transformed.invoiceReferenceNumber =
-      invoice.InvoiceNumber || "NONE PROVIDED";
-    transformed.invoiceIssueDate = invoice.DateString || "NONE PROVIDED";
-    transformed.invoiceReceiptDate = "NONE PROVIDED";
-    transformed.invoiceAmount = invoice.Total || "NONE PROVIDED";
-    transformed.invoicePaymentTerms = "NONE PROVIDED";
-    transformed.invoiceDueDate = invoice.DueDateString || "NONE PROVIDED";
+    transformed.invoiceReferenceNumber = invoice.InvoiceNumber || "";
+    transformed.invoiceIssueDate = invoice.DateString || "";
+    transformed.invoiceReceiptDate = "";
+    transformed.invoiceAmount = invoice.Total || "";
+    transformed.invoicePaymentTerms = "";
+    transformed.invoiceDueDate = invoice.DueDateString || "";
 
     // Add payment terms if available
     if (invoice.PaymentTerms) {
@@ -34,13 +33,13 @@ const transformInvoices = (invoices) => {
         transformed.invoicePaymentTermsBillsDay =
           invoice.PaymentTerms.Bills.Day || null;
         transformed.invoicePaymentTermsBillsType =
-          invoice.PaymentTerms.Bills.Type || "NONE PROVIDED";
+          invoice.PaymentTerms.Bills.Type || "";
       }
       if (invoice.PaymentTerms.Sales) {
         transformed.invoicePaymentTermsSalesDay =
           invoice.PaymentTerms.Sales.Day || null;
         transformed.invoicePaymentTermsSalesType =
-          invoice.PaymentTerms.Sales.Type || "NONE PROVIDED";
+          invoice.PaymentTerms.Sales.Type || "";
       }
     }
 

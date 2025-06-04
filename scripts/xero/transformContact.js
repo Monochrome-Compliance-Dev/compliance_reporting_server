@@ -1,12 +1,10 @@
 const transformContact = (contact) => {
   return {
-    payeeEntityName: contact.Name || "NONE PROVIDED",
-    payeeEntityAbn: contact.TaxNumber || "NONE PROVIDED",
-    payeeEntityAcnArbn: contact.CompanyNumber || "NONE PROVIDED",
+    payeeEntityName: contact.Name,
+    payeeEntityAbn: contact.TaxNumber,
+    payeeEntityAcnArbn: contact.CompanyNumber,
     contractPoPaymentTerms:
-      contact.DAYSAFTERBILLDATE ||
-      contact.DAYSAFTERBILLMONTH ||
-      "NONE PROVIDED",
+      contact.DAYSAFTERBILLDATE || contact.DAYSAFTERBILLMONTH,
   };
 };
 

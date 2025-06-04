@@ -6,14 +6,11 @@ const transformOrganisation = (organisation) => {
   const org = Array.isArray(organisation) ? organisation[0] : organisation;
   console.log("Organisation to transform:", JSON.stringify(org, null, 2));
 
-  transformed.payerEntityAbn =
-    org.TaxNumber || "PAYER_ENTITY_ABN_PLACEHOLDER_BOOOO";
+  transformed.payerEntityAbn = org.TaxNumber;
 
-  transformed.payerEntityAcnArbn =
-    org.RegistrationNumber || "PAYER_ENTITY_ACN_ARBN_PLACEHOLDER";
+  transformed.payerEntityAcnArbn = org.RegistrationNumber;
 
-  transformed.payerEntityName =
-    org.Name || org.LegalName || "PAYER_ENTITY_NAME_PLACEHOLDER";
+  transformed.payerEntityName = org.Name || org.LegalName;
 
   return transformed;
 };
