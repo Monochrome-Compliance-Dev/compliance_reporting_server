@@ -1,0 +1,472 @@
+id,type,title,slug,content,description,date,tags,createdBy,updatedBy,createdAt,updatedAt
+71jlbIpR58,faq,Are credit card payments required to be reported?,are-credit-card-payments-required-to-be-reported,"Yes, if they meet the criteria of a trade credit arrangement, exceed $100 (incl. GST), and are not excluded under a genuinely enforced policy or other exceptions.",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+86mIaODke8,faq,Can more time be requested to submit a report?,can-more-time-be-requested-to-submit-a-report,"Yes, via the Portal. Extensions of up to 28 days require a reason, while longer extensions need supporting documentation.",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+a-b8djm-bR,blog,Who Needs to Report Under the Payment Times Reporting Scheme?,who-needs-to-report-ptr,"# Who Needs to Report Under the Payment Times Reporting Scheme?
+
+_Published: 18 May 2025 • Author: Monochrome Compliance Team_
+
+## Summary
+
+If your business operates in Australia and earns over $100 million in annual income, you may be required to report under the Payment Times Reporting Scheme (PTRS). This article explains who is considered a reporting entity and what criteria determine eligibility.
+
+## What Is a Reporting Entity?
+
+A reporting entity under PTRS is broadly defined as:
+
+- An individual business with total annual income over $100 million, or
+- A controlling corporation (parent company) whose combined subsidiaries exceed the $100 million threshold
+
+Eligibility is based on the most recent income year prior to the reporting period.
+
+## Thresholds and Triggers
+
+### 1. Income Threshold
+
+Businesses with over $100 million in total income (not just turnover) are required to report. This includes:
+
+- Australian entities
+- Foreign entities with Australian operations
+- Corporate groups under a controlling corporation
+
+### 2. Corporate Groups
+
+If your entity is part of a group controlled by a parent entity that exceeds $100 million in consolidated income, the entire group may be captured under the scheme. Only the controlling corporation submits the PTR report for all group members.
+
+### 3. Other Trigger Events
+
+Entities may also become subject to PTR reporting if they acquire another entity or experience substantial structural changes affecting income.
+
+## Examples
+
+- A standalone company with $120M annual income → Must report
+- A holding company with $40M income but subsidiaries that earn $150M → Must report as a controlling corporation
+- A foreign company with a branch operating in Australia earning $110M → Must report
+
+## Legal Disclaimer
+
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.
+
+## Need Help?
+
+[Get started with Monochrome Compliance](https://monochrome-compliance.com)",Find out which businesses and corporate structures are required to report under the Australian Payment Times Reporting Scheme.,18/05/2025 00:00,"PTR,eligibility,reporting obligations,compliance",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+akjeIkQGGt,faq,Frequently Asked Questions,faq,"
+## Who is required to report under the new PTRS scheme?
+
+Only entities that meet the new definition of a reporting entity under the Payment Times Reporting Act 2020 are required to report. This includes the highest-level entity in a corporate group that meets consolidated revenue and control criteria.
+
+## What payments need to be included in a report?
+
+Entities must report payments made under trade credit arrangements to Australian small businesses, excluding payments to government or employees, and subject to specific rules around credit cards and ABNs.
+
+## How is the SBI Tool used?
+
+The SBI Tool must be used after each reporting period to identify small business suppliers based on the calendar year in which the reporting period ended. It is only available via the PTRS Portal.
+
+## What if a report is submitted using the old CSV template?
+
+Reports submitted using the CSV template for periods commencing after 1 July 2024 will be rejected. The new scheme requires reports to be submitted through the Portal's webform interface.
+
+## When is a report due?
+
+Reports must be submitted within 3 months of the end of the reporting period. Most entities will report biannually based on their financial year.
+
+## What if an entity is acquired or loses control of another entity?
+
+You must report on payments by all entities you control at the end of the reporting period. If data is not accessible, section 15 of the Rules allows exclusions with disclosures.
+
+## Are credit card payments required to be reported?
+
+Yes, if they meet the criteria of a trade credit arrangement, exceed $100 (incl. GST), and are not excluded under a genuinely enforced policy or other exceptions.
+
+## Can more time be requested to submit a report?
+
+Yes, via the Portal. Extensions of up to 28 days require a reason, while longer extensions need supporting documentation.
+
+## Do supporting datasets need to be submitted?
+
+No, but you must retain them for seven years. The TCP and SBTCP datasets are essential for calculating required metrics.
+
+## What support is available if someone gets stuck?
+
+You're not alone — our platform is designed to guide you through each step with clarity and confidence. Clear instructions, integrated tips, and contextual help are built into the platform, so you can move forward without needing to leave the platform.
+",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+B2jJS1fhE2,blog,How to Submit a PTR Report,how-to-submit-ptr-report,"# How to Submit a PTR Report
+
+_Published: 18 May 2025 • Author: Monochrome Compliance Team_
+
+## Summary
+
+Submitting a Payment Times Reporting (PTR) report is a regulatory requirement for large businesses in Australia. This guide outlines each step of the process — from data preparation and small business identification to CSV formatting and final submission — using Monochrome Compliance to simplify and streamline the workflow.
+
+## Who Needs This?
+
+This article is designed for individuals responsible for meeting PTR obligations, such as finance leads, governance managers, and compliance teams. If your organisation has over $100 million in annual income or is part of a group that exceeds this threshold, you are legally required to report twice yearly.
+
+## Step-by-Step Submission Guide
+
+### Step 1: Prepare Your Data
+
+Start by gathering supplier invoice and payment data for the current reporting period:
+
+- Supplier ABNs
+- Invoice issue and payment dates
+- Payment amounts
+- Contract payment terms (where available)
+
+Ensure all transactions fall within the correct reporting window: either 1 January–30 June or 1 July–31 December. Data accuracy at this stage is critical.
+
+### Step 2: Identify Small Business Suppliers
+
+Export a list of all supplier ABNs and upload them to the Regulator’s Small Business Identification (SBI) Tool. The tool will return a list of ABNs that are _not_ considered small businesses. This step must be completed for each reporting cycle — you cannot rely on past results.
+
+Once the SBI Tool output is received, upload it into Monochrome Compliance. The system will automatically flag small business transactions based on the validated ABNs.
+
+### Step 3: Format the PTR Report
+
+Import your cleaned and flagged dataset into Monochrome Compliance. The platform checks for:
+
+- Missing or incorrectly formatted fields
+- Inconsistencies between reported dates and payment terms
+- Small business flag accuracy
+- Payment practices that fall outside acceptable ranges
+
+Any detected issues are flagged for review and correction before the final CSV output is generated.
+
+### Step 4: Lodge the Report
+
+Log in to the Regulator’s PTR Portal and upload the validated CSV file. You will also be prompted to complete a summary declaration and provide additional reporting information.
+
+We strongly recommend exporting a PDF copy of your submission from the portal or taking a screenshot for internal audit purposes.
+
+## Frequently Asked Questions
+
+**Can I use my own template?**  
+No — the Regulator mandates a specific CSV format. Monochrome Compliance automatically generates this format for you.
+
+**What if I discover errors after submission?**  
+Contact the Regulator as soon as possible. If it’s within the reporting window, you may be allowed to submit a corrected report.
+
+**Do I need to identify small businesses manually?**  
+No. You must use the SBI Tool and upload the results to your system. Manual classification is not compliant.
+
+## Legal Disclaimer
+
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.
+
+## Need Help?
+
+[Start your submission with Monochrome Compliance](https://monochrome-compliance.com)","A step-by-step guide to preparing, validating and lodging your Payment Times Reporting (PTR) submission using Monochrome Compliance.",18/05/2025 00:00,"PTR,compliance,submission,how-to,reporting",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+c_TlH5lQi9,faq,Do supporting datasets need to be submitted?,do-supporting-datasets-need-to-be-submitted,"No, but you must retain them for seven years. The TCP and SBTCP datasets are essential for calculating required metrics.",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+d4WHSiR-YG,blog,Avoid These Common PTR Submission Mistakes,ptr-submission-mistakes,"# Avoid These Common PTR Submission Mistakes
+
+_Published: 18 May 2025 • Author: Monochrome Compliance Team_
+
+## Summary
+
+Payment Times Reporting (PTR) is more than just a regulatory checkbox — it reflects your organisation’s financial transparency and commitment to fair supplier practices. Unfortunately, many entities fall into avoidable traps during submission. In this guide, we outline the most common mistakes and how to sidestep them using sound governance and practical tools like Monochrome Compliance.
+
+## 1. Incorrect Supplier Classification
+
+**The mistake:** Misidentifying which suppliers qualify as small businesses, either through guesswork or outdated assumptions.
+
+**The fix:** Always validate ABNs using the official Small Business Identification (SBI) Tool provided by the Regulator. Upload your list of ABNs and import the result into Monochrome Compliance to ensure accurate flagging. This step must be completed for each reporting cycle — past results can’t be reused.
+
+## 2. Incomplete or Inconsistent Data
+
+**The mistake:** Submissions that include missing invoice numbers, mismatched payment and issue dates, or incomplete payment terms.
+
+**The fix:** Use a validation tool like Monochrome Compliance to surface issues before submission. Automate data checks and reconcile records with your finance system. Fix inconsistencies early to avoid delays during approval and reporting.
+
+## 3. Outdated CSV Templates
+
+**The mistake:** Using last year’s or last cycle’s CSV export template, which may be missing newly required fields or contain deprecated columns.
+
+**The fix:** Download the latest CSV template directly from the Regulator or export through Monochrome Compliance, which always reflects the most up-to-date format. Validate your data structure before submission.
+
+## 4. Late Submissions
+
+**The mistake:** Leaving data collection and validation too close to the deadline, resulting in rushed reviews or missed due dates.
+
+**The fix:** Work backwards from the deadline. Set internal submission targets at least two weeks prior, with assigned owners and checklists. Use shared calendars or integrated workflow software to monitor task completion.
+
+## 5. No Internal Review Process
+
+**The mistake:** Submitting reports without a second review, increasing the likelihood of human error or oversight.
+
+**The fix:** Establish a two-person signoff process. Use Monochrome Compliance’s PDF export to generate review-ready versions. Store signed copies securely for auditing and assurance purposes.
+
+## Bonus: Not Archiving SBI Tool Results
+
+**The mistake:** Treating the SBI output file as temporary and failing to store it alongside your submission records.
+
+**The fix:** Save both your original ABN input list and the SBI Tool response in a secure, access-controlled location. This serves as audit evidence and ensures continuity across reporting cycles.
+
+## Legal Disclaimer
+
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.
+
+## Need Help?
+
+[Submit with confidence using Monochrome Compliance](https://monochrome-compliance.com)",Learn from the most common errors seen in Payment Times Reporting submissions and how to avoid them using good governance and reliable tools.,18/05/2025 00:00,"PTR,submission errors,compliance,common mistakes",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+HuJVJdLrn_,faq,What if a report is submitted using the old CSV template?,what-if-a-report-is-submitted-using-the-old-csv-template,Reports submitted using the CSV template for periods commencing after 1 July 2024 will be rejected. The new scheme requires reports to be submitted through the Portal's webform interface.,NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+IQPIZg4IE8,faq,What support is available if someone gets stuck?,what-support-is-available-if-someone-gets-stuck,"You're not alone — our platform is designed to guide you through each step with clarity and confidence. Clear instructions, integrated tips, and contextual help are built into the platform, so you can move forward without needing to leave the platform.",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+kBYJP8c_E9,faq,What payments need to be included in a report?,what-payments-need-to-be-included-in-a-report,"Entities must report payments made under trade credit arrangements to Australian small businesses, excluding payments to government or employees, and subject to specific rules around credit cards and ABNs.",NULL,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+kmztFKz2pt,blog,Your Blog Title Here,your-blog-slug,"# Your Blog Title Here
+
+_Published: YYYY-MM-DD • Author: Monochrome Compliance Team_
+
+## Summary
+
+Write a 2–3 sentence overview explaining what the article covers and why it matters.
+
+## Section Heading 1
+
+Introduce the topic clearly. Use bullet points if listing actions or tips:
+
+- First tip or consideration
+- Second point
+- Something to avoid
+
+## Section Heading 2
+
+Break complex topics into smaller chunks. Add clarity with examples, definitions, or context.
+
+## Section Heading 3
+
+Finish with practical guidance, next steps, or how your platform supports the user.
+
+## Need Help?
+
+[Contact us](https://monochrome-compliance.com)
+
+## Legal Disclaimer
+
+_This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations._",A short summary of the post for previews and SEO.,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+nUKQKQAT5y,blog,PTR Reporting Deadlines: What You Need to Know,ptr-reporting-deadlines,"# PTR Reporting Deadlines: What You Need to Know
+
+<div style=font-size: 0.875rem""><em>Published: 18 May 2025 • Author: Monochrome Compliance Team</em></div>",template,18/05/2025 00:00,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+,,,,,,,,,,,
+## Summary,,,,,,,,,,,
+,,,,,,,,,,,
+The Payment Times Reporting Scheme (PTRS) operates on a fixed schedule with clearly defined reporting periods and submission deadlines. Missing a deadline not only attracts regulatory penalties but also signals to the public and your suppliers that compliance is not a priority. This article outlines what you need to know about reporting timeframes and how to stay on track.,,,,,,,,,,,
+,,,,,,,,,,,
+## PTR Reporting Periods and Deadlines,,,,,,,,,,,
+,,,,,,,,,,,
+Entities captured under the PTRS must submit a report **twice per year**, in line with the following periods:,,,,,,,,,,
+,,,,,,,,,,,
+- **First half-year reporting period:**  ,,,,,,,,,,,
+  **1 January – 30 June**  ,,,,,,,,,,,
+  **Submission due by: 30 September**,,,,,,,,,,,
+,,,,,,,,,,,
+- **Second half-year reporting period:**  ,,,,,,,,,,,
+  **1 July – 31 December**  ,,,,,,,,,,,
+  **Submission due by: 31 March**,,,,,,,,,,,
+,,,,,,,,,,,
+There are no extensions available unless formally requested and approved under exceptional circumstances. Late reports are flagged on the Regulator’s public register and may result in financial penalties.,,,,,,,,,,,
+,,,,,,,,,,,
+## Why Deadlines Matter,,,,,,,,,,,
+,,,,,,,,,,,
+Reporting deadlines are enforced under Australian legislation. Timeliness is an indicator of governance maturity and supplier fairness. Repeated late submissions can erode trust, damage your reputation, and impact your eligibility for government contracts.,,,,,,,,,
+,,,,,,,,,,,
+Your submission will be visible on the public register, including whether it was submitted on time or late — making this a public-facing compliance obligation.,,,,,,,,,,
+,,,,,,,,,,,
+## Internal Planning Checklist,,,,,,,,,,,
+,,,,,,,,,,,
+To stay ahead of PTR deadlines, consider embedding the following practices into your internal reporting calendar:,,,,,,,,,,
+,,,,,,,,,,,
+- **Start early:** Begin preparing data and reviewing supplier lists 6–8 weeks before the due date,,,,,,,,,,,
+- **Nominate a lead:** Assign a dedicated owner for PTR reporting, usually within Finance or Governance,,,,,,,,,,
+- **Set internal checkpoints:** Schedule key milestones for SBI Tool checks, data validation, and internal review,,,,,,,,,
+- **Conduct a dry run:** Generate a draft report and review it with relevant stakeholders before finalisation,,,,,,,,,,,
+- **Use shared calendars:** Set recurring internal reminders well ahead of the official submission dates,,,,,,,,,,,
+,,,,,,,,,,,
+## Risks of Missing the Deadline,,,,,,,,,,,
+,,,,,,,,,,,
+If your organisation fails to meet its PTR obligation on time:,,,,,,,,,,,
+,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+,,,,,,,,,,,
+## Monochrome Compliance Helps You Stay Ahead,,,,,,,,,,,
+,,,,,,,,,,,
+The Monochrome Compliance platform provides:,,,,,,,,,,,
+,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+#NAME?,,,,,,,,,,,
+,,,,,,,,,,,
+Our tools reduce the stress of compliance reporting and help your team deliver on time, every time.,,,,,,,,,,
+,,,,,,,,,,,
+## Legal Disclaimer,,,,,,,,,,,
+,,,,,,,,,,,
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.,,,,,,,,,,,
+,,,,,,,,,,,
+## Need Help?,,,,,,,,,,,
+,,,,,,,,,,,
+"[Never miss another PTR deadline](https://monochrome-compliance.com)""",Understand the key reporting periods and submission dates for the Payment Times Reporting Scheme so your business never misses a deadline.,18/05/2025 00:00,"PTR,deadlines,reporting calendar,compliance",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41,,,,
+OvkWWSP2Pj,faq,How is the SBI Tool used?,how-is-the-sbi-tool-used,The SBI Tool must be used after each reporting period to identify small business suppliers based on the calendar year in which the reporting period ended. It is only available via the PTRS Portal.,NULL,NULL,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+pxwDvWE5HQ,faq,What if an entity is acquired or loses control of another entity?,what-if-an-entity-is-acquired-or-loses-control-of-another-entity,"You must report on payments by all entities you control at the end of the reporting period. If data is not accessible, section 15 of the Rules allows exclusions with disclosures.",NULL,NULL,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+RshYePcQY8,blog,How to Use the SBI Tool to Flag Small Business Payments,using-sbi-tool-for-ptr,"# How to Use the SBI Tool to Flag Small Business Payments
+
+_Published: 18 May 2025 • Author: Monochrome Compliance Team_
+
+## Summary
+
+Correctly identifying small business suppliers is a key part of Payment Times Reporting (PTR). The Regulator provides a purpose-built Small Business Identification (SBI) Tool to ensure consistent and accurate classification of suppliers based on ABNs. This guide walks through how the tool works, why it's mandatory, and how Monochrome Compliance integrates it into your workflow.
+
+## What Is the SBI Tool?
+
+The SBI Tool is an online utility provided by the Payment Times Reporting Regulator. It allows entities to submit a list of supplier ABNs and returns a validated output that distinguishes which suppliers are _not_ classified as small businesses.
+
+Under PTR legislation, this tool is the only approved method for making small business determinations. You cannot rely on internal knowledge, size estimates, or assumptions — doing so risks submitting a non-compliant report.
+
+## Why Is This Important?
+
+PTR obligations require entities to report how quickly they pay small businesses. If your submission fails to accurately flag these suppliers, you could understate or misrepresent your payment practices. This affects compliance outcomes and may damage your standing with regulators and the public.
+
+Using the SBI Tool ensures:
+
+- Consistency across reporting entities
+- Confidence that your flagged data meets legal standards
+- Traceable, auditable compliance history
+
+## Step-by-Step Process
+
+### 1. Prepare Your Supplier ABN List
+
+Export a complete list of ABNs from your accounts payable records for the current reporting period. This list should:
+
+- Be limited to suppliers who were paid during the period
+- Exclude non-ABN payees (such as individuals or foreign entities without ABNs)
+- Remove duplicates and validate ABN formatting (11 digits, no spaces)
+
+### 2. Use the Regulator’s SBI Tool
+
+- Access the tool via the PTR Regulator’s website
+- Upload your CSV or paste in the ABNs according to the tool’s guidance
+- Submit the request and wait for the response file
+
+The output will contain only the ABNs that are _not_ small businesses. All others should be considered small businesses for reporting purposes.
+
+### 3. Upload Results into Monochrome Compliance
+
+With Monochrome Compliance, you can directly import the SBI Tool output. The platform will automatically match each ABN to your payment records and apply the appropriate small business flag.
+
+This process eliminates manual matching and reduces the chance of error — giving you a clean, compliant PTR file.
+
+## Additional Tips
+
+- Run the SBI check as late as practical in the reporting cycle to ensure accuracy (e.g. ABNs may change status).
+- Always double-check that your ABN data hasn’t been modified or truncated in Excel or other editors.
+- Archive both your submitted ABN list and the SBI Tool output for auditing purposes.
+
+## Legal Disclaimer
+
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.
+
+## Need Help?
+
+[Get help flagging small business payments](https://monochrome-compliance.com)",Learn how to identify which suppliers are small businesses using the Payment Times Reporting Regulator’s Small Business Identification (SBI) Tool.,18/05/2025 00:00,"PTR,SBI Tool,small business,supplier flagging",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+saIbUcnkmT,faq,Who is required to report under the new PTRS scheme?,who-is-required-to-report-under-the-new-ptrs-scheme,Only entities that meet the new definition of a reporting entity under the Payment Times Reporting Act 2020 are required to report. This includes the highest-level entity in a corporate group that meets consolidated revenue and control criteria.,NULL,NULL,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+usq0zZ3c3L,faq,When is a report due?,when-is-a-report-due,Reports must be submitted within 3 months of the end of the reporting period. Most entities will report biannually based on their financial year.,NULL,NULL,NULL,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+x73mRqJkgR,blog,How to Improve Data Quality Before Submitting Your PTR Report,improve-data-quality,"When it comes to Payment Times Reporting, clean data is everything.
+
+Before you upload your CSV file or generate your final report, take a few minutes to check for common issues that can cause delays — or worse, non-compliance.
+
+## 1. Confirm Required Fields Are Present
+
+Make sure your data includes:
+
+- ABNs for both payer and payee
+- Invoice date and payment date
+- Payment amount
+- Contract or PO reference (if applicable)
+
+Don’t leave mandatory fields blank — the validator will flag them immediately.
+
+## 2. Watch for Typos and Formatting Errors
+
+- Use consistent date formats (e.g. YYYY-MM-DD)
+- Round payment values to whole dollars if needed
+- Avoid invisible characters or extra whitespace
+
+A simple find-and-replace or export to plain CSV can help clear these up.
+
+## 3. Use Our Template
+
+The best way to avoid errors? Use the [CSV template](/resources) we’ve provided. It includes the right column headers, in the right order — and some bonus tips in the comments too.
+
+## 4. Preview Your Report Before Submitting
+
+Our platform offers a live preview of your summary stats, validation errors, and flagged records. Use it. Fix it. Then finalise.
+
+---
+
+Better data means faster reporting, fewer headaches, and a better impression with the regulator.
+
+Still have questions? [Check the FAQ](/faq) or [contact us](/contact).","Bad data can derail your submission. Here’s how to clean, validate, and catch issues before they become a problem.",19/05/2025 00:00,,import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
+Ykx79HTmB_,blog,What’s Changed in PTR Legislation in 2025?,ptr-legislation-2025,"# What’s Changed in PTR Legislation in 2025?
+
+_Published: 18 May 2025 • Author: Monochrome Compliance Team_
+
+## Summary
+
+The Payment Times Reporting Scheme (PTRS) underwent several important updates in 2025. These legislative refinements aim to increase clarity, strengthen compliance, and ensure that large businesses meet their obligations to pay small suppliers on time. This article outlines the key changes and what they mean for your reporting processes.
+
+## Why the Changes Were Introduced
+
+The PTR Regulator identified gaps in reporting consistency, classification accuracy, and enforcement strength during the first few years of the scheme’s operation. The 2025 amendments were introduced to ensure better alignment between legislative intent and practical implementation — and to improve supplier outcomes.
+
+## Key Legislative Changes
+
+### 1. Updated Definition of Small Business
+
+The definition of a “small business” has been aligned with the Australian Bureau of Statistics (ABS) classification standards. This change standardises who qualifies for protection under the scheme.
+
+> You must continue to use the Regulator’s official SBI Tool to verify small business status. Internal estimates or subjective classifications are not compliant.
+
+### 2. Reporting Thresholds Clarified
+
+Legislation now confirms that entities earning **exactly** $100 million in annual income are subject to PTR obligations. Previously, there was ambiguity about whether the threshold was exclusive or inclusive.
+
+This change eliminates uncertainty and ensures consistent treatment of borderline cases.
+
+### 3. Increased Penalties for Non-Compliance
+
+Penalties for both late and inaccurate reporting have been significantly increased. These now include:
+
+- Higher monetary fines
+- Public visibility of infractions on the PTR register
+- Potential exclusion from government procurement opportunities
+
+> If your entity relies on government contracts, this change makes timely and accurate reporting even more critical.
+
+### 4. Tighter Criteria for Reporting Extensions
+
+While the biannual submission schedule remains unchanged, criteria for obtaining deadline extensions have been narrowed. Entities must now demonstrate exceptional circumstances and provide supporting documentation.
+
+Late submissions without approval are likely to result in public censure and financial penalties.
+
+## What This Means for Your Organisation
+
+To meet the new expectations, reporting entities should:
+
+- Begin data gathering and SBI validation earlier in the cycle
+- Review ABN accuracy more frequently
+- Assign clear internal responsibility for PTR submissions
+- Use purpose-built tools like Monochrome Compliance to ensure alignment with the latest formats and rules
+
+## Moving Forward
+
+These changes reflect the Regulator’s intention to increase transparency and strengthen accountability. By proactively updating your processes now, you’ll avoid compliance issues later — and demonstrate your organisation’s commitment to ethical supplier practices.
+
+## Legal Disclaimer
+
+This article provides general information only and is not legal or financial advice. Please consult with the Payment Times Reporting Regulator or a legal advisor to ensure compliance with your organisation's obligations.
+
+## Need Help?
+
+[Stay up to date with Monochrome Compliance](https://monochrome-compliance.com)","A summary of key legislative changes to the Payment Times Reporting Scheme in 2025, including updated definitions, obligations and deadlines.",18/05/2025 00:00,"PTR,legislation,2025 changes,compliance updates",import-script,NULL,22/05/2025 06:41,22/05/2025 06:41
