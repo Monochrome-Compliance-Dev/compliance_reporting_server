@@ -15,11 +15,21 @@ const smtpOptions = {
 
 const emailFrom = process.env.SMTP_FROM;
 
-async function sendSes({ to, subject, html, from, cc, bcc, attachments }) {
+async function sendSes({
+  to,
+  subject,
+  html,
+  from,
+  cc,
+  bcc,
+  name,
+  attachments,
+}) {
   const transporter = nodemailer.createTransport(smtpOptions);
   try {
     await transporter.sendMail({
       from: from || emailFrom,
+      name: name || "Not provided",
       to: "contact@monochrome-compliance.com",
       subject: subject,
       html,

@@ -68,7 +68,8 @@ router.post(
       // await sendAttachmentEmail(req, res);
       await sendSes({
         to: req.body.to,
-        subject: req.body.topic + " " + new Date().toISOString(),
+        subject:
+          req.body.subject || req.body.topic + " " + new Date().toISOString(),
         html: `
       <ul style="font-family: sans-serif; font-size: 1rem; color: #333;">
         <li><strong>subject:</strong> ${req.body.subject || "Not provided"}</li>
