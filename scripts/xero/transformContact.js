@@ -4,8 +4,8 @@ const transformContact = (contact) => {
     payeeEntityAbn: contact.TaxNumber || "NONE PROVIDED",
     payeeEntityAcnArbn: contact.CompanyNumber || "NONE PROVIDED",
     contractPoPaymentTerms:
-      contact.DaysAfterBillDate ||
-      contact.DaysAfterBillMonth ||
+      contact.DAYSAFTERBILLDATE ||
+      contact.DAYSAFTERBILLMONTH ||
       "NONE PROVIDED",
   };
 };

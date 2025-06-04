@@ -84,6 +84,22 @@ const XeroInvoice = (sequelize) => {
         allowNull: true,
         defaultValue: 0.0,
       },
+      invoicePaymentTermsBillsDay: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      invoicePaymentTermsBillsType: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      invoicePaymentTermsSalesDay: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      invoicePaymentTermsSalesType: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
       createdAt: {
         type: DataTypes.DATE,
         allowNull: false,

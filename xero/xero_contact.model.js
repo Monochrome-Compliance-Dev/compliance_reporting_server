@@ -46,22 +46,6 @@ const XeroContact = (sequelize) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
-      DAYSAFTERBILLDATE: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      DAYSAFTERBILLMONTH: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      OFCURRENTMONTH: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      OFFOLLOWINGMONTH: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
       createdAt: {
         type: DataTypes.DATE,
         allowNull: false,

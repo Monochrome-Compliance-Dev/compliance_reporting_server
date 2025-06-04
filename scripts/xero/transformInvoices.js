@@ -4,14 +4,11 @@
  * - Receives a map of contact details (keyed by ContactID) with payment terms, ABN, etc.
  * - Merges the contact-specific payment terms and identifiers.
  */
+const { transformContact } = require("./transformContact");
 
-const transformInvoices = (invoices, contactMap) => {
+const transformInvoices = (invoices) => {
   return invoices.map((invoice) => {
     const transformed = {};
-
-    transformed.paymentAmount = Array.isArray(invoice.Payments)
-      ? invoice.Payments.reduce((sum, p) => sum + (p.Amount || 0), 0)
-      : 0;
 
     transformed.description =
       Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0
@@ -19,29 +16,39 @@ const transformInvoices = (invoices, contactMap) => {
         : "NONE PROVIDED";
 
     transformed.supplyDate = "NONE PROVIDED";
-
-    transformed.paymentDate =
-      Array.isArray(invoice.Payments) && invoice.Payments.length > 0
-        ? new Date(Number(invoice.Payments[0].Date.match(/\d+/)[0]))
-            .toISOString()
-            .slice(0, 10)
-        : "";
-
-    // Contract-level info
     transformed.contractPoReferenceNumber = "NONE PROVIDED";
-
-    // Notice - placeholder
     transformed.noticeForPaymentIssueDate = "NONE PROVIDED";
     transformed.noticeForPaymentTerms = "NONE PROVIDED";
 
-    // Invoice-level info
     transformed.invoiceReferenceNumber =
       invoice.InvoiceNumber || "NONE PROVIDED";
     transformed.invoiceIssueDate = invoice.DateString || "NONE PROVIDED";
-    transformed.invoiceReceiptDate = "PlACEHOLDER";
+    transformed.invoiceReceiptDate = "NONE PROVIDED";
     transformed.invoiceAmount = invoice.Total || "NONE PROVIDED";
     transformed.invoicePaymentTerms = "NONE PROVIDED";
     transformed.invoiceDueDate = invoice.DueDateString || "NONE PROVIDED";
+
+    // Add payment terms if available
+    if (invoice.PaymentTerms) {
+      if (invoice.PaymentTerms.Bills) {
+        transformed.invoicePaymentTermsBillsDay =
+          invoice.PaymentTerms.Bills.Day || null;
+        transformed.invoicePaymentTermsBillsType =
+          invoice.PaymentTerms.Bills.Type || "NONE PROVIDED";
+      }
+      if (invoice.PaymentTerms.Sales) {
+        transformed.invoicePaymentTermsSalesDay =
+          invoice.PaymentTerms.Sales.Day || null;
+        transformed.invoicePaymentTermsSalesType =
+          invoice.PaymentTerms.Sales.Type || "NONE PROVIDED";
+      }
+    }
+
+    // Add contact info directly from the invoice
+    if (invoice.Contact) {
+      const contactData = transformContact(invoice.Contact);
+      Object.assign(transformed, contactData);
+    }
 
     return transformed;
   });

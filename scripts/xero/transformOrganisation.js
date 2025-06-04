@@ -1,19 +1,19 @@
 const transformOrganisation = (organisation) => {
   const transformed = {};
+  console.log("Transforming organisation data...");
 
-  // Use TaxNumber as the ABN
+  // If organisation is an array, use the first entry
+  const org = Array.isArray(organisation) ? organisation[0] : organisation;
+  console.log("Organisation to transform:", JSON.stringify(org, null, 2));
+
   transformed.payerEntityAbn =
-    organisation.TaxNumber || "PAYER_ENTITY_ABN_PLACEHOLDER";
+    org.TaxNumber || "PAYER_ENTITY_ABN_PLACEHOLDER_BOOOO";
 
-  // Use RegistrationNumber as the ACN/ARBN if available
   transformed.payerEntityAcnArbn =
-    organisation.RegistrationNumber || "PAYER_ENTITY_ACN_ARBN_PLACEHOLDER";
+    org.RegistrationNumber || "PAYER_ENTITY_ACN_ARBN_PLACEHOLDER";
 
-  // Use Name or LegalName as the entity name
   transformed.payerEntityName =
-    organisation.Name ||
-    organisation.LegalName ||
-    "PAYER_ENTITY_NAME_PLACEHOLDER";
+    org.Name || org.LegalName || "PAYER_ENTITY_NAME_PLACEHOLDER";
 
   return transformed;
 };

@@ -174,6 +174,11 @@ async function handleOAuthCallback(req, res) {
           "Xero data fetched and saved successfully to xero_[tables]."
         );
 
+        console.log("Organisation:", organisation);
+        console.log("Invoices:", invoices);
+        console.log("Contacts:", contacts);
+        console.log("Payments:", payments);
+
         const xeroData = { organisation, invoices, payments, contacts };
         const transformedXeroData = await transformXeroData(xeroData);
         await tcpService.saveTransformedDataToTcp(transformedXeroData);

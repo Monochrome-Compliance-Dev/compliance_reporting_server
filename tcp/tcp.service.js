@@ -1,6 +1,7 @@
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
+const { tcpBulkImportSchema } = require("./tcp.validator");
 let nanoid = () => "xxxxxxxxxx"; // fallback for test
 
 if (process.env.NODE_ENV !== "test") {
@@ -24,6 +25,7 @@ module.exports = {
   partialUpdate,
   patchRecord,
   getCurrentFieldValue,
+  saveTransformedDataToTcp,
 };
 
 // Accept optional options param, default to empty object, and pass to sequelize queries for RLS/transactions
@@ -200,4 +202,58 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
   });
   if (!row) return null;
   return row[field_name] !== undefined ? row[field_name] : null;
+}
+
+/**
+ * Save transformed TCP data in bulk.
+ * @param {Array} transformedRecords - The records to save.
+ * @param {Object} options - Additional Sequelize options (e.g., transaction, RLS).
+ */
+async function saveTransformedDataToTcp(transformedRecords, options = {}) {
+  if (!Array.isArray(transformedRecords)) {
+    throw new Error("Expected an array of transformed TCP records");
+  }
+
+  logger.logEvent("info", "Starting bulk save of transformed TCP records", {
+    action: "BulkSaveTCP",
+    recordCount: transformedRecords.length,
+  });
+
+  // Normalise numeric fields
+  transformedRecords.forEach((record) => {
+    if (typeof record.paymentAmount === "string") {
+      record.paymentAmount = parseFloat(
+        record.paymentAmount.replace(/[^0-9.-]+/g, "")
+      );
+    }
+  });
+
+  // Validate each record using tcpBulkImportSchema
+  for (let i = 0; i < transformedRecords.length; i++) {
+    const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
+    if (error) {
+      throw new Error(
+        `Validation failed for record at index ${i}: ${error.message}`
+      );
+    }
+  }
+
+  // Bulk insert with validation
+  await db.Tcp.bulkCreate(transformedRecords, {
+    validate: true,
+    ...options,
+  });
+
+  logger.logEvent("info", "✅ Successfully created transformed TCP records", {
+    action: "BulkSaveTCP",
+    savedCount: transformedRecords.length,
+  });
+
+  // Notify frontend via WebSocket, if available
+  if (global.sendWebSocketUpdate) {
+    global.sendWebSocketUpdate({
+      message: "Transformed TCP records saved successfully",
+      type: "status",
+    });
+  }
 }

@@ -11,6 +11,7 @@ module.exports = {
   prepareHeaders,
   handle500Error,
   handleXeroApiError, // newly added export
+  callXeroApiWithAutoRefresh,
 };
 
 /**
@@ -151,4 +152,26 @@ function prepareHeaders(accessToken, tenantId) {
     "Xero-tenant-id": tenantId,
     "Content-Type": "application/json",
   };
+}
+
+const xeroService = require("./xero.service"); // adjust path as needed
+
+/**
+ * Calls an Xero API function and automatically refreshes the token if needed.
+ * @param {Function} apiCallFn - The Xero API call function (should return a Promise).
+ * @param {string} clientId - Client identifier for the refresh token function.
+ * @param  {...any} args - Additional arguments to pass to the API call function.
+ */
+async function callXeroApiWithAutoRefresh(apiCallFn, clientId, ...args) {
+  try {
+    return await apiCallFn(...args);
+  } catch (error) {
+    const statusCode = error.response?.status || error.statusCode || 500;
+    if (statusCode === 401 || statusCode === 403) {
+      console.log("Token expired. Refreshing and retrying...");
+      await xeroService.refreshToken(clientId);
+      return await apiCallFn(...args);
+    }
+    throw error;
+  }
 }
