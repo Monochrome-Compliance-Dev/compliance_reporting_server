@@ -18,10 +18,10 @@ const contactSchema = Joi.object({
   name: Joi.string().required(),
   email: Joi.string().email().required(),
   subject: Joi.string().required(),
-  company: Joi.string().optional().allow("", null),
-  message: Joi.string().optional().allow("", null),
+  company: Joi.string().required(),
+  message: Joi.string().optional().required(),
   to: Joi.string().email().required(),
-  from: Joi.string().email().optional(),
+  from: Joi.string().email().required(),
   cc: Joi.string().email().optional(),
   bcc: Joi.string().email().optional(),
 });
