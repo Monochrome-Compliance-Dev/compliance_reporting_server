@@ -172,6 +172,12 @@ app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
 app.use("/api/audit", require("./audit/audit.controller"));
+
+// Health check endpoint
+app.get("/api/health-check", (req, res) => {
+  res.status(200).json({ status: "ok", message: "Backend is up and running." });
+});
+
 app.use("/api/xero", require("./xero/xero.controller"));
 
 // Middleware to log all registered routes
