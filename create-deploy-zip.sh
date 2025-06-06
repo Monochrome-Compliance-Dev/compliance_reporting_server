@@ -1,0 +1,1 @@
+zip -r deployment.zip * .[^.]* -x "node_modules/*" "logs/*" "coverage/*" "uploads/*" ".git/*" ".DS_Store" ".env" "*.log" ".git/*"

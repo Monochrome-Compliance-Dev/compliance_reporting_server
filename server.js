@@ -7,6 +7,8 @@ if (process.env.NODE_ENV === "production") {
   dotenv.config({ path: ".env.production" });
 } else if (process.env.NODE_ENV === "development") {
   dotenv.config({ path: ".env.development" });
+} else if (process.env.NODE_ENV === "sit") {
+  dotenv.config({ path: ".env.sit" });
 } else {
   dotenv.config({ path: ".env" });
 }
@@ -58,6 +60,7 @@ const PORT = process.env.PORT || 5432;
 const allowedOrigins = [
   "https://monochrome-compliance.com",
   "http://localhost:3000",
+  "https://sit.monochrome-compliance.com",
 ];
 app.use(
   cors({
@@ -230,7 +233,7 @@ app.use(errorHandler);
 // start server unless in test mode
 const port = config.port;
 if (config.env !== "test") {
-  server.listen(port, () => {
+  server.listen(port, "0.0.0.0", () => {
     const message = `✅ Server running in ${config.env} mode on port ${port}`;
     logger.logEvent("info", message, {
       action: "ServerStart",

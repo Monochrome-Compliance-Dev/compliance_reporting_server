@@ -22,6 +22,16 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   },
   logging: console.log,
   schema: process.env.DB_SCHEMA || "public", // Use environment variable or default to 'public'
+  ssl: process.env.DB_SSL === "true",
+  dialectOptions:
+    process.env.DB_SSL === "true"
+      ? {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false,
+          },
+        }
+      : {},
 });
 
 const db = {

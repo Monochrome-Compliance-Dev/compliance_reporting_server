@@ -3,30 +3,33 @@ const NodeClam = require("clamscan");
 let clamAvailable = true;
 const { Readable } = require("stream");
 
-let ClamScan;
-try {
-  ClamScan = new NodeClam().init({
-    removeInfected: true,
-    quarantineInfected: false,
-    scanLog: null,
-    debugMode: false,
-    fileList: null,
-    scanRecursively: false,
-    clamscan: {
-      path: "/opt/homebrew/bin/clamscan", // adjust path if needed
-      db: null,
-      scanArchives: true,
-      active: true,
-    },
-    preference: "clamscan",
-  });
-} catch (error) {
-  clamAvailable = false;
-  logger.logEvent("warn", "ClamAV not available", {
-    action: "AntivirusInit",
-    error: error.message,
-  });
-}
+let ClamScan = null;
+
+(async () => {
+  try {
+    ClamScan = await new NodeClam().init({
+      removeInfected: true,
+      quarantineInfected: false,
+      scanLog: null,
+      debugMode: false,
+      fileList: null,
+      scanRecursively: false,
+      clamscan: {
+        path: "/opt/homebrew/bin/clamscan", // adjust path if needed
+        db: null,
+        scanArchives: true,
+        active: true,
+      },
+      preference: "clamscan",
+    });
+  } catch (error) {
+    clamAvailable = false;
+    logger.logEvent("warn", "ClamAV not available during async init", {
+      action: "AntivirusInit",
+      error: error.message,
+    });
+  }
+})();
 
 async function scanFile(filePath, ext, originalname) {
   if (!clamAvailable) {
@@ -44,7 +47,17 @@ async function scanFile(filePath, ext, originalname) {
   });
 
   try {
-    const clamscan = await ClamScan;
+    let clamscan;
+    try {
+      clamscan = await ClamScan;
+    } catch (error) {
+      logger.logEvent("warn", "ClamAV unavailable at runtime", {
+        action: "AntivirusInit",
+        error: error.message,
+      });
+      return;
+    }
+
     const { isInfected } = await clamscan.isInfected(filePath);
     logger.logEvent("info", "Scan result", {
       action: "AntivirusScan",
@@ -89,7 +102,17 @@ async function scanFileBuffer(buffer, name) {
   });
 
   try {
-    const clamscan = await ClamScan;
+    let clamscan;
+    try {
+      clamscan = await ClamScan;
+    } catch (error) {
+      logger.logEvent("warn", "ClamAV unavailable at runtime", {
+        action: "AntivirusInit",
+        error: error.message,
+      });
+      return;
+    }
+
     const stream = Readable.from(buffer); // convert buffer to stream
     const { isInfected } = await clamscan.scanStream(stream);
 
