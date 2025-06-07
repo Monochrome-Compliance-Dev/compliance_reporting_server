@@ -75,6 +75,14 @@ app.use(
   })
 );
 
+// Health check endpoint
+// This endpoint is used to check if the backend is running
+// It can be used by load balancers or monitoring tools
+// Has to be placed before the rate limiter to ensure it is always accessible
+app.get("/api/health-check", (req, res) => {
+  res.status(200).json({ status: "ok", message: "Backend is up and running." });
+});
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
@@ -175,11 +183,6 @@ app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
 app.use("/api/audit", require("./audit/audit.controller"));
-
-// Health check endpoint
-app.get("/api/health-check", (req, res) => {
-  res.status(200).json({ status: "ok", message: "Backend is up and running." });
-});
 
 app.use("/api/xero", require("./xero/xero.controller"));
 
