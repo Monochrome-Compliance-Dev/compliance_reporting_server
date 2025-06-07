@@ -1,1 +1,1 @@
-web: node server.js
+web: NODE_ENV=sit node server.js
