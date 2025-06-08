@@ -30,6 +30,9 @@ const express = require("express");
 const { WebSocketServer } = require("ws");
 const http = require("http");
 const app = express();
+
+app.set("trust proxy", true);
+
 const server = http.createServer(app);
 
 // Make sendWebSocketUpdate globally available
