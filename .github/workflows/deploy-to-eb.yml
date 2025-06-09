@@ -23,7 +23,9 @@ jobs:
         run: npm ci
 
       - name: Run blog and FAQ migration
-        run: node scripts/migrateBlogAndFaqs.js
+        run: |
+          cd scripts
+          node migrateBlogAndFaqs.js
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
