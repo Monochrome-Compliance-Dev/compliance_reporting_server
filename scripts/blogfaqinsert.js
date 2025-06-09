@@ -5,6 +5,8 @@ require("dotenv").config({
     `../.env.${process.env.NODE_ENV || "development"}`
   ),
 });
+console.log(`🔧 Running in NODE_ENV=${process.env.NODE_ENV}`);
+console.log(`🔧 Resolved DB_URL=${process.env.DB_URL}`);
 const { Sequelize } = require("sequelize");
 const adminContentModel = require("../admin/admin.model"); // adjust if needed
 const data = require("../docs/blogfaq.json");
