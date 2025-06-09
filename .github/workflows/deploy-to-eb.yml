@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Copy environment config
-        run: cp config.js helpers/config.js
+      - name: Copy all project files except node_modules
+        run: rsync -av --exclude='node_modules' ./ ./
 
       - name: Set DATABASE_URL dynamically
         run: |
