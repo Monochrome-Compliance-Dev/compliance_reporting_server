@@ -25,12 +25,13 @@ jobs:
       - name: Set DATABASE_URL dynamically
         run: |
           if [ "$NODE_ENV" = "production" ]; then
-            echo "DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}" >> $GITHUB_ENV
+            export DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}"
           elif [ "$NODE_ENV" = "sit" ]; then
-            echo "DATABASE_URL=${{ secrets.SIT_DATABASE_URL }}" >> $GITHUB_ENV
+            export DATABASE_URL="${{ secrets.SIT_DATABASE_URL }}"
           else
-            echo "DATABASE_URL=${{ secrets.DEV_DATABASE_URL }}" >> $GITHUB_ENV
+            export DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}"
           fi
+          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
         env:
           NODE_ENV: sit
 
