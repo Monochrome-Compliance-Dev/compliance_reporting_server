@@ -1,15 +1,21 @@
 const path = require("path");
 
-// Set NODE_ENV if not already set
-process.env.NODE_ENV = process.env.NODE_ENV || "development";
+// Load .env file conditionally if DB_URL isn't already present
+if (!process.env.DB_URL) {
+  const nodeEnv = process.env.NODE_ENV;
+  if (!nodeEnv) {
+    console.error("❌ NODE_ENV not set and DB_URL not provided");
+    process.exit(1);
+  }
 
-// Resolve and load .env file early before importing other modules
-const envFilePath = path.resolve(__dirname, `../.env.${process.env.NODE_ENV}`);
-require("dotenv").config({ path: envFilePath });
+  const envFilePath = path.resolve(__dirname, `../.env.${nodeEnv}`);
+  require("dotenv").config({ path: envFilePath });
+  console.log(`🔧 Loaded env from ${envFilePath}`);
+} else {
+  console.log("🔧 Using DB_URL from existing environment");
+}
 
-// Debug logs
 console.log(`🔧 Running in NODE_ENV=${process.env.NODE_ENV}`);
-console.log(`🔧 Loaded env from ${envFilePath}`);
 console.log(`🔧 Resolved DB_URL=${process.env.DB_URL}`);
 
 const { Sequelize } = require("sequelize");
