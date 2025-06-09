@@ -1,4 +1,7 @@
-﻿// If NODE_ENV is already set (like by AWS), do not overwrite it
+﻿// Code to run the deployment zip script
+// ./create-deploy-zip.sh
+
+// If NODE_ENV is already set (like by AWS), do not overwrite it
 process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
 // Load appropriate .env file based on NODE_ENV
@@ -64,6 +67,7 @@ const allowedOrigins = [
   "https://monochrome-compliance.com",
   "http://localhost:3000",
   "https://sit.monochrome-compliance.com",
+  "https://www.sit.monochrome-compliance.com",
 ];
 app.use(
   cors({
