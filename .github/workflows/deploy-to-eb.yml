@@ -22,6 +22,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Copy environment config
+        run: cp config.js helpers/config.js
+
       - name: Set DATABASE_URL dynamically
         run: |
           echo "Running with NODE_ENV=$NODE_ENV"
