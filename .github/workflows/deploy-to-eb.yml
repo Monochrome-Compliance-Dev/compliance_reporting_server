@@ -22,19 +22,48 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set DATABASE_URL dynamically
+        run: |
+          if [ "$NODE_ENV" = "production" ]; then
+            echo "DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}" >> $GITHUB_ENV
+          elif [ "$NODE_ENV" = "sit" ]; then
+            echo "DATABASE_URL=${{ secrets.SIT_DATABASE_URL }}" >> $GITHUB_ENV
+          else
+            echo "DATABASE_URL=${{ secrets.DEV_DATABASE_URL }}" >> $GITHUB_ENV
+          fi
+        env:
+          NODE_ENV: sit
+
       - name: Run blog and FAQ migration
         run: node scripts/blogfaqinsert.js
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
+
+      - name: Set EB app and environment dynamically
+        run: |
+          if [ "$NODE_ENV" = "production" ]; then
+            echo "APP_NAME=prod.monochrome-compliance" >> $GITHUB_ENV
+            echo "ENV_NAME=Prod-monochrome-compliance-env" >> $GITHUB_ENV
+          elif [ "$NODE_ENV" = "sit" ]; then
+            echo "APP_NAME=sit.monochrome-compliance" >> $GITHUB_ENV
+            echo "ENV_NAME=Sit-monochrome-compliance-env" >> $GITHUB_ENV
+          else
+            echo "APP_NAME=dev.monochrome-compliance" >> $GITHUB_ENV
+            echo "ENV_NAME=Dev-monochrome-compliance-env" >> $GITHUB_ENV
+          fi
+        env:
+          NODE_ENV: sit
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          application_name: sit.monochrome-compliance
-          environment_name: Sit-monochrome-compliance-env
+          application_name: ${{ env.APP_NAME }}
+          environment_name: ${{ env.ENV_NAME }}
           region: ap-southeast-2
           version_label: ${{ github.sha }}
           deployment_package: deploy.zip
