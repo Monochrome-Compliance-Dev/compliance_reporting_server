@@ -37,10 +37,10 @@ jobs:
         env:
           NODE_ENV: sit
 
-      - name: Run blog and FAQ migration
-        run: node scripts/blogfaqinsert.js
-        env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+      # - name: Run blog and FAQ migration
+      #   run: node scripts/blogfaqinsert.js
+      #   env:
+      #     DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
