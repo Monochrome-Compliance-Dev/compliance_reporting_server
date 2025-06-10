@@ -25,20 +25,10 @@ jobs:
       - name: Copy all project files except node_modules
         run: rsync -av --exclude='node_modules' ./ ./
 
-      - name: Set DATABASE_URL dynamically
-        run: |
-          echo "Running with NODE_ENV=$NODE_ENV"
-          if [ "$NODE_ENV" = "production" ]; then
-            export DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}"
-          elif [ "$NODE_ENV" = "sit" ]; then
-            export DATABASE_URL="${{ secrets.SIT_DATABASE_URL }}"
-          else
-            export DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}"
-          fi
-          echo "Resolved DATABASE_URL=$DATABASE_URL"
-          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
-        env:
-          NODE_ENV: sit
+      # TODO: uncomment if needed for migration
+      # - name: Set DATABASE_URL
+      #   run: |
+      #     echo "DATABASE_URL=postgres://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ secrets.DB_HOST }}:${{ secrets.DB_PORT }}/${{ secrets.DB_NAME }}?ssl=${{ secrets.DB_SSL }}" >> $GITHUB_ENV
 
       # - name: Run blog and FAQ migration
       #   run: node scripts/blogfaqinsert.js
@@ -48,20 +38,10 @@ jobs:
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
-      - name: Set EB app and environment dynamically
+      - name: Set EB app and environment
         run: |
-          if [ "$NODE_ENV" = "production" ]; then
-            echo "APP_NAME=prod.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Prod-monochrome-compliance-env" >> $GITHUB_ENV
-          elif [ "$NODE_ENV" = "sit" ]; then
-            echo "APP_NAME=sit.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Sit-monochrome-compliance-env" >> $GITHUB_ENV
-          else
-            echo "APP_NAME=dev.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Dev-monochrome-compliance-env" >> $GITHUB_ENV
-          fi
-        env:
-          NODE_ENV: sit
+          echo "APP_NAME=${{ secrets.APP_NAME }}" >> $GITHUB_ENV
+          echo "ENV_NAME=${{ secrets.ENV_NAME }}" >> $GITHUB_ENV
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
