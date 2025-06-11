@@ -120,6 +120,11 @@ jobs:
           XERO_SCOPES: ${{ vars.XERO_SCOPES }}
           XERO_TENANT_ID: ${{ vars.XERO_TENANT_ID }}
 
+      - name: Debug EB settings.json
+        run: cat settings.json
+
+      # Database creation and verification is handled by .platform/hooks/predeploy/01-ensure-database.sh on the EB instance.
+
       - name: Set EB app and environment
         run: |
           echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
