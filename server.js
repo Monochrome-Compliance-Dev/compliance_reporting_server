@@ -61,7 +61,9 @@ const allowedOrigins = [
   "https://sit.monochrome-compliance.com",
   "https://www.sit.monochrome-compliance.com",
 ];
-app.use(
+
+app.options(
+  "*",
   cors({
     origin: function (origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) {
