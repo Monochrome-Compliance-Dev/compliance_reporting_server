@@ -25,6 +25,54 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Dynamically fetch the RDS endpoint before ensuring database exists
+      - name: Fetch RDS endpoint
+        run: |
+          DB_HOST=$(aws rds describe-db-instances \
+            --db-instance-identifier ${{ vars.DB_INSTANCE_IDENTIFIER }} \
+            --region ap-southeast-2 \
+            --query "DBInstances[0].Endpoint.Address" \
+            --output text)
+          echo "DB_HOST=$DB_HOST" >> $GITHUB_ENV
+
+      # Note: RDS hostnames cannot be custom-named. AWS generates these based on the stack.
+      - name: Ensure database exists
+        run: |
+          npm install pg --no-save
+          node -e "
+            const { Client } = require('pg');
+            const client = new Client({
+              host: process.env.DB_HOST,
+              port: process.env.DB_PORT,
+              user: process.env.DB_USER,
+              password: process.env.DB_PASSWORD,
+              database: 'postgres',
+              ssl: process.env.DB_SSL === 'true'
+            });
+            client.connect()
+              .then(() => client.query(`SELECT 1 FROM pg_database WHERE datname = '${process.env.DB_NAME}'`))
+              .then(res => {
+                if (res.rowCount === 0) {
+                  console.log('Creating database...');
+                  return client.query(`CREATE DATABASE ${process.env.DB_NAME}`);
+                } else {
+                  console.log('Database already exists.');
+                }
+              })
+              .catch(err => {
+                console.error('Error ensuring database exists:', err);
+                process.exit(1);
+              })
+              .finally(() => client.end());
+          "
+        env:
+          DB_HOST: ${{ env.DB_HOST }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          DB_SSL: ${{ vars.DB_SSL }}
+
       - name: Copy all project files except node_modules
         run: rsync -av --exclude='node_modules' ./ ./
 
@@ -119,7 +167,7 @@ jobs:
             --application-name "$APP_NAME" \
             --environment-name "$ENV_NAME" \
             --region ap-southeast-2 \
-            --option-settings file://settings.json
+            --option-settings file://settings.json file://.github/workflows/eb-extra-settings.json
 
       - name: Wait for EB environment update
         run: |
