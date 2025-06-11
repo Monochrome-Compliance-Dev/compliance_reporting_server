@@ -92,6 +92,8 @@ jobs:
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_TENANT_ID", "Value": "${XERO_TENANT_ID}"}
           ]
           EOF
+          # Append extra EB settings
+          jq -s '.[0] + .[1]' settings.json .github/workflows/eb-extra-settings.json > settings.combined.json && mv settings.combined.json settings.json
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -136,7 +138,7 @@ jobs:
             --application-name "$APP_NAME" \
             --environment-name "$ENV_NAME" \
             --region ap-southeast-2 \
-            --option-settings file://settings.json file://.github/workflows/eb-extra-settings.json
+            --option-settings file://settings.json
 
       - name: Wait for EB environment update
         run: |
