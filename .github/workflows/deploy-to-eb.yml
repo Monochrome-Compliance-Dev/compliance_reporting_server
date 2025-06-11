@@ -56,21 +56,28 @@ jobs:
               database: "postgres",
               ssl: process.env.DB_SSL === "true"
             });
-            client.connect()
-              .then(() => client.query(`SELECT 1 FROM pg_database WHERE datname = ''' + process.env.DB_NAME + '''`))
-              .then(res => {
+
+            async function run() {
+              try {
+                await client.connect();
+                const res = await client.query(
+                  `SELECT 1 FROM pg_database WHERE datname = $1`, [process.env.DB_NAME]
+                );
                 if (res.rowCount === 0) {
                   console.log("Creating database...");
-                  return client.query(`CREATE DATABASE "${process.env.DB_NAME}"`);
+                  await client.query(`CREATE DATABASE "${process.env.DB_NAME}"`);
                 } else {
                   console.log("Database already exists.");
                 }
-              })
-              .catch(err => {
+              } catch (err) {
                 console.error("Error ensuring database exists:", err);
                 process.exit(1);
-              })
-              .finally(() => client.end());
+              } finally {
+                await client.end();
+              }
+            }
+
+            run();
           '
         env:
           DB_HOST: ${{ env.DB_HOST }}
