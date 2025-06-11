@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - main
+      - sit
 
 jobs:
   deploy:
     name: Deploy backend to EB
     runs-on: ubuntu-latest
+    env:
+      GITHUB_ENVIRONMENT: ${{ github.ref == 'refs/heads/sit' && 'SIT' || 'Prod' }}
+    environment: ${{ env.GITHUB_ENVIRONMENT }}
 
     steps:
       - name: Checkout code
@@ -26,22 +30,22 @@ jobs:
         run: rsync -av --exclude='node_modules' ./ ./
 
       # TODO: uncomment if needed for migration
-      # - name: Set DATABASE_URL
-      #   run: |
-      #     echo "DATABASE_URL=postgres://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ secrets.DB_HOST }}:${{ secrets.DB_PORT }}/${{ secrets.DB_NAME }}?ssl=${{ secrets.DB_SSL }}" >> $GITHUB_ENV
+      - name: Set DATABASE_URL
+        run: |
+          echo "DATABASE_URL=postgres://${{ env.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ env.DB_HOST }}:${{ env.DB_PORT }}/${{ env.DB_NAME }}?ssl=${{ env.DB_SSL }}" >> $GITHUB_ENV
 
-      # - name: Run blog and FAQ migration
-      #   run: node scripts/blogfaqinsert.js
-      #   env:
-      #     DATABASE_URL: ${{ env.DATABASE_URL }}
+      - name: Run blog and FAQ migration
+        run: node scripts/blogfaqinsert.js
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
       - name: Set EB app and environment
         run: |
-          echo "APP_NAME=${{ secrets.APP_NAME }}" >> $GITHUB_ENV
-          echo "ENV_NAME=${{ secrets.ENV_NAME }}" >> $GITHUB_ENV
+          echo "APP_NAME=${{ env.APP_NAME }}" >> $GITHUB_ENV
+          echo "ENV_NAME=${{ env.ENV_NAME }}" >> $GITHUB_ENV
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21

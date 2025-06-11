@@ -56,6 +56,7 @@ const PORT = process.env.PORT || 5432;
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
+  "https://www.monochrome-compliance.com",
   "http://localhost:3000",
   "https://sit.monochrome-compliance.com",
   "https://www.sit.monochrome-compliance.com",
@@ -159,7 +160,7 @@ app.disable("x-powered-by");
 // Enforce HTTPS in production
 app.use((req, res, next) => {
   if (
-    process.env.NODE_ENV === "production" &&
+    process.env.NODE_ENV !== "development" &&
     req.headers["x-forwarded-proto"] !== "https"
   ) {
     return res.redirect("https://" + req.headers.host + req.url);
