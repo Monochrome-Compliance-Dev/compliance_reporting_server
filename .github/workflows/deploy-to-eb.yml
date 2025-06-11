@@ -54,11 +54,6 @@ jobs:
             --environment-name "${{ vars.ENV_NAME }}" \
             --region ap-southeast-2 \
             --option-settings \
-              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_PASSWORD,Value=$DB_PASSWORD \
-              Namespace=aws:elasticbeanstalk:application:environment,OptionName=JWT_SECRET,Value=$JWT_SECRET \
-              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_PASS,Value=$SMTP_PASS \
-              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_ID,Value=$XERO_CLIENT_ID \
-              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_SECRET,Value=$XERO_CLIENT_SECRET \
               Namespace=aws:elasticbeanstalk:application:environment,OptionName=API_BASE_URL,Value=${{ vars.API_BASE_URL }} \
               Namespace=aws:elasticbeanstalk:application:environment,OptionName=COOKIE_DOMAIN,Value=${{ vars.COOKIE_DOMAIN }} \
               Namespace=aws:elasticbeanstalk:application:environment,OptionName=CORS_ORIGIN,Value=${{ vars.CORS_ORIGIN }} \
