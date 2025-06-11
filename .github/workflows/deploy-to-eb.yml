@@ -30,14 +30,14 @@ jobs:
         run: rsync -av --exclude='node_modules' ./ ./
 
       # TODO: uncomment if needed for migration
-      - name: Set DATABASE_URL
-        run: |
-          echo "DATABASE_URL=postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}" >> $GITHUB_ENV
+      # - name: Set DATABASE_URL
+      #   run: |
+      #     echo "DATABASE_URL=postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}" >> $GITHUB_ENV
 
-      - name: Run blog and FAQ migration
-        run: node scripts/blogfaqinsert.js
-        env:
-          DATABASE_URL: ${{ vars.DATABASE_URL }}
+      # - name: Run blog and FAQ migration
+      #   run: node scripts/blogfaqinsert.js
+      #   env:
+      #     DATABASE_URL: ${{ vars.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
