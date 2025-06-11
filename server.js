@@ -62,8 +62,8 @@ const allowedOrigins = [
   "https://www.sit.monochrome-compliance.com",
 ];
 
-app.options(
-  "*",
+// Apply CORS middleware globally with custom origin logic
+app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) {
