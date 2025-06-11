@@ -29,14 +29,15 @@ jobs:
       - name: Copy all project files except node_modules
         run: rsync -av --exclude='node_modules' ./ ./
 
-      - name: Set environment variables
+      # TODO: uncomment if needed for migration
+      - name: Set DATABASE_URL
         run: |
-          echo "NODE_ENV=${{ vars.GITHUB_ENVIRONMENT }}" >> $GITHUB_ENV
-          DATABASE_URL="postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}"
-          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}" >> $GITHUB_ENV
 
       - name: Run blog and FAQ migration
         run: node scripts/blogfaqinsert.js
+        env:
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
