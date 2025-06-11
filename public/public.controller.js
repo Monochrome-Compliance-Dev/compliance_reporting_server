@@ -124,6 +124,7 @@ router.post(
 module.exports = router;
 
 function sendEmailSesPrep(req, res) {
+  console.log("sendEmailSesPrep", req.body);
   const isBooking = req.body.subject?.toLowerCase().includes("booking");
   const schema = isBooking ? bookingSchema : contactSchema;
 
@@ -134,6 +135,12 @@ function sendEmailSesPrep(req, res) {
   }
 
   const trackingPixel = generateTrackingPixel(req.body.email, "contact-form");
+  logger.logEvent("info", "Preparing to send SES email", {
+    action: "SendEmailSesPrep",
+    email: req.body.email,
+    subject: req.body.subject,
+  });
+  console.log("SES email preparation complete", req.body);
 
   sendSes({
     to: req.body.to,

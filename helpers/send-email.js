@@ -27,7 +27,8 @@ async function sendSes({
 }) {
   const transporter = nodemailer.createTransport(smtpOptions);
   try {
-    await transporter.sendMail({
+    console.log("Sending SES email to:", to);
+    transporter.sendMail({
       from: from || emailFrom,
       name: name || "Not provided",
       to: "contact@monochrome-compliance.com",
