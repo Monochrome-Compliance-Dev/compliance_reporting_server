@@ -20,6 +20,9 @@ jobs:
       - name: Make prebuild hook executable
         run: chmod +x .platform/hooks/prebuild/00-install-postgresql.sh
 
+      - name: Make predeploy database hook executable
+        run: chmod +x .platform/hooks/predeploy/01-ensure-database.sh
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
