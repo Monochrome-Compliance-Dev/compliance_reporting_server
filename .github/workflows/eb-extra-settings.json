@@ -41,11 +41,6 @@
   },
   {
     "Namespace": "aws:elasticbeanstalk:environment:proxy",
-    "OptionName": "GzipCompression",
-    "Value": "true"
-  },
-  {
-    "Namespace": "aws:elasticbeanstalk:environment:proxy",
     "OptionName": "ProxyServer",
     "Value": "nginx"
   }
