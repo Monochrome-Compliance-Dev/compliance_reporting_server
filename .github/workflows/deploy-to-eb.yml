@@ -10,9 +10,8 @@ jobs:
   deploy:
     name: Deploy backend to EB
     runs-on: ubuntu-latest
-    env:
-      GITHUB_ENVIRONMENT: ${{ github.ref == 'refs/heads/sit' && 'SIT' || 'Prod' }}
-    environment: ${{ vars.GITHUB_ENVIRONMENT }}
+    environment:
+      name: ${{ github.ref == 'refs/heads/sit' && 'SIT' || 'Prod' }}
 
     steps:
       - name: Checkout code
