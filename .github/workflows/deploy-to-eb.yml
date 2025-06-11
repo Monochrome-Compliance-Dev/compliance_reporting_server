@@ -121,6 +121,14 @@ jobs:
             --region ap-southeast-2 \
             --option-settings file://settings.json
 
+      - name: Wait for EB environment update
+        run: |
+          echo "Waiting for EB environment update to complete..."
+          aws elasticbeanstalk wait environment-updated \
+            --application-name "$APP_NAME" \
+            --environment-name "$ENV_NAME" \
+            --region ap-southeast-2
+
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
         with:
