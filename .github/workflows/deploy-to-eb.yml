@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITHUB_ENVIRONMENT: ${{ github.ref == 'refs/heads/sit' && 'SIT' || 'Prod' }}
-    environment: ${{ env.GITHUB_ENVIRONMENT }}
+    environment: ${{ vars.GITHUB_ENVIRONMENT }}
 
     steps:
       - name: Checkout code
@@ -32,28 +32,28 @@ jobs:
       # TODO: uncomment if needed for migration
       - name: Set DATABASE_URL
         run: |
-          echo "DATABASE_URL=postgres://${{ env.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ env.DB_HOST }}:${{ env.DB_PORT }}/${{ env.DB_NAME }}?ssl=${{ env.DB_SSL }}" >> $GITHUB_ENV
+          echo "DATABASE_URL=postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}" >> $GITHUB_ENV
 
       - name: Run blog and FAQ migration
         run: node scripts/blogfaqinsert.js
         env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DATABASE_URL: ${{ vars.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
       - name: Set EB app and environment
         run: |
-          echo "APP_NAME=${{ env.APP_NAME }}" >> $GITHUB_ENV
-          echo "ENV_NAME=${{ env.ENV_NAME }}" >> $GITHUB_ENV
+          echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
+          echo "ENV_NAME=${{ vars.ENV_NAME }}" >> $GITHUB_ENV
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          application_name: ${{ env.APP_NAME }}
-          environment_name: ${{ env.ENV_NAME }}
+          application_name: ${{ vars.APP_NAME }}
+          environment_name: ${{ vars.ENV_NAME }}
           region: ap-southeast-2
           version_label: ${{ github.sha }}
           deployment_package: deploy.zip
