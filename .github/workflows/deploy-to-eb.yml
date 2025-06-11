@@ -41,6 +41,46 @@ jobs:
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
+      - name: Push GitHub secrets to EB environment
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          XERO_CLIENT_ID: ${{ secrets.XERO_CLIENT_ID }}
+          XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
+        run: |
+          aws elasticbeanstalk update-environment \
+            --application-name "${{ vars.APP_NAME }}" \
+            --environment-name "${{ vars.ENV_NAME }}" \
+            --region ap-southeast-2 \
+            --option-settings \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_PASSWORD,Value=$DB_PASSWORD \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=JWT_SECRET,Value=$JWT_SECRET \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_PASS,Value=$SMTP_PASS \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_ID,Value=$XERO_CLIENT_ID \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_SECRET,Value=$XERO_CLIENT_SECRET \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=API_BASE_URL,Value=${{ vars.API_BASE_URL }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=COOKIE_DOMAIN,Value=${{ vars.COOKIE_DOMAIN }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=CORS_ORIGIN,Value=${{ vars.CORS_ORIGIN }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_CLIENT,Value=${{ vars.DB_CLIENT }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_HOST,Value=${{ vars.DB_HOST }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_NAME,Value=${{ vars.DB_NAME }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_PORT,Value=${{ vars.DB_PORT }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_SSL,Value=${{ vars.DB_SSL }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_USER,Value=${{ vars.DB_USER }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=FRONTEND_URL,Value=${{ vars.FRONTEND_URL }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=JWT_EXPIRY,Value=${{ vars.JWT_EXPIRY }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=LOG_LEVEL,Value=${{ vars.LOG_LEVEL }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=PORT,Value=${{ vars.PORT }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_FROM,Value=${{ vars.SMTP_FROM }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_HOST,Value=${{ vars.SMTP_HOST }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_PORT,Value=${{ vars.SMTP_PORT }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_USER,Value=${{ vars.SMTP_USER }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_API_BASE_URL,Value=${{ vars.XERO_API_BASE_URL }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_REDIRECT_URI,Value=${{ vars.XERO_REDIRECT_URI }} \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_SCOPES,Value="${{ vars.XERO_SCOPES }}" \
+              Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_TENANT_ID,Value=${{ vars.XERO_TENANT_ID }}
+
       - name: Set EB app and environment
         run: |
           echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV

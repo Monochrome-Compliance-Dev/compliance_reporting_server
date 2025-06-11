@@ -31,9 +31,9 @@ const server = http.createServer(app);
 
 // Make sendWebSocketUpdate globally available
 global.sendWebSocketUpdate = function (update) {
-  console.log("Sending WebSocket update:", update);
+  // console.log("Sending WebSocket update:", update);
   wss.clients.forEach((client) => {
-    console.log("Checking client readyState:", client.readyState);
+    // console.log("Checking client readyState:", client.readyState);
     if (client.readyState === 1) {
       client.send(JSON.stringify(update));
     }
