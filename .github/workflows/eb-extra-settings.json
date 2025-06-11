@@ -35,11 +35,6 @@
     "Value": "14"
   },
   {
-    "Namespace": "aws:elasticbeanstalk:nginx:client",
-    "OptionName": "client_max_body_size",
-    "Value": "10M"
-  },
-  {
     "Namespace": "aws:elasticbeanstalk:environment:proxy",
     "OptionName": "ProxyServer",
     "Value": "nginx"
