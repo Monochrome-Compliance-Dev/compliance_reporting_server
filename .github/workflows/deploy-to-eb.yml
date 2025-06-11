@@ -41,7 +41,38 @@ jobs:
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
-      - name: Push GitHub secrets to EB environment
+      - name: Generate EB option settings JSON
+        run: |
+          cat > settings.json <<EOF
+          [
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_SECRET", "Value": "${JWT_SECRET}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PASS", "Value": "${SMTP_PASS}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_ID", "Value": "${XERO_CLIENT_ID}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_SECRET", "Value": "${XERO_CLIENT_SECRET}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "API_BASE_URL", "Value": "${API_BASE_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "COOKIE_DOMAIN", "Value": "${COOKIE_DOMAIN}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "CORS_ORIGIN", "Value": "${CORS_ORIGIN}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_CLIENT", "Value": "${DB_CLIENT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_HOST", "Value": "${DB_HOST}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_NAME", "Value": "${DB_NAME}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PORT", "Value": "${DB_PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_SSL", "Value": "${DB_SSL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_USER", "Value": "${DB_USER}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "FRONTEND_URL", "Value": "${FRONTEND_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_EXPIRY", "Value": "${JWT_EXPIRY}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "LOG_LEVEL", "Value": "${LOG_LEVEL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "PORT", "Value": "${PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_FROM", "Value": "${SMTP_FROM}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_HOST", "Value": "${SMTP_HOST}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PORT", "Value": "${SMTP_PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_USER", "Value": "${SMTP_USER}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_API_BASE_URL", "Value": "${XERO_API_BASE_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_REDIRECT_URI", "Value": "${XERO_REDIRECT_URI}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_SCOPES", "Value": "${XERO_SCOPES}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_TENANT_ID", "Value": "${XERO_TENANT_ID}"}
+          ]
+          EOF
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -69,44 +100,19 @@ jobs:
           XERO_REDIRECT_URI: ${{ vars.XERO_REDIRECT_URI }}
           XERO_SCOPES: ${{ vars.XERO_SCOPES }}
           XERO_TENANT_ID: ${{ vars.XERO_TENANT_ID }}
-        run: |
-          SETTINGS="Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_PASSWORD,Value=$DB_PASSWORD,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=JWT_SECRET,Value=$JWT_SECRET,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_PASS,Value=$SMTP_PASS,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_ID,Value=$XERO_CLIENT_ID,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_CLIENT_SECRET,Value=$XERO_CLIENT_SECRET,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=API_BASE_URL,Value=$API_BASE_URL,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=COOKIE_DOMAIN,Value=$COOKIE_DOMAIN,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=CORS_ORIGIN,Value=$CORS_ORIGIN,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_CLIENT,Value=$DB_CLIENT,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_HOST,Value=$DB_HOST,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_NAME,Value=$DB_NAME,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_PORT,Value=$DB_PORT,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_SSL,Value=$DB_SSL,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=DB_USER,Value=$DB_USER,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=FRONTEND_URL,Value=$FRONTEND_URL,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=JWT_EXPIRY,Value=$JWT_EXPIRY,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=LOG_LEVEL,Value=$LOG_LEVEL,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=PORT,Value=$PORT,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_FROM,Value=$SMTP_FROM,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_HOST,Value=$SMTP_HOST,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_PORT,Value=$SMTP_PORT,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=SMTP_USER,Value=$SMTP_USER,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_API_BASE_URL,Value=$XERO_API_BASE_URL,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_REDIRECT_URI,Value=$XERO_REDIRECT_URI,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_SCOPES,Value=$XERO_SCOPES,\
-          Namespace=aws:elasticbeanstalk:application:environment,OptionName=XERO_TENANT_ID,Value=$XERO_TENANT_ID"
-
-          aws elasticbeanstalk update-environment \
-            --application-name "$APP_NAME" \
-            --environment-name "$ENV_NAME" \
-            --region ap-southeast-2 \
-            --option-settings "$SETTINGS"
 
       - name: Set EB app and environment
         run: |
           echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
           echo "ENV_NAME=${{ vars.ENV_NAME }}" >> $GITHUB_ENV
+
+      - name: Update EB environment variables
+        run: |
+          aws elasticbeanstalk update-environment \
+            --application-name "$APP_NAME" \
+            --environment-name "$ENV_NAME" \
+            --region ap-southeast-2 \
+            --option-settings file://settings.json
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
