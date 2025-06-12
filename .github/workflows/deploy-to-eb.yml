@@ -98,8 +98,6 @@ jobs:
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_TENANT_ID", "Value": "${XERO_TENANT_ID}"}
           ]
           EOF
-          # Append extra EB settings
-          jq -s '.[0] + .[1]' settings.json .github/workflows/eb-extra-settings.json > settings.combined.json && mv settings.combined.json settings.json
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
