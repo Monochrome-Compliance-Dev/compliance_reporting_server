@@ -17,11 +17,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Make prebuild hook executable
-        run: chmod +x .platform/hooks/prebuild/00-install-postgresql.sh
+      # - name: Make prebuild hook executable
+      #   run: chmod +x .platform/hooks/prebuild/00-install-postgresql.sh
 
-      - name: Make predeploy database hook executable
-        run: chmod +x .platform/hooks/predeploy/01-ensure-database.sh
+      # - name: Make predeploy database hook executable
+      #   run: chmod +x .platform/hooks/predeploy/01-ensure-database.sh
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -39,14 +39,14 @@ jobs:
           aws-region: ap-southeast-2
 
       # Dynamically fetch the RDS endpoint before ensuring database exists
-      - name: Fetch RDS endpoint
-        run: |
-          DB_HOST=$(aws rds describe-db-instances \
-            --db-instance-identifier ${{ vars.DB_INSTANCE_IDENTIFIER }} \
-            --region ap-southeast-2 \
-            --query "DBInstances[0].Endpoint.Address" \
-            --output text)
-          echo "DB_HOST=$DB_HOST" >> $GITHUB_ENV
+      # - name: Fetch RDS endpoint
+      #   run: |
+      #     DB_HOST=$(aws rds describe-db-instances \
+      #       --db-instance-identifier ${{ vars.DB_INSTANCE_IDENTIFIER }} \
+      #       --region ap-southeast-2 \
+      #       --query "DBInstances[0].Endpoint.Address" \
+      #       --output text)
+      #     echo "DB_HOST=$DB_HOST" >> $GITHUB_ENV
 
       # Database provisioning now handled by EB instance predeploy hook (.platform/hooks/predeploy/01-ensure-database.sh)
 
