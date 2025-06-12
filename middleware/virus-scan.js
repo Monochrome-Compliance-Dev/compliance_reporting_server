@@ -1,45 +1,24 @@
 const { logger } = require("../helpers/logger");
 const NodeClam = require("clamscan");
-let clamAvailable = true;
 const { Readable } = require("stream");
 
-let ClamScan = null;
-
-(async () => {
-  try {
-    ClamScan = await new NodeClam().init({
-      removeInfected: true,
-      quarantineInfected: false,
-      scanLog: null,
-      debugMode: false,
-      fileList: null,
-      scanRecursively: false,
-      clamscan: {
-        path: "/opt/homebrew/bin/clamscan", // adjust path if needed
-        db: null,
-        scanArchives: true,
-        active: true,
-      },
-      preference: "clamscan",
-    });
-  } catch (error) {
-    clamAvailable = false;
-    logger.logEvent("warn", "ClamAV not available during async init", {
-      action: "AntivirusInit",
-      error: error.message,
-    });
-  }
-})();
+const ClamScan = new NodeClam().init({
+  removeInfected: true,
+  quarantineInfected: false,
+  scanLog: null,
+  debugMode: false,
+  fileList: null,
+  scanRecursively: false,
+  clamscan: {
+    path: "/opt/homebrew/bin/clamscan", // adjust path if needed
+    db: null,
+    scanArchives: true,
+    active: true,
+  },
+  preference: "clamscan",
+});
 
 async function scanFile(filePath, ext, originalname) {
-  if (!clamAvailable) {
-    logger.logEvent("warn", "Skipping scan, ClamAV not available", {
-      action: "AntivirusScan",
-      fileName: originalname,
-    });
-    return;
-  }
-
   logger.logEvent("info", "scanFile invoked", {
     action: "AntivirusScan",
     fileName: originalname,
@@ -47,17 +26,7 @@ async function scanFile(filePath, ext, originalname) {
   });
 
   try {
-    let clamscan;
-    try {
-      clamscan = await ClamScan;
-    } catch (error) {
-      logger.logEvent("warn", "ClamAV unavailable at runtime", {
-        action: "AntivirusInit",
-        error: error.message,
-      });
-      return;
-    }
-
+    const clamscan = await ClamScan;
     const { isInfected } = await clamscan.isInfected(filePath);
     logger.logEvent("info", "Scan result", {
       action: "AntivirusScan",
@@ -88,31 +57,13 @@ async function scanFile(filePath, ext, originalname) {
 }
 
 async function scanFileBuffer(buffer, name) {
-  if (!clamAvailable) {
-    logger.logEvent("warn", "Skipping scan, ClamAV not available", {
-      action: "AntivirusScan",
-      fileName: name,
-    });
-    return;
-  }
-
   logger.logEvent("info", "scanFileBuffer invoked", {
     action: "AntivirusScanBuffer",
     fileName: name,
   });
 
   try {
-    let clamscan;
-    try {
-      clamscan = await ClamScan;
-    } catch (error) {
-      logger.logEvent("warn", "ClamAV unavailable at runtime", {
-        action: "AntivirusInit",
-        error: error.message,
-      });
-      return;
-    }
-
+    const clamscan = await ClamScan;
     const stream = Readable.from(buffer); // convert buffer to stream
     const { isInfected } = await clamscan.scanStream(stream);
 
@@ -142,8 +93,4 @@ async function scanFileBuffer(buffer, name) {
   }
 }
 
-module.exports = {
-  scanFile,
-  scanFileBuffer,
-  isClamAvailable: () => clamAvailable,
-};
+module.exports = { scanFile, scanFileBuffer };

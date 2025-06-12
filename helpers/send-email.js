@@ -27,7 +27,7 @@ async function sendSes({
 }) {
   const transporter = nodemailer.createTransport(smtpOptions);
   try {
-    console.log("Sending SES email to:", to);
+    // console.log("Sending SES email to:", to);
     transporter.sendMail({
       from: from || emailFrom,
       name: name || "Not provided",

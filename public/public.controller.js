@@ -62,10 +62,23 @@ router.post(
           action: "SendAttachmentEmail",
         });
       }
-      const filePath = req.file.path;
+      const filePath = req.file.path; // temp path from multer
       const ext = path.extname(filePath).toLowerCase();
       await scanFile(filePath, ext, req.file.originalname);
-      // await sendAttachmentEmail(req, res);
+
+      // Move file to permanent uploads directory after scan
+      const uploadsDir = path.join(
+        __dirname,
+        "../uploads/compliance_navigators"
+      );
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      const destPath = path.join(uploadsDir, req.file.originalname);
+
+      // Move file from temp to uploads directory
+      fs.renameSync(filePath, destPath);
+
       await sendSes({
         to: req.body.to,
         subject:
@@ -90,21 +103,22 @@ router.post(
         attachments: [
           {
             filename: req.file.originalname,
-            path: req.file.path, // Use the file path saved by multer
+            path: destPath, // Use the new uploads path
             contentType: req.file.mimetype,
           },
         ],
       });
 
-      // Delete file after scan and successful email send
-      fs.unlink(filePath, (err) => {
-        if (err)
-          logger.logEvent("warn", "Failed to delete temp file", {
-            action: "SendAttachmentEmail",
-            file: filePath,
-            error: err.message,
-          });
-      });
+      // Optionally, delete the file from uploads after sending if you don't want to keep it
+      // fs.unlink(destPath, (err) => {
+      //   if (err)
+      //     logger.logEvent("warn", "Failed to delete uploaded file", {
+      //       action: "SendAttachmentEmail",
+      //       file: destPath,
+      //       error: err.message,
+      //     });
+      // });
+
       if (!res.headersSent) {
         res.json({ message: "Email sent successfully" });
       }
@@ -124,7 +138,7 @@ router.post(
 module.exports = router;
 
 function sendEmailSesPrep(req, res) {
-  console.log("sendEmailSesPrep", req.body);
+  // console.log("sendEmailSesPrep", req.body);
   const isBooking = req.body.subject?.toLowerCase().includes("booking");
   const schema = isBooking ? bookingSchema : contactSchema;
 
@@ -140,7 +154,7 @@ function sendEmailSesPrep(req, res) {
     email: req.body.email,
     subject: req.body.subject,
   });
-  console.log("SES email preparation complete", req.body);
+  // console.log("SES email preparation complete", req.body);
 
   sendSes({
     to: req.body.to,
