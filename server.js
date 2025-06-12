@@ -4,28 +4,19 @@
 // If NODE_ENV is already set (like by AWS), do not overwrite it
 process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
-// Load appropriate .env file based on NODE_ENV
+// Load .env.development only in development; other envs use AWS-injected vars
 const dotenv = require("dotenv");
-if (process.env.NODE_ENV === "production") {
-  dotenv.config({ path: ".env.production" });
-} else if (process.env.NODE_ENV === "development") {
+if (process.env.NODE_ENV === "development") {
   dotenv.config({ path: ".env.development" });
-} else if (process.env.NODE_ENV === "sit") {
-  dotenv.config({ path: ".env.sit" });
-} else {
-  dotenv.config({ path: ".env" });
 }
 
 console.log("Running in environment:", process.env.NODE_ENV);
-const config = require("./helpers/config");
 
 if (!process.env.JWT_SECRET) {
-  console.warn(
-    "⚠️ JWT_SECRET is not set in the .env file. Authentication may fail."
-  );
+  console.warn("⚠️ JWT_SECRET is missing. Authentication may fail.");
 }
 if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
-  console.warn("⚠️ Database credentials are missing");
+  console.warn("⚠️ One or more database environment variables are missing.");
 }
 
 require("rootpath")();
@@ -34,15 +25,15 @@ const { WebSocketServer } = require("ws");
 const http = require("http");
 const app = express();
 
-app.set("trust proxy", true);
+app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]); // Trust local traffic only
 
 const server = http.createServer(app);
 
 // Make sendWebSocketUpdate globally available
 global.sendWebSocketUpdate = function (update) {
-  console.log("Sending WebSocket update:", update);
+  // console.log("Sending WebSocket update:", update);
   wss.clients.forEach((client) => {
-    console.log("Checking client readyState:", client.readyState);
+    // console.log("Checking client readyState:", client.readyState);
     if (client.readyState === 1) {
       client.send(JSON.stringify(update));
     }
@@ -65,10 +56,13 @@ const PORT = process.env.PORT || 5432;
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
+  "https://www.monochrome-compliance.com",
   "http://localhost:3000",
   "https://sit.monochrome-compliance.com",
   "https://www.sit.monochrome-compliance.com",
 ];
+
+// Apply CORS middleware globally with custom origin logic
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -135,7 +129,7 @@ app.use((req, res, next) => {
   next();
 });
 
-if (config.env === "production") {
+if (process.env.NODE_ENV === "production") {
   app.use(
     helmet.hsts({
       maxAge: 63072000, // 2 years
@@ -168,7 +162,7 @@ app.disable("x-powered-by");
 // Enforce HTTPS in production
 app.use((req, res, next) => {
   if (
-    config.env === "production" &&
+    process.env.NODE_ENV !== "development" &&
     req.headers["x-forwarded-proto"] !== "https"
   ) {
     return res.redirect("https://" + req.headers.host + req.url);
@@ -241,14 +235,14 @@ verifyAppClientIdGUC();
 app.use(errorHandler);
 
 // start server unless in test mode
-const port = config.port;
-if (config.env !== "test") {
+const port = process.env.PORT || 4000;
+if ((process.env.NODE_ENV || "development") !== "test") {
   server.listen(port, "0.0.0.0", () => {
-    const message = `✅ Server running in ${config.env} mode on port ${port}`;
+    const message = `✅ Server running in ${process.env.NODE_ENV || "development"} mode on port ${port}`;
     logger.logEvent("info", message, {
       action: "ServerStart",
       port,
-      env: config.env,
+      env: process.env.NODE_ENV || "development",
     });
   });
 }

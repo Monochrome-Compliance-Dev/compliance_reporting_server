@@ -1,14 +1,13 @@
-const config = require("../helpers/config");
 const { Sequelize } = require("sequelize");
 const { logger } = require("../helpers/logger");
 const fs = require("fs");
 const path = require("path");
 
-const DB_HOST = process.env.DB_HOST || config.db.host;
-const DB_PORT = process.env.DB_PORT || config.db.port;
-const DB_USER = process.env.DB_USER || config.db.user;
-const DB_PASSWORD = process.env.DB_PASSWORD || config.db.password;
-const DB_NAME = process.env.DB_NAME || config.db.name;
+const DB_HOST = process.env.DB_HOST;
+const DB_PORT = process.env.DB_PORT || 5432;
+const DB_USER = process.env.DB_USER;
+const DB_PASSWORD = process.env.DB_PASSWORD;
+const DB_NAME = process.env.DB_NAME;
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   dialect: "postgres",

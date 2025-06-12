@@ -1,5 +1,5 @@
 const { expressjwt: expressJwt } = require("express-jwt");
-const { jwtSecret: secret } = require("../helpers/config");
+const secret = process.env.JWT_SECRET;
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 

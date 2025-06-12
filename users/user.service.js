@@ -1,6 +1,6 @@
 ﻿const os = require("os");
 const { logger } = require("../helpers/logger");
-const config = require("../helpers/config");
+const jwtSecret = process.env.JWT_SECRET;
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
@@ -418,7 +418,7 @@ function generateJwtToken(user) {
   // create a jwt token containing the user id that expires in 15 minutes
   return jwt.sign(
     { id: user.id, role: user.role, clientId: user.clientId },
-    config.jwtSecret,
+    jwtSecret,
     {
       expiresIn: "15m",
     }

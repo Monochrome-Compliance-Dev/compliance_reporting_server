@@ -4,15 +4,24 @@ on:
   push:
     branches:
       - main
+      - sit
 
 jobs:
   deploy:
     name: Deploy backend to EB
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref == 'refs/heads/sit' && 'SIT' || 'Prod' }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # - name: Make prebuild hook executable
+      #   run: chmod +x .platform/hooks/prebuild/00-install-postgresql.sh
+
+      # - name: Make predeploy database hook executable
+      #   run: chmod +x .platform/hooks/predeploy/01-ensure-database.sh
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -22,54 +31,134 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-2
+
+      # Dynamically fetch the RDS endpoint before ensuring database exists
+      # - name: Fetch RDS endpoint
+      #   run: |
+      #     DB_HOST=$(aws rds describe-db-instances \
+      #       --db-instance-identifier ${{ vars.DB_INSTANCE_IDENTIFIER }} \
+      #       --region ap-southeast-2 \
+      #       --query "DBInstances[0].Endpoint.Address" \
+      #       --output text)
+      #     echo "DB_HOST=$DB_HOST" >> $GITHUB_ENV
+
+      # Database provisioning now handled by EB instance predeploy hook (.platform/hooks/predeploy/01-ensure-database.sh)
+
       - name: Copy all project files except node_modules
         run: rsync -av --exclude='node_modules' ./ ./
 
-      - name: Set DATABASE_URL dynamically
-        run: |
-          echo "Running with NODE_ENV=$NODE_ENV"
-          if [ "$NODE_ENV" = "production" ]; then
-            export DATABASE_URL="${{ secrets.PROD_DATABASE_URL }}"
-          elif [ "$NODE_ENV" = "sit" ]; then
-            export DATABASE_URL="${{ secrets.SIT_DATABASE_URL }}"
-          else
-            export DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}"
-          fi
-          echo "Resolved DATABASE_URL=$DATABASE_URL"
-          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
-        env:
-          NODE_ENV: sit
+      # TODO: uncomment if needed for migration
+      # - name: Set DATABASE_URL
+      #   run: |
+      #     echo "DATABASE_URL=postgres://${{ vars.DB_USER }}:${{ secrets.DB_PASSWORD }}@${{ vars.DB_HOST }}:${{ vars.DB_PORT }}/${{ vars.DB_NAME }}?ssl=${{ vars.DB_SSL }}" >> $GITHUB_ENV
 
       # - name: Run blog and FAQ migration
       #   run: node scripts/blogfaqinsert.js
       #   env:
-      #     DATABASE_URL: ${{ env.DATABASE_URL }}
+      #     DATABASE_URL: ${{ vars.DATABASE_URL }}
 
       - name: Zip project
         run: zip -r deploy.zip . -x "*.git*"
 
-      - name: Set EB app and environment dynamically
+      - name: Generate EB option settings JSON
         run: |
-          if [ "$NODE_ENV" = "production" ]; then
-            echo "APP_NAME=prod.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Prod-monochrome-compliance-env" >> $GITHUB_ENV
-          elif [ "$NODE_ENV" = "sit" ]; then
-            echo "APP_NAME=sit.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Sit-monochrome-compliance-env" >> $GITHUB_ENV
-          else
-            echo "APP_NAME=dev.monochrome-compliance" >> $GITHUB_ENV
-            echo "ENV_NAME=Dev-monochrome-compliance-env" >> $GITHUB_ENV
-          fi
+          cat > settings.json <<EOF
+          [
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_SECRET", "Value": "${JWT_SECRET}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PASS", "Value": "${SMTP_PASS}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_ID", "Value": "${XERO_CLIENT_ID}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_SECRET", "Value": "${XERO_CLIENT_SECRET}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "API_BASE_URL", "Value": "${API_BASE_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "COOKIE_DOMAIN", "Value": "${COOKIE_DOMAIN}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "CORS_ORIGIN", "Value": "${CORS_ORIGIN}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_CLIENT", "Value": "${DB_CLIENT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_HOST", "Value": "${DB_HOST}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_NAME", "Value": "${DB_NAME}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PORT", "Value": "${DB_PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_SSL", "Value": "${DB_SSL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_USER", "Value": "${DB_USER}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "FRONTEND_URL", "Value": "${FRONTEND_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_EXPIRY", "Value": "${JWT_EXPIRY}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "LOG_LEVEL", "Value": "${LOG_LEVEL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "PORT", "Value": "${PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_FROM", "Value": "${SMTP_FROM}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_HOST", "Value": "${SMTP_HOST}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PORT", "Value": "${SMTP_PORT}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_USER", "Value": "${SMTP_USER}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_API_BASE_URL", "Value": "${XERO_API_BASE_URL}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_REDIRECT_URI", "Value": "${XERO_REDIRECT_URI}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_SCOPES", "Value": "${XERO_SCOPES}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_TENANT_ID", "Value": "${XERO_TENANT_ID}"}
+          ]
+          EOF
         env:
-          NODE_ENV: sit
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          XERO_CLIENT_ID: ${{ secrets.XERO_CLIENT_ID }}
+          XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          COOKIE_DOMAIN: ${{ vars.COOKIE_DOMAIN }}
+          CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
+          DB_CLIENT: ${{ vars.DB_CLIENT }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          DB_SSL: ${{ vars.DB_SSL }}
+          DB_USER: ${{ vars.DB_USER }}
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+          JWT_EXPIRY: ${{ vars.JWT_EXPIRY }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          PORT: ${{ vars.PORT }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_USER: ${{ vars.SMTP_USER }}
+          XERO_API_BASE_URL: ${{ vars.XERO_API_BASE_URL }}
+          XERO_REDIRECT_URI: ${{ vars.XERO_REDIRECT_URI }}
+          XERO_SCOPES: ${{ vars.XERO_SCOPES }}
+          XERO_TENANT_ID: ${{ vars.XERO_TENANT_ID }}
+
+      - name: Debug EB settings.json
+        run: cat settings.json
+
+      # Database creation and verification is handled by .platform/hooks/predeploy/01-ensure-database.sh on the EB instance.
+
+      - name: Set EB app and environment
+        run: |
+          echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
+          echo "ENV_NAME=${{ vars.ENV_NAME }}" >> $GITHUB_ENV
+
+      - name: Update EB environment variables
+        run: |
+          aws elasticbeanstalk update-environment \
+            --application-name "$APP_NAME" \
+            --environment-name "$ENV_NAME" \
+            --region ap-southeast-2 \
+            --option-settings file://settings.json
+
+      - name: Wait for EB environment update
+        run: |
+          echo "Waiting for EB environment update to complete..."
+          aws elasticbeanstalk wait environment-updated \
+            --application-name "$APP_NAME" \
+            --environment-name "$ENV_NAME" \
+            --region ap-southeast-2
 
       - name: Deploy to EB
         uses: einaregilsson/beanstalk-deploy@v21
         with:
           aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          application_name: ${{ env.APP_NAME }}
-          environment_name: ${{ env.ENV_NAME }}
+          application_name: ${{ vars.APP_NAME }}
+          environment_name: ${{ vars.ENV_NAME }}
           region: ap-southeast-2
           version_label: ${{ github.sha }}
           deployment_package: deploy.zip

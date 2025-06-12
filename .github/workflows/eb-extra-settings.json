@@ -1,0 +1,42 @@
+[
+  {
+    "Namespace": "aws:elasticbeanstalk:application",
+    "OptionName": "Application Healthcheck URL",
+    "Value": "/api/health-check"
+  },
+  {
+    "Namespace": "aws:autoscaling:launchconfiguration",
+    "OptionName": "InstanceType",
+    "Value": "t3.small"
+  },
+  {
+    "Namespace": "aws:autoscaling:asg",
+    "OptionName": "MinSize",
+    "Value": "1"
+  },
+  {
+    "Namespace": "aws:autoscaling:asg",
+    "OptionName": "MaxSize",
+    "Value": "2"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:hostmanager",
+    "OptionName": "LogPublicationControl",
+    "Value": "true"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:cloudwatch:logs",
+    "OptionName": "StreamLogs",
+    "Value": "true"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:cloudwatch:logs",
+    "OptionName": "RetentionInDays",
+    "Value": "14"
+  },
+  {
+    "Namespace": "aws:elasticbeanstalk:environment:proxy",
+    "OptionName": "ProxyServer",
+    "Value": "nginx"
+  }
+]
