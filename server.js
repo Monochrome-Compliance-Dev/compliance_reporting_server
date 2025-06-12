@@ -25,7 +25,7 @@ const { WebSocketServer } = require("ws");
 const http = require("http");
 const app = express();
 
-app.set("trust proxy", true);
+app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]); // Trust local traffic only
 
 const server = http.createServer(app);
 
