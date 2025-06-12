@@ -17,12 +17,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # - name: Make prebuild hook executable
-      #   run: chmod +x .platform/hooks/prebuild/00-install-postgresql.sh
-
-      # - name: Make predeploy database hook executable
-      #   run: chmod +x .platform/hooks/predeploy/01-ensure-database.sh
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -47,8 +41,6 @@ jobs:
       #       --query "DBInstances[0].Endpoint.Address" \
       #       --output text)
       #     echo "DB_HOST=$DB_HOST" >> $GITHUB_ENV
-
-      # Database provisioning now handled by EB instance predeploy hook (.platform/hooks/predeploy/01-ensure-database.sh)
 
       - name: Copy all project files except node_modules
         run: rsync -av --exclude='node_modules' ./ ./
@@ -128,8 +120,6 @@ jobs:
 
       - name: Debug EB settings.json
         run: cat settings.json
-
-      # Database creation and verification is handled by .platform/hooks/predeploy/01-ensure-database.sh on the EB instance.
 
       - name: Set EB app and environment
         run: |
