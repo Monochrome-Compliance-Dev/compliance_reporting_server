@@ -126,6 +126,12 @@ jobs:
           echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
           echo "ENV_NAME=${{ vars.ENV_NAME }}" >> $GITHUB_ENV
 
+      - name: Confirm DB_HOST
+        run: |
+          echo "🔍 DB_HOST resolved at runtime: $DB_HOST"
+        env:
+          DB_HOST: ${{ vars.DB_HOST }}
+
       - name: Update EB environment variables
         run: |
           aws elasticbeanstalk update-environment \
