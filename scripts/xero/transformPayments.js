@@ -5,20 +5,17 @@
  */
 const transformPayments = (payments) => {
   return payments.map((payment) => {
-    const transformed = {};
-
-    // paymentAmount is directly from Amount
-    transformed.paymentAmount = payment.Amount || 0;
-
-    // paymentDate is from Date (converted to ISO 8601)
-    if (payment.Date) {
-      const dateMatch = payment.Date.match(/\d+/);
-      transformed.paymentDate = dateMatch
-        ? new Date(Number(dateMatch[0])).toISOString().slice(0, 10)
-        : "";
-    } else {
-      transformed.paymentDate = "";
-    }
+    const transformed = {
+      ...payment,
+      paymentAmount: payment.Amount || 0,
+      paymentDate: payment.Date
+        ? payment.Date.match(/\d+/)
+          ? new Date(Number(payment.Date.match(/\d+/)[0]))
+              .toISOString()
+              .slice(0, 10)
+          : ""
+        : "",
+    };
 
     return transformed;
   });

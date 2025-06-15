@@ -4,23 +4,29 @@ const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
 const validateRequest = require("../middleware/validate-request");
-const {
-  tcpImportSchema,
-  tcpBulkImportSchema,
-  tcpSchema,
-} = require("./tcp.validator");
+const { tcpBulkImportSchema, tcpSchema } = require("./tcp.validator");
 const { logger } = require("../helpers/logger");
+
+const numericFields = [
+  "payerEntityAbn",
+  "payerEntityAcnArbn",
+  "payeeEntityAbn",
+  "payeeEntityAcnArbn",
+  "invoiceAmount",
+  "paymentTerm",
+  "paymentTime",
+];
 
 // routes
 router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getAllByReportId);
 router.get("/tcp/:id", authorise(), getTcpByReportId);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
 router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
 router.patch("/:id", authorise(), patchRecord);
 router.put("/", authorise(), validateRequest(tcpSchema), bulkUpdate);
 router.put("/partial", authorise(), partialUpdate);
+router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
 router.put("/sbi/:id", authorise(), sbiUpdate);
 router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
@@ -267,22 +273,6 @@ async function bulkCreate(req, res, next) {
 
     for (const record of req.body) {
       try {
-        // Normalise numeric fields
-        const numericFields = [
-          "payerEntityAbn",
-          "payerEntityAcnArbn",
-          "payeeEntityAbn",
-          "payeeEntityAcnArbn",
-        ];
-        numericFields.forEach((field) => {
-          if (record[field] === "" || record[field] === " ") {
-            record[field] = null;
-          } else if (record[field] !== null && record[field] !== undefined) {
-            const parsed = parseInt(record[field], 10);
-            record[field] = isNaN(parsed) ? null : parsed;
-          }
-        });
-
         const created = await tcpService.create(record, { transaction });
         results.push(created);
 

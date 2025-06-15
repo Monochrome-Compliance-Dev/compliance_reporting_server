@@ -5,10 +5,9 @@ const router = express.Router();
 const xeroService = require("./xero.service");
 const authorise = require("../middleware/authorise");
 const { transformXeroData } = require("../scripts/xero/transformXeroData");
-const { saveTransformedDataToTcp } = require("../tcp/tcp.service");
 const tcpService = require("../tcp/tcp.service");
 
-router.get("/connect/:reportId", authorise(), generateAuthUrl);
+router.get("/connect/:reportId/:createdBy", authorise(), generateAuthUrl);
 router.get("/callback", handleOAuthCallback);
 
 module.exports = router;
@@ -33,6 +32,7 @@ function generateAuthUrl(req, res) {
     const state = JSON.stringify({
       clientId: req.auth?.clientId,
       reportId: req.params?.reportId,
+      createdBy: req.params?.createdBy,
     });
 
     const params = new URLSearchParams({
@@ -78,7 +78,7 @@ async function handleOAuthCallback(req, res) {
       return res.status(400).send("Invalid state parameter.");
     }
 
-    const { clientId, reportId } = parsedState;
+    const { clientId, reportId, createdBy } = parsedState;
 
     // Redirect the user immediately to the frontend progress page
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -86,6 +86,7 @@ async function handleOAuthCallback(req, res) {
 
     // Continue background processing
     setImmediate(async () => {
+      let transaction;
       try {
         // Exchange the code for tokens
         let tokenData;
@@ -137,7 +138,7 @@ async function handleOAuthCallback(req, res) {
         const startDate = "2025-03-01";
         const endDate = "2025-03-31";
 
-        const organisation = await xeroService.fetchOrganisationDetails({
+        const organisations = await xeroService.fetchOrganisationDetails({
           accessToken,
           tenantId,
           clientId,
@@ -174,19 +175,42 @@ async function handleOAuthCallback(req, res) {
           "Xero data fetched and saved successfully to xero_[tables]."
         );
 
-        console.log("Organisation:", organisation);
-        console.log("Invoices:", invoices);
-        console.log("Contacts:", contacts);
-        console.log("Payments:", payments);
+        // console.log("Organisations:", organisations);
+        // console.log("Invoices:", invoices);
+        // console.log("Contacts:", contacts);
+        // console.log("Payments:", payments);
 
-        const xeroData = { organisation, invoices, payments, contacts };
+        const xeroData = { organisations, invoices, payments, contacts };
         const transformedXeroData = await transformXeroData(xeroData);
-        await tcpService.saveTransformedDataToTcp(transformedXeroData);
+
+        try {
+          await tcpService.saveTransformedDataToTcp(
+            transformedXeroData,
+            reportId,
+            clientId,
+            createdBy
+          );
+
+          await transaction.commit();
+        } catch (err) {
+          if (transaction) await transaction.rollback();
+          logger.logEvent(
+            "error",
+            "Failed to save transformed data to tcp with transaction",
+            {
+              action: "OAuthCallback-Background",
+              error: err.message,
+            }
+          );
+          return;
+        }
+
         logger.logEvent(
           "info",
           "All Xero data saved successfully to tcp table."
         );
       } catch (err) {
+        if (transaction) await transaction.rollback();
         logger.logEvent(
           "error",
           "Error in background OAuth callback processing",

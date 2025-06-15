@@ -2,7 +2,7 @@ const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
-let nanoid = () => "xxxxxxxxxx"; // fallback for test
+const { sequelize } = require("../db/database");
 
 if (process.env.NODE_ENV !== "test") {
   import("nanoid").then((mod) => {
@@ -209,7 +209,13 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
  * @param {Array} transformedRecords - The records to save.
  * @param {Object} options - Additional Sequelize options (e.g., transaction, RLS).
  */
-async function saveTransformedDataToTcp(transformedRecords, options = {}) {
+async function saveTransformedDataToTcp(
+  transformedRecords,
+  reportId,
+  clientId,
+  createdBy,
+  options = {}
+) {
   if (!Array.isArray(transformedRecords)) {
     throw new Error("Expected an array of transformed TCP records");
   }
@@ -229,7 +235,14 @@ async function saveTransformedDataToTcp(transformedRecords, options = {}) {
   });
 
   // Validate each record using tcpBulkImportSchema
+  // Add reportId, clientId, createdBy to each record
   for (let i = 0; i < transformedRecords.length; i++) {
+    transformedRecords[i].createdBy = createdBy;
+    transformedRecords[i].reportId = reportId;
+    transformedRecords[i].clientId = clientId;
+    console.log(
+      `Validating record at index ${i}: ${JSON.stringify(transformedRecords[i])}`
+    );
     const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
     if (error) {
       throw new Error(
@@ -238,10 +251,17 @@ async function saveTransformedDataToTcp(transformedRecords, options = {}) {
     }
   }
 
-  // Bulk insert with validation
-  await db.Tcp.bulkCreate(transformedRecords, {
-    validate: true,
-    ...options,
+  await sequelize.transaction(async (transaction) => {
+    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
+      transaction,
+    });
+
+    // Extract records and transaction from options for bulkCreate
+    const { validate = true } = options || {};
+    await db.Tcp.bulkCreate(transformedRecords, {
+      validate,
+      transaction,
+    });
   });
 
   logger.logEvent("info", "✅ Successfully created transformed TCP records", {

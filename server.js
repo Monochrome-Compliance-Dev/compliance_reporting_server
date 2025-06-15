@@ -52,8 +52,6 @@ const { logger } = require("./helpers/logger");
 // Middleware to set clientId for RLS
 const setClientIdRLS = require("./middleware/setClientIdRLS");
 
-const PORT = process.env.PORT || 5432;
-
 const allowedOrigins = [
   "https://monochrome-compliance.com",
   "https://www.monochrome-compliance.com",
@@ -184,7 +182,6 @@ app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
 app.use("/api/audit", require("./audit/audit.controller"));
-
 app.use("/api/xero", require("./xero/xero.controller"));
 
 // Middleware to log all registered routes

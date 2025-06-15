@@ -1,10 +1,13 @@
 const transformContact = (contact) => {
+  const c = contact?.Contact || contact;
+
   return {
-    payeeEntityName: contact.Name,
-    payeeEntityAbn: contact.TaxNumber,
-    payeeEntityAcnArbn: contact.CompanyNumber,
+    ...c,
+    payeeEntityName: c?.Name || null,
+    payeeEntityAbn: c?.TaxNumber || null,
+    payeeEntityAcnArbn: c?.CompanyNumber || null,
     contractPoPaymentTerms:
-      contact.DAYSAFTERBILLDATE || contact.DAYSAFTERBILLMONTH,
+      c?.DAYSAFTERBILLDATE || c?.DAYSAFTERBILLMONTH || null,
   };
 };
 

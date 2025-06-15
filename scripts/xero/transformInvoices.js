@@ -10,6 +10,9 @@ const transformInvoices = (invoices) => {
   return invoices.map((invoice) => {
     const transformed = {};
 
+    // Retain all original fields for future use
+    Object.assign(transformed, invoice);
+
     transformed.description =
       Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0
         ? invoice.LineItems[0].Description || ""
