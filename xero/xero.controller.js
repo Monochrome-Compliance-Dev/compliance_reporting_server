@@ -184,14 +184,19 @@ async function handleOAuthCallback(req, res) {
         const transformedXeroData = await transformXeroData(xeroData);
 
         try {
-          await tcpService.saveTransformedDataToTcp(
+          const result = await tcpService.saveTransformedDataToTcp(
             transformedXeroData,
             reportId,
             clientId,
-            createdBy
+            createdBy,
+            transaction
           );
-
-          await transaction.commit();
+          if (result) {
+            logger.logEvent("info", "Inserted TCP records successfully", {
+              count: transformedXeroData.length,
+            });
+          }
+          await transaction?.commit?.();
         } catch (err) {
           if (transaction) await transaction.rollback();
           logger.logEvent(
