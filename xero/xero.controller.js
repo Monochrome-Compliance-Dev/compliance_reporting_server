@@ -13,6 +13,7 @@ router.get(
   generateAuthUrl
 );
 router.get("/callback", handleOAuthCallback);
+router.post("/extract", authorise(), startXeroExtractionHandler);
 
 module.exports = router;
 
@@ -86,177 +87,210 @@ async function handleOAuthCallback(req, res) {
 
     const { clientId, reportId, createdBy, startDate, endDate } = parsedState;
 
-    // Redirect the user immediately to the frontend progress page
+    // Exchange the code for tokens
+    let tokenData;
+    try {
+      tokenData = await xeroService.exchangeAuthCodeForTokens(code, state, req);
+    } catch (err) {
+      logger.logEvent("error", "Failed to exchange code for tokens", {
+        action: "OAuthCallback",
+        error: err.message,
+      });
+      return res.status(500).send("Failed to exchange code for tokens.");
+    }
+
+    let { access_token: accessToken } = tokenData;
+    if (typeof accessToken !== "string") {
+      accessToken = String(accessToken);
+    }
+
+    // Get connections for multiple tenants support
+    let connections = [];
+    try {
+      connections = await xeroService.getConnections(accessToken);
+    } catch (err) {
+      logger.logEvent("error", "Failed to get connections", {
+        action: "OAuthCallback",
+        error: err.message,
+      });
+      return res.status(500).send("Failed to get connections.");
+    }
+
+    if (connections.length === 0) {
+      logger.logEvent(
+        "error",
+        "No tenant IDs found after connection retrieval",
+        { action: "OAuthCallback" }
+      );
+      return res.status(500).send("No tenant IDs found.");
+    }
+
+    // Redirect the user immediately to the frontend selection page with orgs in query string
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    res.redirect(`${frontendUrl}/reports/ptrs/${reportId}/progress`);
-
-    // Continue background processing
-    setImmediate(async () => {
-      try {
-        // Exchange the code for tokens
-        let tokenData;
-        try {
-          tokenData = await xeroService.exchangeAuthCodeForTokens(
-            code,
-            state,
-            req
-          );
-        } catch (err) {
-          logger.logEvent("error", "Failed to exchange code for tokens", {
-            action: "OAuthCallback",
-            error: err.message,
-          });
-          return;
-        }
-
-        let { access_token: accessToken } = tokenData;
-        if (typeof accessToken !== "string") {
-          accessToken = String(accessToken);
-        }
-
-        // Get tenant IDs for multiple tenants support
-        let tenantIds = [];
-        try {
-          const connections = await xeroService.getConnections(accessToken);
-          tenantIds = Array.isArray(connections)
-            ? connections.map((c) => c.tenantId).filter(Boolean)
-            : [];
-        } catch (err) {
-          logger.logEvent("error", "Failed to get connections", {
-            action: "OAuthCallback",
-            error: err.message,
-          });
-          return;
-        }
-
-        if (tenantIds.length === 0) {
-          logger.logEvent(
-            "error",
-            "No tenant IDs found after connection retrieval",
-            { action: "OAuthCallback" }
-          );
-          return;
-        }
-
-        // Hardcoding the start and end dates for testing purposes
-        // const startDate = "2025-03-01";
-        // const endDate = "2025-03-31";
-
-        // Prepare arrays to collect data from all tenants
-        const organisations = [];
-        const payments = [];
-        const invoices = [];
-        const contacts = [];
-
-        for (const tenantId of tenantIds) {
-          const orgs = await xeroService.fetchOrganisationDetails({
-            accessToken,
-            tenantId,
-            clientId,
-            reportId,
-            createdBy,
-          });
-          if (Array.isArray(orgs)) {
-            organisations.push(...orgs);
-          } else {
-            organisations.push(orgs);
-          }
-
-          const tenantPayments = await xeroService.fetchPayments(
-            accessToken,
-            tenantId,
-            clientId,
-            reportId,
-            startDate,
-            endDate,
-            createdBy
-          );
-          payments.push(...tenantPayments);
-
-          const tenantInvoices = await xeroService.fetchInvoices(
-            accessToken,
-            tenantId,
-            clientId,
-            reportId,
-            tenantPayments,
-            createdBy
-          );
-          invoices.push(...tenantInvoices);
-
-          const tenantContacts = await xeroService.fetchContacts(
-            accessToken,
-            tenantId,
-            clientId,
-            reportId,
-            tenantPayments,
-            createdBy
-          );
-          contacts.push(...tenantContacts);
-        }
-
-        logger.logEvent(
-          "info",
-          "Xero data fetched and saved successfully to xero_[tables]."
-        );
-
-        // console.log("Organisations:", organisations);
-        // console.log("Invoices:", invoices);
-        // console.log("Contacts:", contacts);
-        // console.log("Payments:", payments);
-
-        const xeroData = {
-          organisations,
-          invoices,
-          payments,
-          contacts,
-        };
-        // console.log("About to transform Xero data:", xeroData);
-        const transformedXeroData = await transformXeroData(xeroData);
-
-        try {
-          const result = await tcpService.saveTransformedDataToTcp(
-            transformedXeroData,
-            reportId,
-            clientId,
-            createdBy
-          );
-          if (result) {
-            logger.logEvent("info", "Inserted TCP records successfully", {
-              count: transformedXeroData.length,
-            });
-          }
-        } catch (err) {
-          logger.logEvent(
-            "error",
-            "Failed to save transformed data to tcp with transaction",
-            {
-              action: "OAuthCallback-Background",
-              error: err.message,
-            }
-          );
-          return;
-        }
-
-        logger.logEvent(
-          "info",
-          "All Xero data saved successfully to tcp table."
-        );
-      } catch (err) {
-        logger.logEvent(
-          "error",
-          "Error in background OAuth callback processing",
-          {
-            action: "OAuthCallback-Background",
-            error: err.message,
-          }
-        );
-      }
-    });
+    const encodedOrgs = encodeURIComponent(JSON.stringify(connections));
+    res.redirect(
+      `${frontendUrl}/reports/ptrs/${reportId}/selection?organisations=${encodedOrgs}`
+    );
   } catch (err) {
     logger.logEvent("error", "Error in OAuth callback", {
       action: "OAuthCallback",
       error: err.message,
     });
     return res.status(500).send("Internal server error during OAuth callback.");
+  }
+}
+
+async function startXeroExtractionHandler(req, res) {
+  const { accessToken, clientId, reportId, createdBy, startDate, endDate } =
+    req.body;
+
+  setImmediate(() => {
+    startXeroExtraction({
+      accessToken,
+      clientId,
+      reportId,
+      createdBy,
+      startDate,
+      endDate,
+    });
+  });
+
+  res.status(202).json({ message: "Extraction started." });
+}
+
+async function startXeroExtraction({
+  accessToken,
+  clientId,
+  reportId,
+  createdBy,
+  startDate,
+  endDate,
+}) {
+  try {
+    // Prepare arrays to collect data from all tenants
+    const organisations = [];
+    const payments = [];
+    const invoices = [];
+    const contacts = [];
+
+    // Enhanced: Add tenant-level delay, error handling, and WebSocket updates
+    for (const tenant of await xeroService.getConnections(accessToken)) {
+      const waitTime = 30000 + Math.floor(Math.random() * 15000); // 30–45s
+      logger.logEvent(
+        "info",
+        `Waiting ${waitTime / 1000}s before syncing tenant ${tenant.id}`
+      );
+      if (global.sendWebSocketUpdate) {
+        global.sendWebSocketUpdate({
+          status: "info",
+          message: `Waiting ${Math.round(waitTime / 1000)}s before syncing tenant ${tenant.tenantName || tenant.name || tenant.id}`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+      try {
+        const tenantId = tenant.tenantId || tenant.id;
+        const orgs = await xeroService.fetchOrganisationDetails({
+          accessToken,
+          tenantId,
+          clientId,
+          reportId,
+          createdBy,
+        });
+        if (Array.isArray(orgs)) {
+          organisations.push(...orgs);
+        } else {
+          organisations.push(orgs);
+        }
+
+        const tenantPayments = await xeroService.fetchPayments(
+          accessToken,
+          tenantId,
+          clientId,
+          reportId,
+          startDate,
+          endDate,
+          createdBy
+        );
+        payments.push(...tenantPayments);
+
+        const tenantInvoices = await xeroService.fetchInvoices(
+          accessToken,
+          tenantId,
+          clientId,
+          reportId,
+          tenantPayments,
+          createdBy
+        );
+        invoices.push(...tenantInvoices);
+
+        const tenantContacts = await xeroService.fetchContacts(
+          accessToken,
+          tenantId,
+          clientId,
+          reportId,
+          tenantPayments,
+          createdBy
+        );
+        contacts.push(...tenantContacts);
+      } catch (err) {
+        logger.logEvent("error", "Tenant sync failed", {
+          tenantId: tenant.id,
+          error: err,
+        });
+        if (global.sendWebSocketUpdate) {
+          global.sendWebSocketUpdate({
+            status: "error",
+            message: `Tenant ${tenant.tenantName || tenant.name || tenant.id} failed: ${err.message}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    logger.logEvent(
+      "info",
+      "Xero data fetched and saved successfully to xero_[tables]."
+    );
+
+    const xeroData = {
+      organisations,
+      invoices,
+      payments,
+      contacts,
+    };
+    const transformedXeroData = await transformXeroData(xeroData);
+
+    try {
+      const result = await tcpService.saveTransformedDataToTcp(
+        transformedXeroData,
+        reportId,
+        clientId,
+        createdBy
+      );
+      if (result) {
+        logger.logEvent("info", "Inserted TCP records successfully", {
+          count: transformedXeroData.length,
+        });
+      }
+    } catch (err) {
+      logger.logEvent(
+        "error",
+        "Failed to save transformed data to tcp with transaction",
+        {
+          action: "OAuthCallback-Background",
+          error: err.message,
+        }
+      );
+      return;
+    }
+
+    logger.logEvent("info", "All Xero data saved successfully to tcp table.");
+  } catch (err) {
+    logger.logEvent("error", "Error during manual extract", {
+      action: "startXeroExtraction",
+      error: err.message,
+    });
   }
 }

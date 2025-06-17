@@ -99,38 +99,27 @@ async function retryWithExponentialBackoff(fn, retries = 3, baseDelay = 1000) {
       if (simulatedHeaders) {
         console.log("🔄 [Backoff] Simulated headers:", simulatedHeaders);
         await handleXeroRateLimitWarnings(simulatedHeaders);
+        // --- Preemptive throttling before API call ---
+        const remaining = parseInt(
+          simulatedHeaders["x-minlimit-remaining"],
+          10
+        );
+        if (!isNaN(remaining) && remaining <= 3) {
+          const waitMs = 1000 * (6 - remaining);
+          console.warn(
+            `⚠️ Preemptive pause: ${remaining} calls remaining. Waiting ${waitMs}ms...`
+          );
+          await new Promise((res) => setTimeout(res, waitMs));
+        }
       }
 
       const response = await fn();
+      // Destructure to maintain { data, headers, status } shape for downstream
+      const { data, headers, status } = response;
 
-      console.log("Full response headers:", response.headers);
-
-      if (response && response.headers) {
-        console.log("--- Rate Limit Headers ---");
-        if (typeof response.headers.forEach === "function") {
-          response.headers.forEach((value, key) => {
-            console.log(`${key}: ${value}`);
-          });
-        } else if (typeof response.headers === "object") {
-          // For Axios-style headers object
-          Object.entries(response.headers).forEach(([key, value]) => {
-            console.log(`${key}: ${value}`);
-          });
-        } else {
-          console.log("Cannot iterate headers");
-        }
-        console.log("--------------------------");
-      } else {
-        console.log("No headers found on response");
-      }
-
-      console.log(
-        "✅ [Backoff] Response headers after call:",
-        response?.headers
-      );
       // Double-check rate limits after response
-      await handleXeroRateLimitWarnings(response?.headers);
-      return response;
+      await handleXeroRateLimitWarnings(headers);
+      return { data, headers, status };
     } catch (error) {
       const statusCode = error.response?.status || error.statusCode || null;
       if (statusCode === 429) {
@@ -143,11 +132,26 @@ async function retryWithExponentialBackoff(fn, retries = 3, baseDelay = 1000) {
         throw error;
       } else {
         // Non-rate-limit error, backoff before retry
-        const delay = baseDelay * Math.pow(2, attempt);
+        const delay = Math.min(baseDelay * Math.pow(2, attempt), 60000); // cap at 60s
         console.warn(
           `Retrying after ${delay}ms due to error:`,
           extractErrorDetails(error)
         );
+        if (typeof logger !== "undefined" && logger.logEvent) {
+          logger.logEvent(
+            "warn",
+            `Retrying after ${delay / 1000}s (attempt ${attempt + 1})`,
+            { error }
+          );
+        }
+        if (global.sendWebSocketUpdate) {
+          global.sendWebSocketUpdate({
+            status: "warn",
+            message: `Xero API retry (${attempt + 1}): ${error.message}`,
+            retryDelay: `${delay / 1000}s`,
+            timestamp: new Date().toISOString(),
+          });
+        }
         await new Promise((res) => setTimeout(res, delay));
       }
       attempt++;
@@ -246,7 +250,8 @@ function calculateWaitTime(remaining, reset) {
  */
 async function handleXeroRateLimitWarnings(headers) {
   console.log("🔍 [RateLimit] Headers received:", headers);
-  const remaining = parseInt(headers?.["x-rate-limit-remaining"], 10);
+  // Use the correct per-minute rate limit header as returned by Xero
+  const remaining = parseInt(headers?.["x-minlimit-remaining"], 10);
   const reset = parseInt(headers?.["x-rate-limit-reset"], 10);
 
   const waitTime = calculateWaitTime(remaining, reset);
