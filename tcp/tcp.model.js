@@ -26,7 +26,7 @@ function model(sequelize) {
     paymentDate: { type: DataTypes.DATE, allowNull: false },
     contractPoReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     contractPoPaymentTerms: { type: DataTypes.STRING, allowNull: true },
-    noticeForPaymentIssueDate: { type: DataTypes.DATE, allowNull: true },
+    noticeForPaymentIssueDate: { type: DataTypes.STRING, allowNull: true },
     noticeForPaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     invoiceIssueDate: { type: DataTypes.DATE, allowNull: true },

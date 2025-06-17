@@ -13,38 +13,29 @@ const transformInvoices = (invoices) => {
     // Retain all original fields for future use
     Object.assign(transformed, invoice);
 
-    transformed.description =
-      Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0
-        ? invoice.LineItems[0].Description || ""
-        : "";
+    transformed.description = (() => {
+      if (Array.isArray(invoice.LineItems) && invoice.LineItems.length > 0) {
+        for (const item of invoice.LineItems) {
+          if (item.Description && typeof item.Description === "string") {
+            return item.Description;
+          }
+        }
+      }
+      return "None provided";
+    })();
 
-    transformed.supplyDate = "";
-    transformed.contractPoReferenceNumber = "";
-    transformed.noticeForPaymentIssueDate = "";
-    transformed.noticeForPaymentTerms = "";
+    transformed.supplyDate = null;
+    transformed.contractPoReferenceNumber = "None provided";
+    transformed.noticeForPaymentIssueDate = null;
+    transformed.noticeForPaymentTerms = "None provided";
 
-    transformed.invoiceReferenceNumber = invoice.InvoiceNumber || "";
+    transformed.invoiceReferenceNumber =
+      invoice.InvoiceNumber || "None provided";
     transformed.invoiceIssueDate = invoice.DateString || "";
-    transformed.invoiceReceiptDate = "";
+    transformed.invoiceReceiptDate = null;
     transformed.invoiceAmount = invoice.Total || "";
-    transformed.invoicePaymentTerms = "";
+    transformed.invoicePaymentTerms = null;
     transformed.invoiceDueDate = invoice.DueDateString || "";
-
-    // Add payment terms if available
-    if (invoice.PaymentTerms) {
-      if (invoice.PaymentTerms.Bills) {
-        transformed.invoicePaymentTermsBillsDay =
-          invoice.PaymentTerms.Bills.Day || null;
-        transformed.invoicePaymentTermsBillsType =
-          invoice.PaymentTerms.Bills.Type || "";
-      }
-      if (invoice.PaymentTerms.Sales) {
-        transformed.invoicePaymentTermsSalesDay =
-          invoice.PaymentTerms.Sales.Day || null;
-        transformed.invoicePaymentTermsSalesType =
-          invoice.PaymentTerms.Sales.Type || "";
-      }
-    }
 
     // Add contact info directly from the invoice
     if (invoice.Contact) {

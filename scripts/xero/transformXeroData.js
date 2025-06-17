@@ -22,7 +22,8 @@ async function transformXeroData(xeroData) {
     );
     logger.logEvent(
       "info",
-      `Transformed ${transformedData.organisations.length} organisations`
+      `Transformed organisations ${transformedData.organisations}`
+      // `Transformed ${transformedData.organisations.length} organisations`
     );
   }
 
@@ -60,45 +61,45 @@ async function transformXeroData(xeroData) {
   // console.log("Organisation Data:", org);
 
   transformedData.payments.forEach((payment) => {
+    if (payment.Status === "DELETED") return;
+
     const invoice = transformedData.invoices.find(
       (inv) => inv.InvoiceID === payment.Invoice.InvoiceID
     );
-    if (!invoice) return;
-    // console.log("Invoice Data:", invoice);
+    if (!invoice || invoice.Type === "ACCREC") return;
 
     const contact = transformedData.contacts.find(
       (c) => c.ContactID === invoice.Contact.ContactID
     );
 
+    // console.log("-----------org:", org);
+    // console.log("invoice:", invoice);
+    // console.log("contact:", contact);
+    // console.log("payment:", payment);
+
     const rawRecord = {
-      payerEntityName: org?.payerEntityName || null,
-      payerEntityAbn: org?.payerEntityAbn || null,
-      payerEntityAcnArbn: org?.payerEntityAcnArbn || null,
-
-      payeeEntityName: contact?.payeeEntityName || null,
-      payeeEntityAbn: contact?.payeeEntityAbn || null,
-      payeeEntityAcnArbn: contact?.payeeEntityAcnArbn || null,
-
-      paymentAmount: payment?.paymentAmount || null,
-      description: invoice?.Reference || null,
-      supplyDate: invoice?.SupplyDate || null,
-      paymentDate: payment?.paymentDate || null,
-
-      contractPoReferenceNumber: null,
-      contractPoPaymentTerms: contact?.contractPoPaymentTerms || null,
-
-      noticeForPaymentIssueDate: null,
-      noticeForPaymentTerms: null,
-
-      invoiceReferenceNumber: invoice?.InvoiceNumber || null,
-      invoiceIssueDate: invoice?.invoiceIssueDate || null,
-      invoiceReceiptDate: invoice?.DateString || null,
-      invoiceAmount: invoice?.Total || null,
-      invoicePaymentTerms: invoice?.PaymentTerms || null,
-      invoiceDueDate: invoice?.DueDateString || null,
+      payerEntityAbn: org.payerEntityAbn,
+      payerEntityAcnArbn: org.payerEntityAcnArbn,
+      payerEntityName: org.payerEntityName,
+      payeeEntityAbn: contact.payeeEntityAbn,
+      payeeEntityAcnArbn: contact.payeeEntityAcnArbn,
+      payeeEntityName: contact.payeeEntityName,
+      paymentAmount: payment.Amount,
+      description: invoice.description,
+      supplyDate: invoice.supplyDate,
+      paymentDate: payment.paymentDate,
+      contractPoReferenceNumber: invoice.contractPoReferenceNumber,
+      contractPoPaymentTerms: contact.contractPoPaymentTerms,
+      noticeForPaymentIssueDate: invoice.noticeForPaymentIssueDate,
+      noticeForPaymentTerms: invoice.noticeForPaymentTerms,
+      invoiceReferenceNumber: invoice.invoiceReferenceNumber,
+      invoiceIssueDate: invoice.invoiceIssueDate,
+      invoiceReceiptDate: invoice.invoiceReceiptDate,
+      invoiceAmount: invoice.invoiceAmount,
+      invoicePaymentTerms: invoice.invoicePaymentTerms,
+      invoiceDueDate: invoice.invoiceDueDate,
     };
 
-    // console.log("Raw Record:", rawRecord);
     mergedRecords.push(rawRecord);
   });
 

@@ -41,6 +41,15 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: false,
       },
+      Reference: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      IsReconciled: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true,
+        defaultValue: false,
+      },
       Status: {
         type: DataTypes.STRING(50),
         allowNull: true,
@@ -48,6 +57,14 @@ module.exports = (sequelize) => {
       Invoice: {
         type: DataTypes.JSONB,
         allowNull: true,
+      },
+      source: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
+      createdBy: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
       createdAt: {
         type: DataTypes.DATE,

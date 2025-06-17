@@ -7,7 +7,11 @@ const authorise = require("../middleware/authorise");
 const { transformXeroData } = require("../scripts/xero/transformXeroData");
 const tcpService = require("../tcp/tcp.service");
 
-router.get("/connect/:reportId/:createdBy", authorise(), generateAuthUrl);
+router.get(
+  "/connect/:reportId/:createdBy/:startDate/:endDate",
+  authorise(),
+  generateAuthUrl
+);
 router.get("/callback", handleOAuthCallback);
 
 module.exports = router;
@@ -19,7 +23,7 @@ function generateAuthUrl(req, res) {
       process.env.XERO_REDIRECT_URI || "http://localhost:3000/callback";
     const scopes =
       process.env.XERO_SCOPES ||
-      "openid profile email accounting.transactions accounting.contacts";
+      "openid profile email accounting.transactions.read accounting.contacts.read accounting.settings.read";
 
     if (!xeroClientId) {
       logger.logEvent(
@@ -33,6 +37,8 @@ function generateAuthUrl(req, res) {
       clientId: req.auth?.clientId,
       reportId: req.params?.reportId,
       createdBy: req.params?.createdBy,
+      startDate: req.params?.startDate,
+      endDate: req.params?.endDate,
     });
 
     const params = new URLSearchParams({
@@ -78,7 +84,7 @@ async function handleOAuthCallback(req, res) {
       return res.status(400).send("Invalid state parameter.");
     }
 
-    const { clientId, reportId, createdBy } = parsedState;
+    const { clientId, reportId, createdBy, startDate, endDate } = parsedState;
 
     // Redirect the user immediately to the frontend progress page
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -86,7 +92,6 @@ async function handleOAuthCallback(req, res) {
 
     // Continue background processing
     setImmediate(async () => {
-      let transaction;
       try {
         // Exchange the code for tokens
         let tokenData;
@@ -109,14 +114,13 @@ async function handleOAuthCallback(req, res) {
           accessToken = String(accessToken);
         }
 
-        // Get tenant ID
-        let tenantId;
+        // Get tenant IDs for multiple tenants support
+        let tenantIds = [];
         try {
           const connections = await xeroService.getConnections(accessToken);
-          tenantId = connections?.[0]?.tenantId;
-          if (typeof tenantId !== "string") {
-            tenantId = String(tenantId);
-          }
+          tenantIds = Array.isArray(connections)
+            ? connections.map((c) => c.tenantId).filter(Boolean)
+            : [];
         } catch (err) {
           logger.logEvent("error", "Failed to get connections", {
             action: "OAuthCallback",
@@ -125,50 +129,70 @@ async function handleOAuthCallback(req, res) {
           return;
         }
 
-        if (!tenantId) {
+        if (tenantIds.length === 0) {
           logger.logEvent(
             "error",
-            "Tenant ID is missing after connection retrieval",
+            "No tenant IDs found after connection retrieval",
             { action: "OAuthCallback" }
           );
           return;
         }
 
         // Hardcoding the start and end dates for testing purposes
-        const startDate = "2025-03-01";
-        const endDate = "2025-03-31";
+        // const startDate = "2025-03-01";
+        // const endDate = "2025-03-31";
 
-        const organisations = await xeroService.fetchOrganisationDetails({
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-        });
+        // Prepare arrays to collect data from all tenants
+        const organisations = [];
+        const payments = [];
+        const invoices = [];
+        const contacts = [];
 
-        const payments = await xeroService.fetchPayments(
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-          startDate,
-          endDate
-        );
+        for (const tenantId of tenantIds) {
+          const orgs = await xeroService.fetchOrganisationDetails({
+            accessToken,
+            tenantId,
+            clientId,
+            reportId,
+            createdBy,
+          });
+          if (Array.isArray(orgs)) {
+            organisations.push(...orgs);
+          } else {
+            organisations.push(orgs);
+          }
 
-        const invoices = await xeroService.fetchInvoices(
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-          payments
-        );
+          const tenantPayments = await xeroService.fetchPayments(
+            accessToken,
+            tenantId,
+            clientId,
+            reportId,
+            startDate,
+            endDate,
+            createdBy
+          );
+          payments.push(...tenantPayments);
 
-        const contacts = await xeroService.fetchContacts(
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-          payments
-        );
+          const tenantInvoices = await xeroService.fetchInvoices(
+            accessToken,
+            tenantId,
+            clientId,
+            reportId,
+            tenantPayments,
+            createdBy
+          );
+          invoices.push(...tenantInvoices);
+
+          const tenantContacts = await xeroService.fetchContacts(
+            accessToken,
+            tenantId,
+            clientId,
+            reportId,
+            tenantPayments,
+            createdBy
+          );
+          contacts.push(...tenantContacts);
+        }
 
         logger.logEvent(
           "info",
@@ -180,7 +204,13 @@ async function handleOAuthCallback(req, res) {
         // console.log("Contacts:", contacts);
         // console.log("Payments:", payments);
 
-        const xeroData = { organisations, invoices, payments, contacts };
+        const xeroData = {
+          organisations,
+          invoices,
+          payments,
+          contacts,
+        };
+        // console.log("About to transform Xero data:", xeroData);
         const transformedXeroData = await transformXeroData(xeroData);
 
         try {
@@ -188,17 +218,14 @@ async function handleOAuthCallback(req, res) {
             transformedXeroData,
             reportId,
             clientId,
-            createdBy,
-            transaction
+            createdBy
           );
           if (result) {
             logger.logEvent("info", "Inserted TCP records successfully", {
               count: transformedXeroData.length,
             });
           }
-          await transaction?.commit?.();
         } catch (err) {
-          if (transaction) await transaction.rollback();
           logger.logEvent(
             "error",
             "Failed to save transformed data to tcp with transaction",
@@ -215,7 +242,6 @@ async function handleOAuthCallback(req, res) {
           "All Xero data saved successfully to tcp table."
         );
       } catch (err) {
-        if (transaction) await transaction.rollback();
         logger.logEvent(
           "error",
           "Error in background OAuth callback processing",

@@ -224,7 +224,8 @@ async function fetchContacts(
   tenantId,
   clientId,
   reportId,
-  payments
+  payments,
+  createdBy
 ) {
   logger.logEvent("info", "Fetching contacts from Xero", {
     action: "FetchContacts",
@@ -233,7 +234,7 @@ async function fetchContacts(
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching contacts...",
+      message: `Fetching ${tenantId} contacts...`,
       type: "status",
     });
   }
@@ -378,13 +379,16 @@ async function fetchContacts(
               clientId,
               reportId,
               ContactID: contact.ContactID,
-              Name: contact.Name || "",
-              CompanyNumber: contact.CompanyNumber || null,
-              TaxNumber: contact.TaxNumber || null,
-              DAYSAFTERBILLDATE: contact.DaysaAfterBillDate || null,
-              DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth || null,
-              OFCURRENTMONTH: contact.OfCurrentMonth || null,
-              OFFOLLOWINGMONTH: contact.OfFollowingMonth || null,
+              Name: contact.Name,
+              CompanyNumber: contact.CompanyNumber,
+              TaxNumber: contact.TaxNumber,
+              DAYSAFTERBILLDATE: contact.DaysaAfterBillDate,
+              DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth,
+              OFCURRENTMONTH: contact.OfCurrentMonth,
+              OFFOLLOWINGMONTH: contact.OfFollowingMonth,
+              PaymentTerms: contact.PaymentTerms,
+              source: "Xero",
+              createdBy,
               createdAt: new Date(),
               updatedAt: new Date(),
             });
@@ -474,7 +478,8 @@ async function fetchInvoices(
   tenantId,
   clientId,
   reportId,
-  payments
+  payments,
+  createdBy
 ) {
   logger.logEvent(
     "info",
@@ -487,7 +492,7 @@ async function fetchInvoices(
   );
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching invoices...",
+      message: `Fetching ${tenantId} invoices...`,
       type: "status",
     });
   }
@@ -503,6 +508,9 @@ async function fetchInvoices(
 
     // Prepare to collect actual invoice objects
     const invoiceResults = [];
+
+    // Prepare to collect not found invoices
+    const notFoundInvoices = [];
 
     // Use rate-limiting and error extraction utilities for each invoice fetch
     const limit = pLimit(5);
@@ -526,25 +534,42 @@ async function fetchInvoices(
             ) {
               invoice = data.Invoices[0];
             }
+            // If not found, add to notFoundInvoices
+            if (!invoice) {
+              notFoundInvoices.push({
+                invoiceId: id,
+                reason: "Not returned by Xero API",
+              });
+            }
             if (invoice) {
               invoiceResults.push(invoice);
               const invoiceRecord = {
                 clientId,
                 reportId,
-                InvoiceID: invoice.InvoiceID || null,
-                InvoiceNumber: invoice.InvoiceNumber || null,
-                Reference: invoice.Reference || null,
-                LineItems: invoice.LineItems || null,
-                Type: invoice.Type || null,
-                Contact: invoice.Contact || null,
-                DateString: invoice.Date || null,
-                DueDateString: invoice.DueDate || null,
-                Payments: invoice.Payments || null,
-                Status: invoice.Status || null,
-                AmountPaid: invoice.AmountPaid || null,
-                AmountDue: invoice.AmountDue || null,
-                AmountCredited: invoice.AmountCredited || null,
-                Total: invoice.Total || null,
+                InvoiceID: invoice.InvoiceID,
+                InvoiceNumber: invoice.InvoiceNumber,
+                Reference: invoice.Reference,
+                LineItems: invoice.LineItems,
+                Type: invoice.Type,
+                Contact: invoice.Contact,
+                DateString: invoice.DateString,
+                DueDateString: invoice.DueDateString,
+                Payments: invoice.Payments,
+                Status: invoice.Status,
+                AmountDue: invoice.AmountDue,
+                AmountPaid: invoice.AmountPaid,
+                AmountCredited: invoice.AmountCredited,
+                Total: invoice.Total,
+                invoicePaymentTermsBillsDay:
+                  invoice.invoicePaymentTermsBillsDay,
+                invoicePaymentTermsBillsType:
+                  invoice.invoicePaymentTermsBillsType,
+                invoicePaymentTermsSalesDay:
+                  invoice.invoicePaymentTermsSalesDay,
+                invoicePaymentTermsSalesType:
+                  invoice.invoicePaymentTermsSalesType,
+                source: "Xero",
+                createdBy,
                 createdAt: new Date(),
                 updatedAt: new Date(),
               };
@@ -563,6 +588,14 @@ async function fetchInvoices(
         })
       )
     );
+
+    if (global.sendWebSocketUpdate && notFoundInvoices.length > 0) {
+      global.sendWebSocketUpdate({
+        message: "Some invoices could not be retrieved",
+        type: "warning",
+        missingInvoices: notFoundInvoices,
+      });
+    }
 
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
@@ -657,7 +690,8 @@ async function fetchPayments(
   clientId,
   reportId,
   startDate,
-  endDate
+  endDate,
+  createdBy
 ) {
   logger.logEvent("info", "Extracting payments from Xero", {
     action: "ExtractXeroPayments",
@@ -668,7 +702,7 @@ async function fetchPayments(
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching payments...",
+      message: `Fetching ${tenantId} payments...`,
       type: "status",
     });
   }
@@ -678,7 +712,8 @@ async function fetchPayments(
     const end = new Date(endDate);
     const whereClause =
       `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
-      ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})`;
+      ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
+      ` && Status != "DELETED" && Invoice.Type != "ACCREC" && Invoice.Type != "ACCRECCREDIT"`;
     // Optionally log the final URL/params for troubleshooting
     logger.logEvent("debug", "Xero Payments GET where clause", {
       whereClause,
@@ -692,6 +727,8 @@ async function fetchPayments(
         get("/Payments", accessToken, tenantId, {
           params: {
             where: whereClause,
+            page: 1,
+            pageSize: 1,
           },
         }),
       3,
@@ -699,16 +736,28 @@ async function fetchPayments(
       global.sendWebSocketUpdate
     );
     const payments = data.Payments || [];
-    console.log("Payments data from Xero:", payments?.length);
+
     for (const payment of payments) {
+      // Skip payments with Status "DELETED" or Invoice.Type "ACCREC"
+      if (
+        payment.Status === "DELETED" ||
+        payment.Invoice?.Type === "ACCREC" ||
+        payment.Invoice?.Type === "ACCRECCREDIT"
+      ) {
+        continue;
+      }
       const paymentRecord = {
         clientId,
         reportId,
-        PaymentID: payment.PaymentID || null,
-        Amount: payment.Amount || null,
+        Amount: payment.Amount,
+        PaymentID: payment.PaymentID,
         Date: payment.Date,
-        Status: payment.Status || null,
-        Invoice: payment.Invoice || null,
+        Reference: payment.Reference,
+        IsReconciled: payment.IsReconciled,
+        Status: payment.Status,
+        Invoice: payment.Invoice,
+        source: "Xero",
+        createdBy,
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -764,6 +813,7 @@ async function fetchOrganisationDetails({
   tenantId,
   clientId,
   reportId,
+  createdBy,
 }) {
   logger.logEvent("info", "Extracting organisation details from Xero", {
     action: "ExtractXeroOrganisationDetails",
@@ -772,7 +822,7 @@ async function fetchOrganisationDetails({
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching organisation details...",
+      message: `Fetching ${tenantId} organisation details...`,
       type: "status",
     });
   }
@@ -785,40 +835,48 @@ async function fetchOrganisationDetails({
       1000,
       global.sendWebSocketUpdate
     );
-    const organisations = data.Organisations || [];
-    console.log("Organisations data from Xero:", organisations?.length);
-    for (const org of organisations) {
-      const orgRecord = {
-        clientId,
-        reportId,
-        organisationId: org.RegistrationNumber,
-        organisationName: org.Name,
-        organisationLegalName: org.LegalName,
-        organisationAbn: org.TaxNumber || null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      try {
-        await db.XeroOrganisation.upsert(orgRecord);
-      } catch (error) {
-        logger.logEvent("error", "Error during organisation upsert", {
-          error: extractErrorDetails(error),
-          organisationId: org.OrganisationID,
+    // Xero returns Organisations as an array
+    const organisation =
+      Array.isArray(data.Organisations) && data.Organisations.length > 0
+        ? data.Organisations[0]
+        : null;
+    console.log("Organisation data:", organisation);
+
+    try {
+      if (organisation) {
+        const orgRecord = {
+          OrganisationID: organisation.OrganisationID,
+          Name: organisation.Name,
+          LegalName: organisation.LegalName,
+          RegistrationNumber: organisation.RegistrationNumber,
+          TaxNumber: organisation.TaxNumber,
+          PaymentTerms: organisation.PaymentTerms,
+          // Add required fields
           clientId,
           reportId,
-        });
+          source: "Xero",
+          createdBy,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await db.XeroOrganisation.upsert(orgRecord);
       }
+    } catch (error) {
+      logger.logEvent("error", "Error during organisation upsert", {
+        error: extractErrorDetails(error),
+        organisationId: organisation?.APIKey || organisation?.OrganisationID,
+        clientId,
+        reportId,
+      });
     }
-    await db.XeroOrganisation.findAll({
-      where: { clientId, reportId },
-    });
+
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
         message: "SUCCESS: Organisation details saved",
         type: "status",
       });
     }
-    return organisations;
+    return organisation;
   } catch (error) {
     handleXeroApiError(error, global.sendWebSocketUpdate);
     logger.logEvent(

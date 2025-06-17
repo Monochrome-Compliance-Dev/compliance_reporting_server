@@ -46,6 +46,18 @@ const XeroContact = (sequelize) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      PaymentTerms: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+      },
+      source: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
+      createdBy: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
       createdAt: {
         type: DataTypes.DATE,
         allowNull: false,

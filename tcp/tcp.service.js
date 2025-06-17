@@ -234,9 +234,23 @@ async function saveTransformedDataToTcp(
     }
   });
 
+  // Normalise date fields
+  transformedRecords.forEach((record) => {
+    if (
+      record.invoiceIssueDate &&
+      typeof record.invoiceIssueDate === "string"
+    ) {
+      record.invoiceIssueDate = new Date(record.invoiceIssueDate);
+    }
+    if (record.invoiceDueDate && typeof record.invoiceDueDate === "string") {
+      record.invoiceDueDate = new Date(record.invoiceDueDate);
+    }
+  });
+
   // Validate each record using tcpBulkImportSchema
   // Add reportId, clientId, createdBy to each record
   for (let i = 0; i < transformedRecords.length; i++) {
+    console.log(`Validating record at index ${i}:`, transformedRecords[i]);
     transformedRecords[i].createdBy = createdBy;
     transformedRecords[i].reportId = reportId;
     transformedRecords[i].clientId = clientId;

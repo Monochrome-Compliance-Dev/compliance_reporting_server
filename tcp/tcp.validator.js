@@ -38,7 +38,7 @@ const tcpSchema = Joi.array().items(
       .default(null),
     paymentAmount: Joi.number().precision(2).required(),
     description: Joi.string().custom(sanitize).allow("", null),
-    supplyDate: Joi.date().optional().allow("", null),
+    supplyDate: Joi.string().optional().allow("", null),
     paymentDate: Joi.date().required(),
     contractPoReferenceNumber: Joi.string().custom(sanitize).allow("", null),
     contractPoPaymentTerms: Joi.string().custom(sanitize).allow("", null),
@@ -121,15 +121,15 @@ const tcpBulkImportSchema = Joi.object({
     .default(null),
   paymentAmount: Joi.number().precision(2).required(),
   description: Joi.string().custom(sanitize).allow("", null),
-  supplyDate: Joi.date().optional().allow("", null),
+  supplyDate: Joi.string().optional().allow("", null),
   paymentDate: Joi.date().optional().allow(null),
   contractPoReferenceNumber: Joi.string().custom(sanitize).allow("", null),
   contractPoPaymentTerms: Joi.string().custom(sanitize).allow("", null),
-  noticeForPaymentIssueDate: Joi.date().optional().allow("", null),
+  noticeForPaymentIssueDate: Joi.string().optional().allow("", null),
   noticeForPaymentTerms: Joi.string().custom(sanitize).allow("", null),
   invoiceReferenceNumber: Joi.string().custom(sanitize).allow("", null),
   invoiceIssueDate: Joi.date().optional().allow(null),
-  invoiceReceiptDate: Joi.date().optional().allow("", null),
+  invoiceReceiptDate: Joi.string().optional().allow("", null),
   invoiceAmount: Joi.number()
     .precision(2)
     .optional()

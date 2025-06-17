@@ -12,6 +12,7 @@ module.exports = {
   handle500Error,
   handleXeroApiError, // newly added export
   callXeroApiWithAutoRefresh,
+  handleXeroRateLimitWarnings,
 };
 
 /**
@@ -90,7 +91,46 @@ async function retryWithExponentialBackoff(fn, retries = 3, baseDelay = 1000) {
   let attempt = 0;
   while (attempt < retries) {
     try {
-      return await fn();
+      // Throttle proactively before making the API call if possible
+      const simulatedHeaders =
+        typeof fn.getRateLimitHeaders === "function"
+          ? await fn.getRateLimitHeaders()
+          : null;
+      if (simulatedHeaders) {
+        console.log("🔄 [Backoff] Simulated headers:", simulatedHeaders);
+        await handleXeroRateLimitWarnings(simulatedHeaders);
+      }
+
+      const response = await fn();
+
+      console.log("Full response headers:", response.headers);
+
+      if (response && response.headers) {
+        console.log("--- Rate Limit Headers ---");
+        if (typeof response.headers.forEach === "function") {
+          response.headers.forEach((value, key) => {
+            console.log(`${key}: ${value}`);
+          });
+        } else if (typeof response.headers === "object") {
+          // For Axios-style headers object
+          Object.entries(response.headers).forEach(([key, value]) => {
+            console.log(`${key}: ${value}`);
+          });
+        } else {
+          console.log("Cannot iterate headers");
+        }
+        console.log("--------------------------");
+      } else {
+        console.log("No headers found on response");
+      }
+
+      console.log(
+        "✅ [Backoff] Response headers after call:",
+        response?.headers
+      );
+      // Double-check rate limits after response
+      await handleXeroRateLimitWarnings(response?.headers);
+      return response;
     } catch (error) {
       const statusCode = error.response?.status || error.statusCode || null;
       if (statusCode === 429) {
@@ -129,6 +169,7 @@ async function paginateXeroApi(fetchPageFn, processPageFn) {
       const response = await retryWithExponentialBackoff(() =>
         fetchPageFn(page)
       );
+      await handleXeroRateLimitWarnings(response?.headers);
       await processPageFn(response);
       // Xero's pagination: assume 100 per page, so if less than 100, we're done
       hasMore = response?.data?.length > 0 && response.data.length === 100;
@@ -164,7 +205,9 @@ const xeroService = require("./xero.service"); // adjust path as needed
  */
 async function callXeroApiWithAutoRefresh(apiCallFn, clientId, ...args) {
   try {
-    return await apiCallFn(...args);
+    const response = await apiCallFn(...args);
+    await handleXeroRateLimitWarnings(response?.headers);
+    return response;
   } catch (error) {
     const statusCode = error.response?.status || error.statusCode || 500;
     if (statusCode === 401 || statusCode === 403) {
@@ -173,5 +216,50 @@ async function callXeroApiWithAutoRefresh(apiCallFn, clientId, ...args) {
       return await apiCallFn(...args);
     }
     throw error;
+  }
+}
+
+/**
+ * Dynamically calculates wait time to avoid hitting the Xero API rate limit.
+ * @param {number} remaining - The number of calls left.
+ * @param {number} reset - Epoch time (ms or s) when the rate limit resets.
+ * @returns {number} delay in milliseconds
+ */
+function calculateWaitTime(remaining, reset) {
+  if (isNaN(remaining) || isNaN(reset)) return 0;
+
+  const now = Date.now();
+  const resetTime = reset > 1000000000 ? reset * 1000 : reset; // handles ms vs s
+  const timeUntilReset = Math.max(resetTime - now, 1000); // ensure at least 1s buffer
+
+  // Assume 60 calls remaining is safe, less than that needs spreading
+  if (remaining > 60) return 0;
+
+  // Spread remaining calls evenly over the time until reset
+  const delayPerCall = Math.ceil(timeUntilReset / (remaining || 1));
+  return delayPerCall;
+}
+
+/**
+ * Proactively handles Xero rate limit warnings based on headers.
+ * @param {Object} headers - Response headers from the Xero API.
+ */
+async function handleXeroRateLimitWarnings(headers) {
+  console.log("🔍 [RateLimit] Headers received:", headers);
+  const remaining = parseInt(headers?.["x-rate-limit-remaining"], 10);
+  const reset = parseInt(headers?.["x-rate-limit-reset"], 10);
+
+  const waitTime = calculateWaitTime(remaining, reset);
+  if (waitTime > 0) {
+    const msg = `[Xero API] Throttling to avoid rate limit: waiting ${waitTime}ms (remaining: ${remaining})`;
+    console.warn(msg);
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        status: "warning",
+        message: msg,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await new Promise((res) => setTimeout(res, waitTime));
   }
 }

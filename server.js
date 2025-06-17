@@ -51,6 +51,7 @@ const { logger } = require("./helpers/logger");
 
 // Middleware to set clientId for RLS
 const setClientIdRLS = require("./middleware/setClientIdRLS");
+const transactionCleanup = require("./middleware/transactionCleanup");
 
 const allowedOrigins = [
   "https://monochrome-compliance.com",
@@ -170,6 +171,7 @@ app.use((req, res, next) => {
 
 // Set RLS clientId for every request
 app.use(setClientIdRLS);
+// app.use(transactionCleanup);
 
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));

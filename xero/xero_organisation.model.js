@@ -29,22 +29,38 @@ const XeroOrganisation = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      organisationId: {
+      OrganisationID: {
         type: DataTypes.STRING,
         allowNull: false,
         unique: true,
       },
-      organisationName: {
+      Name: {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      organisationLegalName: {
+      LegalName: {
         type: DataTypes.STRING,
         allowNull: true,
       },
-      organisationAbn: {
+      RegistrationNumber: {
         type: DataTypes.STRING,
         allowNull: true,
+      },
+      TaxNumber: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      PaymentTerms: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+      },
+      source: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
+      },
+      createdBy: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
       createdAt: {
         type: DataTypes.DATE,
