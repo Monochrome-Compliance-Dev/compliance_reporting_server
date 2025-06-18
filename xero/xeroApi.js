@@ -154,5 +154,74 @@ const post = async (url, data, accessToken, tenantId, config = {}) => {
   }
 };
 
+/**
+ * Make a DELETE request to the Xero API with dynamic accessToken and tenantId.
+ * @param {string} url - The endpoint (e.g. /connections/:id)
+ * @param {string} accessToken - OAuth2 access token
+ * @param {string} tenantId - Xero tenant id (optional for /connections)
+ * @param {object} config - Additional axios config (optional)
+ */
+const del = async (url, accessToken, tenantId, config = {}) => {
+  if (typeof accessToken !== "string") {
+    console.warn("accessToken is not a string. Fixing it now.");
+    accessToken = accessToken?.accessToken || "";
+  }
+  if (tenantId && typeof tenantId !== "string") {
+    tenantId = tenantId?.tenantId || "";
+  }
+  try {
+    while (!xeroQueue) await new Promise((res) => setTimeout(res, 10));
+    if (!xeroStartTime) xeroStartTime = Date.now();
+    xeroProcessedCount++;
+    const elapsed = Date.now() - xeroStartTime;
+    const avgTimePerItem = elapsed / xeroProcessedCount;
+    const eta = xeroTotalCount
+      ? (xeroTotalCount - xeroProcessedCount) * avgTimePerItem
+      : null;
+
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        status: "info",
+        message: `Xero API DELETE request ${xeroProcessedCount}${xeroTotalCount ? ` of ${xeroTotalCount}` : ""}`,
+        eta: eta ? formatEta(eta) : null,
+        current: xeroProcessedCount,
+        total: xeroTotalCount,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const headers = {
+      ...(config.headers || {}),
+      Authorization: `Bearer ${accessToken}`,
+      ...(tenantId && { "Xero-tenant-id": tenantId }),
+      Accept: "application/json",
+    };
+    let baseURL;
+    if (url === "/connections" || url.startsWith("/connections/")) {
+      baseURL = "https://api.xero.com";
+    } else {
+      baseURL = process.env.XERO_API_BASE_URL;
+    }
+    const response = await xeroQueue.add(() =>
+      axios.delete(url, {
+        ...config,
+        baseURL,
+        headers,
+      })
+    );
+    return {
+      data: response.data,
+      headers: response.headers,
+      status: response.status,
+    };
+  } catch (error) {
+    console.error(
+      `Error DELETE ${url}:`,
+      error.response?.data || error.message
+    );
+    throw error;
+  }
+};
+
 // Export for reuse
-module.exports = { get, post };
+module.exports = { get, post, del };

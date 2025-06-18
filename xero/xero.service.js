@@ -1,5 +1,5 @@
 const { logger } = require("../helpers/logger");
-const { get, post } = require("./xeroApi");
+const { get, post, del } = require("./xeroApi");
 const {
   retryWithExponentialBackoff,
   paginateXeroApi,
@@ -28,6 +28,8 @@ module.exports = {
   getConnections,
   getAllXeroData,
   syncAllTenants, // Exported for use
+  removeTenant,
+  saveToken,
 };
 
 async function exchangeAuthCodeForTokens(code, state, req) {
@@ -65,10 +67,12 @@ async function exchangeAuthCodeForTokens(code, state, req) {
     // Extract clientId and reportId securely from state if encoded, else fallback to req.auth.clientId
     let clientId = null;
     let reportId = null;
+    let tenantId = null;
     try {
       const parsedState = JSON.parse(state);
       clientId = parsedState.clientId || req.auth.clientId;
       reportId = parsedState.reportId || req.query?.reportId || null;
+      tenantId = parsedState.tenantId || null;
     } catch (e) {
       logger.logEvent("warn", "State parsing failed, using req.auth.clientId", {
         action: "ExchangeAuthCodeForTokens",
@@ -90,30 +94,11 @@ async function exchangeAuthCodeForTokens(code, state, req) {
         action: "ExchangeAuthCodeForTokens",
         clientId,
         reportId,
+        tenantId,
       }
     );
 
-    // Save the new token data to the database, including clientId (mandatory)
-    const updateData = {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires: new Date(Date.now() + (tokenData.expires_in || 0) * 1000),
-      created: new Date(),
-      createdByIp: "", // You may want to pass this in if available
-      revoked: null,
-      revokedByIp: null,
-      replacedByToken: null,
-      clientId, // Mandatory for auditing and security
-      reportId, // Save reportId if needed for auditing
-    };
-
-    await XeroToken.upsert(updateData);
-
-    logger.logEvent("info", "Token data saved to database", {
-      action: "ExchangeAuthCodeForTokens",
-      clientId,
-      reportId,
-    });
+    // Do not insert token here — save handled after tenantId is known
     return tokenData;
   } catch (error) {
     logger.logEvent("error", "Error exchanging auth code for tokens", {
@@ -1025,4 +1010,141 @@ async function syncAllTenants(tenants, fetchXeroDataForTenant, logger) {
   for (const tenant of tenants) {
     await fetchXeroDataForTenant(tenant);
   }
+}
+
+/**
+ * Remove a Xero tenant connection.
+ * @param {string} tenantId
+ */
+async function removeTenant(tenantId) {
+  logger.logEvent("info", "Removing Xero tenant connection", {
+    action: "RemoveTenant",
+    tenantId,
+  });
+
+  // Log before looking for access token
+  logger.logEvent("debug", "Looking for most recent unrevoked access token", {
+    action: "RemoveTenant",
+    tenantId,
+  });
+
+  try {
+    const accessTokenRecord = await XeroToken.findOne({
+      where: { tenantId, revoked: null },
+      order: [["created", "DESC"]],
+    });
+
+    if (!accessTokenRecord) {
+      logger.logEvent("warn", "No unrevoked access token found", {
+        action: "RemoveTenant",
+        tenantId,
+      });
+    } else {
+      logger.logEvent("debug", "Access token found for removal", {
+        action: "RemoveTenant",
+        tenantId,
+        tokenCreated: accessTokenRecord.created,
+      });
+    }
+
+    if (!accessTokenRecord) {
+      throw new Error("No active access token found for removing tenant");
+    }
+
+    const accessToken = accessTokenRecord.access_token;
+
+    logger.logEvent("debug", "Sending request to Xero to remove connection", {
+      action: "RemoveTenant",
+      tenantId,
+      tokenSnippet: accessToken?.slice?.(0, 10) + "...",
+    });
+
+    try {
+      await retryWithExponentialBackoff(
+        () => del("/connections/" + tenantId, accessToken),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+
+      logger.logEvent("info", "Tenant removed from Xero successfully", {
+        action: "RemoveTenant",
+        tenantId,
+      });
+    } catch (error) {
+      const details = extractErrorDetails(error);
+      if (
+        details?.Status === 403 &&
+        details?.Detail === "AuthenticationUnsuccessful"
+      ) {
+        logger.logEvent(
+          "warn",
+          "Token no longer valid for tenant — assuming removal",
+          {
+            action: "RemoveTenant",
+            tenantId,
+            fallback: true,
+            details,
+          }
+        );
+        // Log a fallback "Tenant assumed removed" and return early
+        logger.logEvent(
+          "info",
+          "Tenant assumed removed from Xero (token invalid or already removed)",
+          {
+            action: "RemoveTenant",
+            tenantId,
+            fallback: true,
+          }
+        );
+        return;
+      }
+
+      logger.logEvent("error", "Failed to remove tenant", {
+        action: "RemoveTenant",
+        tenantId,
+        error: details,
+      });
+      throw error;
+    }
+  } catch (error) {
+    // Add deep debug log of the full error object
+    console.error("Full removeTenant error:", error);
+    logger.logEvent("error", "Failed to remove tenant", {
+      action: "RemoveTenant",
+      tenantId,
+      error: extractErrorDetails(error),
+    });
+    throw error;
+  }
+}
+
+// Save a Xero token for a tenant/client
+
+/**
+ * Save or update a Xero token for a tenant.
+ * @param {Object} param0
+ */
+async function saveToken({
+  accessToken,
+  refreshToken,
+  expiresIn,
+  clientId,
+  tenantId,
+  // Optionally accept createdByIp as a parameter if available
+}) {
+  const updateData = {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires: new Date(Date.now() + (expiresIn || 0) * 1000),
+    created: new Date(),
+    createdByIp: "", // you may want to pass this dynamically
+    revoked: null,
+    revokedByIp: null,
+    replacedByToken: null,
+    clientId,
+    tenantId,
+  };
+
+  await XeroToken.upsert(updateData);
 }

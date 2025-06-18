@@ -15,6 +15,23 @@ router.get(
 router.get("/callback", handleOAuthCallback);
 router.post("/extract", authorise(), startXeroExtractionHandler);
 
+// Route to remove a tenant
+router.delete("/tenants/:tenantId", authorise(), async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    await xeroService.removeTenant(tenantId);
+    res
+      .status(200)
+      .json({ message: `Tenant ${tenantId} removed successfully.` });
+  } catch (err) {
+    logger.logEvent("error", "Failed to remove tenant", {
+      action: "removeTenant",
+      error: err.message,
+    });
+    res.status(500).json({ error: "Failed to remove tenant." });
+  }
+});
+
 module.exports = router;
 
 function generateAuthUrl(req, res) {
@@ -62,30 +79,54 @@ function generateAuthUrl(req, res) {
 }
 
 async function handleOAuthCallback(req, res) {
+  const { code, state, error, error_description } = req.query;
+
+  let parsedState = {};
   try {
-    const { code, state } = req.query;
+    parsedState = JSON.parse(state);
+  } catch (err) {
+    logger.logEvent("error", "Failed to parse state", {
+      action: "OAuthCallback",
+      error: err.message,
+      state,
+    });
+    return res.status(400).send("Invalid state parameter.");
+  }
+
+  const { reportId } = parsedState;
+
+  try {
+    if (error) {
+      const description =
+        error_description || "Access was denied or revoked by the user.";
+      logger.logEvent("warn", "Xero auth denied or revoked", {
+        error,
+        description,
+      });
+
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      if (description.includes("TenantConsent status DENIED")) {
+        return res.redirect(`${frontendUrl}/user/dashboard`);
+      }
+
+      return res.redirect(
+        `${frontendUrl}/reports/ptrs/${reportId}/selection?error=${encodeURIComponent(description)}`
+      );
+    }
 
     if (!code) {
-      logger.logEvent("error", "Missing code in OAuth callback", {
+      const description =
+        "Missing code in OAuth callback — the connection may have failed or been cancelled unexpectedly.";
+      logger.logEvent("error", description, {
         action: "OAuthCallback",
-        code,
+        reportId,
       });
-      return res.status(400).send("Missing code.");
-    }
 
-    let parsedState = {};
-    try {
-      parsedState = JSON.parse(state);
-    } catch (err) {
-      logger.logEvent("error", "Failed to parse state", {
-        action: "OAuthCallback",
-        error: err.message,
-        state,
-      });
-      return res.status(400).send("Invalid state parameter.");
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+      return res.redirect(
+        `${frontendUrl}/reports/ptrs/${reportId}/selection?error=${encodeURIComponent(description)}`
+      );
     }
-
-    const { clientId, reportId, createdBy, startDate, endDate } = parsedState;
 
     // Exchange the code for tokens
     let tokenData;
@@ -124,6 +165,24 @@ async function handleOAuthCallback(req, res) {
       );
       return res.status(500).send("No tenant IDs found.");
     }
+
+    console.log("Retrieved connections:", connections);
+
+    // Save token per tenant (removed validation)
+    await Promise.all(
+      connections.map(async (connection) => {
+        const tokenPayload = {
+          accessToken,
+          refreshToken: tokenData.refresh_token,
+          expiresIn: tokenData.expires_in,
+          idToken: tokenData.id_token,
+          clientId: parsedState.clientId,
+          tenantId: connection.tenantId,
+          createdBy: parsedState.createdBy,
+        };
+        await xeroService.saveToken(tokenPayload);
+      })
+    );
 
     // Redirect the user immediately to the frontend selection page with orgs in query string
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";

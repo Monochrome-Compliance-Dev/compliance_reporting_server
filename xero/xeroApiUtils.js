@@ -249,7 +249,7 @@ function calculateWaitTime(remaining, reset) {
  * @param {Object} headers - Response headers from the Xero API.
  */
 async function handleXeroRateLimitWarnings(headers) {
-  console.log("🔍 [RateLimit] Headers received:", headers);
+  // console.log("🔍 [RateLimit] Headers received:", headers);
   // Use the correct per-minute rate limit header as returned by Xero
   const remaining = parseInt(headers?.["x-minlimit-remaining"], 10);
   const reset = parseInt(headers?.["x-rate-limit-reset"], 10);

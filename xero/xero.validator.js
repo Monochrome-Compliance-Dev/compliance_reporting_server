@@ -24,6 +24,7 @@ const xeroTokenSchema = Joi.object({
   revokedByIp: Joi.string().optional().allow(null, ""),
   replacedByToken: Joi.string().optional().allow(null, ""),
   clientId: Joi.string().length(10).required(),
+  tenantId: Joi.string().required(),
 });
 
 const xeroInvoiceSchema = Joi.object({
