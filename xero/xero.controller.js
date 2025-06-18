@@ -6,6 +6,7 @@ const xeroService = require("./xero.service");
 const authorise = require("../middleware/authorise");
 const { transformXeroData } = require("../scripts/xero/transformXeroData");
 const tcpService = require("../tcp/tcp.service");
+const { json } = require("body-parser");
 
 router.get(
   "/connect/:reportId/:createdBy/:startDate/:endDate",
@@ -166,7 +167,7 @@ async function handleOAuthCallback(req, res) {
       return res.status(500).send("No tenant IDs found.");
     }
 
-    console.log("Retrieved connections:", connections);
+    // console.log("Retrieved connections:", connections);
 
     // Save token per tenant (removed validation)
     await Promise.all(
@@ -200,21 +201,49 @@ async function handleOAuthCallback(req, res) {
 }
 
 async function startXeroExtractionHandler(req, res) {
-  const { accessToken, clientId, reportId, createdBy, startDate, endDate } =
+  const { clientId, reportId, createdBy, startDate, endDate, tenantIds } =
     req.body;
-
-  setImmediate(() => {
-    startXeroExtraction({
-      accessToken,
-      clientId,
-      reportId,
-      createdBy,
-      startDate,
-      endDate,
-    });
+  console.log("Starting Xero extraction with params:", {
+    clientId,
+    reportId,
+    createdBy,
+    startDate,
+    endDate,
+    tenantIds,
   });
 
-  res.status(202).json({ message: "Extraction started." });
+  if (!Array.isArray(tenantIds) || tenantIds.length === 0) {
+    return res.status(400).json({ error: "No tenantIds provided." });
+  }
+
+  for (const tenantId of tenantIds) {
+    const tokenRecord = await xeroService.getLatestToken(clientId, tenantId);
+    if (!tokenRecord || !tokenRecord.access_token) {
+      logger.logEvent("error", "Access token not found for client and tenant", {
+        clientId,
+        tenantId,
+      });
+      continue; // skip this one, but keep going
+    }
+
+    const accessToken = tokenRecord.access_token;
+
+    setImmediate(() => {
+      startXeroExtraction({
+        accessToken,
+        clientId,
+        reportId,
+        createdBy,
+        startDate,
+        endDate,
+        tenantIds: [tenantId], // pass as array for downstream compatibility
+      });
+    });
+  }
+
+  res
+    .status(202)
+    .json({ message: "Extraction started for specified tenants." });
 }
 
 async function startXeroExtraction({
@@ -224,6 +253,7 @@ async function startXeroExtraction({
   createdBy,
   startDate,
   endDate,
+  tenantIds,
 }) {
   try {
     // Prepare arrays to collect data from all tenants
@@ -231,25 +261,27 @@ async function startXeroExtraction({
     const payments = [];
     const invoices = [];
     const contacts = [];
+    const bankTxns = [];
 
-    // Enhanced: Add tenant-level delay, error handling, and WebSocket updates
-    for (const tenant of await xeroService.getConnections(accessToken)) {
+    for (const tenantId of tenantIds) {
+      const tenant = { tenantId };
+      console.log("Starting sync for tenant:", tenantId);
+
       const waitTime = 30000 + Math.floor(Math.random() * 15000); // 30–45s
       logger.logEvent(
         "info",
-        `Waiting ${waitTime / 1000}s before syncing tenant ${tenant.id}`
+        `Waiting ${waitTime / 1000}s before syncing tenant ${tenantId}`
       );
       if (global.sendWebSocketUpdate) {
         global.sendWebSocketUpdate({
           status: "info",
-          message: `Waiting ${Math.round(waitTime / 1000)}s before syncing tenant ${tenant.tenantName || tenant.name || tenant.id}`,
+          message: `Waiting ${Math.round(waitTime / 1000)}s before syncing tenant ${tenantId}`,
           timestamp: new Date().toISOString(),
         });
       }
       await new Promise((resolve) => setTimeout(resolve, waitTime));
 
       try {
-        const tenantId = tenant.tenantId || tenant.id;
         const orgs = await xeroService.fetchOrganisationDetails({
           accessToken,
           tenantId,
@@ -263,7 +295,11 @@ async function startXeroExtraction({
           organisations.push(orgs);
         }
 
-        const tenantPayments = await xeroService.fetchPayments(
+        console.log(
+          `Fetching BankTransactions from ${startDate} to ${endDate}`
+        );
+
+        const tenantBankTxns = await xeroService.fetchBankTransactions(
           accessToken,
           tenantId,
           clientId,
@@ -272,36 +308,47 @@ async function startXeroExtraction({
           endDate,
           createdBy
         );
-        payments.push(...tenantPayments);
+        bankTxns.push(...tenantBankTxns);
 
-        const tenantInvoices = await xeroService.fetchInvoices(
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-          tenantPayments,
-          createdBy
-        );
-        invoices.push(...tenantInvoices);
+        // const tenantPayments = await xeroService.fetchPayments(
+        //   accessToken,
+        //   tenantId,
+        //   clientId,
+        //   reportId,
+        //   startDate,
+        //   endDate,
+        //   createdBy
+        // );
+        // payments.push(...tenantPayments);
 
-        const tenantContacts = await xeroService.fetchContacts(
-          accessToken,
-          tenantId,
-          clientId,
-          reportId,
-          tenantPayments,
-          createdBy
-        );
-        contacts.push(...tenantContacts);
+        // const tenantInvoices = await xeroService.fetchInvoices(
+        //   accessToken,
+        //   tenantId,
+        //   clientId,
+        //   reportId,
+        //   tenantPayments,
+        //   createdBy
+        // );
+        // invoices.push(...tenantInvoices);
+
+        // const tenantContacts = await xeroService.fetchContacts(
+        //   accessToken,
+        //   tenantId,
+        //   clientId,
+        //   reportId,
+        //   tenantPayments,
+        //   createdBy
+        // );
+        // contacts.push(...tenantContacts);
       } catch (err) {
         logger.logEvent("error", "Tenant sync failed", {
-          tenantId: tenant.id,
+          tenantId,
           error: err,
         });
         if (global.sendWebSocketUpdate) {
           global.sendWebSocketUpdate({
             status: "error",
-            message: `Tenant ${tenant.tenantName || tenant.name || tenant.id} failed: ${err.message}`,
+            message: `Tenant ${tenantId} failed: ${err.message}`,
             timestamp: new Date().toISOString(),
           });
         }
@@ -315,35 +362,36 @@ async function startXeroExtraction({
 
     const xeroData = {
       organisations,
-      invoices,
-      payments,
-      contacts,
+      // invoices,
+      // payments,
+      // contacts,
+      bankTxns,
     };
-    const transformedXeroData = await transformXeroData(xeroData);
+    // const transformedXeroData = await transformXeroData(xeroData);
 
-    try {
-      const result = await tcpService.saveTransformedDataToTcp(
-        transformedXeroData,
-        reportId,
-        clientId,
-        createdBy
-      );
-      if (result) {
-        logger.logEvent("info", "Inserted TCP records successfully", {
-          count: transformedXeroData.length,
-        });
-      }
-    } catch (err) {
-      logger.logEvent(
-        "error",
-        "Failed to save transformed data to tcp with transaction",
-        {
-          action: "OAuthCallback-Background",
-          error: err.message,
-        }
-      );
-      return;
-    }
+    // try {
+    //   const result = await tcpService.saveTransformedDataToTcp(
+    //     transformedXeroData,
+    //     reportId,
+    //     clientId,
+    //     createdBy
+    //   );
+    //   if (result) {
+    //     logger.logEvent("info", "Inserted TCP records successfully", {
+    //       count: transformedXeroData.length,
+    //     });
+    //   }
+    // } catch (err) {
+    //   logger.logEvent(
+    //     "error",
+    //     "Failed to save transformed data to tcp with transaction",
+    //     {
+    //       action: "OAuthCallback-Background",
+    //       error: err.message,
+    //     }
+    //   );
+    //   return;
+    // }
 
     logger.logEvent("info", "All Xero data saved successfully to tcp table.");
   } catch (err) {

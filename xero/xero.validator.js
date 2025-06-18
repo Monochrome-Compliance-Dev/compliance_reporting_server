@@ -111,6 +111,38 @@ const credentialsSchema = Joi.object({
   password: Joi.string().required(),
 });
 
+const XeroBankTxnSchema = Joi.object({
+  clientId: Joi.string().length(10).required(),
+  reportId: Joi.string().required(),
+  BankTransactionID: Joi.string().optional().allow(null, ""),
+  Type: Joi.string().optional().allow(null, ""),
+  Contact: Joi.object().optional().allow(null, ""),
+  LineItems: Joi.array()
+    .items(
+      Joi.object({
+        Description: Joi.string().optional().allow(null, ""),
+        Quantity: Joi.number().optional(),
+        UnitAmount: Joi.number().optional(),
+        AccountCode: Joi.string().optional().allow(null, ""),
+        TaxType: Joi.string().optional().allow(null, ""),
+        TaxAmount: Joi.number().optional(),
+      })
+    )
+    .optional(),
+  BankAccount: Joi.object().optional().allow(null, ""),
+  LineAmountTypes: Joi.string().optional().allow(null, ""),
+  SubTotal: Joi.number().optional(),
+  TotalTax: Joi.number().optional(),
+  Total: Joi.number().optional(),
+  CurrencyCode: Joi.string().optional(),
+  Reconciled: Joi.boolean().optional(),
+  Status: Joi.string().optional(),
+  DateString: Joi.string().optional(),
+  tenantId: Joi.string().required(),
+  source: Joi.string().required(),
+  createdBy: Joi.string().required(),
+});
+
 module.exports = {
   xeroTokenSchema,
   xeroInvoiceSchema,

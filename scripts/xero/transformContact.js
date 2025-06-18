@@ -14,6 +14,11 @@ const transformContact = (contact) => {
     contractPoPaymentTerms = c.PaymentTerms.Bills.Day;
   }
 
+  // Log the tenant (if available)
+  if (contact?.tenant) {
+    console.log("Tenant:", contact.tenant);
+  }
+
   return {
     ...c,
     payeeEntityName: c?.Name || null,

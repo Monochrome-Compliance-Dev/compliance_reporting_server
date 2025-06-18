@@ -1,12 +1,9 @@
 const { logger } = require("../helpers/logger");
+const { parseXeroDate } = require("../utils/date-parser");
 const { get, post, del } = require("./xeroApi");
 const {
   retryWithExponentialBackoff,
-  paginateXeroApi,
   extractErrorDetails,
-  prepareHeaders,
-  rateLimitHandler,
-  logApiCall,
   handleXeroApiError,
 } = require("./xeroApiUtils");
 const defineXeroTokenModel = require("./xero_tokens.model");
@@ -30,6 +27,8 @@ module.exports = {
   syncAllTenants, // Exported for use
   removeTenant,
   saveToken,
+  getLatestToken,
+  fetchBankTransactions,
 };
 
 async function exchangeAuthCodeForTokens(code, state, req) {
@@ -707,7 +706,7 @@ async function fetchPayments(
       startDate,
       endDate,
     });
-    const { data, headers, status } = await retryWithExponentialBackoff(
+    const { data, headers } = await retryWithExponentialBackoff(
       () =>
         get("/Payments", accessToken, tenantId, {
           params: {
@@ -1147,4 +1146,216 @@ async function saveToken({
   };
 
   await XeroToken.upsert(updateData);
+}
+
+/**
+ * Retrieve the most recent (unrevoked) token for a given clientId.
+ * @param {string} clientId
+ * @returns {Promise<Object|null>}
+ */
+async function getLatestToken(clientId, tenantId) {
+  return XeroToken.findOne({
+    where: { clientId, tenantId, revoked: null },
+    order: [["created", "DESC"]],
+  });
+}
+
+// Possible fuzzy matching for bank transactions and payments
+// import dayjs from "dayjs";
+
+// function matchPaymentsToBankTransactions(
+//   payments,
+//   bankTransactions,
+//   options = {}
+// ) {
+//   const {
+//     dateToleranceDays = 2,
+//     amountTolerance = 0.01,
+//     useContactMatch = true,
+//   } = options;
+
+//   const matched = [];
+//   const unmatchedPayments = [];
+//   const matchedTransactionIds = new Set();
+
+//   payments.forEach((payment) => {
+//     const paymentDate = dayjs(payment.date);
+//     const paymentAmount = parseFloat(payment.amount);
+
+//     const match = bankTransactions.find((tx) => {
+//       const txDate = dayjs(tx.date);
+//       const txAmount = parseFloat(tx.amount);
+//       const dateDiff = Math.abs(paymentDate.diff(txDate, "day"));
+
+//       const contactMatch =
+//         !useContactMatch ||
+//         (payment.contact?.name &&
+//           tx.contact?.name &&
+//           payment.contact.name.toLowerCase() === tx.contact.name.toLowerCase());
+
+//       const isAmountMatch =
+//         Math.abs(paymentAmount - txAmount) <= amountTolerance;
+
+//       const isMatch =
+//         isAmountMatch && dateDiff <= dateToleranceDays && contactMatch;
+
+//       return isMatch && !matchedTransactionIds.has(tx.id);
+//     });
+
+//     if (match) {
+//       matched.push({ payment, bankTransaction: match });
+//       matchedTransactionIds.add(match.id);
+//     } else {
+//       unmatchedPayments.push(payment);
+//     }
+//   });
+
+//   return {
+//     matched,
+//     unmatchedPayments,
+//     unmatchedBankTransactions: bankTransactions.filter(
+//       (tx) => !matchedTransactionIds.has(tx.id)
+//     ),
+//   };
+// }
+
+/**
+ * Fetch bank transactions from Xero API and save them to the database.
+ * @param {Object} options - { accessToken, tenantId, clientId, reportId, startDate, endDate, createdBy }
+ */
+async function fetchBankTransactions(
+  accessToken,
+  tenantId,
+  clientId,
+  reportId,
+  startDate,
+  endDate,
+  createdBy
+) {
+  logger.logEvent("info", "Extracting bank transactions from Xero", {
+    action: "ExtractXeroBankTransactions",
+    clientId,
+    reportId,
+    startDate,
+    endDate,
+  });
+
+  if (global.sendWebSocketUpdate) {
+    global.sendWebSocketUpdate({
+      message: `Fetching ${tenantId} bank transactions...`,
+      type: "status",
+    });
+  }
+
+  try {
+    let fetchedAll = false;
+    let page = 1;
+    const allBankTxns = [];
+
+    while (!fetchedAll) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const whereClause =
+        `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
+        ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
+        ` && Type == "SPEND"`;
+      logger.logEvent("debug", "Xero Bank Transactions GET where clause", {
+        whereClause,
+        clientId,
+        reportId,
+        startDate,
+        endDate,
+      });
+      const { data } = await retryWithExponentialBackoff(
+        () =>
+          get("/BankTransactions", accessToken, tenantId, {
+            params: {
+              where: whereClause,
+              page, // Use pagination
+              // pageSize: 100, // Xero defaults to 100 per page
+            },
+          }),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+
+      // console.log("!@!@!@Bank transactions data:", data);
+
+      const pageItems = data?.BankTransactions || [];
+
+      if (!Array.isArray(pageItems)) {
+        logger.logEvent("warn", "No bank transactions returned", {
+          tenantId,
+          clientId,
+          reportId,
+          page,
+        });
+        break;
+      }
+
+      for (const txn of pageItems) {
+        allBankTxns.push(txn);
+        try {
+          await db.XeroBankTxn.upsert({
+            ...txn,
+            Date: parseXeroDate(txn.Date, txn.DateString),
+            clientId,
+            reportId,
+            tenantId,
+            source: "Xero",
+            createdBy,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        } catch (err) {
+          logger.logEvent("error", "Error during bank transaction upsert", {
+            error: extractErrorDetails(err),
+            bankTransactionId: txn.BankTransactionID,
+            clientId,
+            reportId,
+          });
+        }
+      }
+
+      if (pageItems.length < 100) {
+        fetchedAll = true;
+      } else {
+        page++;
+      }
+    }
+
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        message: "SUCCESS: Bank transactions fetched and saved",
+        type: "status",
+      });
+    }
+
+    logger.logEvent("info", "Bank transactions extracted and saved", {
+      action: "ExtractXeroBankTransactions",
+      clientId,
+      reportId,
+      count: allBankTxns.length,
+    });
+
+    return allBankTxns;
+  } catch (error) {
+    handleXeroApiError(error, global.sendWebSocketUpdate);
+    logger.logEvent("error", "Error extracting bank transactions from Xero", {
+      action: "ExtractXeroBankTransactions",
+      clientId,
+      reportId,
+      error: error.message,
+    });
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        status: "error",
+        message:
+          "Error extracting bank transactions from Xero: " + error.message,
+        code: error.statusCode || error.response?.status || 500,
+      });
+    }
+    throw error;
+  }
 }
