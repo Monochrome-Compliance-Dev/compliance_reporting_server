@@ -22,6 +22,12 @@ function model(sequelize) {
     payeeEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true },
     paymentAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: false },
     description: { type: DataTypes.STRING, allowNull: true },
+    transactionType: { type: DataTypes.STRING, allowNull: true },
+    isReconciled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
     supplyDate: { type: DataTypes.STRING, allowNull: true },
     paymentDate: { type: DataTypes.DATE, allowNull: false },
     contractPoReferenceNumber: { type: DataTypes.STRING, allowNull: true },

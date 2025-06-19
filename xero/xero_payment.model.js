@@ -45,6 +45,10 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: true,
       },
+      PaymentType: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+      },
       IsReconciled: {
         type: DataTypes.BOOLEAN,
         allowNull: true,

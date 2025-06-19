@@ -202,14 +202,16 @@ async function refreshToken() {
 /**
  * Fetch contacts from Xero API and save them to the database.
  * Enhanced logging for API responses, errors, retries, and upserts.
- * @param {Object} options - { accessToken, tenantId, clientId, reportId, payments }
+ * @param {Object} options - { accessToken, tenantId, clientId, reportId, transactions }
  */
+// TODO: Request a list of contacts by id only
+// https://developer.xero.com/documentation/api/accounting/contacts#optimised-use-of-the-where-filter
 async function fetchContacts(
   accessToken,
   tenantId,
   clientId,
   reportId,
-  payments,
+  transactions,
   createdBy
 ) {
   logger.logEvent("info", "Fetching contacts from Xero", {
@@ -226,26 +228,25 @@ async function fetchContacts(
   try {
     logger.logEvent(
       "debug",
-      "Number of invoices and payments before processing",
+      "Number of transactions (payments + bankTxns) before processing",
       {
         action: "FetchContacts",
         clientId,
         reportId,
-        paymentCount: payments.length,
+        transactionCount: transactions.length,
       }
     );
 
     const contactIdsSet = new Set();
-    // Extract ContactID from nested Invoice.Contact object in payments
-    for (let i = 0; i < payments.length; i++) {
-      const payment = payments[i];
-      const invoice = payment.Invoice || {};
-      const contact = invoice.Contact || {};
-      const contactId = contact.ContactID || null;
+    // Extract ContactID from record (supports both Payment and BankTxn style)
+    for (let i = 0; i < transactions.length; i++) {
+      const record = transactions[i];
+      const contactId =
+        record.Contact?.ContactID || record.Invoice?.Contact?.ContactID || null;
       logger.logEvent(
         "debug",
-        "[fetchContacts] Extracted contactId from payment",
-        { contactId, clientId, reportId, iteration: i, source: "payment" }
+        "[fetchContacts] Extracted contactId from record",
+        { contactId, clientId, reportId, iteration: i, source: "record" }
       );
       if (contactId) {
         contactIdsSet.add(contactId);
@@ -365,10 +366,6 @@ async function fetchContacts(
               Name: contact.Name,
               CompanyNumber: contact.CompanyNumber,
               TaxNumber: contact.TaxNumber,
-              DAYSAFTERBILLDATE: contact.DaysaAfterBillDate,
-              DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth,
-              OFCURRENTMONTH: contact.OfCurrentMonth,
-              OFFOLLOWINGMONTH: contact.OfFollowingMonth,
               PaymentTerms: contact.PaymentTerms,
               source: "Xero",
               createdBy,
@@ -691,70 +688,84 @@ async function fetchPayments(
     });
   }
   try {
-    // Build Xero-compliant ISO 8601 DateTime filter
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const whereClause =
-      `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
-      ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
-      ` && Status != "DELETED" && Invoice.Type != "ACCREC" && Invoice.Type != "ACCRECCREDIT"`;
-    // Optionally log the final URL/params for troubleshooting
-    logger.logEvent("debug", "Xero Payments GET where clause", {
-      whereClause,
-      clientId,
-      reportId,
-      startDate,
-      endDate,
-    });
-    const { data, headers } = await retryWithExponentialBackoff(
-      () =>
-        get("/Payments", accessToken, tenantId, {
-          params: {
-            where: whereClause,
-            // page: 1,
-            // pageSize: 1,
-          },
-        }),
-      3,
-      1000,
-      global.sendWebSocketUpdate
-    );
-    logger.logEvent("debug", "Xero API response headers", { headers });
-    const payments = data?.Payments || [];
+    let fetchedAll = false;
+    let page = 1;
+    const allPayments = [];
 
-    for (const payment of payments) {
-      // Skip payments with Status "DELETED" or Invoice.Type "ACCREC"
-      if (
-        payment.Status === "DELETED" ||
-        payment.Invoice?.Type === "ACCREC" ||
-        payment.Invoice?.Type === "ACCRECCREDIT"
-      ) {
-        continue;
-      }
-      const paymentRecord = {
+    while (!fetchedAll) {
+      // Build Xero-compliant ISO 8601 DateTime filter
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const whereClause =
+        `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
+        ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
+        ` && Status != "DELETED" && Invoice.Type != "ACCREC" && Invoice.Type != "ACCRECCREDIT"`;
+      // Optionally log the final URL/params for troubleshooting
+      logger.logEvent("debug", "Xero Payments GET where clause", {
+        whereClause,
         clientId,
         reportId,
-        Amount: payment.Amount,
-        PaymentID: payment.PaymentID,
-        Date: payment.Date,
-        Reference: payment.Reference,
-        IsReconciled: payment.IsReconciled,
-        Status: payment.Status,
-        Invoice: payment.Invoice,
-        source: "Xero",
-        createdBy,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      try {
-        await db.XeroPayment.upsert(paymentRecord);
-      } catch (error) {
-        logger.logEvent("error", "Error during payment upsert", {
-          error: extractErrorDetails(error),
-          paymentId: payment.PaymentID,
+        startDate,
+        endDate,
+      });
+      const { data, headers } = await retryWithExponentialBackoff(
+        () =>
+          get("/Payments", accessToken, tenantId, {
+            params: {
+              where: whereClause,
+              page,
+              // pageSize: 100, // Xero defaults to 100 per page
+            },
+          }),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+      // logger.logEvent("debug", "Xero API response headers", { headers });
+      const pageItems = data?.Payments || [];
+
+      for (const payment of pageItems) {
+        allPayments.push(payment);
+        // Skip payments with Status "DELETED" or Invoice.Type "ACCREC"
+        if (
+          payment.Status === "DELETED" ||
+          payment.Invoice?.Type === "ACCREC" ||
+          payment.Invoice?.Type === "ACCRECCREDIT"
+        ) {
+          continue;
+        }
+        const paymentRecord = {
           clientId,
           reportId,
-        });
+          Amount: payment.Amount,
+          PaymentID: payment.PaymentID,
+          Date: payment.Date,
+          Reference: payment.Reference,
+          IsReconciled: payment.IsReconciled,
+          Status: payment.Status,
+          Invoice: payment.Invoice,
+          source: "Xero",
+          createdBy,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        try {
+          await db.XeroPayment.upsert(paymentRecord);
+        } catch (error) {
+          logger.logEvent("error", "Error during payment upsert", {
+            error: extractErrorDetails(error),
+            paymentId: payment.PaymentID,
+            clientId,
+            reportId,
+          });
+        }
+      }
+
+      if (pageItems.length > 1) {
+        // if (pageItems.length < 100) {
+        fetchedAll = true;
+      } else {
+        page++;
       }
     }
     if (global.sendWebSocketUpdate) {
@@ -767,9 +778,9 @@ async function fetchPayments(
       action: "ExtractXeroPayments",
       clientId,
       reportId,
-      count: payments.length,
+      count: allPayments.length,
     });
-    return payments;
+    return allPayments;
   } catch (error) {
     handleXeroApiError(error, global.sendWebSocketUpdate);
     logger.logEvent("error", "Error extracting payments from Xero", {
@@ -826,7 +837,6 @@ async function fetchOrganisationDetails({
       Array.isArray(data?.Organisations) && data.Organisations.length > 0
         ? data.Organisations[0]
         : null;
-    console.log("Organisation data:", organisation);
 
     try {
       if (organisation) {
@@ -950,6 +960,7 @@ async function getAllXeroData(clientId, reportId, db) {
       db.XeroInvoice.findAll({ where: { clientId, reportId } }),
       db.XeroPayment.findAll({ where: { clientId, reportId } }),
       db.XeroContact.findAll({ where: { clientId, reportId } }),
+      db.XeroBankTxn.findAll({ where: { clientId, reportId } }),
     ]);
     logger.logEvent("info", "Fetched XeroOrganisation records", {
       action: "GetAllXeroData",
@@ -975,6 +986,12 @@ async function getAllXeroData(clientId, reportId, db) {
       reportId,
       count: contacts.length,
     });
+    logger.logEvent("info", "Fetched XeroBankTxn records", {
+      action: "GetAllXeroData",
+      clientId,
+      reportId,
+      count: bankTxns.length,
+    });
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
         message: "SUCCESS: All Xero data fetched",
@@ -986,6 +1003,7 @@ async function getAllXeroData(clientId, reportId, db) {
       invoices,
       payments,
       contacts,
+      bankTransactions,
     };
   } catch (error) {
     if (global.sendWebSocketUpdate) {
@@ -1266,7 +1284,7 @@ async function fetchBankTransactions(
         startDate,
         endDate,
       });
-      const { data } = await retryWithExponentialBackoff(
+      const { data, headers } = await retryWithExponentialBackoff(
         () =>
           get("/BankTransactions", accessToken, tenantId, {
             params: {
@@ -1318,6 +1336,7 @@ async function fetchBankTransactions(
         }
       }
 
+      // if (pageItems.length > 1) {
       if (pageItems.length < 100) {
         fetchedAll = true;
       } else {

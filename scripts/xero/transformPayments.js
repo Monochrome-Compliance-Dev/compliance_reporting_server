@@ -7,14 +7,9 @@
 const parseDotNetDate = (input) => {
   if (typeof input === "string") {
     const match = /\/Date\((\d+)(?:[+-]\d+)?\)\//.exec(input);
-    console.log("Parsing .NET date:", input, "Match:", match);
     if (match && match[1]) {
       const timestamp = parseInt(match[1], 10);
-      console.log("Extracted timestamp:", timestamp);
       const date = new Date(timestamp);
-      console.log("Converted date:", date);
-      console.log("Is valid date:", !isNaN(date.getTime()));
-      console.log("ISO String:", date.toISOString());
       return isNaN(date.getTime()) ? null : date.toISOString();
     }
   }
@@ -29,15 +24,8 @@ const transformPayments = (payments) => {
       ...payment,
       paymentAmount: payment.Amount,
       paymentDate,
+      PaymentType: payment.PaymentType,
     };
-    console.log(
-      "Transformed Payment:",
-      transformed.PaymentID,
-      "Amount:",
-      transformed.paymentAmount,
-      "Date:",
-      transformed.paymentDate
-    );
 
     return transformed;
   });
