@@ -13,14 +13,22 @@ module.exports = {
 
 async function getAll(options = {}) {
   try {
+    const whereClause = options.includeDeleted
+      ? {}
+      : { reportStatus: { [db.Sequelize.Op.ne]: "Deleted" } };
+
     const rows = await db.Report.findAll({
+      where: whereClause,
       ...options,
       transaction: options.transaction,
     });
+
     logger.logEvent("info", "Fetched all reports", {
       action: "GetAllReports",
       count: Array.isArray(rows) ? rows.length : undefined,
+      includeDeleted: options.includeDeleted || false,
     });
+
     return rows;
   } catch (error) {
     logger.logEvent("error", "Error fetching all reports", {
@@ -88,7 +96,6 @@ async function update(id, params, options = {}) {
   await db.Report.update(params, {
     where: { id },
     ...options,
-    transaction: options.transaction,
   });
   const result = await db.Report.findOne({
     where: { id },
@@ -103,16 +110,41 @@ async function update(id, params, options = {}) {
   return result;
 }
 
-async function _delete(id, options = {}) {
-  await db.Report.destroy({
-    where: { id },
-    ...options,
-    transaction: options.transaction,
-  });
-  logger.logEvent("warn", "Report deleted", {
-    action: "DeleteReport",
-    reportId: id,
-  });
+async function _delete(id, clientId, options = {}) {
+  const t = await db.sequelize.transaction();
+  try {
+    await db.sequelize.query(
+      `SET LOCAL app.current_client_id = '${clientId}'`,
+      { transaction: t }
+    );
+
+    const [count] = await db.Report.update(
+      { reportStatus: "Deleted" },
+      {
+        ...options,
+        where: { id },
+        transaction: t,
+      }
+    );
+
+    if (count === 0) {
+      throw new Error("Report not found or update blocked by RLS.");
+    }
+
+    await t.commit();
+    logger.logEvent("warn", "Report status set to Deleted", {
+      action: "SoftDeleteReport",
+      reportId: id,
+    });
+  } catch (error) {
+    await t.rollback();
+    logger.logEvent("error", "Failed to soft delete report", {
+      action: "SoftDeleteReport",
+      reportId: id,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function getById(id, options = {}) {

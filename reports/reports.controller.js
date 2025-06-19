@@ -68,7 +68,7 @@ function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
-  console.log("Creating report with data:", req.body, req.auth);
+  // console.log("Creating report with data:", req.body, req.auth);
   try {
     const report = await reportService.create(req.body, {
       transaction: req.dbTransaction,
@@ -113,25 +113,21 @@ function update(req, res, next) {
     });
 }
 
-function _delete(req, res, next) {
-  reportService
-    .delete(req.params.id, { transaction: req.dbTransaction })
-    .then(() => {
-      logger.logEvent("warn", "Report deleted", {
-        action: "DeleteReport",
-        reportId: req.params.id,
-        userId: req.auth.id,
-      });
-      req.dbTransaction.commit();
-      res.json({ message: "Report deleted successfully" });
-    })
-    .catch((error) => {
-      logger.logEvent("error", "Error deleting report", {
-        action: "DeleteReport",
-        reportId: req.params.id,
-        error: error.message,
-      });
-      req.dbTransaction.rollback();
-      next(error);
+async function _delete(req, res, next) {
+  try {
+    const { id } = req.params;
+    const clientId = req.auth.clientId;
+
+    if (!clientId) {
+      logger.logEvent("warn", "No clientId found for RLS - skipping");
+      return res.status(400).json({ message: "Client ID missing" });
+    }
+
+    await reportService.delete(id, clientId, {
+      transaction: req.dbTransaction,
     });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
 }
