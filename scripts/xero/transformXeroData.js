@@ -111,6 +111,7 @@ async function transformXeroData(xeroData) {
       invoiceAmount: invoice.invoiceAmount,
       invoicePaymentTerms: invoice.invoicePaymentTerms,
       invoiceDueDate: invoice.invoiceDueDate,
+      isReconciled: payment.isReconciled,
     };
 
     mergedRecords.push(rawRecord);
@@ -152,6 +153,7 @@ async function transformXeroData(xeroData) {
       invoiceAmount: txn.invoiceAmount,
       invoicePaymentTerms: txn.invoicePaymentTerms,
       invoiceDueDate: txn.invoiceDueDate,
+      isReconciled: txn.isReconciled,
     };
 
     mergedRecords.push(rawRecord);

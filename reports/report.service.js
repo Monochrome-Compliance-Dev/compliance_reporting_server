@@ -9,6 +9,7 @@ module.exports = {
   delete: _delete,
   getAllByReportId,
   finaliseSubmission,
+  saveUploadMetadata,
 };
 
 async function getAll(options = {}) {
@@ -214,4 +215,25 @@ async function finaliseSubmission() {
   });
 
   return { success: true, message: "Report(s) marked as Submitted" };
+}
+
+/**
+ * Save upload metadata to the reportUpload table.
+ * @param {Object} metadata - The metadata to save.
+ * @param {Object} options - Optional Sequelize options (e.g. transaction).
+ * @returns {Promise<Object>} The created ReportUpload instance.
+ */
+async function saveUploadMetadata(metadata, options = {}) {
+  if (!options.transaction) {
+    return await sequelize.transaction(async (transaction) => {
+      await sequelize.query(
+        `SET LOCAL app.current_client_id = '${metadata.clientId}'`,
+        { transaction }
+      );
+      return await db.ReportUpload.create(metadata, { transaction });
+    });
+  }
+  return await db.ReportUpload.create(metadata, {
+    transaction: options.transaction,
+  });
 }

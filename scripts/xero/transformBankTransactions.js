@@ -61,6 +61,7 @@ const transformBankTransactions = (bankTransactions) => {
       invoiceAmount: bankTransaction.Total,
       invoicePaymentTerms: null,
       invoiceDueDate: paymentDate,
+      isReconciled: bankTransaction.IsReconciled,
     };
 
     return transformed;

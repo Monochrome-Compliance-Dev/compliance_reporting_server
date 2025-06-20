@@ -6,16 +6,10 @@ const tcpService = require("./tcp.service");
 const validateRequest = require("../middleware/validate-request");
 const { tcpBulkImportSchema, tcpSchema } = require("./tcp.validator");
 const { logger } = require("../helpers/logger");
-
-const numericFields = [
-  "payerEntityAbn",
-  "payerEntityAcnArbn",
-  "payeeEntityAbn",
-  "payeeEntityAcnArbn",
-  "invoiceAmount",
-  "paymentTerm",
-  "paymentTime",
-];
+const fs = require("fs");
+const path = require("path");
+const { scanFile } = require("../middleware/virus-scan");
+const reportService = require("../reports/report.service");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -32,6 +26,7 @@ router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
 router.put("/submit-final", authorise(), submitFinalReport);
 router.get("/download-summary", authorise(), downloadSummaryReport);
+router.post("/upload", authorise(), uploadFile);
 
 module.exports = router;
 
@@ -603,5 +598,133 @@ async function bulkPatchUpdate(req, res, next) {
     });
     console.error("Error bulk patch updating records:", error);
     next(error);
+  }
+}
+
+// Ensure tmpUploads directory exists before handling uploads
+const tmpUploadPath = path.join(__dirname, "../tmpUploads");
+if (!fs.existsSync(tmpUploadPath)) {
+  fs.mkdirSync(tmpUploadPath, { recursive: true });
+}
+
+async function uploadFile(req, res) {
+  try {
+    // console.log("[DEBUG] File received by route:", req.file);
+    if (!req.file || !req.file.path) {
+      logger.logEvent("warn", "Missing file or file path in request", {
+        action: "PtrsDataUpload",
+      });
+    }
+    const filePath = req.file.path; // temp path from multer
+    const ext = path.extname(filePath).toLowerCase();
+    await scanFile(filePath, ext, req.file.originalname);
+
+    // Move file to permanent uploads directory after scan
+    const uploadsDir = path.join(__dirname, "../uploads/ptrs_data_uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    const destPath = path.join(uploadsDir, req.file.originalname);
+
+    fs.renameSync(filePath, destPath);
+
+    // Parse CSV file and collect basic validation results
+    const results = [];
+    const invalidRows = [];
+
+    fs.createReadStream(destPath)
+      .pipe(csv())
+      .on("data", (row) => {
+        const reasons = [];
+
+        const hasPayerName =
+          typeof row.payerEntityName === "string" &&
+          row.payerEntityName.trim() !== "";
+        if (!hasPayerName) reasons.push("Missing or invalid payerEntityName");
+
+        const hasPayeeName =
+          typeof row.payeeEntityName === "string" &&
+          row.payeeEntityName.trim() !== "";
+        if (!hasPayeeName) reasons.push("Missing or invalid payeeEntityName");
+
+        const hasABN =
+          row.payeeEntityAbn &&
+          /^\d{11}$/.test(String(row.payeeEntityAbn).trim());
+        if (!hasABN) reasons.push("Missing or invalid payeeEntityAbn");
+
+        const hasValidAmount = !isNaN(parseFloat(row.paymentAmount));
+        if (!hasValidAmount) reasons.push("Missing or invalid paymentAmount");
+
+        const hasPaymentDate =
+          row.paymentDate && !isNaN(Date.parse(row.paymentDate));
+        if (!hasPaymentDate) reasons.push("Missing or invalid paymentDate");
+
+        if (reasons.length === 0) {
+          results.push(row);
+        } else {
+          invalidRows.push({ ...row, issues: reasons });
+        }
+      })
+      .on("end", async () => {
+        try {
+          // Insert valid rows using bulkCreate
+          const insertResults = await tcpService.bulkCreate(results, {
+            transaction: req.dbTransaction,
+          });
+
+          // Insert metadata into tbl_report_upload (reportUploadService)
+          try {
+            await reportService.saveUploadMetadata(
+              {
+                clientId: req.auth.clientId,
+                userId: req.auth.id,
+                reportId: req.body.reportId,
+                filename: req.file.originalname,
+                filepath: destPath,
+                recordCount: results.length,
+                uploadedAt: new Date(),
+                updatedBy: req.auth.id,
+              },
+              { transaction: req.dbTransaction }
+            );
+          } catch (err) {
+            logger.logEvent("error", "Failed to log file upload metadata", {
+              action: "uploadFile-metadata",
+              error: err.message,
+            });
+            // Do not block overall process if metadata save fails
+          }
+
+          res.status(200).json({
+            message:
+              "File uploaded, parsed, and records inserted successfully.",
+            totalRows: results.length + invalidRows.length,
+            validRows: results.length,
+            invalidRows: invalidRows.length,
+            inserted: insertResults,
+            errors: invalidRows, // Include full invalid rows with reasons
+            validRecordsPreview: results.slice(0, 20), // Preview for UI
+          });
+        } catch (insertErr) {
+          logger.logEvent("error", "Bulk insert failed", {
+            action: "uploadFile-insert",
+            error: insertErr.message,
+          });
+          res.status(500).json({ error: "Failed to insert valid records." });
+        }
+      })
+      .on("error", (err) => {
+        logger.logEvent("error", "CSV parsing failed", {
+          action: "uploadFile-parse",
+          error: err.message,
+        });
+        res.status(500).json({ error: "Failed to parse CSV file." });
+      });
+  } catch (err) {
+    logger.logEvent("error", "Error uploading file", {
+      action: "uploadFile",
+      error: err.message,
+    });
+    return res.status(500).json({ error: "Failed to upload file." });
   }
 }

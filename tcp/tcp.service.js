@@ -250,7 +250,7 @@ async function saveTransformedDataToTcp(
   // Validate each record using tcpBulkImportSchema
   // Add reportId, clientId, createdBy to each record
   for (let i = 0; i < transformedRecords.length; i++) {
-    console.log(`Validating record at index ${i}:`, transformedRecords[i]);
+    // console.log(`Validating record at index ${i}:`, transformedRecords[i]);
     transformedRecords[i].createdBy = createdBy;
     transformedRecords[i].reportId = reportId;
     transformedRecords[i].clientId = clientId;

@@ -25,6 +25,7 @@ const transformPayments = (payments) => {
       paymentAmount: payment.Amount,
       paymentDate,
       PaymentType: payment.PaymentType,
+      isReconciled: payment.IsReconciled,
     };
 
     return transformed;
