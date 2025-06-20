@@ -20,6 +20,22 @@ if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
 }
 
 require("rootpath")();
+
+// Global crash handlers for diagnostics
+process.on("uncaughtException", (err) => {
+  console.error("💥 Uncaught Exception:", err);
+  logger.logEvent("error", "UncaughtException", {
+    error: err.message,
+    stack: err.stack,
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("💥 Unhandled Rejection:", reason);
+  logger.logEvent("error", "UnhandledRejection", {
+    reason: reason instanceof Error ? reason.message : String(reason),
+  });
+});
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const http = require("http");
