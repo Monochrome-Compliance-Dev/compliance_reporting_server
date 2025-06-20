@@ -81,14 +81,17 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: function (origin, callback) {
+      console.log("🔍 CORS origin received:", origin);
+      console.log("🧾 Allowed origins:", allowedOrigins);
+
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         logger.logEvent("warn", "CORS Rejected", {
           action: "CORSRejected",
-          origin: origin,
+          origin,
         });
-        callback(null, false); // Safely reject without throwing
+        callback(new Error("CORS: Origin not allowed"));
       }
     },
     credentials: true,
