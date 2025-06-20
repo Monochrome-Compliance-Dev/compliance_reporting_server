@@ -69,13 +69,14 @@ const { logger } = require("./helpers/logger");
 const setClientIdRLS = require("./middleware/setClientIdRLS");
 const transactionCleanup = require("./middleware/transactionCleanup");
 
-const allowedOrigins = [
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
   "https://monochrome-compliance.com",
   "https://www.monochrome-compliance.com",
   "http://localhost:3000",
   "https://sit.monochrome-compliance.com",
   "https://www.sit.monochrome-compliance.com",
 ];
+console.log("🧾 Final allowed origins:", allowedOrigins);
 
 // Apply CORS middleware globally with custom origin logic
 app.use(
