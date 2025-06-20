@@ -68,12 +68,26 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error("Not allowed by CORS"));
+        logger.logEvent("warn", "CORS Rejected", {
+          action: "CORSRejected",
+          origin: origin,
+        });
+        callback(null, false); // Safely reject without throwing
       }
     },
     credentials: true,
   })
 );
+
+// Immediately reject suspicious bot routes such as /boaform/admin/formLogin
+app.use("/boaform", (req, res) => {
+  logger.logEvent("warn", "Blocked suspicious request", {
+    action: "BotRouteBlocked",
+    path: req.path,
+    ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress,
+  });
+  res.status(403).send("Forbidden");
+});
 
 // Health check endpoint
 // This endpoint is used to check if the backend is running
