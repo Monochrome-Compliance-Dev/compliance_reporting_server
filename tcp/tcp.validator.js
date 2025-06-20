@@ -75,6 +75,8 @@ const tcpSchema = Joi.array().items(
       .empty("")
       .default(null),
     explanatoryComments2: Joi.string().custom(sanitize).allow("", null),
+    source: Joi.string().required(),
+    createdBy: Joi.string().custom(sanitize).length(10).required(),
     createdBy: Joi.string().custom(sanitize).length(10).optional(),
     updatedBy: Joi.string().custom(sanitize).length(10).optional(),
     reportId: Joi.string().required(),
@@ -160,6 +162,7 @@ const tcpBulkImportSchema = Joi.object({
     .empty("")
     .default(null),
   explanatoryComments2: Joi.string().custom(sanitize).allow("", null),
+  source: Joi.string().required(),
   createdBy: Joi.string().custom(sanitize).length(10).required(),
   updatedBy: Joi.string().custom(sanitize).length(10).optional(),
   reportId: Joi.string().required(),

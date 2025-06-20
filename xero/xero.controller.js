@@ -1,12 +1,14 @@
+const csv = require("csv-parser");
 const { logger } = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
+const fs = require("fs");
+const path = require("path");
 
 const xeroService = require("./xero.service");
 const authorise = require("../middleware/authorise");
 const { transformXeroData } = require("../scripts/xero/transformXeroData");
 const tcpService = require("../tcp/tcp.service");
-const { json } = require("body-parser");
 
 router.get(
   "/connect/:reportId/:createdBy/:startDate/:endDate",
@@ -373,11 +375,13 @@ async function startXeroExtraction({
     const transformedXeroData = await transformXeroData(xeroData);
 
     try {
+      const source = "xero";
       const result = await tcpService.saveTransformedDataToTcp(
         transformedXeroData,
         reportId,
         clientId,
-        createdBy
+        createdBy,
+        source
       );
       if (result) {
         logger.logEvent("info", "Inserted TCP records successfully", {
