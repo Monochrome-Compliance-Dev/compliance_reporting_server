@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const upload = multer({ dest: "tmpUploads/" });
 const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
@@ -10,6 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const { scanFile } = require("../middleware/virus-scan");
 const reportService = require("../reports/report.service");
+const csv = require("csv-parser");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -26,7 +29,7 @@ router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
 router.put("/submit-final", authorise(), submitFinalReport);
 router.get("/download-summary", authorise(), downloadSummaryReport);
-router.post("/upload", authorise(), uploadFile);
+router.post("/upload", authorise(), upload.single("file"), uploadFile);
 
 module.exports = router;
 
@@ -635,6 +638,81 @@ async function uploadFile(req, res) {
     fs.createReadStream(destPath)
       .pipe(csv())
       .on("data", (row) => {
+        // Filter only allowed fields at the start
+        const allowedFields = [
+          "payerEntityName",
+          "payerEntityAbn",
+          "payerEntityAcnArbn",
+          "payeeEntityName",
+          "payeeEntityAbn",
+          "payeeEntityAcnArbn",
+          "paymentAmount",
+          "description",
+          "transactionType",
+          "isReconciled",
+          "supplyDate",
+          "paymentDate",
+          "contractPoReferenceNumber",
+          "contractPoPaymentTerms",
+          "noticeForPaymentIssueDate",
+          "noticeForPaymentTerms",
+          "invoiceReferenceNumber",
+          "invoiceIssueDate",
+          "invoiceReceiptDate",
+          "invoiceAmount",
+          "invoicePaymentTerms",
+          "invoiceDueDate",
+        ];
+        row = Object.fromEntries(
+          Object.entries(row).filter(([key]) => allowedFields.includes(key))
+        );
+
+        // Convert 'NULL' strings and empty strings to actual null
+        for (const key in row) {
+          if (
+            typeof row[key] === "string" &&
+            row[key].trim().toUpperCase() === "'NULL'"
+          ) {
+            row[key] = null;
+          } else if (row[key] === "") {
+            row[key] = null;
+          }
+        }
+        // Convert isReconciled from "1"/"0" string to boolean
+        if (row.hasOwnProperty("isReconciled")) {
+          const val = row["isReconciled"];
+          if (
+            val === true ||
+            val === "1" ||
+            val === 1 ||
+            val === "t" ||
+            val === "T" ||
+            val === "true" ||
+            val === "TRUE"
+          ) {
+            row["isReconciled"] = true;
+          } else if (
+            val === false ||
+            val === "0" ||
+            val === 0 ||
+            val === "f" ||
+            val === "F" ||
+            val === "false" ||
+            val === "FALSE"
+          ) {
+            row["isReconciled"] = false;
+          } else {
+            row["isReconciled"] = null;
+          }
+        }
+
+        // Set default values for each processed row
+        const now = new Date();
+        row.createdBy = req.auth.id;
+        row.updatedBy = req.auth.id;
+        row.clientId = req.auth.clientId;
+        row.reportId = req.body.reportId || null; // Use reportId from request body
+
         const reasons = [];
 
         const hasPayerName =
@@ -667,10 +745,18 @@ async function uploadFile(req, res) {
       })
       .on("end", async () => {
         try {
-          // Insert valid rows using bulkCreate
-          const insertResults = await tcpService.bulkCreate(results, {
-            transaction: req.dbTransaction,
-          });
+          // Insert valid rows using saveTransformedDataToTcp
+          const source = "csv_upload";
+          const insertResults = await tcpService.saveTransformedDataToTcp(
+            results,
+            req.body.reportId,
+            req.auth.clientId,
+            req.auth.id,
+            source,
+            {
+              transaction: req.dbTransaction,
+            }
+          );
 
           // Insert metadata into tbl_report_upload (reportUploadService)
           try {

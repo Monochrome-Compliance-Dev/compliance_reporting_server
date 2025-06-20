@@ -69,6 +69,7 @@ function model(sequelize) {
     isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     paymentTime: { type: DataTypes.INTEGER, allowNull: true },
     explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
+    source: { type: DataTypes.STRING(20), allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys

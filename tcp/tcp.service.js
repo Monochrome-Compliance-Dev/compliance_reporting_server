@@ -214,6 +214,7 @@ async function saveTransformedDataToTcp(
   reportId,
   clientId,
   createdBy,
+  source,
   options = {}
 ) {
   if (!Array.isArray(transformedRecords)) {
@@ -254,6 +255,7 @@ async function saveTransformedDataToTcp(
     transformedRecords[i].createdBy = createdBy;
     transformedRecords[i].reportId = reportId;
     transformedRecords[i].clientId = clientId;
+    transformedRecords[i].source = source;
     const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
     if (error) {
       throw new Error(

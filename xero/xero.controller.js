@@ -375,11 +375,13 @@ async function startXeroExtraction({
     const transformedXeroData = await transformXeroData(xeroData);
 
     try {
+      const source = "xero";
       const result = await tcpService.saveTransformedDataToTcp(
         transformedXeroData,
         reportId,
         clientId,
-        createdBy
+        createdBy,
+        source
       );
       if (result) {
         logger.logEvent("info", "Inserted TCP records successfully", {
