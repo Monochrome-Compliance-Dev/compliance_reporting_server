@@ -82,8 +82,8 @@ console.log("🧾 Final allowed origins:", allowedOrigins);
 app.use(
   cors({
     origin: function (origin, callback) {
-      console.log("🔍 CORS origin received:", origin);
-      console.log("🧾 Allowed origins:", allowedOrigins);
+      // console.log("🔍 CORS origin received:", origin);
+      // console.log("🧾 Allowed origins:", allowedOrigins);
 
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
@@ -243,6 +243,7 @@ app._router.stack.forEach((middleware) => {
 
 // --- BEGIN: Check Postgres custom GUC app.current_client_id on startup ---
 const { sequelize } = require("./db/database");
+// console.log("sequelize:", sequelize);
 
 async function verifyAppClientIdGUC() {
   try {

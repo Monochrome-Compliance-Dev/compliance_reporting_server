@@ -224,16 +224,23 @@ async function finaliseSubmission() {
  * @returns {Promise<Object>} The created ReportUpload instance.
  */
 async function saveUploadMetadata(metadata, options = {}) {
-  if (!options.transaction) {
-    return await sequelize.transaction(async (transaction) => {
-      await sequelize.query(
-        `SET LOCAL app.current_client_id = '${metadata.clientId}'`,
-        { transaction }
-      );
-      return await db.ReportUpload.create(metadata, { transaction });
-    });
+  const transaction = options.transaction;
+  const clientId = metadata.clientId;
+
+  if (!transaction) {
+    throw new Error("Transaction is required for saveUploadMetadata");
   }
-  return await db.ReportUpload.create(metadata, {
-    transaction: options.transaction,
+
+  await db.sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
+    transaction,
   });
+
+  const result = await db.ReportUpload.create(metadata, { transaction });
+
+  logger.logEvent("info", "Upload metadata saved", {
+    action: "SaveUploadMetadata",
+    ...metadata,
+  });
+
+  return result;
 }

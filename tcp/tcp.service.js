@@ -26,6 +26,8 @@ module.exports = {
   patchRecord,
   getCurrentFieldValue,
   saveTransformedDataToTcp,
+  saveErrorsToTcpError,
+  getErrorsByReportId,
 };
 
 // Accept optional options param, default to empty object, and pass to sequelize queries for RLS/transactions
@@ -291,4 +293,67 @@ async function saveTransformedDataToTcp(
   }
 
   return true;
+}
+
+/**
+ * Save TCP error records in bulk.
+ * @param {Array} errorRecords - The records with validation errors to save.
+ * @param {String} reportId - The report ID for the batch.
+ * @param {String} clientId - The client ID for RLS.
+ * @param {String} createdBy - The ID of the user who initiated the upload.
+ * @param {String} source - The origin of the data (e.g., 'csv_upload').
+ * @param {Object} options - Additional Sequelize options (e.g., transaction).
+ */
+async function saveErrorsToTcpError(
+  errorRecords,
+  reportId,
+  clientId,
+  createdBy,
+  source,
+  options = {}
+) {
+  if (!Array.isArray(errorRecords)) {
+    throw new Error("Expected an array of TCP error records");
+  }
+
+  logger.logEvent("info", "Saving TCP error records", {
+    action: "BulkSaveTcpError",
+    errorCount: errorRecords.length,
+  });
+
+  // Set metadata fields on each error record
+  for (let i = 0; i < errorRecords.length; i++) {
+    errorRecords[i].createdBy = createdBy;
+    errorRecords[i].reportId = reportId;
+    errorRecords[i].clientId = clientId;
+    errorRecords[i].source = source;
+  }
+
+  await sequelize.transaction(async (transaction) => {
+    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
+      transaction,
+    });
+
+    console.log("db.TcpError: ", db.TcpError);
+
+    const { validate = true } = options || {};
+    await db.TcpError.bulkCreate(errorRecords, {
+      validate,
+      transaction,
+    });
+  });
+
+  logger.logEvent("info", "✅ Successfully saved TCP error records", {
+    action: "BulkSaveTcpError",
+    savedCount: errorRecords.length,
+  });
+
+  return true;
+}
+
+async function getErrorsByReportId(reportId, options = {}) {
+  return await db.TcpError.findAll({
+    where: { reportId },
+    ...options,
+  });
 }

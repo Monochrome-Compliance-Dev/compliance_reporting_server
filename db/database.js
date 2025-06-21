@@ -143,6 +143,16 @@ async function initialise() {
     db.XeroOrganisation.belongsTo(db.Client);
   }
 
+  // TCP csv upload error relationship
+  if (db.Client && db.TcpError) {
+    db.Client.hasMany(db.TcpError, { onDelete: "CASCADE" });
+    db.TcpError.belongsTo(db.Client);
+  }
+  if (db.Report && db.TcpError) {
+    db.Report.hasMany(db.TcpError, { onDelete: "CASCADE" });
+    db.TcpError.belongsTo(db.Report);
+  }
+
   // Sync models
   await sequelize.sync();
 

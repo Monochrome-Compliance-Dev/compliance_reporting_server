@@ -30,6 +30,7 @@ router.get("/missing-isSb", authorise(), checkMissingIsSb);
 router.put("/submit-final", authorise(), submitFinalReport);
 router.get("/download-summary", authorise(), downloadSummaryReport);
 router.post("/upload", authorise(), upload.single("file"), uploadFile);
+router.get("/errors/:id", authorise(), getErrorsByReportId);
 
 module.exports = router;
 
@@ -670,8 +671,9 @@ async function uploadFile(req, res) {
         // Convert 'NULL' strings and empty strings to actual null
         for (const key in row) {
           if (
-            typeof row[key] === "string" &&
-            row[key].trim().toUpperCase() === "'NULL'"
+            (typeof row[key] === "string" &&
+              row[key].trim().toUpperCase() === "'NULL'") ||
+            "NULL".includes(row[key].trim().toUpperCase())
           ) {
             row[key] = null;
           } else if (row[key] === "") {
@@ -758,6 +760,20 @@ async function uploadFile(req, res) {
             }
           );
 
+          // Save invalid rows to tcp_error table
+          if (invalidRows.length > 0) {
+            await tcpService.saveErrorsToTcpError(
+              invalidRows,
+              req.body.reportId,
+              req.auth.clientId,
+              req.auth.id,
+              source,
+              {
+                transaction: req.dbTransaction,
+              }
+            );
+          }
+
           // Insert metadata into tbl_report_upload (reportUploadService)
           try {
             await reportService.saveUploadMetadata(
@@ -812,5 +828,23 @@ async function uploadFile(req, res) {
       error: err.message,
     });
     return res.status(500).json({ error: "Failed to upload file." });
+  }
+}
+
+async function getErrorsByReportId(req, res, next) {
+  try {
+    const reportId = req.params.id;
+    const errors = await tcpService.getErrorsByReportId(reportId, {
+      transaction: req.dbTransaction,
+    });
+    if (!errors || errors.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No errors found for this report." });
+    }
+    res.json(errors);
+  } catch (error) {
+    console.error("Error fetching errors by report ID:", error);
+    next(error);
   }
 }
