@@ -74,14 +74,14 @@ const XeroBankTxn = (sequelize) => {
         allowNull: true,
       },
       // Not included in the current paginated response, contrary to the Xero docs: https://developer.xero.com/documentation/api/accounting/banktransactions
-      // Url: {
-      //   type: DataTypes.STRING(255),
-      //   allowNull: true,
-      // },
-      // Reference: {
-      //   type: DataTypes.STRING(255),
-      //   allowNull: true,
-      // },
+      Url: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+      Reference: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
       Status: {
         type: DataTypes.STRING(20),
         allowNull: true,

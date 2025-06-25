@@ -618,8 +618,9 @@ async function fetchInvoices(
  * Get transformed data for the current client.
  * @param {Object} options - { clientId, reportId }
  */
-async function getTransformedData(clientId, reportId, db) {
-  // async function getTransformedData(clientId, reportId) { // db is passed in for testing purposes
+// async function getTransformedData(clientId, reportId, db) {
+async function getTransformedData(clientId, reportId) {
+  // db is passed in for testing purposes
   logger.logEvent("info", "Retrieving transformed data for client", {
     action: "GetTransformedData",
     clientId,
@@ -744,6 +745,7 @@ async function fetchPayments(
           IsReconciled: payment.IsReconciled,
           Status: payment.Status,
           Invoice: payment.Invoice,
+          PaymentType: payment.PaymentType,
           source: "Xero",
           createdBy,
           createdAt: new Date(),
@@ -761,8 +763,8 @@ async function fetchPayments(
         }
       }
 
-      if (pageItems.length > 1) {
-        // if (pageItems.length < 100) {
+      // if (pageItems.length > 1) {
+      if (pageItems.length < 100) {
         fetchedAll = true;
       } else {
         page++;
@@ -1321,6 +1323,8 @@ async function fetchBankTransactions(
             clientId,
             reportId,
             tenantId,
+            Url: txn.Url || null,
+            Reference: txn.Reference || null,
             source: "Xero",
             createdBy,
             createdAt: new Date(),

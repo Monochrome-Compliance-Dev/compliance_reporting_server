@@ -1,6 +1,15 @@
 const fs = require("fs");
 const path = require("path");
 const winston = require("winston");
+winston.addColors({ audit: "cyan" });
+
+const customLevels = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+  audit: 4,
+};
 require("winston-daily-rotate-file");
 
 // Ensure the logs directory exists
@@ -10,7 +19,8 @@ if (!fs.existsSync(logDir)) {
 }
 
 const logger = winston.createLogger({
-  level: "info",
+  levels: customLevels,
+  level: process.env.LOG_LEVEL || "debug",
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
@@ -68,7 +78,8 @@ const logger = winston.createLogger({
 });
 
 const auditLogger = winston.createLogger({
-  level: "info",
+  levels: customLevels,
+  level: "audit",
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.errors({ stack: true }),
@@ -103,11 +114,11 @@ logger.audit = (message) => {
 };
 
 logger.logEvent = (level, message, meta = {}) => {
-  logger.log({ level, message, ...meta });
+  logger.log({ level, message, meta });
 };
 
 logger.auditEvent = (message, meta = {}) => {
-  auditLogger.info({ message, ...meta });
+  auditLogger.log({ level: "audit", message, meta });
 };
 
 module.exports = { logger, auditLogger };

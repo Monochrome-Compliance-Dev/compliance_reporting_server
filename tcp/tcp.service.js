@@ -73,7 +73,7 @@ async function sbiUpdate(reportId, params, options = {}) {
 }
 
 async function getById(id, options = {}) {
-  return await getTcp(id, options);
+  return await db.Tcp.findByPk(id, options);
 }
 
 async function create(params, options = {}) {
@@ -216,7 +216,7 @@ async function saveTransformedDataToTcp(
   reportId,
   clientId,
   createdBy,
-  source,
+  source = "xero",
   options = {}
 ) {
   if (!Array.isArray(transformedRecords)) {
@@ -230,6 +230,7 @@ async function saveTransformedDataToTcp(
 
   // Normalise numeric fields
   transformedRecords.forEach((record) => {
+    console.log("Processing record:", record);
     if (typeof record.paymentAmount === "string") {
       record.paymentAmount = parseFloat(
         record.paymentAmount.replace(/[^0-9.-]+/g, "")
@@ -248,6 +249,9 @@ async function saveTransformedDataToTcp(
     if (record.invoiceDueDate && typeof record.invoiceDueDate === "string") {
       record.invoiceDueDate = new Date(record.invoiceDueDate);
     }
+    // if (!record.description) {
+    //   record.description = "No description provided";
+    // }
   });
 
   // Validate each record using tcpBulkImportSchema
@@ -263,6 +267,13 @@ async function saveTransformedDataToTcp(
       throw new Error(
         `Validation failed for record at index ${i}: ${error.message}`
       );
+      // transformedRecords[i].hasError = true; // Mark as error record
+      // transformedRecords[i].errorReason = error.message; // Store error reason
+      // logger.logEvent("error", "TCP record validation error", {
+      //   action: "BulkSaveTCP",
+      //   index: i,
+      //   error: error.message,
+      // });
     }
   }
 

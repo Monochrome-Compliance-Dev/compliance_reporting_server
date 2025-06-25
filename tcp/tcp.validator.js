@@ -67,6 +67,7 @@ const tcpSchema = Joi.array().items(
     paymentTerm: Joi.number().integer().allow(null).empty("").default(null),
     excludedTcp: Joi.boolean().required(),
     explanatoryComments1: Joi.string().custom(sanitize).allow("", null),
+    accountCode: Joi.string().custom(sanitize).allow("", null),
     isSb: Joi.boolean().optional(),
     paymentTime: Joi.number()
       .integer()
@@ -144,6 +145,7 @@ const tcpBulkImportSchema = Joi.object({
     .default(null),
   invoicePaymentTerms: Joi.string().custom(sanitize).allow("", null),
   invoiceDueDate: Joi.date().optional().allow(null),
+  accountCode: Joi.string().custom(sanitize).allow("", null),
   isTcp: Joi.boolean().optional(),
   tcpExclusionComment: Joi.string().custom(sanitize).allow("", null),
   peppolEnabled: Joi.boolean().optional(),

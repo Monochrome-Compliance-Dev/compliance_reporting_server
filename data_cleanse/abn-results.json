@@ -1,0 +1,72 @@
+[
+  {
+    "Search Term": "ASIC",
+    "Name": "AUSTRALIAN SECURITIES & INVESTMENTS COMMISSION",
+    "Suggested ABN": "86768265615",
+    "Postcode": "2000",
+    "State": "NSW",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Few matches with same score. Selection is likely reliable."
+  },
+  {
+    "Search Term": "Colliers & Associates",
+    "Name": "COLLIER & ASSOCIATES PTY. LTD",
+    "Suggested ABN": "76059535992",
+    "Postcode": "3000",
+    "State": "VIC",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Few matches with same score. Selection is likely reliable."
+  },
+  {
+    "Search Term": "Elderton Audit Pty Ltd",
+    "Name": "ELDERTON AUDIT PTY LTD",
+    "Suggested ABN": "51609542458",
+    "Postcode": "6000",
+    "State": "WA",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Only one exact match found. Name appears to be unique."
+  },
+  {
+    "Search Term": "Executive Town Car Service",
+    "Name": "Executive Town Car Service",
+    "Suggested ABN": "21069724331",
+    "Postcode": "6100",
+    "State": "WA",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Only one exact match found. Name appears to be unique."
+  },
+  {
+    "Search Term": "Marriott Brisbane",
+    "Name": "BRISBANE MARRIOTT HOTEL",
+    "Suggested ABN": "79066059729",
+    "Postcode": "2000",
+    "State": "NSW",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Few matches with same score. Selection is likely reliable."
+  },
+  {
+    "Search Term": "pricewaterhouseCoopers",
+    "Name": "PRICE WATERHOUSE COOPERS",
+    "Suggested ABN": "26563812149",
+    "Postcode": "2000",
+    "State": "NSW",
+    "ABN Status": "Active",
+    "Confidence Level": "Medium",
+    "Comments": "Selected best clean match among 4 candidates."
+  },
+  {
+    "Search Term": "Stephen Johnston",
+    "Name": "STEPHEN JOHNSTON",
+    "Suggested ABN": "96455798024",
+    "Postcode": "3919",
+    "State": "VIC",
+    "ABN Status": "Active",
+    "Confidence Level": "High",
+    "Comments": "Few matches with same score. Selection is likely reliable."
+  }
+]

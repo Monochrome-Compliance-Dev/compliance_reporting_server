@@ -76,12 +76,12 @@ async function transformXeroData(xeroData) {
     if (payment.Status === "DELETED") return;
 
     const invoice = transformedData.invoices.find(
-      (inv) => inv.InvoiceID === payment.Invoice.InvoiceID
+      (inv) => inv?.InvoiceID === payment?.Invoice?.InvoiceID
     );
     if (!invoice || invoice.Type === "ACCREC") return;
 
     const contact = transformedData.contacts.find(
-      (c) => c.ContactID === invoice.Contact.ContactID
+      (c) => c?.ContactID === invoice.Contact?.ContactID
     );
 
     // console.log("-----------org:", org);
@@ -97,7 +97,7 @@ async function transformXeroData(xeroData) {
       payeeEntityAcnArbn: contact.payeeEntityAcnArbn,
       payeeEntityName: contact.payeeEntityName,
       paymentAmount: payment.Amount,
-      description: invoice.description,
+      description: "invoice.description",
       transactionType: payment.PaymentType,
       supplyDate: invoice.supplyDate,
       paymentDate: payment.paymentDate,
@@ -112,16 +112,22 @@ async function transformXeroData(xeroData) {
       invoicePaymentTerms: invoice.invoicePaymentTerms,
       invoiceDueDate: invoice.invoiceDueDate,
       isReconciled: payment.isReconciled,
+      accountCode: invoice.accountCode || null,
     };
 
     mergedRecords.push(rawRecord);
   });
+  console.log(
+    "Payment merged records: ",
+    mergedRecords.length,
+    mergedRecords.slice(0, 5)
+  );
 
   transformedData.bankTransactions.forEach((txn) => {
     if (txn.Status === "DELETED") return;
 
     const contact = transformedData.contacts.find(
-      (c) => c.ContactID === txn.Contact?.ContactID
+      (c) => c?.ContactID === txn.Contact?.ContactID
     );
     if (!contact) {
       logger.logEvent("warn", "No matching contact for bank transaction", {
@@ -139,7 +145,7 @@ async function transformXeroData(xeroData) {
       payeeEntityAcnArbn: contact.payeeEntityAcnArbn || null,
       payeeEntityName: contact.payeeEntityName || null,
       paymentAmount: txn.paymentAmount,
-      description: txn.description,
+      description: txn.description || "No description available",
       transactionType: txn.Type,
       supplyDate: txn.supplyDate,
       paymentDate: txn.paymentDate,
@@ -154,10 +160,15 @@ async function transformXeroData(xeroData) {
       invoicePaymentTerms: txn.invoicePaymentTerms,
       invoiceDueDate: txn.invoiceDueDate,
       isReconciled: txn.isReconciled,
+      accountCode: txn.accountCode || null,
     };
-
     mergedRecords.push(rawRecord);
   });
+  console.log(
+    "Txn merged records: ",
+    mergedRecords.length,
+    mergedRecords.slice(0, 5)
+  );
 
   logger.logEvent("info", "Xero data transformation complete");
   // console.log("Transformed Xero Data:", mergedRecords.slice(0, 20));

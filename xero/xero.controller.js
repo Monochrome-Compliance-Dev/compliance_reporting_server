@@ -374,24 +374,74 @@ async function startXeroExtraction({
     };
     const transformedXeroData = await transformXeroData(xeroData);
 
+    // Begin new validation/split/save logic
+    const validRows = [];
+    const invalidRows = [];
+
+    for (const row of transformedXeroData) {
+      const reasons = [];
+
+      const hasPayerName =
+        typeof row.payerEntityName === "string" &&
+        row.payerEntityName.trim() !== "";
+      if (!hasPayerName) reasons.push("Missing or invalid payerEntityName");
+
+      const hasPayeeName =
+        typeof row.payeeEntityName === "string" &&
+        row.payeeEntityName.trim() !== "";
+      if (!hasPayeeName) reasons.push("Missing or invalid payeeEntityName");
+
+      const hasABN =
+        row.payeeEntityAbn &&
+        /^\d{11}$/.test(String(row.payeeEntityAbn).trim());
+      if (!hasABN) reasons.push("Missing or invalid payeeEntityAbn");
+
+      const hasValidAmount = !isNaN(parseFloat(row.paymentAmount));
+      if (!hasValidAmount) reasons.push("Missing or invalid paymentAmount");
+
+      const hasPaymentDate =
+        row.paymentDate && !isNaN(Date.parse(row.paymentDate));
+      if (!hasPaymentDate) reasons.push("Missing or invalid paymentDate");
+
+      if (reasons.length > 0) {
+        invalidRows.push({ ...row, issues: reasons });
+      } else {
+        validRows.push(row);
+      }
+    }
+
+    const source = "xero";
+
     try {
-      const source = "xero";
-      const result = await tcpService.saveTransformedDataToTcp(
-        transformedXeroData,
-        reportId,
-        clientId,
-        createdBy,
-        source
-      );
-      if (result) {
+      if (validRows.length > 0) {
+        await tcpService.saveTransformedDataToTcp(
+          validRows,
+          reportId,
+          clientId,
+          createdBy,
+          source
+        );
         logger.logEvent("info", "Inserted TCP records successfully", {
-          count: transformedXeroData.length,
+          count: validRows.length,
+        });
+      }
+
+      if (invalidRows.length > 0) {
+        await tcpService.saveErrorsToTcpError(
+          invalidRows,
+          reportId,
+          clientId,
+          createdBy,
+          source
+        );
+        logger.logEvent("info", "Inserted TCP error records", {
+          count: invalidRows.length,
         });
       }
     } catch (err) {
       logger.logEvent(
         "error",
-        "Failed to save transformed data to tcp with transaction",
+        "Failed to save transformed data/errors to tcp/tcp_error with transaction",
         {
           action: "OAuthCallback-Background",
           error: err.message,

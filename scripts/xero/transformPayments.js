@@ -23,7 +23,7 @@ const transformPayments = (payments) => {
     const transformed = {
       ...payment,
       paymentAmount: payment.Amount,
-      paymentDate,
+      paymentDate: paymentDate,
       PaymentType: payment.PaymentType,
       isReconciled: payment.IsReconciled,
     };

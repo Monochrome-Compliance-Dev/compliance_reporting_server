@@ -217,8 +217,8 @@ app.use("/api/public", require("./public/public.controller"));
 app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
-app.use("/api/audit", require("./audit/audit.controller"));
 app.use("/api/xero", require("./xero/xero.controller"));
+app.use("/api/data-cleanse", require("./data_cleanse/data_cleanse.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {
