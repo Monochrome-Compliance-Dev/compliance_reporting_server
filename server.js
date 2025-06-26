@@ -58,6 +58,7 @@ app.get("/api/health-check", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 app.use("/api/public", require("./public/public.controller"));
+app.use("/api/bookings", require("./booking/booking.controller"));
 
 const {
   handleUnprocessedSubmission,
