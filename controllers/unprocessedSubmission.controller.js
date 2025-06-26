@@ -36,64 +36,58 @@ const upload = multer({
 });
 
 // Note: virusScanMiddleware could be included here in future
-const handleUnprocessedSubmission = [
-  upload.single("file"),
-
-  async (req, res, next) => {
+const handleUnprocessedSubmission = async (req) => {
+  try {
     console.log("Received file:", req.file);
     console.log("Body fields:", req.body);
-    try {
-      const { email, contactName, contactPhone, businessName, abn, fileType } =
-        req.body;
-      if (!email || !contactName || !req.file) {
-        return res
-          .status(400)
-          .json({ error: "Missing required fields or file" });
-      }
 
-      // Virus scan immediately after file is uploaded, before DB write
-      const ext = path.extname(req.file.path).toLowerCase();
-      await scanFile(req.file.path, ext, req.file.originalname);
-
-      const submission = await UnprocessedSubmission.create({
-        email,
-        contactName,
-        contactPhone,
-        businessName,
-        abn,
-        fileType,
-        filePath: req.file.path,
-      });
-
-      logger.logEvent("info", "UnprocessedSubmissionReceived", {
-        id: submission.id,
-        email,
-        file: req.file.filename,
-        fileType,
-      });
-
-      await sendEmail({
-        to: "contact@monochrome-compliance.com",
-        subject: `New PTR Submission from ${email}`,
-        html: `
-          <p><strong>Email:</strong> ${email}</p>
-          <p><strong>Name:</strong> ${contactName}</p>
-          <p><strong>Phone:</strong> ${contactPhone || "N/A"}</p>
-          <p><strong>Business Name:</strong> ${businessName || "N/A"}</p>
-          <p><strong>ABN:</strong> ${abn || "N/A"}</p>
-          <p><strong>File:</strong> ${req.file.filename}</p>
-          <p><strong>File Type:</strong> ${fileType || "N/A"}</p>
-        `,
-      });
-
-      res.status(201).json({ message: "Submission received" });
-    } catch (err) {
-      logger.logEvent("error", "SubmissionError", { error: err.message });
-      next(err);
+    const { email, contactName, contactPhone, businessName, abn, fileType } =
+      req.body;
+    if (!email || !contactName || !req.file) {
+      throw new Error("Missing required fields or file");
     }
-  },
-];
+
+    // Virus scan immediately after file is uploaded, before DB write
+    const ext = path.extname(req.file.path).toLowerCase();
+    await scanFile(req.file.path, ext, req.file.originalname);
+
+    const submission = await UnprocessedSubmission.create({
+      email,
+      contactName,
+      contactPhone,
+      businessName,
+      abn,
+      fileType,
+      filePath: req.file.path,
+    });
+
+    logger.logEvent("info", "UnprocessedSubmissionReceived", {
+      id: submission.id,
+      email,
+      file: req.file.filename,
+      fileType,
+    });
+
+    await sendEmail({
+      to: "contact@monochrome-compliance.com",
+      subject: `New PTR Submission from ${email}`,
+      html: `
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Name:</strong> ${contactName}</p>
+        <p><strong>Phone:</strong> ${contactPhone || "N/A"}</p>
+        <p><strong>Business Name:</strong> ${businessName || "N/A"}</p>
+        <p><strong>ABN:</strong> ${abn || "N/A"}</p>
+        <p><strong>File:</strong> ${req.file.filename}</p>
+        <p><strong>File Type:</strong> ${fileType || "N/A"}</p>
+      `,
+    });
+  } catch (err) {
+    logger.logEvent("error", "SubmissionError", { error: err.message });
+    throw err;
+  }
+};
 
 module.exports = {
+  upload,
   handleUnprocessedSubmission,
 };
