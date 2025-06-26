@@ -57,6 +57,7 @@ app.use(helmet());
 app.get("/api/health-check", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
+app.use("/api/public", require("./public/public.controller"));
 
 const {
   handleUnprocessedSubmission,
