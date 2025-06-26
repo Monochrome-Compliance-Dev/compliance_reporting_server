@@ -9,6 +9,7 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const helmet = require("helmet");
 const errorHandler = require("./middleware/error-handler");
+const upload = require("./middleware/upload");
 const { logger } = require("./helpers/logger");
 
 process.on("uncaughtException", (err) => {
@@ -60,7 +61,23 @@ app.get("/api/health-check", (req, res) => {
 const {
   handleUnprocessedSubmission,
 } = require("./controllers/unprocessedSubmission.controller");
-app.post("/api/unprocessed-submission", handleUnprocessedSubmission);
+
+// Logging middleware for /api/unprocessed-submission
+app.use("/api/unprocessed-submission", (req, res, next) => {
+  console.log("🛰 Incoming request to /api/unprocessed-submission");
+  console.log("Headers:", req.headers["content-type"]);
+  next();
+});
+
+app.post(
+  "/api/unprocessed-submission",
+  upload.single("file"),
+  (req, res, next) => {
+    console.log("📦 Received in route: file =", req.file);
+    console.log("📨 Received in route: body =", req.body);
+    handleUnprocessedSubmission(req, res, next);
+  }
+);
 
 app.use(errorHandler);
 
