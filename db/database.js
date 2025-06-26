@@ -60,6 +60,7 @@ async function initialise() {
   }
 
   // Dynamically load models from their folders
+  /*
   const modelDirs = [
     "../users",
     "../clients",
@@ -83,8 +84,10 @@ async function initialise() {
       }
     });
   });
+  */
 
   // Setup model relationships
+  /*
   if (db.User && db.RefreshToken) {
     db.User.hasMany(db.RefreshToken, { onDelete: "CASCADE" });
     db.RefreshToken.belongsTo(db.User);
@@ -144,12 +147,13 @@ async function initialise() {
     db.Report.hasMany(db.TcpError, { onDelete: "CASCADE" });
     db.TcpError.belongsTo(db.Report);
   }
+  */
 
   // Sync models
   await sequelize.sync();
 
   // Initialise RLS policies (if using them)
-  await initialiseRLS();
+  // await initialiseRLS();
 }
 
 async function initialiseRLS() {
