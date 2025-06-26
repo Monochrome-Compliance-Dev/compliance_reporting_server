@@ -28,9 +28,23 @@ process.on("unhandledRejection", (reason) => {
 const app = express();
 app.disable("x-powered-by");
 
+const allowedOrigins = [
+  "https://sit.monochrome-compliance.com",
+  "https://wwww.sit.monochrome-compliance.com",
+  "https://www.monochrome-compliance.com",
+  "https://monochrome-compliance.com",
+  "http://localhost:3000",
+];
+
 app.use(
   cors({
-    origin: true,
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS not allowed for this origin"));
+      }
+    },
     credentials: true,
   })
 );
