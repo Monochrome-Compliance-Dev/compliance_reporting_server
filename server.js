@@ -1,7 +1,15 @@
 ﻿const http = require("http");
 const { Client } = require("pg");
 
-const server = http.createServer(async (_, res) => {
+const server = http.createServer(async (req, res) => {
+  const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+
+  if (pathname === "/api/health-check") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("healthy");
+    return;
+  }
+
   const client = new Client({
     host: process.env.DB_HOST,
     port: 5432,
