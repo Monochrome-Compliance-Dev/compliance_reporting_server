@@ -448,6 +448,7 @@ if (!fs.existsSync(tmpUploadPath)) {
 }
 
 async function uploadFile(req, res) {
+  // console.log("req.file in uploadFile:", req.file);
   try {
     // console.log("[DEBUG] File received by route:", req.file);
     if (!req.file || !req.file.path) {
@@ -516,28 +517,20 @@ async function uploadFile(req, res) {
             row[key] = null;
           }
         }
-        // Convert isReconciled from "1"/"0" string to boolean
+        // Force string fields to remain strings and strip ".0" float artifacts
+        const forceStringFields = ["payerEntityAcnArbn", "payeeEntityAcnArbn"];
+        for (const key of forceStringFields) {
+          if (row[key]) {
+            row[key] = String(row[key]).trim().replace(/\.0$/, "");
+          }
+        }
+        // Robust, case-insensitive conversion for isReconciled
         if (row.hasOwnProperty("isReconciled")) {
-          const val = row["isReconciled"];
-          if (
-            val === true ||
-            val === "1" ||
-            val === 1 ||
-            val === "t" ||
-            val === "T" ||
-            val === "true" ||
-            val === "TRUE"
-          ) {
+          const val = String(row["isReconciled"]).trim().toLowerCase();
+          // console.log("Processing isReconciled value:", row["isReconciled"]);
+          if (["1", "true", "t"].includes(val)) {
             row["isReconciled"] = true;
-          } else if (
-            val === false ||
-            val === "0" ||
-            val === 0 ||
-            val === "f" ||
-            val === "F" ||
-            val === "false" ||
-            val === "FALSE"
-          ) {
+          } else if (["0", "false", "f"].includes(val)) {
             row["isReconciled"] = false;
           } else {
             row["isReconciled"] = null;
@@ -545,7 +538,7 @@ async function uploadFile(req, res) {
         }
 
         // Set default values for each processed row
-        console.log("Processing req.body.reportId:", req.body.reportId);
+        // console.log("Processing req.body.reportId:", req.body.reportId);
         const now = new Date();
         row.createdBy = req.auth.id;
         row.updatedBy = req.auth.id;

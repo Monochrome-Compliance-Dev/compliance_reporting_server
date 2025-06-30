@@ -31,7 +31,8 @@ function model(sequelize) {
         "Accepted",
         "Rejected",
         "Submitted",
-        "Deleted"
+        "Deleted",
+        "Validated"
       ),
       allowNull: false,
       defaultValue: "Created",

@@ -11,13 +11,14 @@ router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getById);
 router.post("/", authorise(), validateRequest(reportSchema), create);
 router.put("/:id", authorise(), validateRequest(reportSchema), update);
+router.patch("/:id", authorise(), patch);
 router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 
 function getAll(req, res, next) {
   reportService
-    .getAll({ transaction: req.dbTransaction })
+    .getAll({ clientId: req.auth?.clientId })
     .then((reports) => {
       logger.logEvent("info", "Fetched all reports", {
         action: "GetAllReports",
@@ -38,7 +39,7 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   reportService
-    .getById(req.params.id, { transaction: req.dbTransaction }) // Add the transaction here
+    .getById(req.params.id)
     .then((report) => {
       if (report) {
         logger.logEvent("info", "Fetched report by ID", {
@@ -68,38 +69,32 @@ function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
-  // console.log("Creating report with data:", req.body, req.auth);
   try {
-    const report = await reportService.create(req.body, {
-      transaction: req.dbTransaction,
-    });
+    const report = await reportService.create(req.body);
     logger.logEvent("info", "Report created", {
       action: "CreateReport",
       reportId: report.id,
       userId: req.auth.id,
     });
-    await req.dbTransaction.commit();
     res.json(report);
   } catch (error) {
     logger.logEvent("error", "Error creating report", {
       action: "CreateReport",
       error: error.message,
     });
-    await req.dbTransaction.rollback();
     next(error);
   }
 }
 
 function update(req, res, next) {
   reportService
-    .update(req.params.id, req.body, { transaction: req.dbTransaction })
+    .update(req.params.id, req.body)
     .then((report) => {
       logger.logEvent("info", "Report updated", {
         action: "UpdateReport",
         reportId: req.params.id,
         userId: req.auth.id,
       });
-      req.dbTransaction.commit();
       res.json(report);
     })
     .catch((error) => {
@@ -108,9 +103,39 @@ function update(req, res, next) {
         reportId: req.params.id,
         error: error.message,
       });
-      req.dbTransaction.rollback();
       next(error);
     });
+}
+
+async function patch(req, res, next) {
+  try {
+    const { id } = req.params;
+    const clientId = req.auth.clientId;
+
+    if (!clientId) {
+      logger.logEvent("warn", "No clientId found for RLS - skipping");
+      return res.status(400).json({ message: "Client ID missing" });
+    }
+
+    const report = await reportService.patch(id, req.body, {
+      clientId,
+    });
+
+    logger.logEvent("info", "Report patched", {
+      action: "PatchReport",
+      reportId: id,
+      userId: req.auth.id,
+    });
+
+    res.json(report);
+  } catch (error) {
+    logger.logEvent("error", "Error patching report", {
+      action: "PatchReport",
+      reportId: req.params.id,
+      error: error.message,
+    });
+    next(error);
+  }
 }
 
 async function _delete(req, res, next) {
@@ -123,9 +148,7 @@ async function _delete(req, res, next) {
       return res.status(400).json({ message: "Client ID missing" });
     }
 
-    await reportService.delete(id, clientId, {
-      transaction: req.dbTransaction,
-    });
+    await reportService.delete(id, clientId);
     res.status(204).send();
   } catch (err) {
     next(err);

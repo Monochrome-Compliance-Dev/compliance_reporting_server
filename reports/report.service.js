@@ -1,3 +1,6 @@
+const {
+  beginTransactionWithClientContext,
+} = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 
@@ -6,6 +9,7 @@ module.exports = {
   getById,
   create,
   update,
+  patch,
   delete: _delete,
   getAllByReportId,
   finaliseSubmission,
@@ -13,6 +17,7 @@ module.exports = {
 };
 
 async function getAll(options = {}) {
+  const t = await beginTransactionWithClientContext(options.clientId);
   try {
     const whereClause = options.includeDeleted
       ? {}
@@ -21,7 +26,7 @@ async function getAll(options = {}) {
     const rows = await db.Report.findAll({
       where: whereClause,
       ...options,
-      transaction: options.transaction,
+      transaction: t,
     });
 
     logger.logEvent("info", "Fetched all reports", {
@@ -64,13 +69,8 @@ async function getAllByReportId(reportId, options = {}) {
 }
 
 async function create(params, options = {}) {
-  const t = await db.sequelize.transaction();
+  const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    await db.sequelize.query(
-      `SET LOCAL app.current_client_id = '${params.clientId}'`,
-      { transaction: t }
-    );
-
     const result = await db.Report.create(params, {
       ...options,
       transaction: t,
@@ -111,14 +111,42 @@ async function update(id, params, options = {}) {
   return result;
 }
 
-async function _delete(id, clientId, options = {}) {
-  const t = await db.sequelize.transaction();
+async function patch(id, params, options = {}) {
+  const t =
+    options.transaction ||
+    (await beginTransactionWithClientContext(params.clientId));
   try {
-    await db.sequelize.query(
-      `SET LOCAL app.current_client_id = '${clientId}'`,
-      { transaction: t }
-    );
+    const [count, [updatedReport]] = await db.Report.update(params, {
+      where: { id },
+      returning: true,
+      ...options,
+      transaction: t,
+    });
 
+    if (count === 0) {
+      throw new Error("Report not found or update blocked by RLS.");
+    }
+    if (!options.transaction) await t.commit();
+    logger.logEvent("info", "Report patched", {
+      action: "PatchReport",
+      reportId: id,
+      ...params,
+    });
+    return updatedReport;
+  } catch (error) {
+    if (!options.transaction) await t.rollback();
+    logger.logEvent("error", "Error patching report, rolled back", {
+      action: "PatchReport",
+      reportId: id,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+async function _delete(id, clientId, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
     const [count] = await db.Report.update(
       { reportStatus: "Deleted" },
       {

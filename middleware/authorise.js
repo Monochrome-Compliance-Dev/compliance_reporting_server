@@ -63,10 +63,6 @@ function authorise(roles = []) {
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);
 
-      // Inject clientId for RLS policies
-      const setClientIdRLS = require("./setClientIdRLS");
-      await setClientIdRLS(req, res, () => {});
-
       const injectClientId = require("./injectClientId");
       injectClientId(req, res, () => {});
 
