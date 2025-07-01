@@ -13,6 +13,7 @@ const path = require("path");
 const { scanFile } = require("../middleware/virus-scan");
 const reportService = require("../reports/report.service");
 const csv = require("csv-parser");
+const { cli } = require("winston/lib/winston/config");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -43,7 +44,7 @@ function getAll(req, res, next) {
 
 function getAllByReportId(req, res, next) {
   tcpService
-    .getAllByReportId(req.params.id, { transaction: req.dbTransaction })
+    .getAllByReportId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -53,6 +54,7 @@ async function patchRecord(req, res, next) {
   try {
     const { id } = req.params;
     const userId = req.auth.id;
+    const clientId = req.auth.clientId;
     const updates = req.body;
 
     if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
@@ -60,17 +62,13 @@ async function patchRecord(req, res, next) {
     }
 
     // Fetch the old record before updating
-    const oldRecord = await tcpService.getById(id, {
-      transaction: req.dbTransaction,
-    });
+    const oldRecord = await tcpService.getById(id, clientId);
     if (!oldRecord) {
       return res.status(404).json({ message: "Record not found" });
     }
 
     // Patch the record
-    const updated = await tcpService.patchRecord(id, updates, {
-      transaction: req.dbTransaction,
-    });
+    const updated = await tcpService.patchRecord(id, updates, clientId);
 
     res.json({
       success: true,
@@ -85,7 +83,7 @@ async function patchRecord(req, res, next) {
 
 function getTcpByReportId(req, res, next) {
   tcpService
-    .getTcpByReportId(req.params.id, { transaction: req.dbTransaction })
+    .getTcpByReportId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -229,7 +227,7 @@ async function bulkCreate(req, res, next) {
 
     for (const record of req.body) {
       try {
-        const created = await tcpService.create(record, { transaction });
+        const created = await tcpService.create(record, clientId);
         results.push(created);
       } catch (error) {
         console.error("Error processing record:", error);
@@ -247,7 +245,7 @@ async function bulkCreate(req, res, next) {
       count: results.length,
     });
 
-    await transaction.commit();
+    // await transaction.commit();
     res.json({
       success: true,
       message: "All records saved successfully",
@@ -274,10 +272,8 @@ async function bulkUpdate(req, res, next) {
       for (const record of itemsToProcess) {
         try {
           const { id, createdAt, ...recordToUpdate } = record;
-          const oldRecord = await tcpService.getById(id, { transaction });
-          const updated = await tcpService.update(id, recordToUpdate, {
-            transaction,
-          });
+          const oldRecord = await tcpService.getById(id, clientId);
+          const updated = await tcpService.update(id, recordToUpdate, clientId);
           results.push(updated);
         } catch (error) {
           console.error("Error processing record:", error);
@@ -378,7 +374,6 @@ async function bulkPatchUpdate(req, res, next) {
   logger.logEvent("info", "Incoming bulk patch request", {
     clientId: req.auth.clientId,
   }); // log start of request
-  const transaction = req.dbTransaction;
   try {
     if (!Array.isArray(req.body)) {
       logger.logEvent("warn", "Invalid request body for bulk patch", {
@@ -390,6 +385,7 @@ async function bulkPatchUpdate(req, res, next) {
     }
 
     const clientId = req.auth.clientId;
+    console.log("Client ID for bulk patch:", clientId);
     const userId = req.auth.id;
 
     const updatePromises = req.body.map(async (record) => {
@@ -403,22 +399,20 @@ async function bulkPatchUpdate(req, res, next) {
         );
       }
       const { step, ...filteredUpdates } = updates;
-      const oldRecord = await tcpService.getById(id, {
-        transaction,
-      });
-
-      const updated = await tcpService.patchRecord(id, filteredUpdates, {
-        transaction,
-      });
+      // const oldRecord = await tcpService.getById(id, req.auth?.clientId);
+      const updated = await tcpService.patchRecord(
+        id,
+        filteredUpdates,
+        clientId
+      );
       return updated;
     });
 
     const results = await Promise.all(updatePromises);
 
-    await transaction.commit(); // Make sure transaction is committed
     logger.logEvent("info", "Bulk patch update successful", {
       action: "BulkPatchUpdateTCP",
-      clientId: req.auth.clientId,
+      clientId: clientId,
       count: results.length,
       // updatedIds: results.map((r) => r.id),
     });
@@ -429,9 +423,6 @@ async function bulkPatchUpdate(req, res, next) {
       results,
     });
   } catch (error) {
-    if (transaction && !transaction.finished) {
-      await transaction.rollback(); // Rollback only if there's an error
-    }
     logger.logEvent("error", "Error in bulk patch update", {
       clientId: req.auth.clientId,
       error: error.message,

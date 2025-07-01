@@ -39,8 +39,9 @@ function getAll(req, res, next) {
 
 function getById(req, res, next) {
   reportService
-    .getById(req.params.id)
+    .getById(req.params.id, req.auth?.clientId)
     .then((report) => {
+      console.log("Fetched report:", report);
       if (report) {
         logger.logEvent("info", "Fetched report by ID", {
           action: "GetReportById",

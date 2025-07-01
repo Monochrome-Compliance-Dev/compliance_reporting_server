@@ -3,6 +3,9 @@ const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
 const { sequelize } = require("../db/database");
+const {
+  beginTransactionWithClientContext,
+} = require("../helpers/setClientIdRLS");
 
 if (process.env.NODE_ENV !== "test") {
   import("nanoid").then((mod) => {
@@ -35,19 +38,35 @@ async function getAll(options = {}) {
   return await db.Tcp.findAll(options);
 }
 
-async function getAllByReportId(reportId, options = {}) {
-  return await db.Tcp.findAll({ where: { reportId }, ...options });
+async function getAllByReportId(reportId, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
+  return await db.Tcp.findAll({ where: { reportId }, transaction: t });
 }
 
-async function getTcpByReportId(reportId, options = {}) {
-  return await db.Tcp.findAll({
-    where: {
+async function getTcpByReportId(reportId, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
+
+  try {
+    const rows = await db.Tcp.findAll({
+      where: { reportId },
+      transaction: t,
+    });
+
+    logger.logEvent("info", "Fetched TCP records for report", {
+      action: "GetTCPByReportId",
       reportId,
-      isTcp: true,
-      excludedTcp: false,
-    },
-    ...options,
-  });
+      count: rows?.length ?? 0,
+    });
+
+    return rows;
+  } catch (error) {
+    logger.logEvent("error", "Failed to fetch TCP records", {
+      action: "GetTCPByReportId",
+      reportId,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 async function partialUpdate(id, updates, options = {}) {
@@ -72,12 +91,14 @@ async function sbiUpdate(reportId, params, options = {}) {
   );
 }
 
-async function getById(id, options = {}) {
-  return await db.Tcp.findByPk(id, options);
+async function getById(id, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
+  return await db.Tcp.findByPk(id, { transaction: t });
 }
 
-async function create(params, options = {}) {
-  const result = await db.Tcp.create(params, options);
+async function create(params, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
+  const result = await db.Tcp.create(params, { transaction: t });
   logger.logEvent("info", "TCP record created", {
     action: "CreateTCP",
   });
@@ -159,16 +180,17 @@ async function generateSummaryCsv(options = {}) {
   return csv;
 }
 
-async function patchRecord(id, update, options = {}) {
+async function patchRecord(id, update, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
   try {
     logger.logEvent("info", "TCP PATCH update requested", {
       action: "patchRecordTCP",
     });
-    await db.Tcp.update(update, { where: { id }, ...options });
+    await db.Tcp.update(update, { where: { id }, transaction: t });
     logger.logEvent("info", "Bulk PATCH update completed", {
       action: "patchRecordTCP",
     });
-    return db.Tcp.findOne({ where: { id }, ...options });
+    return db.Tcp.findOne({ where: { id }, transaction: t });
   } catch (error) {
     logger.logEvent("error", "Bulk PATCH update failed", {
       action: "patchRecordTCP",
@@ -277,33 +299,38 @@ async function saveTransformedDataToTcp(
     }
   }
 
-  await sequelize.transaction(async (transaction) => {
-    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
-      transaction,
-    });
-
-    // Extract records and transaction from options for bulkCreate
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
     const { validate = true } = options || {};
+
     await db.Tcp.bulkCreate(transformedRecords, {
       validate,
-      transaction,
+      transaction: t,
     });
-  });
 
-  logger.logEvent("info", "✅ Successfully created transformed TCP records", {
-    action: "BulkSaveTCP",
-    savedCount: transformedRecords.length,
-  });
-
-  // Notify frontend via WebSocket, if available
-  if (global.sendWebSocketUpdate) {
-    global.sendWebSocketUpdate({
-      message: "Transformed TCP records saved successfully",
-      type: "status",
+    const insertedRecords = await db.Tcp.findAll({
+      where: { reportId },
+      transaction: t,
     });
+
+    logger.logEvent("info", "✅ Successfully created transformed TCP records", {
+      action: "BulkSaveTCP",
+      savedCount: transformedRecords.length,
+    });
+
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        message: "Transformed TCP records saved successfully",
+        type: "status",
+      });
+    }
+
+    await t.commit();
+    return insertedRecords;
+  } catch (err) {
+    await t.rollback();
+    throw err;
   }
-
-  return true;
 }
 
 /**

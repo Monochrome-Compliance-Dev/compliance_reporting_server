@@ -176,12 +176,12 @@ async function _delete(id, clientId, options = {}) {
   }
 }
 
-async function getById(id, options = {}) {
+async function getById(id, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
   try {
     const report = await db.Report.findOne({
       where: { id },
-      ...options,
-      transaction: options.transaction,
+      transaction: t,
     });
     if (!report) {
       logger.logEvent("warn", "Report not found", {
@@ -194,6 +194,7 @@ async function getById(id, options = {}) {
       action: "GetReportById",
       reportId: id,
     });
+    // console.log("Fetched report:", report);
     return report;
   } catch (error) {
     logger.logEvent("error", "Error fetching report by ID", {
