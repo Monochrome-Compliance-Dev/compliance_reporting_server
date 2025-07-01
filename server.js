@@ -219,6 +219,7 @@ app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
 app.use("/api/xero", require("./xero/xero.controller"));
 app.use("/api/data-cleanse", require("./data_cleanse/data_cleanse.controller"));
+app.use("/api/tcp/dashboard", require("./dashboard/dashboard.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {

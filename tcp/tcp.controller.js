@@ -13,7 +13,7 @@ const path = require("path");
 const { scanFile } = require("../middleware/virus-scan");
 const reportService = require("../reports/report.service");
 const csv = require("csv-parser");
-const { cli } = require("winston/lib/winston/config");
+const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
 
 // routes
 router.get("/", authorise(), getAll);
@@ -32,6 +32,7 @@ router.put("/submit-final", authorise(), submitFinalReport);
 router.get("/download-summary", authorise(), downloadSummaryReport);
 router.post("/upload", authorise(), upload.single("file"), uploadFile);
 router.get("/errors/:id", authorise(), getErrorsByReportId);
+router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
 
@@ -672,6 +673,18 @@ async function getErrorsByReportId(req, res, next) {
     res.json(errors);
   } catch (error) {
     console.error("Error fetching errors by report ID:", error);
+    next(error);
+  }
+}
+
+// Controller for recalculating TCP metrics
+async function recalculateMetrics(req, res, next) {
+  try {
+    const reportId = req.params.id;
+    const clientId = req.auth.clientId;
+    await processTcpMetrics(reportId, clientId);
+    res.json({ success: true, message: "TCP metrics recalculated." });
+  } catch (error) {
     next(error);
   }
 }
