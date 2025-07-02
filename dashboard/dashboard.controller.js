@@ -9,6 +9,7 @@ router.get("/:id/metrics/previous", authorise(), getDashboardPreviousMetrics);
 router.get("/:id/flags", authorise(), getDashboardFlags);
 router.get("/:id/snapshot", authorise(), getDashboardSnapshot);
 router.get("/:id/signals", authorise(), getDashboardSignals);
+router.get("/:id/extended-metrics", authorise(), getDashboardExtendedMetrics);
 
 module.exports = router;
 
@@ -44,5 +45,12 @@ function getDashboardSignals(req, res, next) {
   dashboardService
     .getDashboardSignals(req.params.id, req.auth.clientId)
     .then((signals) => (signals ? res.json(signals) : res.sendStatus(404)))
+    .catch(next);
+}
+
+function getDashboardExtendedMetrics(req, res, next) {
+  dashboardService
+    .getDashboardExtendedMetrics(req.params.id, req.auth.clientId)
+    .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
     .catch(next);
 }

@@ -1,3 +1,6 @@
+const {
+  beginTransactionWithClientContext,
+} = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 
@@ -7,6 +10,7 @@ module.exports = {
   getDashboardFlags,
   getDashboardSnapshot,
   getDashboardSignals,
+  getDashboardExtendedMetrics,
 };
 
 async function getDashboardMetrics(reportId, clientId) {
@@ -128,20 +132,23 @@ async function getDashboardSnapshot(reportId, clientId) {
 }
 
 async function getDashboardSignals(reportId, clientId) {
-  console.log(
-    "Fetching dashboard signals for reportId:",
-    reportId,
-    "clientId:",
-    clientId
-  );
-  logger.logEvent("info", "Fetching dashboard signals", {
-    action: "GetDashboardSignals",
-    reportId,
-    clientId,
-  });
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    console.log(
+      "Fetching dashboard signals for reportId:",
+      reportId,
+      "clientId:",
+      clientId
+    );
+    logger.logEvent("info", "Fetching dashboard signals", {
+      action: "GetDashboardSignals",
+      reportId,
+      clientId,
+    });
 
-  const [[summary], topSuppliers, [bands]] = await Promise.all([
-    db.sequelize.query(
+    const coreMetrics = await getDashboardMetrics(reportId, clientId);
+
+    const [summaryResult] = await db.sequelize.query(
       `
         SELECT
           ROUND(AVG("paymentTime")::numeric, 2) AS "avgDays",
@@ -153,9 +160,13 @@ async function getDashboardSignals(reportId, clientId) {
       {
         replacements: { reportId, clientId },
         type: db.sequelize.QueryTypes.SELECT,
+        transaction: t,
       }
-    ),
-    db.sequelize.query(
+    );
+    console.log("Summary result:", summaryResult);
+    const summary = summaryResult[0];
+
+    const topSuppliers = await db.sequelize.query(
       `
         SELECT "payeeEntityAbn", ROUND(AVG("paymentTime")::numeric, 2) AS "avgDays"
         FROM "tbl_tcp"
@@ -167,9 +178,12 @@ async function getDashboardSignals(reportId, clientId) {
       {
         replacements: { reportId, clientId },
         type: db.sequelize.QueryTypes.SELECT,
+        transaction: t,
       }
-    ),
-    db.sequelize.query(
+    );
+    console.log("Top suppliers result:", topSuppliers);
+
+    const [bandsResult] = await db.sequelize.query(
       `
         SELECT
           COUNT(*) FILTER (WHERE "paymentAmount" < 5000) AS "lt5k",
@@ -182,20 +196,98 @@ async function getDashboardSignals(reportId, clientId) {
       {
         replacements: { reportId, clientId },
         type: db.sequelize.QueryTypes.SELECT,
+        transaction: t,
       }
-    ),
-  ]);
+    );
+    console.log("Invoice band result:", bandsResult);
+    const bands = Array.isArray(bandsResult) ? bandsResult[0] : bandsResult;
 
-  return {
-    avgDays: summary.avgDays,
-    medianDays: summary.medianDays,
-    lateSbRate: summary.lateSbRate,
-    slowestPaidSuppliers: topSuppliers,
-    invoiceBands: [
-      { label: "<$5k", count: Number(bands.lt5k) },
-      { label: "$5k–50k", count: Number(bands.btw5k50k) },
-      { label: "$50k–200k", count: Number(bands.btw50k200k) },
-      { label: ">$200k", count: Number(bands.gt200k) },
-    ],
-  };
+    await t.commit();
+
+    logger.logEvent("info", "Returning dashboard signals", {
+      action: "ReturnDashboardSignals",
+      reportId,
+      clientId,
+      signals: {
+        ...coreMetrics,
+        avgDays: summary?.avgDays,
+        medianDays: summary?.medianDays,
+        lateSbRate: summary?.lateSbRate,
+        slowestPaidSuppliers: topSuppliers,
+        invoiceBands: [
+          { label: "<$5k", count: Number(bands?.lt5k) },
+          { label: "$5k–50k", count: Number(bands?.btw5k50k) },
+          { label: "$50k–200k", count: Number(bands?.btw50k200k) },
+          { label: ">$200k", count: Number(bands?.gt200k) },
+        ],
+      },
+    });
+
+    return {
+      ...coreMetrics,
+      avgDays: summary?.avgDays,
+      medianDays: summary?.medianDays,
+      lateSbRate: summary?.lateSbRate,
+      slowestPaidSuppliers: topSuppliers,
+      invoiceBands: [
+        { label: "<$5k", count: Number(bands?.lt5k) },
+        { label: "$5k–50k", count: Number(bands?.btw5k50k) },
+        { label: "$50k–200k", count: Number(bands?.btw50k200k) },
+        { label: ">$200k", count: Number(bands?.gt200k) },
+      ],
+    };
+  } catch (error) {
+    await t.rollback();
+    logger.logEvent("error", "Failed to fetch dashboard signals", {
+      action: "GetDashboardSignals",
+      reportId,
+      clientId,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+async function getDashboardExtendedMetrics(reportId, clientId) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    logger.logEvent("info", "Fetching extended dashboard metrics", {
+      action: "GetExtendedDashboardMetrics",
+      reportId,
+      clientId,
+    });
+
+    const [results] = await db.sequelize.query(
+      `
+        SELECT
+          SUM(CASE WHEN "paymentTime" <= 30 THEN 1 ELSE 0 END) AS "invoicesPaidWithin30Days",
+          SUM(CASE WHEN "paymentTime" <= 30 THEN "paymentAmount" ELSE 0 END) AS "valuePaidWithin30Days",
+          PERCENTILE_CONT(0.8) WITHIN GROUP (ORDER BY "paymentTime") AS "percentile80",
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY "paymentTime") AS "percentile95",
+          SUM(CASE WHEN "isSb" = true THEN 1 ELSE 0 END) AS "sbNumPayments",
+          SUM(CASE WHEN "isSb" = true THEN "paymentAmount" ELSE 0 END) AS "sbValuePayments",
+          SUM(CASE WHEN "isSb" = true AND "transactionType" = 'PEPPOL' THEN 1 ELSE 0 END) AS "sbPeppolNum",
+          SUM(CASE WHEN "isSb" = true AND "transactionType" = 'PEPPOL' THEN "paymentAmount" ELSE 0 END) AS "sbPeppolValue"
+        FROM "tbl_tcp"
+        WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
+      `,
+      {
+        replacements: { reportId, clientId },
+        type: db.sequelize.QueryTypes.SELECT,
+        transaction: t,
+      }
+    );
+
+    await t.commit();
+    return results;
+  } catch (error) {
+    await t.rollback();
+    logger.logEvent("error", "Failed to fetch extended dashboard metrics", {
+      action: "GetExtendedDashboardMetrics",
+      reportId,
+      clientId,
+      error: error.message,
+    });
+    throw error;
+  }
 }

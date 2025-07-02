@@ -682,6 +682,12 @@ async function recalculateMetrics(req, res, next) {
   try {
     const reportId = req.params.id;
     const clientId = req.auth.clientId;
+    console.log(
+      "Recalculating TCP metrics for reportId:",
+      reportId,
+      "and clientId:",
+      clientId
+    );
     await processTcpMetrics(reportId, clientId);
     res.json({ success: true, message: "TCP metrics recalculated." });
   } catch (error) {
