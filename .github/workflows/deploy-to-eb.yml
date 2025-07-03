@@ -62,7 +62,7 @@ jobs:
         run: |
           cat > settings.json <<EOF
           [
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_SECRET", "Value": "${JWT_SECRET}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PASS", "Value": "${SMTP_PASS}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_ID", "Value": "${XERO_CLIENT_ID}"},
@@ -70,12 +70,12 @@ jobs:
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "API_BASE_URL", "Value": "${API_BASE_URL}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "COOKIE_DOMAIN", "Value": "${COOKIE_DOMAIN}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "CORS_ORIGIN", "Value": "${CORS_ORIGIN}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_CLIENT", "Value": "${DB_CLIENT}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_HOST", "Value": "${DB_HOST}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_NAME", "Value": "${DB_NAME}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PORT", "Value": "${DB_PORT}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_SSL", "Value": "${DB_SSL}"},
-            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_USER", "Value": "${DB_USER}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_CLIENT", "Value": "${DB_CLIENT}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_HOST", "Value": "${DB_HOST}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_NAME", "Value": "${DB_NAME}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PORT", "Value": "${DB_PORT}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_SSL", "Value": "${DB_SSL}"},
+            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_USER", "Value": "${DB_USER}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "FRONTEND_URL", "Value": "${FRONTEND_URL}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_EXPIRY", "Value": "${JWT_EXPIRY}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "LOG_LEVEL", "Value": "${LOG_LEVEL}"},
@@ -91,7 +91,7 @@ jobs:
           ]
           EOF
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          #DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           XERO_CLIENT_ID: ${{ secrets.XERO_CLIENT_ID }}
@@ -99,12 +99,12 @@ jobs:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
           COOKIE_DOMAIN: ${{ vars.COOKIE_DOMAIN }}
           CORS_ORIGIN: ${{ vars.CORS_ORIGIN }}
-          DB_CLIENT: ${{ vars.DB_CLIENT }}
-          DB_HOST: ${{ vars.DB_HOST }}
-          DB_NAME: ${{ vars.DB_NAME }}
-          DB_PORT: ${{ vars.DB_PORT }}
-          DB_SSL: ${{ vars.DB_SSL }}
-          DB_USER: ${{ vars.DB_USER }}
+          #DB_CLIENT: ${{ vars.DB_CLIENT }}
+          #DB_HOST: ${{ vars.DB_HOST }}
+          #DB_NAME: ${{ vars.DB_NAME }}
+          #DB_PORT: ${{ vars.DB_PORT }}
+          #DB_SSL: ${{ vars.DB_SSL }}
+          #DB_USER: ${{ vars.DB_USER }}
           FRONTEND_URL: ${{ vars.FRONTEND_URL }}
           JWT_EXPIRY: ${{ vars.JWT_EXPIRY }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
@@ -126,11 +126,11 @@ jobs:
           echo "APP_NAME=${{ vars.APP_NAME }}" >> $GITHUB_ENV
           echo "ENV_NAME=${{ vars.ENV_NAME }}" >> $GITHUB_ENV
 
-      - name: Confirm DB_HOST
-        run: |
-          echo "🔍 DB_HOST resolved at runtime: $DB_HOST"
-        env:
-          DB_HOST: ${{ vars.DB_HOST }}
+      # - name: Confirm DB_HOST
+      #   run: |
+      #     echo "🔍 DB_HOST resolved at runtime: $DB_HOST"
+      #   env:
+      #     DB_HOST: ${{ vars.DB_HOST }}
 
       - name: Update EB environment variables
         run: |
