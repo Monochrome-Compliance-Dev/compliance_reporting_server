@@ -54,3 +54,9 @@ tmpUploads
 
 # Zip files
 *.zip
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
+AWS_Details
