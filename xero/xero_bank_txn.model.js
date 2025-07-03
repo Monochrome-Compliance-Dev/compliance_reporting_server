@@ -1,8 +1,8 @@
 const { DataTypes } = require("sequelize");
 
-module.exports = (sequelize) => {
-  const XeroPayment = sequelize.define(
-    "XeroPayment",
+const XeroBankTxn = (sequelize) => {
+  return sequelize.define(
+    "XeroBankTxn",
     {
       id: {
         type: DataTypes.UUID,
@@ -29,38 +29,70 @@ module.exports = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      PaymentID: {
+      Type: {
         type: DataTypes.STRING(50),
         allowNull: false,
       },
-      Amount: {
-        type: DataTypes.DECIMAL(10, 2),
+      Contact: {
+        type: DataTypes.JSONB,
         allowNull: true,
       },
-      Date: {
+      LineItems: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+      },
+      BankAccount: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+      },
+      LineAmountTypes: {
         type: DataTypes.STRING(50),
+        allowNull: true,
+      },
+      SubTotal: {
+        type: DataTypes.DECIMAL(18, 2),
+        allowNull: true,
+      },
+      TotalTax: {
+        type: DataTypes.DECIMAL(18, 2),
+        allowNull: true,
+      },
+      Total: {
+        type: DataTypes.DECIMAL(18, 2),
+        allowNull: true,
+      },
+      CurrencyCode: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+      },
+      BankTransactionID: {
+        type: DataTypes.UUID,
         allowNull: false,
-      },
-      Reference: {
-        type: DataTypes.STRING(50),
-        allowNull: true,
-      },
-      PaymentType: {
-        type: DataTypes.STRING(50),
-        allowNull: true,
       },
       IsReconciled: {
         type: DataTypes.BOOLEAN,
         allowNull: true,
-        defaultValue: false,
+      },
+      // Not included in the current paginated response, contrary to the Xero docs: https://developer.xero.com/documentation/api/accounting/banktransactions
+      Url: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
+      Reference: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
       },
       Status: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.STRING(20),
         allowNull: true,
       },
-      Invoice: {
-        type: DataTypes.JSONB,
+      Date: {
+        type: DataTypes.DATE,
         allowNull: true,
+      },
+      tenantId: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
       source: {
         type: DataTypes.STRING(50),
@@ -82,10 +114,12 @@ module.exports = (sequelize) => {
       },
     },
     {
-      tableName: "xero_payments",
+      tableName: "xero_bank_txn",
       timestamps: true,
+      updatedAt: "updatedAt",
+      createdAt: "createdAt",
     }
   );
-
-  return XeroPayment;
 };
+
+module.exports = XeroBankTxn;

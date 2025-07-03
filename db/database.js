@@ -8,6 +8,7 @@ const DB_PORT = process.env.DB_PORT || 5432;
 const DB_USER = process.env.DB_USER;
 const DB_PASSWORD = process.env.DB_PASSWORD;
 const DB_NAME = process.env.DB_NAME;
+const DB_SSL = process.env.DB_SSL;
 
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   dialect: "postgres",
@@ -22,7 +23,7 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   logging: console.log,
   schema: process.env.DB_SCHEMA || "public", // Use environment variable or default to 'public'
   dialectOptions:
-    process.env.NODE_ENV !== "development"
+    DB_SSL === "true"
       ? {
           ssl: {
             require: true,
@@ -67,7 +68,6 @@ async function initialise() {
     "../entities",
     "../booking",
     "../tracking",
-    "../audit",
     "../admin",
     "../xero",
   ];
@@ -104,14 +104,6 @@ async function initialise() {
     db.Report.hasMany(db.Tcp, { onDelete: "CASCADE" });
     db.Tcp.belongsTo(db.Report, { onDelete: "CASCADE" });
   }
-  if (db.Tcp && db.Audit) {
-    db.Tcp.hasMany(db.Audit, { onDelete: "CASCADE" });
-    db.Audit.belongsTo(db.Tcp, { onDelete: "CASCADE" });
-  }
-  if (db.Client && db.Audit) {
-    db.Client.hasMany(db.Audit, { onDelete: "CASCADE" });
-    db.Audit.belongsTo(db.Client, { onDelete: "CASCADE" });
-  }
 
   // Xero Token relationship
   if (db.Client && db.XeroToken) {
@@ -141,6 +133,16 @@ async function initialise() {
   if (db.Client && db.XeroOrganisation) {
     db.Client.hasMany(db.XeroOrganisation, { onDelete: "CASCADE" });
     db.XeroOrganisation.belongsTo(db.Client);
+  }
+
+  // TCP csv upload error relationship
+  if (db.Client && db.TcpError) {
+    db.Client.hasMany(db.TcpError, { onDelete: "CASCADE" });
+    db.TcpError.belongsTo(db.Client);
+  }
+  if (db.Report && db.TcpError) {
+    db.Report.hasMany(db.TcpError, { onDelete: "CASCADE" });
+    db.TcpError.belongsTo(db.Report);
   }
 
   // Sync models

@@ -1,12 +1,9 @@
 const { logger } = require("../helpers/logger");
-const { get, post } = require("./xeroApi");
+const { parseXeroDate } = require("../utils/date-parser");
+const { get, post, del } = require("./xeroApi");
 const {
   retryWithExponentialBackoff,
-  paginateXeroApi,
   extractErrorDetails,
-  prepareHeaders,
-  rateLimitHandler,
-  logApiCall,
   handleXeroApiError,
 } = require("./xeroApiUtils");
 const defineXeroTokenModel = require("./xero_tokens.model");
@@ -27,6 +24,11 @@ module.exports = {
   exchangeAuthCodeForTokens,
   getConnections,
   getAllXeroData,
+  syncAllTenants, // Exported for use
+  removeTenant,
+  saveToken,
+  getLatestToken,
+  fetchBankTransactions,
 };
 
 async function exchangeAuthCodeForTokens(code, state, req) {
@@ -44,7 +46,7 @@ async function exchangeAuthCodeForTokens(code, state, req) {
     });
 
     // Use retryWithExponentialBackoff for robust token exchange
-    const tokenData = await retryWithExponentialBackoff(
+    const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
         post("https://identity.xero.com/connect/token", params, {
           headers: {
@@ -64,10 +66,12 @@ async function exchangeAuthCodeForTokens(code, state, req) {
     // Extract clientId and reportId securely from state if encoded, else fallback to req.auth.clientId
     let clientId = null;
     let reportId = null;
+    let tenantId = null;
     try {
       const parsedState = JSON.parse(state);
       clientId = parsedState.clientId || req.auth.clientId;
       reportId = parsedState.reportId || req.query?.reportId || null;
+      tenantId = parsedState.tenantId || null;
     } catch (e) {
       logger.logEvent("warn", "State parsing failed, using req.auth.clientId", {
         action: "ExchangeAuthCodeForTokens",
@@ -89,30 +93,11 @@ async function exchangeAuthCodeForTokens(code, state, req) {
         action: "ExchangeAuthCodeForTokens",
         clientId,
         reportId,
+        tenantId,
       }
     );
 
-    // Save the new token data to the database, including clientId (mandatory)
-    const updateData = {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires: new Date(Date.now() + (tokenData.expires_in || 0) * 1000),
-      created: new Date(),
-      createdByIp: "", // You may want to pass this in if available
-      revoked: null,
-      revokedByIp: null,
-      replacedByToken: null,
-      clientId, // Mandatory for auditing and security
-      reportId, // Save reportId if needed for auditing
-    };
-
-    await XeroToken.upsert(updateData);
-
-    logger.logEvent("info", "Token data saved to database", {
-      action: "ExchangeAuthCodeForTokens",
-      clientId,
-      reportId,
-    });
+    // Do not insert token here — save handled after tenantId is known
     return tokenData;
   } catch (error) {
     logger.logEvent("error", "Error exchanging auth code for tokens", {
@@ -145,7 +130,7 @@ async function refreshToken() {
         url: "https://identity.xero.com/connect/token",
       }
     );
-    const tokenData = await retryWithExponentialBackoff(
+    const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
         post("https://identity.xero.com/connect/token", null, {
           params: {
@@ -217,14 +202,17 @@ async function refreshToken() {
 /**
  * Fetch contacts from Xero API and save them to the database.
  * Enhanced logging for API responses, errors, retries, and upserts.
- * @param {Object} options - { accessToken, tenantId, clientId, reportId, payments }
+ * @param {Object} options - { accessToken, tenantId, clientId, reportId, transactions }
  */
+// TODO: Request a list of contacts by id only
+// https://developer.xero.com/documentation/api/accounting/contacts#optimised-use-of-the-where-filter
 async function fetchContacts(
   accessToken,
   tenantId,
   clientId,
   reportId,
-  payments
+  transactions,
+  createdBy
 ) {
   logger.logEvent("info", "Fetching contacts from Xero", {
     action: "FetchContacts",
@@ -233,33 +221,32 @@ async function fetchContacts(
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching contacts...",
+      message: `Fetching ${tenantId} contacts...`,
       type: "status",
     });
   }
   try {
     logger.logEvent(
       "debug",
-      "Number of invoices and payments before processing",
+      "Number of transactions (payments + bankTxns) before processing",
       {
         action: "FetchContacts",
         clientId,
         reportId,
-        paymentCount: payments.length,
+        transactionCount: transactions.length,
       }
     );
 
     const contactIdsSet = new Set();
-    // Extract ContactID from nested Invoice.Contact object in payments
-    for (let i = 0; i < payments.length; i++) {
-      const payment = payments[i];
-      const invoice = payment.Invoice || {};
-      const contact = invoice.Contact || {};
-      const contactId = contact.ContactID || null;
+    // Extract ContactID from record (supports both Payment and BankTxn style)
+    for (let i = 0; i < transactions.length; i++) {
+      const record = transactions[i];
+      const contactId =
+        record.Contact?.ContactID || record.Invoice?.Contact?.ContactID || null;
       logger.logEvent(
         "debug",
-        "[fetchContacts] Extracted contactId from payment",
-        { contactId, clientId, reportId, iteration: i, source: "payment" }
+        "[fetchContacts] Extracted contactId from record",
+        { contactId, clientId, reportId, iteration: i, source: "record" }
       );
       if (contactId) {
         contactIdsSet.add(contactId);
@@ -288,14 +275,14 @@ async function fetchContacts(
         iteration: idx,
       });
       try {
-        let response;
+        let data, headers, status;
         try {
-          response = await retryWithExponentialBackoff(
+          ({ data, headers, status } = await retryWithExponentialBackoff(
             () => get(`/Contacts/${contactId}`, accessToken, tenantId),
             3,
             1000,
             global.sendWebSocketUpdate
-          );
+          ));
         } catch (apiError) {
           // Use extractErrorDetails utility
           logger.logEvent("error", `API error fetching contact ${contactId}`, {
@@ -325,40 +312,38 @@ async function fetchContacts(
         }
         logger.logEvent(
           "debug",
-          `API call response status: ${response?.status ?? "n/a"}`,
+          `API call response status: ${status ?? "n/a"}`,
           { contactId, clientId, reportId, iteration: idx }
         );
         logger.logEvent("debug", "API response body", {
-          responseBody: response,
+          responseBody: data,
           contactId,
           clientId,
           reportId,
           iteration: idx,
         });
+        logger.logEvent("debug", "Xero API response headers", { headers });
 
         // Xero SDKs may return the body as .Contact or .Contacts, depending on endpoint
         const contact =
-          response?.Contact ||
-          (response?.Contacts && Array.isArray(response.Contacts)
-            ? response.Contacts[0]
+          data?.Contact ||
+          (data?.Contacts && Array.isArray(data.Contacts)
+            ? data.Contacts[0]
             : null);
-        if (
-          !response ||
-          (!contact && !response?.Contact && !response?.Contacts)
-        ) {
+        if (!data || (!contact && !data?.Contact && !data?.Contacts)) {
           logger.logEvent(
             "warn",
             "API response is empty or missing expected fields for contact",
-            { contactId, clientId, reportId, response, iteration: idx }
+            { contactId, clientId, reportId, data, iteration: idx }
           );
         }
-        if (response?.Warnings || response?.Errors) {
+        if (data?.Warnings || data?.Errors) {
           logger.logEvent("warn", "API response contains warnings/errors", {
             clientId,
             reportId,
             contactId,
-            warnings: response?.Warnings,
-            errors: response?.Errors,
+            warnings: data?.Warnings,
+            errors: data?.Errors,
             iteration: idx,
           });
         }
@@ -378,13 +363,12 @@ async function fetchContacts(
               clientId,
               reportId,
               ContactID: contact.ContactID,
-              Name: contact.Name || "",
-              CompanyNumber: contact.CompanyNumber || null,
-              TaxNumber: contact.TaxNumber || null,
-              DAYSAFTERBILLDATE: contact.DaysaAfterBillDate || null,
-              DAYSAFTERBILLMONTH: contact.DaysaAfterBillMonth || null,
-              OFCURRENTMONTH: contact.OfCurrentMonth || null,
-              OFFOLLOWINGMONTH: contact.OfFollowingMonth || null,
+              Name: contact.Name,
+              CompanyNumber: contact.CompanyNumber,
+              TaxNumber: contact.TaxNumber,
+              PaymentTerms: contact.PaymentTerms,
+              source: "Xero",
+              createdBy,
               createdAt: new Date(),
               updatedAt: new Date(),
             });
@@ -474,7 +458,8 @@ async function fetchInvoices(
   tenantId,
   clientId,
   reportId,
-  payments
+  payments,
+  createdBy
 ) {
   logger.logEvent(
     "info",
@@ -487,7 +472,7 @@ async function fetchInvoices(
   );
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching invoices...",
+      message: `Fetching ${tenantId} invoices...`,
       type: "status",
     });
   }
@@ -504,18 +489,22 @@ async function fetchInvoices(
     // Prepare to collect actual invoice objects
     const invoiceResults = [];
 
+    // Prepare to collect not found invoices
+    const notFoundInvoices = [];
+
     // Use rate-limiting and error extraction utilities for each invoice fetch
     const limit = pLimit(5);
     await Promise.all(
       invoiceIds.map((id) =>
         limit(async () => {
           try {
-            const data = await retryWithExponentialBackoff(
+            const { data, headers, status } = await retryWithExponentialBackoff(
               () => get(`/Invoices/${id}`, accessToken, tenantId),
               3,
               1000,
               global.sendWebSocketUpdate
             );
+            logger.logEvent("debug", "Xero API response headers", { headers });
             // Xero returns {Invoices: [invoice]} or {Invoice: {...}} depending on API
             let invoice = null;
             if (data?.Invoice) {
@@ -526,25 +515,42 @@ async function fetchInvoices(
             ) {
               invoice = data.Invoices[0];
             }
+            // If not found, add to notFoundInvoices
+            if (!invoice) {
+              notFoundInvoices.push({
+                invoiceId: id,
+                reason: "Not returned by Xero API",
+              });
+            }
             if (invoice) {
               invoiceResults.push(invoice);
               const invoiceRecord = {
                 clientId,
                 reportId,
-                InvoiceID: invoice.InvoiceID || null,
-                InvoiceNumber: invoice.InvoiceNumber || null,
-                Reference: invoice.Reference || null,
-                LineItems: invoice.LineItems || null,
-                Type: invoice.Type || null,
-                Contact: invoice.Contact || null,
-                DateString: invoice.Date || null,
-                DueDateString: invoice.DueDate || null,
-                Payments: invoice.Payments || null,
-                Status: invoice.Status || null,
-                AmountPaid: invoice.AmountPaid || null,
-                AmountDue: invoice.AmountDue || null,
-                AmountCredited: invoice.AmountCredited || null,
-                Total: invoice.Total || null,
+                InvoiceID: invoice.InvoiceID,
+                InvoiceNumber: invoice.InvoiceNumber,
+                Reference: invoice.Reference,
+                LineItems: invoice.LineItems,
+                Type: invoice.Type,
+                Contact: invoice.Contact,
+                DateString: invoice.DateString,
+                DueDateString: invoice.DueDateString,
+                Payments: invoice.Payments,
+                Status: invoice.Status,
+                AmountDue: invoice.AmountDue,
+                AmountPaid: invoice.AmountPaid,
+                AmountCredited: invoice.AmountCredited,
+                Total: invoice.Total,
+                invoicePaymentTermsBillsDay:
+                  invoice.invoicePaymentTermsBillsDay,
+                invoicePaymentTermsBillsType:
+                  invoice.invoicePaymentTermsBillsType,
+                invoicePaymentTermsSalesDay:
+                  invoice.invoicePaymentTermsSalesDay,
+                invoicePaymentTermsSalesType:
+                  invoice.invoicePaymentTermsSalesType,
+                source: "Xero",
+                createdBy,
                 createdAt: new Date(),
                 updatedAt: new Date(),
               };
@@ -563,6 +569,14 @@ async function fetchInvoices(
         })
       )
     );
+
+    if (global.sendWebSocketUpdate && notFoundInvoices.length > 0) {
+      global.sendWebSocketUpdate({
+        message: "Some invoices could not be retrieved",
+        type: "warning",
+        missingInvoices: notFoundInvoices,
+      });
+    }
 
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
@@ -604,8 +618,9 @@ async function fetchInvoices(
  * Get transformed data for the current client.
  * @param {Object} options - { clientId, reportId }
  */
-async function getTransformedData(clientId, reportId, db) {
-  // async function getTransformedData(clientId, reportId) { // db is passed in for testing purposes
+// async function getTransformedData(clientId, reportId, db) {
+async function getTransformedData(clientId, reportId) {
+  // db is passed in for testing purposes
   logger.logEvent("info", "Retrieving transformed data for client", {
     action: "GetTransformedData",
     clientId,
@@ -657,7 +672,8 @@ async function fetchPayments(
   clientId,
   reportId,
   startDate,
-  endDate
+  endDate,
+  createdBy
 ) {
   logger.logEvent("info", "Extracting payments from Xero", {
     action: "ExtractXeroPayments",
@@ -668,59 +684,90 @@ async function fetchPayments(
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching payments...",
+      message: `Fetching ${tenantId} payments...`,
       type: "status",
     });
   }
   try {
-    // Build Xero-compliant ISO 8601 DateTime filter
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const whereClause =
-      `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
-      ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})`;
-    // Optionally log the final URL/params for troubleshooting
-    logger.logEvent("debug", "Xero Payments GET where clause", {
-      whereClause,
-      clientId,
-      reportId,
-      startDate,
-      endDate,
-    });
-    const data = await retryWithExponentialBackoff(
-      () =>
-        get("/Payments", accessToken, tenantId, {
-          params: {
-            where: whereClause,
-          },
-        }),
-      3,
-      1000,
-      global.sendWebSocketUpdate
-    );
-    const payments = data.Payments || [];
-    console.log("Payments data from Xero:", payments?.length);
-    for (const payment of payments) {
-      const paymentRecord = {
+    let fetchedAll = false;
+    let page = 1;
+    const allPayments = [];
+
+    while (!fetchedAll) {
+      // Build Xero-compliant ISO 8601 DateTime filter
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const whereClause =
+        `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
+        ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
+        ` && Status != "DELETED" && Invoice.Type != "ACCREC" && Invoice.Type != "ACCRECCREDIT"`;
+      // Optionally log the final URL/params for troubleshooting
+      logger.logEvent("debug", "Xero Payments GET where clause", {
+        whereClause,
         clientId,
         reportId,
-        PaymentID: payment.PaymentID || null,
-        Amount: payment.Amount || null,
-        Date: payment.Date,
-        Status: payment.Status || null,
-        Invoice: payment.Invoice || null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      try {
-        await db.XeroPayment.upsert(paymentRecord);
-      } catch (error) {
-        logger.logEvent("error", "Error during payment upsert", {
-          error: extractErrorDetails(error),
-          paymentId: payment.PaymentID,
+        startDate,
+        endDate,
+      });
+      const { data, headers } = await retryWithExponentialBackoff(
+        () =>
+          get("/Payments", accessToken, tenantId, {
+            params: {
+              where: whereClause,
+              page,
+              // pageSize: 100, // Xero defaults to 100 per page
+            },
+          }),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+      // logger.logEvent("debug", "Xero API response headers", { headers });
+      const pageItems = data?.Payments || [];
+
+      for (const payment of pageItems) {
+        allPayments.push(payment);
+        // Skip payments with Status "DELETED" or Invoice.Type "ACCREC"
+        if (
+          payment.Status === "DELETED" ||
+          payment.Invoice?.Type === "ACCREC" ||
+          payment.Invoice?.Type === "ACCRECCREDIT"
+        ) {
+          continue;
+        }
+        const paymentRecord = {
           clientId,
           reportId,
-        });
+          Amount: payment.Amount,
+          PaymentID: payment.PaymentID,
+          Date: payment.Date,
+          Reference: payment.Reference,
+          IsReconciled: payment.IsReconciled,
+          Status: payment.Status,
+          Invoice: payment.Invoice,
+          PaymentType: payment.PaymentType,
+          source: "Xero",
+          createdBy,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        try {
+          await db.XeroPayment.upsert(paymentRecord);
+        } catch (error) {
+          logger.logEvent("error", "Error during payment upsert", {
+            error: extractErrorDetails(error),
+            paymentId: payment.PaymentID,
+            clientId,
+            reportId,
+          });
+        }
+      }
+
+      // if (pageItems.length > 1) {
+      if (pageItems.length < 100) {
+        fetchedAll = true;
+      } else {
+        page++;
       }
     }
     if (global.sendWebSocketUpdate) {
@@ -733,9 +780,9 @@ async function fetchPayments(
       action: "ExtractXeroPayments",
       clientId,
       reportId,
-      count: payments.length,
+      count: allPayments.length,
     });
-    return payments;
+    return allPayments;
   } catch (error) {
     handleXeroApiError(error, global.sendWebSocketUpdate);
     logger.logEvent("error", "Error extracting payments from Xero", {
@@ -764,6 +811,7 @@ async function fetchOrganisationDetails({
   tenantId,
   clientId,
   reportId,
+  createdBy,
 }) {
   logger.logEvent("info", "Extracting organisation details from Xero", {
     action: "ExtractXeroOrganisationDetails",
@@ -772,53 +820,61 @@ async function fetchOrganisationDetails({
   });
   if (global.sendWebSocketUpdate) {
     global.sendWebSocketUpdate({
-      message: "Fetching organisation details...",
+      message: `Fetching ${tenantId} organisation details...`,
       type: "status",
     });
   }
 
   try {
     // Use retryWithExponentialBackoff and extractErrorDetails utility
-    const data = await retryWithExponentialBackoff(
+    const { data, headers, status } = await retryWithExponentialBackoff(
       () => get("/Organisation", accessToken, tenantId),
       3,
       1000,
       global.sendWebSocketUpdate
     );
-    const organisations = data.Organisations || [];
-    console.log("Organisations data from Xero:", organisations?.length);
-    for (const org of organisations) {
-      const orgRecord = {
-        clientId,
-        reportId,
-        organisationId: org.RegistrationNumber,
-        organisationName: org.Name,
-        organisationLegalName: org.LegalName,
-        organisationAbn: org.TaxNumber || null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      try {
-        await db.XeroOrganisation.upsert(orgRecord);
-      } catch (error) {
-        logger.logEvent("error", "Error during organisation upsert", {
-          error: extractErrorDetails(error),
-          organisationId: org.OrganisationID,
+    logger.logEvent("debug", "Xero API response headers", { headers });
+    // Xero returns Organisations as an array
+    const organisation =
+      Array.isArray(data?.Organisations) && data.Organisations.length > 0
+        ? data.Organisations[0]
+        : null;
+
+    try {
+      if (organisation) {
+        const orgRecord = {
+          OrganisationID: organisation.OrganisationID,
+          Name: organisation.Name,
+          LegalName: organisation.LegalName,
+          RegistrationNumber: organisation.RegistrationNumber,
+          TaxNumber: organisation.TaxNumber,
+          PaymentTerms: organisation.PaymentTerms,
+          // Add required fields
           clientId,
           reportId,
-        });
+          source: "Xero",
+          createdBy,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await db.XeroOrganisation.upsert(orgRecord);
       }
+    } catch (error) {
+      logger.logEvent("error", "Error during organisation upsert", {
+        error: extractErrorDetails(error),
+        organisationId: organisation?.APIKey || organisation?.OrganisationID,
+        clientId,
+        reportId,
+      });
     }
-    await db.XeroOrganisation.findAll({
-      where: { clientId, reportId },
-    });
+
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
         message: "SUCCESS: Organisation details saved",
         type: "status",
       });
     }
-    return organisations;
+    return organisation;
   } catch (error) {
     handleXeroApiError(error, global.sendWebSocketUpdate);
     logger.logEvent(
@@ -853,7 +909,7 @@ async function getConnections(accessToken) {
   });
   try {
     // Use retryWithExponentialBackoff and extractErrorDetails utility
-    const data = await retryWithExponentialBackoff(
+    const { data, headers, status } = await retryWithExponentialBackoff(
       () => get("/connections", accessToken.toString()),
       3,
       1000,
@@ -906,6 +962,7 @@ async function getAllXeroData(clientId, reportId, db) {
       db.XeroInvoice.findAll({ where: { clientId, reportId } }),
       db.XeroPayment.findAll({ where: { clientId, reportId } }),
       db.XeroContact.findAll({ where: { clientId, reportId } }),
+      db.XeroBankTxn.findAll({ where: { clientId, reportId } }),
     ]);
     logger.logEvent("info", "Fetched XeroOrganisation records", {
       action: "GetAllXeroData",
@@ -931,6 +988,12 @@ async function getAllXeroData(clientId, reportId, db) {
       reportId,
       count: contacts.length,
     });
+    logger.logEvent("info", "Fetched XeroBankTxn records", {
+      action: "GetAllXeroData",
+      clientId,
+      reportId,
+      count: bankTxns.length,
+    });
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
         message: "SUCCESS: All Xero data fetched",
@@ -942,12 +1005,377 @@ async function getAllXeroData(clientId, reportId, db) {
       invoices,
       payments,
       contacts,
+      bankTransactions,
     };
   } catch (error) {
     if (global.sendWebSocketUpdate) {
       global.sendWebSocketUpdate({
         status: "error",
         message: "Error fetching all Xero data: " + error.message,
+        code: error.statusCode || error.response?.status || 500,
+      });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Sync all tenants with staggered delays to avoid Xero rate limits.
+ * This version is a placeholder: the actual tenant-level delay, error handling, and WebSocket updates
+ * should be implemented directly in the controller loop for better progress reporting.
+ */
+async function syncAllTenants(tenants, fetchXeroDataForTenant, logger) {
+  // See controller for actual implementation with delay, error handling, and WebSocket updates.
+  for (const tenant of tenants) {
+    await fetchXeroDataForTenant(tenant);
+  }
+}
+
+/**
+ * Remove a Xero tenant connection.
+ * @param {string} tenantId
+ */
+async function removeTenant(tenantId) {
+  logger.logEvent("info", "Removing Xero tenant connection", {
+    action: "RemoveTenant",
+    tenantId,
+  });
+
+  // Log before looking for access token
+  logger.logEvent("debug", "Looking for most recent unrevoked access token", {
+    action: "RemoveTenant",
+    tenantId,
+  });
+
+  try {
+    const accessTokenRecord = await XeroToken.findOne({
+      where: { tenantId, revoked: null },
+      order: [["created", "DESC"]],
+    });
+
+    if (!accessTokenRecord) {
+      logger.logEvent("warn", "No unrevoked access token found", {
+        action: "RemoveTenant",
+        tenantId,
+      });
+    } else {
+      logger.logEvent("debug", "Access token found for removal", {
+        action: "RemoveTenant",
+        tenantId,
+        tokenCreated: accessTokenRecord.created,
+      });
+    }
+
+    if (!accessTokenRecord) {
+      throw new Error("No active access token found for removing tenant");
+    }
+
+    const accessToken = accessTokenRecord.access_token;
+
+    logger.logEvent("debug", "Sending request to Xero to remove connection", {
+      action: "RemoveTenant",
+      tenantId,
+      tokenSnippet: accessToken?.slice?.(0, 10) + "...",
+    });
+
+    try {
+      await retryWithExponentialBackoff(
+        () => del("/connections/" + tenantId, accessToken),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+
+      logger.logEvent("info", "Tenant removed from Xero successfully", {
+        action: "RemoveTenant",
+        tenantId,
+      });
+    } catch (error) {
+      const details = extractErrorDetails(error);
+      if (
+        details?.Status === 403 &&
+        details?.Detail === "AuthenticationUnsuccessful"
+      ) {
+        logger.logEvent(
+          "warn",
+          "Token no longer valid for tenant — assuming removal",
+          {
+            action: "RemoveTenant",
+            tenantId,
+            fallback: true,
+            details,
+          }
+        );
+        // Log a fallback "Tenant assumed removed" and return early
+        logger.logEvent(
+          "info",
+          "Tenant assumed removed from Xero (token invalid or already removed)",
+          {
+            action: "RemoveTenant",
+            tenantId,
+            fallback: true,
+          }
+        );
+        return;
+      }
+
+      logger.logEvent("error", "Failed to remove tenant", {
+        action: "RemoveTenant",
+        tenantId,
+        error: details,
+      });
+      throw error;
+    }
+  } catch (error) {
+    // Add deep debug log of the full error object
+    console.error("Full removeTenant error:", error);
+    logger.logEvent("error", "Failed to remove tenant", {
+      action: "RemoveTenant",
+      tenantId,
+      error: extractErrorDetails(error),
+    });
+    throw error;
+  }
+}
+
+// Save a Xero token for a tenant/client
+
+/**
+ * Save or update a Xero token for a tenant.
+ * @param {Object} param0
+ */
+async function saveToken({
+  accessToken,
+  refreshToken,
+  expiresIn,
+  clientId,
+  tenantId,
+  // Optionally accept createdByIp as a parameter if available
+}) {
+  const updateData = {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires: new Date(Date.now() + (expiresIn || 0) * 1000),
+    created: new Date(),
+    createdByIp: "", // you may want to pass this dynamically
+    revoked: null,
+    revokedByIp: null,
+    replacedByToken: null,
+    clientId,
+    tenantId,
+  };
+
+  await XeroToken.upsert(updateData);
+}
+
+/**
+ * Retrieve the most recent (unrevoked) token for a given clientId.
+ * @param {string} clientId
+ * @returns {Promise<Object|null>}
+ */
+async function getLatestToken(clientId, tenantId) {
+  return XeroToken.findOne({
+    where: { clientId, tenantId, revoked: null },
+    order: [["created", "DESC"]],
+  });
+}
+
+// Possible fuzzy matching for bank transactions and payments
+// import dayjs from "dayjs";
+
+// function matchPaymentsToBankTransactions(
+//   payments,
+//   bankTransactions,
+//   options = {}
+// ) {
+//   const {
+//     dateToleranceDays = 2,
+//     amountTolerance = 0.01,
+//     useContactMatch = true,
+//   } = options;
+
+//   const matched = [];
+//   const unmatchedPayments = [];
+//   const matchedTransactionIds = new Set();
+
+//   payments.forEach((payment) => {
+//     const paymentDate = dayjs(payment.date);
+//     const paymentAmount = parseFloat(payment.amount);
+
+//     const match = bankTransactions.find((tx) => {
+//       const txDate = dayjs(tx.date);
+//       const txAmount = parseFloat(tx.amount);
+//       const dateDiff = Math.abs(paymentDate.diff(txDate, "day"));
+
+//       const contactMatch =
+//         !useContactMatch ||
+//         (payment.contact?.name &&
+//           tx.contact?.name &&
+//           payment.contact.name.toLowerCase() === tx.contact.name.toLowerCase());
+
+//       const isAmountMatch =
+//         Math.abs(paymentAmount - txAmount) <= amountTolerance;
+
+//       const isMatch =
+//         isAmountMatch && dateDiff <= dateToleranceDays && contactMatch;
+
+//       return isMatch && !matchedTransactionIds.has(tx.id);
+//     });
+
+//     if (match) {
+//       matched.push({ payment, bankTransaction: match });
+//       matchedTransactionIds.add(match.id);
+//     } else {
+//       unmatchedPayments.push(payment);
+//     }
+//   });
+
+//   return {
+//     matched,
+//     unmatchedPayments,
+//     unmatchedBankTransactions: bankTransactions.filter(
+//       (tx) => !matchedTransactionIds.has(tx.id)
+//     ),
+//   };
+// }
+
+/**
+ * Fetch bank transactions from Xero API and save them to the database.
+ * @param {Object} options - { accessToken, tenantId, clientId, reportId, startDate, endDate, createdBy }
+ */
+async function fetchBankTransactions(
+  accessToken,
+  tenantId,
+  clientId,
+  reportId,
+  startDate,
+  endDate,
+  createdBy
+) {
+  logger.logEvent("info", "Extracting bank transactions from Xero", {
+    action: "ExtractXeroBankTransactions",
+    clientId,
+    reportId,
+    startDate,
+    endDate,
+  });
+
+  if (global.sendWebSocketUpdate) {
+    global.sendWebSocketUpdate({
+      message: `Fetching ${tenantId} bank transactions...`,
+      type: "status",
+    });
+  }
+
+  try {
+    let fetchedAll = false;
+    let page = 1;
+    const allBankTxns = [];
+
+    while (!fetchedAll) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const whereClause =
+        `Date >= DateTime(${start.getFullYear()}, ${start.getMonth() + 1}, ${start.getDate()})` +
+        ` && Date <= DateTime(${end.getFullYear()}, ${end.getMonth() + 1}, ${end.getDate()})` +
+        ` && Type == "SPEND"`;
+      logger.logEvent("debug", "Xero Bank Transactions GET where clause", {
+        whereClause,
+        clientId,
+        reportId,
+        startDate,
+        endDate,
+      });
+      const { data, headers } = await retryWithExponentialBackoff(
+        () =>
+          get("/BankTransactions", accessToken, tenantId, {
+            params: {
+              where: whereClause,
+              page, // Use pagination
+              // pageSize: 100, // Xero defaults to 100 per page
+            },
+          }),
+        3,
+        1000,
+        global.sendWebSocketUpdate
+      );
+
+      // console.log("!@!@!@Bank transactions data:", data);
+
+      const pageItems = data?.BankTransactions || [];
+
+      if (!Array.isArray(pageItems)) {
+        logger.logEvent("warn", "No bank transactions returned", {
+          tenantId,
+          clientId,
+          reportId,
+          page,
+        });
+        break;
+      }
+
+      for (const txn of pageItems) {
+        allBankTxns.push(txn);
+        try {
+          await db.XeroBankTxn.upsert({
+            ...txn,
+            Date: parseXeroDate(txn.Date, txn.DateString),
+            clientId,
+            reportId,
+            tenantId,
+            Url: txn.Url || null,
+            Reference: txn.Reference || null,
+            source: "Xero",
+            createdBy,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        } catch (err) {
+          logger.logEvent("error", "Error during bank transaction upsert", {
+            error: extractErrorDetails(err),
+            bankTransactionId: txn.BankTransactionID,
+            clientId,
+            reportId,
+          });
+        }
+      }
+
+      // if (pageItems.length > 1) {
+      if (pageItems.length < 100) {
+        fetchedAll = true;
+      } else {
+        page++;
+      }
+    }
+
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        message: "SUCCESS: Bank transactions fetched and saved",
+        type: "status",
+      });
+    }
+
+    logger.logEvent("info", "Bank transactions extracted and saved", {
+      action: "ExtractXeroBankTransactions",
+      clientId,
+      reportId,
+      count: allBankTxns.length,
+    });
+
+    return allBankTxns;
+  } catch (error) {
+    handleXeroApiError(error, global.sendWebSocketUpdate);
+    logger.logEvent("error", "Error extracting bank transactions from Xero", {
+      action: "ExtractXeroBankTransactions",
+      clientId,
+      reportId,
+      error: error.message,
+    });
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        status: "error",
+        message:
+          "Error extracting bank transactions from Xero: " + error.message,
         code: error.statusCode || error.response?.status || 500,
       });
     }

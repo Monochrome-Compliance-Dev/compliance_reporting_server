@@ -1,31 +1,38 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const upload = multer({ dest: "tmpUploads/" });
 const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
 const validateRequest = require("../middleware/validate-request");
-const {
-  tcpImportSchema,
-  tcpBulkImportSchema,
-  tcpSchema,
-} = require("./tcp.validator");
+const { tcpBulkImportSchema, tcpSchema } = require("./tcp.validator");
 const { logger } = require("../helpers/logger");
+const fs = require("fs");
+const path = require("path");
+const { scanFile } = require("../middleware/virus-scan");
+const reportService = require("../reports/report.service");
+const csv = require("csv-parser");
+const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
 
 // routes
 router.get("/", authorise(), getAll);
 router.get("/report/:id", authorise(), getAllByReportId);
 router.get("/tcp/:id", authorise(), getTcpByReportId);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
 router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
 router.patch("/:id", authorise(), patchRecord);
 router.put("/", authorise(), validateRequest(tcpSchema), bulkUpdate);
 router.put("/partial", authorise(), partialUpdate);
+router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
 router.put("/sbi/:id", authorise(), sbiUpdate);
 router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
 router.put("/submit-final", authorise(), submitFinalReport);
 router.get("/download-summary", authorise(), downloadSummaryReport);
+router.post("/upload", authorise(), upload.single("file"), uploadFile);
+router.get("/errors/:id", authorise(), getErrorsByReportId);
+router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
 
@@ -38,78 +45,36 @@ function getAll(req, res, next) {
 
 function getAllByReportId(req, res, next) {
   tcpService
-    .getAllByReportId(req.params.id, { transaction: req.dbTransaction })
+    .getAllByReportId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
 
-// Patch a single TCP record and create audit entries for changed fields
+// Patch a single TCP record
 async function patchRecord(req, res, next) {
   try {
     const { id } = req.params;
     const userId = req.auth.id;
+    const clientId = req.auth.clientId;
     const updates = req.body;
-    const auditService = require("../audit/audit.service");
-    let nanoid;
-    // Lazy load nanoid if not already loaded
-    if (!nanoid) {
-      const { nanoid: importedNanoid } = await import("nanoid");
-      nanoid = importedNanoid;
-    }
 
     if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
       return res.status(400).json({ message: "Invalid request body" });
     }
 
     // Fetch the old record before updating
-    const oldRecord = await tcpService.getById(id, {
-      transaction: req.dbTransaction,
-    });
+    const oldRecord = await tcpService.getById(id, clientId);
     if (!oldRecord) {
       return res.status(404).json({ message: "Record not found" });
     }
 
     // Patch the record
-    const updated = await tcpService.partialUpdate(id, updates, {
-      transaction: req.dbTransaction,
-    });
-
-    // For each changed field, create an audit entry, skipping 'updatedAt'
-    const now = new Date();
-    const auditEntries = [];
-    for (const [field, newValue] of Object.entries(updates)) {
-      if (field === "updatedAt") continue; // Skip updatedAt field
-      const oldValue = oldRecord[field];
-      if (oldValue !== newValue) {
-        // Only audit if the value actually changed
-        const auditEntry = {
-          id: nanoid(10),
-          tcpId: id,
-          fieldName: field,
-          oldValue: oldValue,
-          newValue: newValue,
-          step: updates.step || null,
-          user_id: userId,
-          createdAt: now,
-          action: "update",
-        };
-        try {
-          await auditService.create(req.auth.clientId, auditEntry, {
-            transaction: req.dbTransaction,
-          });
-          auditEntries.push(auditEntry);
-        } catch (err) {
-          // Log but do not fail the patch if audit fails
-          console.error("Failed to create audit entry:", err);
-        }
-      }
-    }
+    const updated = await tcpService.patchRecord(id, updates, clientId);
 
     res.json({
       success: true,
       message: "Record updated successfully",
       data: updated,
-      audits: auditEntries,
     });
   } catch (error) {
     console.error("Error patching record:", error);
@@ -119,7 +84,7 @@ async function patchRecord(req, res, next) {
 
 function getTcpByReportId(req, res, next) {
   tcpService
-    .getTcpByReportId(req.params.id, { transaction: req.dbTransaction })
+    .getTcpByReportId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -248,7 +213,7 @@ function getById(req, res, next) {
     .catch(next);
 }
 
-// Bulk create with audit entries for each created record
+// Bulk create
 async function bulkCreate(req, res, next) {
   const transaction = req.dbTransaction;
   try {
@@ -257,58 +222,14 @@ async function bulkCreate(req, res, next) {
         .status(400)
         .json({ message: "Request body must be an array." });
     }
-    const auditService = require("../audit/audit.service");
-    const { nanoid: importedNanoid } = await import("nanoid");
-    const nanoid = importedNanoid;
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const results = [];
-    const auditEntriesAll = [];
 
     for (const record of req.body) {
       try {
-        // Normalise numeric fields
-        const numericFields = [
-          "payerEntityAbn",
-          "payerEntityAcnArbn",
-          "payeeEntityAbn",
-          "payeeEntityAcnArbn",
-        ];
-        numericFields.forEach((field) => {
-          if (record[field] === "" || record[field] === " ") {
-            record[field] = null;
-          } else if (record[field] !== null && record[field] !== undefined) {
-            const parsed = parseInt(record[field], 10);
-            record[field] = isNaN(parsed) ? null : parsed;
-          }
-        });
-
-        const created = await tcpService.create(record, { transaction });
+        const created = await tcpService.create(record, clientId);
         results.push(created);
-
-        const now = new Date();
-        for (const [field, value] of Object.entries(created)) {
-          if (field === "updatedAt") continue;
-          if (typeof value !== "undefined") {
-            const auditEntry = {
-              id: nanoid(10),
-              tcpId: created.id,
-              fieldName: field,
-              oldValue: null,
-              newValue: value,
-              step: created.step || null,
-              user_id: userId,
-              createdAt: now,
-              action: "create",
-            };
-            try {
-              await auditService.create(clientId, auditEntry, { transaction });
-              auditEntriesAll.push(auditEntry);
-            } catch (err) {
-              console.error("Failed to create audit entry:", err);
-            }
-          }
-        }
       } catch (error) {
         console.error("Error processing record:", error);
         return res.status(400).json({
@@ -325,12 +246,11 @@ async function bulkCreate(req, res, next) {
       count: results.length,
     });
 
-    await transaction.commit();
+    // await transaction.commit();
     res.json({
       success: true,
       message: "All records saved successfully",
       results,
-      audits: auditEntriesAll,
     });
   } catch (error) {
     await transaction.rollback();
@@ -339,17 +259,13 @@ async function bulkCreate(req, res, next) {
   }
 }
 
-// PUT: Bulk update with audit trail for each field change
+// PUT: Bulk update
 async function bulkUpdate(req, res, next) {
   const transaction = req.dbTransaction;
   try {
-    const auditService = require("../audit/audit.service");
-    const { nanoid: importedNanoid } = await import("nanoid");
-    const nanoid = importedNanoid;
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const records = Object.values(req.body);
-    const auditEntriesAll = [];
     const results = [];
 
     for (const item of records) {
@@ -357,38 +273,9 @@ async function bulkUpdate(req, res, next) {
       for (const record of itemsToProcess) {
         try {
           const { id, createdAt, ...recordToUpdate } = record;
-          const oldRecord = await tcpService.getById(id, { transaction });
-          const updated = await tcpService.update(id, recordToUpdate, {
-            transaction,
-          });
+          const oldRecord = await tcpService.getById(id, clientId);
+          const updated = await tcpService.update(id, recordToUpdate, clientId);
           results.push(updated);
-
-          const now = new Date();
-          for (const [field, newValue] of Object.entries(recordToUpdate)) {
-            if (field === "updatedAt") continue;
-            const oldValue = oldRecord ? oldRecord[field] : undefined;
-            if (oldValue !== newValue) {
-              const auditEntry = {
-                id: nanoid(10),
-                tcpId: id,
-                fieldName: field,
-                oldValue: oldValue,
-                newValue: newValue,
-                step: recordToUpdate.step || null,
-                user_id: userId,
-                createdAt: now,
-                action: "update",
-              };
-              try {
-                await auditService.create(clientId, auditEntry, {
-                  transaction,
-                });
-                auditEntriesAll.push(auditEntry);
-              } catch (err) {
-                console.error("Failed to create audit entry:", err);
-              }
-            }
-          }
         } catch (error) {
           console.error("Error processing record:", error);
           throw error;
@@ -407,7 +294,6 @@ async function bulkUpdate(req, res, next) {
       success: true,
       message: "All records updated successfully",
       results,
-      audits: auditEntriesAll,
     });
   } catch (error) {
     await transaction.rollback();
@@ -416,13 +302,10 @@ async function bulkUpdate(req, res, next) {
   }
 }
 
-// DELETE: Delete a record and audit deletion
+// DELETE: Delete a record
 async function _delete(req, res, next) {
   const transaction = req.dbTransaction;
   try {
-    const auditService = require("../audit/audit.service");
-    const { nanoid: importedNanoid } = await import("nanoid");
-    const nanoid = importedNanoid;
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const id = req.params.id;
@@ -436,36 +319,9 @@ async function _delete(req, res, next) {
       clientId,
     });
 
-    const now = new Date();
-    const auditEntries = [];
-    if (oldRecord) {
-      for (const [field, oldValue] of Object.entries(oldRecord)) {
-        if (typeof oldValue !== "undefined") {
-          const auditEntry = {
-            id: nanoid(10),
-            tcpId: id,
-            fieldName: field,
-            oldValue: oldValue,
-            newValue: null,
-            step: oldRecord.step || null,
-            user_id: userId,
-            createdAt: now,
-            action: "delete",
-          };
-          try {
-            await auditService.create(clientId, auditEntry, { transaction });
-            auditEntries.push(auditEntry);
-          } catch (err) {
-            console.error("Failed to create audit entry:", err);
-          }
-        }
-      }
-    }
-
     await transaction.commit();
     res.json({
       message: "Tcp deleted successfully",
-      audits: auditEntries,
     });
   } catch (error) {
     await transaction.rollback();
@@ -514,13 +370,11 @@ function downloadSummaryReport(req, res, next) {
     .catch(next);
 }
 
-// Bulk partial update route handler with audit entries for each updated field
+// Bulk bulk patch route handler
 async function bulkPatchUpdate(req, res, next) {
-  console.log("Received bulk patch request:", req.body);
   logger.logEvent("info", "Incoming bulk patch request", {
     clientId: req.auth.clientId,
   }); // log start of request
-  const transaction = req.dbTransaction;
   try {
     if (!Array.isArray(req.body)) {
       logger.logEvent("warn", "Invalid request body for bulk patch", {
@@ -531,12 +385,9 @@ async function bulkPatchUpdate(req, res, next) {
         .json({ message: "Request body must be an array." });
     }
 
-    const auditService = require("../audit/audit.service");
-    const { nanoid: importedNanoid } = await import("nanoid");
-    const nanoid = importedNanoid;
     const clientId = req.auth.clientId;
+    console.log("Client ID for bulk patch:", clientId);
     const userId = req.auth.id;
-    const auditEntriesAll = [];
 
     const updatePromises = req.body.map(async (record) => {
       const { id, ...updates } = record;
@@ -549,69 +400,297 @@ async function bulkPatchUpdate(req, res, next) {
         );
       }
       const { step, ...filteredUpdates } = updates;
-      const oldRecord = await tcpService.getById(id, {
-        transaction,
-      });
-      const updated = await tcpService.patchRecord(id, filteredUpdates, {
-        transaction,
-      });
-      const now = new Date();
-      for (const [field, newValue] of Object.entries(filteredUpdates)) {
-        if (field === "updatedAt") continue;
-        const oldValue = oldRecord ? oldRecord[field] : undefined;
-        if (oldValue !== newValue) {
-          const auditEntry = {
-            id: nanoid(10),
-            tcpId: id,
-            fieldName: field,
-            oldValue: oldValue,
-            newValue: newValue,
-            step: step || null,
-            createdBy: userId,
-            createdAt: now,
-            action: "update",
-            clientId: clientId,
-          };
-          try {
-            console.log(
-              "Creating audit entry for clientId:",
-              auditEntry,
-              clientId
-            );
-            // Insert the actual call to create the audit entry
-            await auditService.create(auditEntry, { transaction });
-            auditEntriesAll.push(auditEntry);
-          } catch (err) {
-            console.error("Failed to create audit entry:", err);
-          }
-        }
-      }
+      // const oldRecord = await tcpService.getById(id, req.auth?.clientId);
+      const updated = await tcpService.patchRecord(
+        id,
+        filteredUpdates,
+        clientId
+      );
       return updated;
     });
 
     const results = await Promise.all(updatePromises);
 
-    await transaction.commit(); // Make sure transaction is committed
     logger.logEvent("info", "Bulk patch update successful", {
       action: "BulkPatchUpdateTCP",
-      clientId: req.auth.clientId,
+      clientId: clientId,
       count: results.length,
-      updatedIds: results.map((r) => r.id),
+      // updatedIds: results.map((r) => r.id),
     });
 
     res.json({
       success: true,
       message: "All records patch updated successfully",
       results,
-      audits: auditEntriesAll,
     });
   } catch (error) {
-    await transaction.rollback(); // Rollback only if there's an error
     logger.logEvent("error", "Error in bulk patch update", {
       clientId: req.auth.clientId,
       error: error.message,
     });
     console.error("Error bulk patch updating records:", error);
+    next(error);
+  }
+}
+
+// Ensure tmpUploads directory exists before handling uploads
+const tmpUploadPath = path.join(__dirname, "../tmpUploads");
+if (!fs.existsSync(tmpUploadPath)) {
+  fs.mkdirSync(tmpUploadPath, { recursive: true });
+}
+
+async function uploadFile(req, res) {
+  // console.log("req.file in uploadFile:", req.file);
+  try {
+    // console.log("[DEBUG] File received by route:", req.file);
+    if (!req.file || !req.file.path) {
+      logger.logEvent("warn", "Missing file or file path in request", {
+        action: "PtrsDataUpload",
+      });
+    }
+    const filePath = req.file.path; // temp path from multer
+    const ext = path.extname(filePath).toLowerCase();
+    await scanFile(filePath, ext, req.file.originalname);
+
+    // Move file to permanent uploads directory after scan
+    const uploadsDir = path.join(__dirname, "../uploads/ptrs_data_uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    const destPath = path.join(uploadsDir, req.file.originalname);
+
+    fs.renameSync(filePath, destPath);
+
+    // Parse CSV file and collect basic validation results
+    const results = [];
+    const invalidRows = [];
+
+    fs.createReadStream(destPath)
+      .pipe(csv())
+      .on("data", (row) => {
+        // Filter only allowed fields at the start
+        const allowedFields = [
+          "payerEntityName",
+          "payerEntityAbn",
+          "payerEntityAcnArbn",
+          "payeeEntityName",
+          "payeeEntityAbn",
+          "payeeEntityAcnArbn",
+          "paymentAmount",
+          "description",
+          "transactionType",
+          "isReconciled",
+          "supplyDate",
+          "paymentDate",
+          "contractPoReferenceNumber",
+          "contractPoPaymentTerms",
+          "noticeForPaymentIssueDate",
+          "noticeForPaymentTerms",
+          "invoiceReferenceNumber",
+          "invoiceIssueDate",
+          "invoiceReceiptDate",
+          "invoiceAmount",
+          "invoicePaymentTerms",
+          "invoiceDueDate",
+        ];
+        row = Object.fromEntries(
+          Object.entries(row).filter(([key]) => allowedFields.includes(key))
+        );
+
+        // Convert 'NULL' strings and empty strings to actual null
+        for (const key in row) {
+          if (
+            (typeof row[key] === "string" &&
+              row[key].trim().toUpperCase() === "'NULL'") ||
+            "NULL".includes(row[key].trim().toUpperCase())
+          ) {
+            row[key] = null;
+          } else if (row[key] === "") {
+            row[key] = null;
+          }
+        }
+        // Force string fields to remain strings and strip ".0" float artifacts
+        const forceStringFields = ["payerEntityAcnArbn", "payeeEntityAcnArbn"];
+        for (const key of forceStringFields) {
+          if (row[key]) {
+            row[key] = String(row[key]).trim().replace(/\.0$/, "");
+          }
+        }
+        // Robust, case-insensitive conversion for isReconciled
+        if (row.hasOwnProperty("isReconciled")) {
+          const val = String(row["isReconciled"]).trim().toLowerCase();
+          // console.log("Processing isReconciled value:", row["isReconciled"]);
+          if (["1", "true", "t"].includes(val)) {
+            row["isReconciled"] = true;
+          } else if (["0", "false", "f"].includes(val)) {
+            row["isReconciled"] = false;
+          } else {
+            row["isReconciled"] = null;
+          }
+        }
+
+        // Set default values for each processed row
+        // console.log("Processing req.body.reportId:", req.body.reportId);
+        const now = new Date();
+        row.createdBy = req.auth.id;
+        row.updatedBy = req.auth.id;
+        row.clientId = req.auth.clientId;
+        row.reportId = req.body.reportId;
+        const reasons = [];
+
+        const hasPayerName =
+          typeof row.payerEntityName === "string" &&
+          row.payerEntityName.trim() !== "";
+        if (!hasPayerName) reasons.push("Missing or invalid payerEntityName");
+
+        const hasPayeeName =
+          typeof row.payeeEntityName === "string" &&
+          row.payeeEntityName.trim() !== "";
+        if (!hasPayeeName) reasons.push("Missing or invalid payeeEntityName");
+
+        const hasABN =
+          row.payeeEntityAbn &&
+          /^\d{11}$/.test(String(row.payeeEntityAbn).trim());
+        if (!hasABN) reasons.push("Missing or invalid payeeEntityAbn");
+
+        const hasValidAmount = !isNaN(parseFloat(row.paymentAmount));
+        if (!hasValidAmount) reasons.push("Missing or invalid paymentAmount");
+
+        const hasPaymentDate =
+          row.paymentDate && !isNaN(Date.parse(row.paymentDate));
+        if (!hasPaymentDate) reasons.push("Missing or invalid paymentDate");
+
+        const hasAnyError =
+          !hasPayerName ||
+          !hasPayeeName ||
+          !hasABN ||
+          !hasValidAmount ||
+          !hasPaymentDate;
+
+        if (hasAnyError) {
+          invalidRows.push({ ...row, issues: reasons });
+        } else {
+          results.push(row);
+        }
+      })
+      .on("end", async () => {
+        try {
+          // Insert valid rows using saveTransformedDataToTcp
+          const source = "csv_upload";
+          const insertResults = await tcpService.saveTransformedDataToTcp(
+            results,
+            req.body.reportId,
+            req.auth.clientId,
+            req.auth.id,
+            source,
+            {
+              transaction: req.dbTransaction,
+            }
+          );
+
+          // Save invalid rows to tcp_error table
+          if (invalidRows.length > 0) {
+            await tcpService.saveErrorsToTcpError(
+              invalidRows,
+              req.body.reportId,
+              req.auth.clientId,
+              req.auth.id,
+              source,
+              {
+                transaction: req.dbTransaction,
+              }
+            );
+          }
+
+          // Insert metadata into tbl_report_upload (reportUploadService)
+          try {
+            await reportService.saveUploadMetadata(
+              {
+                clientId: req.auth.clientId,
+                userId: req.auth.id,
+                reportId: req.body.reportId,
+                filename: req.file.originalname,
+                filepath: destPath,
+                recordCount: results.length,
+                uploadedAt: new Date(),
+                updatedBy: req.auth.id,
+              },
+              { transaction: req.dbTransaction }
+            );
+          } catch (err) {
+            logger.logEvent("error", "Failed to log file upload metadata", {
+              action: "uploadFile-metadata",
+              error: err.message,
+            });
+            // Do not block overall process if metadata save fails
+          }
+
+          res.status(200).json({
+            message:
+              "File uploaded, parsed, and records inserted successfully.",
+            totalRows: results.length + invalidRows.length,
+            validRows: results.length,
+            invalidRows: invalidRows.length,
+            inserted: insertResults,
+            errors: invalidRows, // Include full invalid rows with reasons
+            validRecordsPreview: results.slice(0, 20), // Preview for UI
+          });
+        } catch (insertErr) {
+          logger.logEvent("error", "Bulk insert failed", {
+            action: "uploadFile-insert",
+            error: insertErr.message,
+          });
+          res.status(500).json({ error: "Failed to insert valid records." });
+        }
+      })
+      .on("error", (err) => {
+        logger.logEvent("error", "CSV parsing failed", {
+          action: "uploadFile-parse",
+          error: err.message,
+        });
+        res.status(500).json({ error: "Failed to parse CSV file." });
+      });
+  } catch (err) {
+    logger.logEvent("error", "Error uploading file", {
+      action: "uploadFile",
+      error: err.message,
+    });
+    return res.status(500).json({ error: "Failed to upload file." });
+  }
+}
+
+async function getErrorsByReportId(req, res, next) {
+  try {
+    const reportId = req.params.id;
+    const errors = await tcpService.getErrorsByReportId(reportId, {
+      transaction: req.dbTransaction,
+    });
+    if (!errors || errors.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No errors found for this report." });
+    }
+    res.json(errors);
+  } catch (error) {
+    console.error("Error fetching errors by report ID:", error);
+    next(error);
+  }
+}
+
+// Controller for recalculating TCP metrics
+async function recalculateMetrics(req, res, next) {
+  try {
+    const reportId = req.params.id;
+    const clientId = req.auth.clientId;
+    console.log(
+      "Recalculating TCP metrics for reportId:",
+      reportId,
+      "and clientId:",
+      clientId
+    );
+    await processTcpMetrics(reportId, clientId);
+    res.json({ success: true, message: "TCP metrics recalculated." });
+  } catch (error) {
     next(error);
   }
 }

@@ -51,6 +51,10 @@ function defineXeroTokenModel(sequelize) {
           key: "id",
         },
       },
+      tenantId: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
     },
     {
       tableName: "xero_tokens",

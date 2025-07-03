@@ -15,7 +15,9 @@ const reportSchema = Joi.object({
       "Received",
       "Accepted",
       "Rejected",
-      "Submitted"
+      "Submitted",
+      "Deleted",
+      "Validated"
     )
     .sanitize()
     .required(),

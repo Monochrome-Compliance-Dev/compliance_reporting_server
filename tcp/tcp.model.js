@@ -22,11 +22,17 @@ function model(sequelize) {
     payeeEntityAcnArbn: { type: DataTypes.BIGINT, allowNull: true },
     paymentAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: false },
     description: { type: DataTypes.STRING, allowNull: true },
+    transactionType: { type: DataTypes.STRING, allowNull: true },
+    isReconciled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
     supplyDate: { type: DataTypes.STRING, allowNull: true },
     paymentDate: { type: DataTypes.DATE, allowNull: false },
     contractPoReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     contractPoPaymentTerms: { type: DataTypes.STRING, allowNull: true },
-    noticeForPaymentIssueDate: { type: DataTypes.DATE, allowNull: true },
+    noticeForPaymentIssueDate: { type: DataTypes.STRING, allowNull: true },
     noticeForPaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceReferenceNumber: { type: DataTypes.STRING, allowNull: true },
     invoiceIssueDate: { type: DataTypes.DATE, allowNull: true },
@@ -34,6 +40,7 @@ function model(sequelize) {
     invoiceAmount: { type: DataTypes.DECIMAL(15, 2), allowNull: true },
     invoicePaymentTerms: { type: DataTypes.STRING, allowNull: true },
     invoiceDueDate: { type: DataTypes.DATE, allowNull: true },
+    accountCode: { type: DataTypes.STRING, allowNull: true },
     isTcp: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     tcpExclusionComment: { type: DataTypes.TEXT, allowNull: true },
     peppolEnabled: {
@@ -63,6 +70,8 @@ function model(sequelize) {
     isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     paymentTime: { type: DataTypes.INTEGER, allowNull: true },
     explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
+    // Additional fields
+    source: { type: DataTypes.STRING(20), allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys

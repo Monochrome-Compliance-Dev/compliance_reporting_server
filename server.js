@@ -20,6 +20,22 @@ if (!process.env.DB_HOST || !process.env.DB_USER || !process.env.DB_NAME) {
 }
 
 require("rootpath")();
+
+// Global crash handlers for diagnostics
+process.on("uncaughtException", (err) => {
+  console.error("💥 Uncaught Exception:", err);
+  logger.logEvent("error", "UncaughtException", {
+    error: err.message,
+    stack: err.stack,
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("💥 Unhandled Rejection:", reason);
+  logger.logEvent("error", "UnhandledRejection", {
+    reason: reason instanceof Error ? reason.message : String(reason),
+  });
+});
 const express = require("express");
 const { WebSocketServer } = require("ws");
 const http = require("http");
@@ -50,31 +66,48 @@ const rateLimit = require("express-rate-limit");
 const { logger } = require("./helpers/logger");
 
 // Middleware to set clientId for RLS
-const setClientIdRLS = require("./middleware/setClientIdRLS");
+// const setClientIdRLS = require("./helpers/setClientIdRLS");
+// const transactionCleanup = require("./middleware/transactionCleanup");
 
-const PORT = process.env.PORT || 5432;
-
-const allowedOrigins = [
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
   "https://monochrome-compliance.com",
   "https://www.monochrome-compliance.com",
   "http://localhost:3000",
   "https://sit.monochrome-compliance.com",
   "https://www.sit.monochrome-compliance.com",
 ];
+console.log("🧾 Final allowed origins:", allowedOrigins);
 
 // Apply CORS middleware globally with custom origin logic
 app.use(
   cors({
     origin: function (origin, callback) {
+      // console.log("🔍 CORS origin received:", origin);
+      // console.log("🧾 Allowed origins:", allowedOrigins);
+
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(new Error("Not allowed by CORS"));
+        logger.logEvent("warn", "CORS Rejected", {
+          action: "CORSRejected",
+          origin,
+        });
+        callback(new Error("CORS: Origin not allowed"));
       }
     },
     credentials: true,
   })
 );
+
+// Immediately reject suspicious bot routes such as /boaform/admin/formLogin
+app.use("/boaform", (req, res) => {
+  logger.logEvent("warn", "Blocked suspicious request", {
+    action: "BotRouteBlocked",
+    path: req.path,
+    ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress,
+  });
+  res.status(403).send("Forbidden");
+});
 
 // Health check endpoint
 // This endpoint is used to check if the backend is running
@@ -171,7 +204,8 @@ app.use((req, res, next) => {
 });
 
 // Set RLS clientId for every request
-app.use(setClientIdRLS);
+// app.use(setClientIdRLS); // Converted to a helper function at the service level
+// app.use(transactionCleanup);
 
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
@@ -183,9 +217,9 @@ app.use("/api/public", require("./public/public.controller"));
 app.use("/api/booking", require("./booking/booking.controller"));
 app.use("/api/tracking", require("./tracking/tracking.controller"));
 app.use("/api/admin", require("./admin/admin.controller"));
-app.use("/api/audit", require("./audit/audit.controller"));
-
 app.use("/api/xero", require("./xero/xero.controller"));
+app.use("/api/data-cleanse", require("./data_cleanse/data_cleanse.controller"));
+app.use("/api/tcp/dashboard", require("./dashboard/dashboard.controller"));
 
 // Middleware to log all registered routes
 app._router.stack.forEach((middleware) => {
@@ -210,6 +244,7 @@ app._router.stack.forEach((middleware) => {
 
 // --- BEGIN: Check Postgres custom GUC app.current_client_id on startup ---
 const { sequelize } = require("./db/database");
+// console.log("sequelize:", sequelize);
 
 async function verifyAppClientIdGUC() {
   try {

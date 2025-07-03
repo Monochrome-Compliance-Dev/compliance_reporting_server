@@ -3,22 +3,30 @@
  * - Receives an array of payments.
  * - Transforms the paymentAmount and paymentDate.
  */
+
+const parseDotNetDate = (input) => {
+  if (typeof input === "string") {
+    const match = /\/Date\((\d+)(?:[+-]\d+)?\)\//.exec(input);
+    if (match && match[1]) {
+      const timestamp = parseInt(match[1], 10);
+      const date = new Date(timestamp);
+      return isNaN(date.getTime()) ? null : date.toISOString();
+    }
+  }
+  return null;
+};
+
 const transformPayments = (payments) => {
   return payments.map((payment) => {
-    const transformed = {};
+    const paymentDate = parseDotNetDate(payment.Date);
 
-    // paymentAmount is directly from Amount
-    transformed.paymentAmount = payment.Amount || 0;
-
-    // paymentDate is from Date (converted to ISO 8601)
-    if (payment.Date) {
-      const dateMatch = payment.Date.match(/\d+/);
-      transformed.paymentDate = dateMatch
-        ? new Date(Number(dateMatch[0])).toISOString().slice(0, 10)
-        : "";
-    } else {
-      transformed.paymentDate = "";
-    }
+    const transformed = {
+      ...payment,
+      paymentAmount: payment.Amount,
+      paymentDate: paymentDate,
+      PaymentType: payment.PaymentType,
+      isReconciled: payment.IsReconciled,
+    };
 
     return transformed;
   });

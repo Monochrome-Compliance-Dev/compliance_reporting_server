@@ -42,6 +42,10 @@ const XeroInvoice = (sequelize) => {
         type: DataTypes.STRING(50),
         allowNull: true,
       },
+      Url: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+      },
       LineItems: {
         type: DataTypes.JSONB,
         allowNull: true,
@@ -84,21 +88,13 @@ const XeroInvoice = (sequelize) => {
         allowNull: true,
         defaultValue: 0.0,
       },
-      invoicePaymentTermsBillsDay: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
+      source: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
-      invoicePaymentTermsBillsType: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      invoicePaymentTermsSalesDay: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
-      },
-      invoicePaymentTermsSalesType: {
-        type: DataTypes.STRING,
-        allowNull: true,
+      createdBy: {
+        type: DataTypes.STRING(50),
+        allowNull: false,
       },
       createdAt: {
         type: DataTypes.DATE,

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
+const https = require("https");
 
 module.exports = {
   saveBlog,
@@ -79,21 +80,49 @@ async function saveFaq({ content, userId }) {
   });
 }
 
-async function getAllContent() {
-  logger.logEvent("info", "Fetching all content", {
-    action: "GetAllAdminContent",
-  });
+let cachedRemoteContent = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-  return db.AdminContent.findAll({
-    order: [["createdAt", "DESC"]],
+async function loadRemoteContent() {
+  const now = Date.now();
+  if (cachedRemoteContent && now - cacheTimestamp < CACHE_TTL_MS) {
+    return cachedRemoteContent;
+  }
+
+  const s3Url =
+    "https://monochrome-content.s3.ap-southeast-2.amazonaws.com/blog-faq.json";
+
+  return new Promise((resolve, reject) => {
+    https
+      .get(s3Url, (res) => {
+        let rawData = "";
+        res.on("data", (chunk) => (rawData += chunk));
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(rawData);
+            const allContent = [
+              ...(parsed.blogs || []),
+              ...(parsed.faqs || []),
+            ];
+            cachedRemoteContent = allContent;
+            cacheTimestamp = Date.now();
+            resolve(allContent);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      })
+      .on("error", reject);
   });
 }
 
-async function getContentBySlug(slug) {
-  logger.logEvent("info", "Fetching content by slug", {
-    action: "GetAdminContentBySlug",
-    slug,
-  });
+async function getAllContent() {
+  const content = await loadRemoteContent();
+  return content;
+}
 
-  return db.AdminContent.findOne({ where: { slug } });
+async function getContentBySlug(slug) {
+  const content = await loadRemoteContent();
+  return content.find((item) => item.slug === slug) || null;
 }
