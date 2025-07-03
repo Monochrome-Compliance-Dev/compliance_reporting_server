@@ -175,4 +175,15 @@ async function initialiseRLS() {
 }
 
 module.exports = db;
-initialise();
+if (process.env.DISABLE_DB !== "true") {
+  initialise().catch((err) => {
+    logger.logEvent("fatal", "Failed DB init", {
+      action: "DatabaseInit",
+      error: err.message,
+      stack: err.stack,
+    });
+    process.exit(1);
+  });
+} else {
+  logger.logEvent("info", "DB init skipped (DISABLE_DB=true)");
+}
