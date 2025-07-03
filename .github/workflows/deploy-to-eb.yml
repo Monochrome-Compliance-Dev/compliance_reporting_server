@@ -62,7 +62,7 @@ jobs:
         run: |
           cat > settings.json <<EOF
           [
-            #{"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
+            {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "DB_PASSWORD", "Value": "${DB_PASSWORD}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "JWT_SECRET", "Value": "${JWT_SECRET}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "SMTP_PASS", "Value": "${SMTP_PASS}"},
             {"Namespace": "aws:elasticbeanstalk:application:environment", "OptionName": "XERO_CLIENT_ID", "Value": "${XERO_CLIENT_ID}"},
