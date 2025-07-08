@@ -47,7 +47,7 @@ module.exports = (sequelize) => {
       },
     },
     {
-      tableName: "audit_events",
+      tableName: "tbl_audit_events",
       timestamps: true,
       underscored: true,
     }
