@@ -14,6 +14,14 @@ module.exports = (sequelize) => {
         primaryKey: true,
         defaultValue: () => nanoid(10),
       },
+      clientId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
+      reportingPeriodId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
       code: { type: DataTypes.STRING, allowNull: false, unique: true },
       name: { type: DataTypes.STRING, allowNull: false },
       description: DataTypes.TEXT,
@@ -22,7 +30,7 @@ module.exports = (sequelize) => {
         allowNull: false,
       },
     },
-    { tableName: "tbl_esg_indicators", timestamps: true, underscored: true }
+    { tableName: "tbl_esg_indicators", timestamps: true }
   );
   return ESGIndicator;
 };

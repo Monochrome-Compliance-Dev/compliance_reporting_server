@@ -11,7 +11,8 @@ const esgIndicatorSchema = Joi.object({
   category: Joi.string()
     .valid("environment", "social", "governance")
     .required(),
-  clientId: Joi.string().length(10).required(),
+  reportingPeriodId: Joi.string().length(10).required(),
+  clientId: Joi.string().length(10),
 });
 
 const esgMetricSchema = Joi.object({
@@ -19,10 +20,30 @@ const esgMetricSchema = Joi.object({
   reportingPeriodId: Joi.string().length(10).required(),
   value: Joi.number().required(),
   unit: Joi.string().max(50).sanitize().required(),
-  clientId: Joi.string().length(10).required(),
+  clientId: Joi.string().length(10),
+});
+
+const esgReportingPeriodSchema = Joi.object({
+  name: Joi.string().max(255).sanitize().required(),
+  startDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required()
+    .label("Start Date")
+    .messages({
+      "string.pattern.base": "Start Date must be in YYYY-MM-DD format",
+    }),
+  endDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required()
+    .label("End Date")
+    .messages({
+      "string.pattern.base": "End Date must be in YYYY-MM-DD format",
+    }),
+  clientId: Joi.string().length(10), // still optional, injected by server
 });
 
 module.exports = {
   esgIndicatorSchema,
   esgMetricSchema,
+  esgReportingPeriodSchema,
 };

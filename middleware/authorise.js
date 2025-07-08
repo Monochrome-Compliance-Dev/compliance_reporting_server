@@ -17,6 +17,8 @@ function authorise(roles = []) {
 
     // authorize based on user role
     async (req, res, next) => {
+      // console.log("req.body:", req.body);
+      // console.log("req.auth:", req.auth);
       const user = await db.User.findByPk(req.auth.id);
 
       if (!user || (roles.length && !roles.includes(user.role))) {

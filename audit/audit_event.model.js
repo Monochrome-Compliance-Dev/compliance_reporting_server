@@ -49,7 +49,6 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_audit_events",
       timestamps: true,
-      underscored: true,
     }
   );
 

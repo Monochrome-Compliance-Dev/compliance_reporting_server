@@ -14,6 +14,10 @@ module.exports = (sequelize) => {
         primaryKey: true,
         defaultValue: () => nanoid(10),
       },
+      clientId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
       name: { type: DataTypes.STRING, allowNull: false },
       startDate: { type: DataTypes.DATEONLY, allowNull: false },
       endDate: { type: DataTypes.DATEONLY, allowNull: false },
@@ -21,7 +25,6 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_esg_reporting_periods",
       timestamps: true,
-      underscored: true,
     }
   );
 

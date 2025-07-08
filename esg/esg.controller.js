@@ -20,9 +20,18 @@ router.post(
   createMetric
 );
 router.post("/reporting-periods", authorise(), createReportingPeriod);
-
 router.get("/reporting-periods", authorise(), getReportingPeriodsByClient);
 router.get("/metrics", authorise(), getMetricsByClient);
+router.get(
+  "/indicators/:reportingPeriodId",
+  authorise(),
+  getIndicatorsByReportingPeriodId
+);
+router.get(
+  "/metrics/:reportingPeriodId",
+  authorise(),
+  getMetricsByReportingPeriodId
+);
 
 async function getReportingPeriodsByClient(req, res, next) {
   try {
@@ -45,13 +54,65 @@ async function getReportingPeriodsByClient(req, res, next) {
   }
 }
 
+async function getIndicatorsByReportingPeriodId(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const reportingPeriodId = req.params.reportingPeriodId;
+
+    const indicators = await esgService.getIndicatorsByReportingPeriodId(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      action: "GetIndicatorsByReportingPeriod",
+      entity: "ESGIndicator",
+      entityId: reportingPeriodId,
+      details: { count: indicators.length },
+    });
+
+    res.json(indicators);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMetricsByReportingPeriodId(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const reportingPeriodId = req.params.reportingPeriodId;
+
+    const metrics = await esgService.getMetricsByReportingPeriodId(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      action: "GetMetricsByReportingPeriod",
+      entity: "ESGMetric",
+      entityId: reportingPeriodId,
+      details: { count: metrics.length },
+    });
+
+    res.json(metrics);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = router;
 
 async function createIndicator(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
-    const { code, name, description, category } = req.body;
+    const { code, name, description, category, reportingPeriodId } = req.body;
 
     const indicator = await esgService.createIndicator({
       clientId,
@@ -59,6 +120,7 @@ async function createIndicator(req, res, next) {
       name,
       description,
       category,
+      reportingPeriodId,
     });
 
     await auditService.logEvent({
@@ -67,7 +129,7 @@ async function createIndicator(req, res, next) {
       action: "CreateESGIndicator",
       entity: "ESGIndicator",
       entityId: indicator.id,
-      details: { code, name, description, category },
+      details: { code, name, description, category, reportingPeriodId },
     });
 
     res

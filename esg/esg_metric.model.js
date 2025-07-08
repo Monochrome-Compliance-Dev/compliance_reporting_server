@@ -38,7 +38,6 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_esg_metrics",
       timestamps: true,
-      underscored: true,
     }
   );
   return ESGMetric;

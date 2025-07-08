@@ -10,6 +10,8 @@ module.exports = {
   getMetricsByClient,
   createReportingPeriod,
   getReportingPeriodsByClient,
+  getIndicatorsByReportingPeriodId,
+  getMetricsByReportingPeriodId,
 };
 
 async function createIndicator(params, options = {}) {
@@ -145,6 +147,70 @@ async function getReportingPeriodsByClient(clientId, options = {}) {
     logger.error("Error fetching ESG ReportingPeriods by client", {
       action: "GetReportingPeriods",
       clientId,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+async function getIndicatorsByReportingPeriodId(
+  clientId,
+  reportingPeriodId,
+  options = {}
+) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const indicators = await db.ESGIndicator.findAll({
+      where: { reportingPeriodId },
+      ...options,
+      transaction: t,
+    });
+
+    logger.info("Fetched ESG Indicators by reporting period", {
+      action: "GetIndicatorsByReportingPeriod",
+      clientId,
+      reportingPeriodId,
+      count: Array.isArray(indicators) ? indicators.length : 0,
+    });
+
+    return indicators;
+  } catch (error) {
+    logger.error("Error fetching ESG Indicators by reporting period", {
+      action: "GetIndicatorsByReportingPeriod",
+      clientId,
+      reportingPeriodId,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+async function getMetricsByReportingPeriodId(
+  clientId,
+  reportingPeriodId,
+  options = {}
+) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const metrics = await db.ESGMetric.findAll({
+      where: { reportingPeriodId },
+      ...options,
+      transaction: t,
+    });
+
+    logger.info("Fetched ESG Metrics by reporting period", {
+      action: "GetMetricsByReportingPeriod",
+      clientId,
+      reportingPeriodId,
+      count: Array.isArray(metrics) ? metrics.length : 0,
+    });
+
+    return metrics;
+  } catch (error) {
+    logger.error("Error fetching ESG Metrics by reporting period", {
+      action: "GetMetricsByReportingPeriod",
+      clientId,
+      reportingPeriodId,
       error: error.message,
     });
     throw error;
