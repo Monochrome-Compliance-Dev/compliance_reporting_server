@@ -70,6 +70,8 @@ async function initialise() {
     "../tracking",
     "../admin",
     "../xero",
+    "../audit", // added to load AuditEvent model
+    "../esg", // added to load ESGIndicator and ESGMetric models
   ];
 
   modelDirs.forEach((dir) => {
@@ -78,6 +80,7 @@ async function initialise() {
     files.forEach((file) => {
       if (file.endsWith(".model.js")) {
         const model = require(path.join(modelPath, file))(sequelize);
+        console.log(`Loaded model: ${file}`);
         const name = model.name.charAt(0).toUpperCase() + model.name.slice(1);
         db[name] = model;
       }
@@ -145,6 +148,12 @@ async function initialise() {
     db.TcpError.belongsTo(db.Report);
   }
 
+  // ESG Indicator and Metric relationships
+  if (db.ESGIndicator && db.ESGMetric) {
+    db.ESGIndicator.hasMany(db.ESGMetric, { foreignKey: "indicatorId" });
+    db.ESGMetric.belongsTo(db.ESGIndicator, { foreignKey: "indicatorId" });
+  }
+
   // Sync models
   await sequelize.sync();
 
@@ -177,7 +186,7 @@ async function initialiseRLS() {
 module.exports = db;
 if (process.env.DISABLE_DB !== "true") {
   initialise().catch((err) => {
-    logger.logEvent("fatal", "Failed DB init", {
+    logger.logEvent("error", "Failed DB init", {
       action: "DatabaseInit",
       error: err.message,
       stack: err.stack,

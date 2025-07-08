@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "ESG API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auto Refresh Token",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Cookie",
+            "value": "refreshToken=replace_this_with_real_refresh_token",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/api/users/refresh-token",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "4000",
+          "path": ["api", "users", "refresh-token"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var json = pm.response.json();",
+              "if (json.jwtToken) {",
+              "    pm.environment.set(\"jwt_token\", json.jwtToken);",
+              "    console.log(\"Updated jwt_token to:\", json.jwtToken);",
+              "} else {",
+              "    console.warn(\"No jwtToken found in response\");",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create ESG Indicator",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"code\": \"S1_GHG\",\n  \"name\": \"Scope 1 Emissions\",\n  \"description\": \"Tonnes of CO2e\",\n  \"category\": \"environment\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:4000/api/esg/indicators",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "4000",
+          "path": ["api", "esg", "indicators"]
+        }
+      }
+    },
+    {
+      "name": "Create ESG Metric",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"indicatorId\": \"abc123xyz1\",\n  \"reportingPeriodId\": \"def456ghi2\",\n  \"value\": 1234.5,\n  \"unit\": \"tonnes\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:4000/api/esg/metrics",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "4000",
+          "path": ["api", "esg", "metrics"]
+        }
+      }
+    },
+    {
+      "name": "Get ESG Metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:4000/api/esg/metrics",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "4000",
+          "path": ["api", "esg", "metrics"]
+        }
+      }
+    },
+    {
+      "name": "Create ESG Reporting Period",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"name\": \"Q1 FY25\",\n  \"startDate\": \"2025-07-01\",\n  \"endDate\": \"2025-09-30\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:4000/api/esg/reporting-periods",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "4000",
+          "path": ["api", "esg", "reporting-periods"]
+        }
+      }
+    }
+  ]
+}
