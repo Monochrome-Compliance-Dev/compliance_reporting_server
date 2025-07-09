@@ -32,6 +32,8 @@ router.get(
   authorise(),
   getMetricsByReportingPeriodId
 );
+router.delete("/indicators/:indicatorId", authorise(), deleteIndicator);
+router.delete("/metrics/:metricId", authorise(), deleteMetric);
 
 async function getReportingPeriodsByClient(req, res, next) {
   try {
@@ -214,6 +216,52 @@ async function createReportingPeriod(req, res, next) {
     });
 
     res.status(201).json(period.get ? period.get({ plain: true }) : period);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler for deleting an ESG indicator
+async function deleteIndicator(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const indicatorId = req.params.indicatorId;
+
+    await esgService.deleteIndicator(clientId, indicatorId);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      action: "DeleteESGIndicator",
+      entity: "ESGIndicator",
+      entityId: indicatorId,
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler for deleting an ESG metric
+async function deleteMetric(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const metricId = req.params.metricId;
+
+    await esgService.deleteMetric(clientId, metricId);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      action: "DeleteESGMetric",
+      entity: "ESGMetric",
+      entityId: metricId,
+    });
+
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

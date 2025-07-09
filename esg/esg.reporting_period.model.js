@@ -25,6 +25,7 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_esg_reporting_periods",
       timestamps: true,
+      paranoid: true,
     }
   );
 

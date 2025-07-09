@@ -30,7 +30,7 @@ module.exports = (sequelize) => {
         allowNull: false,
       },
     },
-    { tableName: "tbl_esg_indicators", timestamps: true }
+    { tableName: "tbl_esg_indicators", timestamps: true, paranoid: true }
   );
   return ESGIndicator;
 };

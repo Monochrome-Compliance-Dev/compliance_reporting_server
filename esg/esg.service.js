@@ -12,6 +12,8 @@ module.exports = {
   getReportingPeriodsByClient,
   getIndicatorsByReportingPeriodId,
   getMetricsByReportingPeriodId,
+  deleteIndicator,
+  deleteMetric,
 };
 
 async function createIndicator(params, options = {}) {
@@ -211,6 +213,62 @@ async function getMetricsByReportingPeriodId(
       action: "GetMetricsByReportingPeriod",
       clientId,
       reportingPeriodId,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+// Soft delete ESG Indicator by id
+async function deleteIndicator(clientId, indicatorId, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.ESGIndicator.destroy({
+      where: { id: indicatorId },
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+    logger.info("Soft deleted ESG Indicator", {
+      action: "DeleteESGIndicator",
+      clientId,
+      indicatorId,
+    });
+  } catch (error) {
+    await t.rollback();
+    logger.error("Error soft deleting ESG Indicator", {
+      action: "DeleteESGIndicator",
+      clientId,
+      indicatorId,
+      error: error.message,
+    });
+    throw error;
+  }
+}
+
+// Soft delete ESG Metric by id
+async function deleteMetric(clientId, metricId, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.ESGMetric.destroy({
+      where: { id: metricId },
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+    logger.info("Soft deleted ESG Metric", {
+      action: "DeleteESGMetric",
+      clientId,
+      metricId,
+    });
+  } catch (error) {
+    await t.rollback();
+    logger.error("Error soft deleting ESG Metric", {
+      action: "DeleteESGMetric",
+      clientId,
+      metricId,
       error: error.message,
     });
     throw error;

@@ -38,6 +38,7 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_esg_metrics",
       timestamps: true,
+      paranoid: true,
     }
   );
   return ESGMetric;
