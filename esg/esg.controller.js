@@ -21,6 +21,7 @@ router.post(
 );
 router.post("/reporting-periods", authorise(), createReportingPeriod);
 router.get("/reporting-periods", authorise(), getReportingPeriodsByClient);
+router.get("/reporting-periods/:id", authorise(), getReportingPeriodById);
 router.get("/metrics", authorise(), getMetricsByClient);
 router.get(
   "/indicators/:reportingPeriodId",
@@ -34,6 +35,23 @@ router.get(
 );
 router.delete("/indicators/:indicatorId", authorise(), deleteIndicator);
 router.delete("/metrics/:metricId", authorise(), deleteMetric);
+
+// Approval workflow endpoints
+router.post(
+  "/reporting-periods/:id/submit",
+  authorise(),
+  submitReportingPeriod
+);
+router.post(
+  "/reporting-periods/:id/approve",
+  authorise(),
+  approveReportingPeriod
+);
+router.post(
+  "/reporting-periods/:id/rollback",
+  authorise(),
+  rollbackReportingPeriod
+);
 
 async function getReportingPeriodsByClient(req, res, next) {
   try {
@@ -298,6 +316,147 @@ async function deleteMetric(req, res, next) {
     });
 
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Approval workflow handlers
+async function submitReportingPeriod(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    const period = await esgService.getReportingPeriodById(clientId, id);
+    if (!period) return res.status(404).json({ error: "Not found" });
+
+    if (period.status !== "Draft")
+      return res.status(400).json({ error: "Only Draft can be submitted." });
+
+    await esgService.updateReportingPeriod(clientId, id, {
+      status: "PendingApproval",
+      submittedBy: userId,
+      submittedAt: new Date(),
+    });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "SubmitReportingPeriod",
+      entity: "ReportingPeriod",
+      entityId: id,
+      details: { status: "PendingApproval" },
+    });
+
+    res.json({ message: "Reporting period submitted for approval." });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function approveReportingPeriod(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    const period = await esgService.getReportingPeriodById(clientId, id);
+    if (!period) return res.status(404).json({ error: "Not found" });
+
+    if (period.status !== "PendingApproval")
+      return res
+        .status(400)
+        .json({ error: "Only PendingApproval can be approved." });
+
+    await esgService.updateReportingPeriod(clientId, id, {
+      status: "Approved",
+      approvedBy: userId,
+      approvedAt: new Date(),
+    });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "ApproveReportingPeriod",
+      entity: "ReportingPeriod",
+      entityId: id,
+      details: { status: "Approved" },
+    });
+
+    res.json({ message: "Reporting period approved and locked." });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function rollbackReportingPeriod(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    const period = await esgService.getReportingPeriodById(clientId, id);
+    if (!period) return res.status(404).json({ error: "Not found" });
+
+    if (period.status !== "PendingApproval" && period.status !== "Approved")
+      return res
+        .status(400)
+        .json({ error: "Only PendingApproval or Approved can rollback." });
+
+    await esgService.updateReportingPeriod(clientId, id, {
+      status: "Draft",
+    });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "RollbackReportingPeriod",
+      entity: "ReportingPeriod",
+      entityId: id,
+      details: { status: "Draft" },
+    });
+
+    res.json({ message: "Reporting period rolled back to Draft." });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getReportingPeriodById(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    const period = await esgService.getReportingPeriodById(clientId, id);
+    if (!period) return res.status(404).json({ error: "Not found" });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetReportingPeriod",
+      entity: "ReportingPeriod",
+      entityId: id,
+    });
+
+    res.json(period.get ? period.get({ plain: true }) : period);
   } catch (err) {
     next(err);
   }

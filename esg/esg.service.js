@@ -14,6 +14,8 @@ module.exports = {
   getMetricsByReportingPeriodId,
   deleteIndicator,
   deleteMetric,
+  getReportingPeriodById,
+  updateReportingPeriod,
 };
 
 async function createIndicator(params, options = {}) {
@@ -183,6 +185,39 @@ async function deleteMetric(clientId, metricId, options = {}) {
     });
 
     await t.commit();
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
+}
+
+async function getReportingPeriodById(clientId, id, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const period = await db.ReportingPeriod.findByPk(id, {
+      ...options,
+      transaction: t,
+    });
+
+    return period;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function updateReportingPeriod(clientId, id, updates, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const result = await db.ReportingPeriod.update(updates, {
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+    return result;
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
