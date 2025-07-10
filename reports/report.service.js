@@ -2,7 +2,6 @@ const {
   beginTransactionWithClientContext,
 } = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
-const { logger } = require("../helpers/logger");
 
 module.exports = {
   getAll,
@@ -29,18 +28,8 @@ async function getAll(options = {}) {
       transaction: t,
     });
 
-    logger.logEvent("info", "Fetched all reports", {
-      action: "GetAllReports",
-      count: Array.isArray(rows) ? rows.length : undefined,
-      includeDeleted: options.includeDeleted || false,
-    });
-
     return rows;
   } catch (error) {
-    logger.logEvent("error", "Error fetching all reports", {
-      action: "GetAllReports",
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -52,18 +41,8 @@ async function getAllByReportId(reportId, options = {}) {
       ...options,
       transaction: options.transaction,
     });
-    logger.logEvent("info", "Fetched reports by reportId", {
-      action: "GetAllByReportId",
-      reportId,
-      count: Array.isArray(rows) ? rows.length : undefined,
-    });
     return rows;
   } catch (error) {
-    logger.logEvent("error", "Error fetching reports by reportId", {
-      action: "GetAllByReportId",
-      reportId,
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -77,38 +56,33 @@ async function create(params, options = {}) {
     });
 
     await t.commit();
-    logger.logEvent("info", "Report created & committed", {
-      action: "CreateReport",
-      ...params,
-    });
 
-    return result;
+    return result?.get?.({ plain: true }) || result;
   } catch (error) {
     await t.rollback();
-    logger.logEvent("error", "Error creating report, rolled back", {
-      action: "CreateReport",
-      error: error.message,
-    });
     throw error;
   }
 }
 
 async function update(id, params, options = {}) {
-  await db.Report.update(params, {
-    where: { id },
-    ...options,
-  });
-  const result = await db.Report.findOne({
-    where: { id },
-    ...options,
-    transaction: options.transaction,
-  });
-  logger.logEvent("info", "Report updated", {
-    action: "UpdateReport",
-    reportId: id,
-    ...params,
-  });
-  return result;
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    await db.Report.update(params, {
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+    const result = await db.Report.findOne({
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+    return result?.get?.({ plain: true }) || result;
+  } catch (error) {
+    await t.rollback();
+    throw error;
+  }
 }
 
 async function patch(id, params, options = {}) {
@@ -127,19 +101,9 @@ async function patch(id, params, options = {}) {
       throw new Error("Report not found or update blocked by RLS.");
     }
     if (!options.transaction) await t.commit();
-    logger.logEvent("info", "Report patched", {
-      action: "PatchReport",
-      reportId: id,
-      ...params,
-    });
-    return updatedReport;
+    return updatedReport?.get?.({ plain: true }) || updatedReport;
   } catch (error) {
     if (!options.transaction) await t.rollback();
-    logger.logEvent("error", "Error patching report, rolled back", {
-      action: "PatchReport",
-      reportId: id,
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -161,17 +125,8 @@ async function _delete(id, clientId, options = {}) {
     }
 
     await t.commit();
-    logger.logEvent("warn", "Report status set to Deleted", {
-      action: "SoftDeleteReport",
-      reportId: id,
-    });
   } catch (error) {
     await t.rollback();
-    logger.logEvent("error", "Failed to soft delete report", {
-      action: "SoftDeleteReport",
-      reportId: id,
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -184,24 +139,10 @@ async function getById(id, clientId) {
       transaction: t,
     });
     if (!report) {
-      logger.logEvent("warn", "Report not found", {
-        action: "GetReportById",
-        reportId: id,
-      });
       throw { status: 404, message: "Report not found" };
     }
-    logger.logEvent("info", "Fetched report by ID", {
-      action: "GetReportById",
-      reportId: id,
-    });
-    // console.log("Fetched report:", report);
-    return report;
+    return report.get({ plain: true });
   } catch (error) {
-    logger.logEvent("error", "Error fetching report by ID", {
-      action: "GetReportById",
-      reportId: id,
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -212,13 +153,6 @@ async function finaliseSubmission() {
     `SELECT COUNT(*) AS count FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
   );
   if (rows[0].count > 0) {
-    logger.logEvent(
-      "warn",
-      "Report submission blocked due to missing isSb flags",
-      {
-        action: "FinaliseSubmissionBlocked",
-      }
-    );
     throw { status: 400, message: "Some records are missing isSb flags" };
   }
 
@@ -237,11 +171,6 @@ async function finaliseSubmission() {
       where: { id: reportId },
     });
   }
-
-  logger.logEvent("info", "Reports finalised", {
-    action: "FinaliseSubmission",
-    reportIds: reportIds.map((r) => r.reportId),
-  });
 
   return { success: true, message: "Report(s) marked as Submitted" };
 }
@@ -265,11 +194,6 @@ async function saveUploadMetadata(metadata, options = {}) {
   });
 
   const result = await db.ReportUpload.create(metadata, { transaction });
-
-  logger.logEvent("info", "Upload metadata saved", {
-    action: "SaveUploadMetadata",
-    ...metadata,
-  });
 
   return result;
 }

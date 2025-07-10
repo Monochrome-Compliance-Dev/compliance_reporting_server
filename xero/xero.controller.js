@@ -27,17 +27,16 @@ router.delete("/tenants/:tenantId", authorise(), async (req, res) => {
       tenantId,
       removedBy: req.auth?.userId,
     });
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: `Tenant ${tenantId} removed successfully.`,
-      });
+    res.status(200).json({
+      success: true,
+      message: `Tenant ${tenantId} removed successfully.`,
+    });
   } catch (err) {
     logger.logEvent("error", "Failed to remove tenant", {
       action: "removeTenant",
       error: err.message,
       stack: err.stack,
+      ...(err.context || {}),
     });
     res
       .status(500)
@@ -92,12 +91,10 @@ function generateAuthUrl(req, res) {
       error: err.message,
       stack: err.stack,
     });
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to generate authorization URL.",
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate authorization URL.",
+    });
   }
 }
 
@@ -125,6 +122,7 @@ async function handleOAuthCallback(req, res) {
       logger.logEvent("warn", "Xero auth denied or revoked", {
         error,
         description,
+        ...(err?.context || {}),
       });
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -160,6 +158,7 @@ async function handleOAuthCallback(req, res) {
         action: "OAuthCallback",
         error: err.message,
         stack: err.stack,
+        ...(err.context || {}),
       });
       return res.status(500).send("Failed to exchange code for tokens.");
     }
@@ -178,6 +177,7 @@ async function handleOAuthCallback(req, res) {
         action: "OAuthCallback",
         error: err.message,
         stack: err.stack,
+        ...(err.context || {}),
       });
       return res.status(500).send("Failed to get connections.");
     }
@@ -220,6 +220,7 @@ async function handleOAuthCallback(req, res) {
       action: "OAuthCallback",
       error: err.message,
       stack: err.stack,
+      ...(err.context || {}),
     });
     return res.status(500).send("Internal server error during OAuth callback.");
   }
@@ -236,36 +237,69 @@ async function startXeroExtractionHandler(req, res) {
   }
 
   try {
-    await xeroService.startXeroExtraction({
-      clientId,
-      reportId,
-      createdBy,
-      startDate,
-      endDate,
-      tenantIds,
-    });
-    logger.logEvent("info", "Xero extraction started for specified tenants.", {
-      clientId,
-      reportId,
-      createdBy,
-      tenantIds,
-      startDate,
-      endDate,
-    });
-    res
-      .status(202)
-      .json({
-        success: true,
-        message: "Extraction started for specified tenants.",
+    for (const tenantId of tenantIds) {
+      await xeroService.startXeroExtraction({
+        clientId,
+        reportId,
+        createdBy,
+        startDate,
+        endDate,
+        tenantId,
+        onProgress: (status) => {
+          const logData = {
+            ...status,
+            clientId,
+            reportId,
+            createdBy,
+            tenantId,
+            timestamp: new Date().toISOString(),
+          };
+          logger.logEvent("info", "Extraction progress", logData);
+
+          if (req.wss && typeof req.wss.broadcast === "function") {
+            try {
+              req.wss.broadcast(
+                JSON.stringify({
+                  type: "xeroExtractionProgress",
+                  data: logData,
+                })
+              );
+            } catch (wsErr) {
+              logger.logEvent(
+                "warn",
+                "Failed to broadcast extraction progress",
+                {
+                  error: wsErr.message,
+                  stack: wsErr.stack,
+                }
+              );
+            }
+          }
+        },
       });
+    }
+
+    logger.logEvent("info", "Xero extraction completed for all tenants.", {
+      clientId,
+      reportId,
+      createdBy,
+      tenantIds,
+      startDate,
+      endDate,
+    });
+    res.status(202).json({
+      success: true,
+      message: "Extraction completed for all tenants.",
+    });
   } catch (err) {
-    logger.logEvent("error", "Failed to start Xero extraction", {
+    logger.logEvent("error", "Failed during Xero extraction for tenants", {
       action: "startXeroExtractionHandler",
       error: err.message,
       stack: err.stack,
+      ...(err.context || {}),
     });
     res
       .status(500)
-      .json({ success: false, message: "Failed to start extraction." });
+      .json({ success: false, message: "Failed to complete extraction." });
   }
 }

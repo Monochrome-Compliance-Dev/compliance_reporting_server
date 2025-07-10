@@ -9,10 +9,7 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Client.findAll({
-    attributes: ["id", ["businessName", "name"]],
-    order: [["businessName", "ASC"]],
-  });
+  return await db.Client.findAll();
 }
 
 async function getById(clientId, id) {

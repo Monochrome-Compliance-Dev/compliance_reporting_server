@@ -15,52 +15,47 @@ let xeroQueue;
   xeroQueue = new PQueue({
     concurrency: 5,
     interval: 60000,
-    intervalCap: 55, // leave some buffer to avoid 429s
+    intervalCap: 55,
   });
 })();
 
 let xeroProcessedCount = 0;
 let xeroStartTime = null;
-let xeroTotalCount = null; // optional, can be set externally if needed
+let xeroTotalCount = null;
 
-// Wrapper function for GET requests
-/**
- * Make a GET request to the Xero API with dynamic accessToken and tenantId.
- * @param {string} url - The endpoint (e.g. /Invoices)
- * @param {string} accessToken - OAuth2 access token
- * @param {string} tenantId - Xero tenant id
- * @param {object} config - Additional axios config (optional)
- */
+function updateXeroProgress(method, url) {
+  if (!xeroStartTime) xeroStartTime = Date.now();
+  xeroProcessedCount++;
+  const elapsed = Date.now() - xeroStartTime;
+  const avgTimePerItem = elapsed / xeroProcessedCount;
+  const eta = xeroTotalCount
+    ? (xeroTotalCount - xeroProcessedCount) * avgTimePerItem
+    : null;
+
+  if (global.sendWebSocketUpdate) {
+    global.sendWebSocketUpdate({
+      type: "xero-progress",
+      method,
+      endpoint: url,
+      current: xeroProcessedCount,
+      total: xeroTotalCount,
+      eta: eta ? formatEta(eta) : null,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
 const get = async (url, accessToken, tenantId, config = {}) => {
   if (typeof accessToken !== "string") {
-    console.warn("accessToken is not a string. Fixing it now.");
     accessToken = accessToken?.accessToken || "";
   }
   if (typeof tenantId !== "string") {
-    console.warn("tenantId is not a string. Fixing it now.");
     tenantId = tenantId?.tenantId || "";
   }
 
   try {
     while (!xeroQueue) await new Promise((res) => setTimeout(res, 10));
-    if (!xeroStartTime) xeroStartTime = Date.now();
-    xeroProcessedCount++;
-    const elapsed = Date.now() - xeroStartTime;
-    const avgTimePerItem = elapsed / xeroProcessedCount;
-    const eta = xeroTotalCount
-      ? (xeroTotalCount - xeroProcessedCount) * avgTimePerItem
-      : null;
-
-    if (global.sendWebSocketUpdate) {
-      global.sendWebSocketUpdate({
-        status: "info",
-        message: `Xero API request ${xeroProcessedCount}${xeroTotalCount ? ` of ${xeroTotalCount}` : ""}`,
-        eta: eta ? formatEta(eta) : null,
-        current: xeroProcessedCount,
-        total: xeroTotalCount,
-        timestamp: new Date().toISOString(),
-      });
-    }
+    updateXeroProgress("GET", url);
 
     const headers = {
       ...(config.headers || {}),
@@ -68,12 +63,11 @@ const get = async (url, accessToken, tenantId, config = {}) => {
       "Xero-tenant-id": tenantId,
       Accept: "application/json",
     };
-    let baseURL;
-    if (url === "/connections") {
-      baseURL = "https://api.xero.com";
-    } else {
-      baseURL = process.env.XERO_API_BASE_URL;
-    }
+    const baseURL =
+      url === "/connections"
+        ? "https://api.xero.com"
+        : process.env.XERO_API_BASE_URL;
+
     const response = await xeroQueue.add(() =>
       axios.get(url, {
         ...config,
@@ -87,55 +81,29 @@ const get = async (url, accessToken, tenantId, config = {}) => {
       status: response.status,
     };
   } catch (error) {
-    console.error(`Error GET ${url}:`, error.response?.data || error.message);
+    error.context = { url, method: "GET" };
     throw error;
   }
 };
 
-/**
- * Make a POST request to the Xero API with dynamic accessToken and tenantId.
- * @param {string} url - The endpoint or absolute URL
- * @param {*} data - Body data
- * @param {string} accessToken - OAuth2 access token
- * @param {string} tenantId - Xero tenant id
- * @param {object} config - Additional axios config (optional)
- */
 const post = async (url, data, accessToken, tenantId, config = {}) => {
   if (typeof accessToken !== "string") {
-    console.warn("accessToken is not a string. Fixing it now.");
     accessToken = accessToken?.accessToken || "";
   }
+
   try {
     while (!xeroQueue) await new Promise((res) => setTimeout(res, 10));
-    if (!xeroStartTime) xeroStartTime = Date.now();
-    xeroProcessedCount++;
-    const elapsed = Date.now() - xeroStartTime;
-    const avgTimePerItem = elapsed / xeroProcessedCount;
-    const eta = xeroTotalCount
-      ? (xeroTotalCount - xeroProcessedCount) * avgTimePerItem
-      : null;
+    updateXeroProgress("POST", url);
 
-    if (global.sendWebSocketUpdate) {
-      global.sendWebSocketUpdate({
-        status: "info",
-        message: `Xero API request ${xeroProcessedCount}${xeroTotalCount ? ` of ${xeroTotalCount}` : ""}`,
-        eta: eta ? formatEta(eta) : null,
-        current: xeroProcessedCount,
-        total: xeroTotalCount,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // For token endpoint, accessToken and tenantId may be undefined, so only set if provided
     const headers = {
       ...(config.headers || {}),
       ...(accessToken && { Authorization: `Bearer ${accessToken}` }),
       ...(tenantId && { "Xero-tenant-id": tenantId }),
       Accept: "application/json",
     };
-    // If url is absolute (token endpoint), baseURL is not set
     const isAbsolute = /^https?:\/\//i.test(url);
     const baseURL = isAbsolute ? undefined : process.env.XERO_API_BASE_URL;
+
     const response = await xeroQueue.add(() =>
       axios.post(url, data, {
         ...config,
@@ -149,46 +117,22 @@ const post = async (url, data, accessToken, tenantId, config = {}) => {
       status: response.status,
     };
   } catch (error) {
-    console.error(`Error POST ${url}:`, error.response?.data || error.message);
+    error.context = { url, method: "POST" };
     throw error;
   }
 };
 
-/**
- * Make a DELETE request to the Xero API with dynamic accessToken and tenantId.
- * @param {string} url - The endpoint (e.g. /connections/:id)
- * @param {string} accessToken - OAuth2 access token
- * @param {string} tenantId - Xero tenant id (optional for /connections)
- * @param {object} config - Additional axios config (optional)
- */
 const del = async (url, accessToken, tenantId, config = {}) => {
   if (typeof accessToken !== "string") {
-    console.warn("accessToken is not a string. Fixing it now.");
     accessToken = accessToken?.accessToken || "";
   }
   if (tenantId && typeof tenantId !== "string") {
     tenantId = tenantId?.tenantId || "";
   }
+
   try {
     while (!xeroQueue) await new Promise((res) => setTimeout(res, 10));
-    if (!xeroStartTime) xeroStartTime = Date.now();
-    xeroProcessedCount++;
-    const elapsed = Date.now() - xeroStartTime;
-    const avgTimePerItem = elapsed / xeroProcessedCount;
-    const eta = xeroTotalCount
-      ? (xeroTotalCount - xeroProcessedCount) * avgTimePerItem
-      : null;
-
-    if (global.sendWebSocketUpdate) {
-      global.sendWebSocketUpdate({
-        status: "info",
-        message: `Xero API DELETE request ${xeroProcessedCount}${xeroTotalCount ? ` of ${xeroTotalCount}` : ""}`,
-        eta: eta ? formatEta(eta) : null,
-        current: xeroProcessedCount,
-        total: xeroTotalCount,
-        timestamp: new Date().toISOString(),
-      });
-    }
+    updateXeroProgress("DELETE", url);
 
     const headers = {
       ...(config.headers || {}),
@@ -196,12 +140,11 @@ const del = async (url, accessToken, tenantId, config = {}) => {
       ...(tenantId && { "Xero-tenant-id": tenantId }),
       Accept: "application/json",
     };
-    let baseURL;
-    if (url === "/connections" || url.startsWith("/connections/")) {
-      baseURL = "https://api.xero.com";
-    } else {
-      baseURL = process.env.XERO_API_BASE_URL;
-    }
+    const baseURL =
+      url === "/connections" || url.startsWith("/connections/")
+        ? "https://api.xero.com"
+        : process.env.XERO_API_BASE_URL;
+
     const response = await xeroQueue.add(() =>
       axios.delete(url, {
         ...config,
@@ -215,13 +158,9 @@ const del = async (url, accessToken, tenantId, config = {}) => {
       status: response.status,
     };
   } catch (error) {
-    console.error(
-      `Error DELETE ${url}:`,
-      error.response?.data || error.message
-    );
+    error.context = { url, method: "DELETE" };
     throw error;
   }
 };
 
-// Export for reuse
 module.exports = { get, post, del };

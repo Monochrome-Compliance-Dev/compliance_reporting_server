@@ -16,142 +16,235 @@ router.delete("/:id", authorise(), _delete);
 
 module.exports = router;
 
-function getAll(req, res, next) {
-  reportService
-    .getAll({ clientId: req.auth?.clientId })
-    .then((reports) => {
-      logger.logEvent("info", "Fetched all reports", {
-        action: "GetAllReports",
-        userId: req.auth.id,
-        count: Array.isArray(reports) ? reports.length : undefined,
-      });
-      res.json(reports);
-    })
-    .catch((error) => {
-      logger.logEvent("error", "Error fetching all reports", {
-        action: "GetAllReports",
-        userId: req.auth.id,
-        error: error.message,
-      });
-      next(error);
-    });
-}
-
-function getById(req, res, next) {
-  reportService
-    .getById(req.params.id, req.auth?.clientId)
-    .then((report) => {
-      // console.log("Fetched report:", report);
-      if (report) {
-        logger.logEvent("info", "Fetched report by ID", {
-          action: "GetReportById",
-          reportId: req.params.id,
-          userId: req.auth.id,
-        });
-        res.json(report);
-      } else {
-        logger.logEvent("warn", "Report not found", {
-          action: "GetReportById",
-          reportId: req.params.id,
-          userId: req.auth.id,
-        });
-        res.sendStatus(404);
-      }
-    })
-    .catch((error) => {
-      logger.logEvent("error", "Error fetching report by ID", {
-        action: "GetReportById",
-        reportId: req.params.id,
-        userId: req.auth.id,
-        error: error.message,
-      });
-      next(error);
-    });
-}
-
-async function create(req, res, next) {
+async function getAll(req, res, next) {
+  const timestamp = new Date().toISOString();
   try {
-    const report = await reportService.create(req.body);
-    logger.logEvent("info", "Report created", {
-      action: "CreateReport",
-      reportId: report.id,
-      userId: req.auth.id,
+    const clientId = req.auth?.clientId;
+    const userId = req.auth?.id;
+    logger.logEvent("info", "Fetching all reports", {
+      action: "GetAllReports",
+      userId,
+      clientId,
+      timestamp,
     });
-    res.json(report);
+    const reports = await reportService.getAll({ clientId });
+    logger.logEvent("info", "Fetched all reports", {
+      action: "GetAllReports",
+      userId,
+      clientId,
+      count: Array.isArray(reports) ? reports.length : undefined,
+      timestamp,
+    });
+    res.json({ status: "success", data: reports });
   } catch (error) {
-    logger.logEvent("error", "Error creating report", {
-      action: "CreateReport",
+    logger.logEvent("error", "Error fetching all reports", {
+      action: "GetAllReports",
+      userId: req.auth?.id,
+      clientId: req.auth?.clientId,
       error: error.message,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }
 }
 
-function update(req, res, next) {
-  reportService
-    .update(req.params.id, req.body)
-    .then((report) => {
-      logger.logEvent("info", "Report updated", {
-        action: "UpdateReport",
-        reportId: req.params.id,
-        userId: req.auth.id,
+async function getById(req, res, next) {
+  const timestamp = new Date().toISOString();
+  const id = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  logger.logEvent("info", "Fetching report by ID", {
+    action: "GetReportById",
+    id,
+    clientId,
+    userId,
+    timestamp,
+  });
+  try {
+    const report = await reportService.getById({ id, clientId });
+    if (report) {
+      logger.logEvent("info", "Fetched report by ID", {
+        action: "GetReportById",
+        id,
+        clientId,
+        userId,
+        timestamp,
       });
-      res.json(report);
-    })
-    .catch((error) => {
-      logger.logEvent("error", "Error updating report", {
-        action: "UpdateReport",
-        reportId: req.params.id,
-        error: error.message,
+      res.json({ status: "success", data: report });
+    } else {
+      logger.logEvent("warn", "Report not found", {
+        action: "GetReportById",
+        id,
+        clientId,
+        userId,
+        timestamp,
       });
-      next(error);
+      res.sendStatus(404);
+    }
+  } catch (error) {
+    logger.logEvent("error", "Error fetching report by ID", {
+      action: "GetReportById",
+      id,
+      clientId,
+      userId,
+      error: error.message,
+      timestamp: new Date().toISOString(),
     });
+    next(error);
+  }
+}
+
+async function create(req, res, next) {
+  const timestamp = new Date().toISOString();
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  logger.logEvent("info", "Creating report", {
+    action: "CreateReport",
+    clientId,
+    userId,
+    timestamp,
+  });
+  try {
+    const report = await reportService.create({ data: req.body, clientId });
+    logger.logEvent("info", "Report created", {
+      action: "CreateReport",
+      id: report.id,
+      clientId,
+      userId,
+      timestamp,
+    });
+    res.json({ status: "success", data: report });
+  } catch (error) {
+    logger.logEvent("error", "Error creating report", {
+      action: "CreateReport",
+      clientId,
+      userId,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+async function update(req, res, next) {
+  const timestamp = new Date().toISOString();
+  const id = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  logger.logEvent("info", "Updating report", {
+    action: "UpdateReport",
+    id,
+    clientId,
+    userId,
+    timestamp,
+  });
+  try {
+    const report = await reportService.update({ id, data: req.body, clientId });
+    logger.logEvent("info", "Report updated", {
+      action: "UpdateReport",
+      id,
+      clientId,
+      userId,
+      timestamp,
+    });
+    res.json({ status: "success", data: report });
+  } catch (error) {
+    logger.logEvent("error", "Error updating report", {
+      action: "UpdateReport",
+      id,
+      clientId,
+      userId,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
 }
 
 async function patch(req, res, next) {
+  const timestamp = new Date().toISOString();
+  const id = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  logger.logEvent("info", "Patching report", {
+    action: "PatchReport",
+    id,
+    clientId,
+    userId,
+    timestamp,
+  });
   try {
-    const { id } = req.params;
-    const clientId = req.auth.clientId;
-
     if (!clientId) {
-      logger.logEvent("warn", "No clientId found for RLS - skipping");
+      logger.logEvent("warn", "No clientId found for RLS - skipping", {
+        action: "PatchReport",
+        id,
+        userId,
+        timestamp,
+      });
       return res.status(400).json({ message: "Client ID missing" });
     }
-
-    const report = await reportService.patch(id, req.body, {
-      clientId,
-    });
-
+    const report = await reportService.patch({ id, data: req.body, clientId });
     logger.logEvent("info", "Report patched", {
       action: "PatchReport",
-      reportId: id,
-      userId: req.auth.id,
+      id,
+      clientId,
+      userId,
+      timestamp,
     });
-
-    res.json(report);
+    res.json({ status: "success", data: report });
   } catch (error) {
     logger.logEvent("error", "Error patching report", {
       action: "PatchReport",
-      reportId: req.params.id,
+      id,
+      clientId,
+      userId,
       error: error.message,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }
 }
 
 async function _delete(req, res, next) {
+  const timestamp = new Date().toISOString();
+  const id = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  logger.logEvent("info", "Deleting report", {
+    action: "DeleteReport",
+    id,
+    clientId,
+    userId,
+    timestamp,
+  });
   try {
-    const { id } = req.params;
-    const clientId = req.auth.clientId;
-
     if (!clientId) {
-      logger.logEvent("warn", "No clientId found for RLS - skipping");
+      logger.logEvent("warn", "No clientId found for RLS - skipping", {
+        action: "DeleteReport",
+        id,
+        userId,
+        timestamp,
+      });
       return res.status(400).json({ message: "Client ID missing" });
     }
-
-    await reportService.delete(id, clientId);
-    res.status(204).send();
-  } catch (err) {
-    next(err);
+    await reportService.delete({ id, clientId });
+    logger.logEvent("info", "Report deleted", {
+      action: "DeleteReport",
+      id,
+      clientId,
+      userId,
+      timestamp,
+    });
+    res.status(204).json({ status: "success" });
+  } catch (error) {
+    logger.logEvent("error", "Error deleting report", {
+      action: "DeleteReport",
+      id,
+      clientId,
+      userId,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
   }
 }
