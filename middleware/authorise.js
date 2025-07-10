@@ -65,9 +65,6 @@ function authorise(roles = []) {
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);
 
-      const injectClientId = require("./injectClientId");
-      injectClientId(req, res, () => {});
-
       next();
     },
   ];

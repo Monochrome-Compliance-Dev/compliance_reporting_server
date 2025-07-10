@@ -39,12 +39,16 @@ async function getReportingPeriodsByClient(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
 
     const periods = await esgService.getReportingPeriodsByClient(clientId);
 
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "GetReportingPeriods",
       entity: "ReportingPeriod",
       details: { count: periods.length },
@@ -60,6 +64,8 @@ async function getIndicatorsByReportingPeriodId(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
 
     const indicators = await esgService.getIndicatorsByReportingPeriodId(
@@ -70,6 +76,8 @@ async function getIndicatorsByReportingPeriodId(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "GetIndicatorsByReportingPeriod",
       entity: "ESGIndicator",
       entityId: reportingPeriodId,
@@ -86,6 +94,8 @@ async function getMetricsByReportingPeriodId(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
 
     const metrics = await esgService.getMetricsByReportingPeriodId(
@@ -96,6 +106,8 @@ async function getMetricsByReportingPeriodId(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "GetMetricsByReportingPeriod",
       entity: "ESGMetric",
       entityId: reportingPeriodId,
@@ -114,6 +126,8 @@ async function createIndicator(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const { code, name, description, category, reportingPeriodId } = req.body;
 
     const indicator = await esgService.createIndicator({
@@ -128,6 +142,8 @@ async function createIndicator(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "CreateESGIndicator",
       entity: "ESGIndicator",
       entityId: indicator.id,
@@ -146,6 +162,8 @@ async function createMetric(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const { indicatorId, reportingPeriodId, value, unit } = req.body;
 
     const metric = await esgService.createMetric({
@@ -159,6 +177,8 @@ async function createMetric(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "CreateESGMetric",
       entity: "ESGMetric",
       entityId: metric.id,
@@ -175,12 +195,16 @@ async function getMetricsByClient(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
 
     const metrics = await esgService.getMetricsByClient(clientId);
 
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "GetESGMetrics",
       entity: "ESGMetric",
       details: { count: metrics.length },
@@ -197,6 +221,8 @@ async function createReportingPeriod(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const { name, startDate, endDate } = req.body;
 
     const period = await esgService.createReportingPeriod({
@@ -209,6 +235,8 @@ async function createReportingPeriod(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "CreateReportingPeriod",
       entity: "ReportingPeriod",
       entityId: period.id,
@@ -226,6 +254,8 @@ async function deleteIndicator(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const indicatorId = req.params.indicatorId;
 
     await esgService.deleteIndicator(clientId, indicatorId);
@@ -233,6 +263,8 @@ async function deleteIndicator(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "DeleteESGIndicator",
       entity: "ESGIndicator",
       entityId: indicatorId,
@@ -249,6 +281,8 @@ async function deleteMetric(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const metricId = req.params.metricId;
 
     await esgService.deleteMetric(clientId, metricId);
@@ -256,6 +290,8 @@ async function deleteMetric(req, res, next) {
     await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
       action: "DeleteESGMetric",
       entity: "ESGMetric",
       entityId: metricId,

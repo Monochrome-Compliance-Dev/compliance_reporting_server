@@ -1,136 +1,91 @@
-## 📄 Multi-Tenancy Architecture with Views & Triggers
+## 📄 Multi-Tenancy Architecture with PostgreSQL RLS
 
 ### 1️⃣ Executive Summary
 
-This document outlines the architecture for strict tenant isolation using MySQL views and triggers. It ensures data belonging to one client cannot be seen or modified by another, while simplifying the application’s data access.
+This document describes the architecture for strict tenant isolation using PostgreSQL Row-Level Security (RLS) with session-based client context. It ensures data belonging to one client cannot be seen or modified by another, while remaining performant and maintainable.
 
 ---
 
 ### 2️⃣ High-Level Overview
 
 - **Components**:
-  - **Base Tables**: Store all client data.
-  - **Client-Specific Views**: Filter data by `clientId`.
-  - **Triggers**: Enforce `clientId` on all inserts/updates.
-- **Goal**: Prevent cross-tenant data access while maintaining performance and simplicity.
+
+  - **Base Tables**: All client data is stored together.
+  - **RLS Policies**: Enforce data access at the row level, checking against a session variable.
+  - **Session Context**: `SET LOCAL app.current_client_id` for each transaction.
+
+- **Goal**: Prevent cross-tenant data access, enforced by the database itself.
 
 ---
 
-### 3️⃣ Diagram
+### 3️⃣ Key Elements
 
-_(Insert a diagram showing:_
+#### ✅ RLS Policies
 
-- Users → Views → Base Tables
-- Triggers sitting between views and tables
-  )\*
+- Defined directly on tables, e.g.:
 
----
-
-### 4️⃣ Key Elements
-
-#### ✅ Views
-
-- **Naming**: `client_{clientId}_{tableName}`
-- **Example**:
   ```sql
-  CREATE VIEW client_YSPlLRE6ND_tbl_tcp AS
-  SELECT * FROM tbl_tcp WHERE clientId = 'YSPlLRE6ND';
-  ```
-- **Purpose**: Restrict read/write access to only relevant client data.
-
-#### ✅ Triggers
-
-- **Naming**: `trg_client_{clientId}_{tableName}_{event}`
-- **`before_insert`**:
-  - Ensures `clientId` is always populated from the application’s request.
-- **`before_update`**:
-  - Prevents any change to `clientId`.
-- **Example**:
-  ```sql
-  CREATE TRIGGER trg_client_YSPlLRE6ND_tbl_tcp_before_insert
-  BEFORE INSERT ON tbl_tcp
-  FOR EACH ROW
-  BEGIN
-    IF NEW.clientId IS NULL OR NEW.clientId = '' THEN
-      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'clientId is required';
-    END IF;
-  END;
+  ALTER TABLE tbl_tcp ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY client_isolation_policy
+    ON tbl_tcp
+    USING (clientId = current_setting('app.current_client_id'));
   ```
 
+- Prevents any `SELECT`, `UPDATE`, or `DELETE` from affecting rows outside the client’s scope.
+
+#### ✅ Session Context
+
+- Application explicitly sets the client context for each transaction:
+  ```sql
+  SET LOCAL app.current_client_id = 'YSPlLRE6ND';
+  ```
+- Scoped only to the current transaction, ensuring no cross-request leakage.
+
 ---
 
-### 5️⃣ Data Flow Examples
+### 4️⃣ Data Flow Examples
 
-#### **SELECT**
+#### **SELECT / UPDATE / DELETE**
 
-- Users query views.
-- Views only expose rows with matching `clientId`.
+- App opens transaction.
+- Sets `app.current_client_id`.
+- Executes queries; RLS ensures rows filtered by client.
 
 #### **INSERT**
 
-- App sends `INSERT` to the view.
-- Trigger injects/validates `clientId` for the final insert.
-
-#### **UPDATE**
-
-- App sends `UPDATE` to the view.
-- Trigger ensures `clientId` isn’t changed.
-
-#### **DELETE**
-
-- Users can only delete rows in their view.
+- `BEFORE INSERT` triggers or check constraints ensure `clientId` matches `app.current_client_id` or is set automatically.
 
 ---
 
-### 6️⃣ Risks & Caveats
+### 5️⃣ Risks & Caveats
 
-- Views only protect at the DB layer if app only queries through them.
-- Triggers must be updated with schema changes.
-- Slight performance overhead due to triggers.
-
----
-
-### 7️⃣ Setup & Maintenance
-
-✅ **Creating Views**
-
-- Managed by `createClientViews(clientId)`.
-- Automatically created per client for all relevant tables.
-
-✅ **Creating Triggers**
-
-- Managed by `createClientTriggers(clientId)`.
-- Each table’s `INSERT` and `UPDATE` triggers enforce `clientId` presence and immutability.
-
-✅ **Schema Updates**
-
-- Must re-run view/trigger creation if new tables are added or columns change.
+- Always require `SET LOCAL` in a transaction. Forgetting to set this means no rows are accessible (safe by design).
+- Must ensure all application queries happen inside the same transaction.
+- Slight overhead from Postgres checking `current_setting` on each row.
 
 ---
 
-### 8️⃣ Example Scripts
+### 6️⃣ Setup & Maintenance
 
-```sql
--- Create View
-CREATE VIEW client_YSPlLRE6ND_tbl_tcp AS
-SELECT * FROM tbl_tcp WHERE clientId = 'YSPlLRE6ND';
+✅ **RLS Policies**
 
--- Create Trigger
-CREATE TRIGGER trg_client_YSPlLRE6ND_tbl_tcp_before_insert
-BEFORE INSERT ON tbl_tcp
-FOR EACH ROW
-BEGIN
-  IF NEW.clientId IS NULL THEN
-    SET NEW.clientId = 'YSPlLRE6ND';
-  END IF;
-END;
-```
+- Created by migration scripts or helper functions per table.
+- Must add policies whenever a new table with `clientId` is introduced.
+
+✅ **Session Context Management**
+
+- Handled by `beginTransactionWithClientContext(clientId)` helper.
+- Rolls back immediately on failure to set context.
+
+✅ **Schema Changes**
+
+- RLS policy must be added to new tables or re-applied if schema is rebuilt.
 
 ---
 
-### 9️⃣ Future Considerations
+### 7️⃣ Future Considerations
 
-- Evaluate database-level row security policies (like PostgreSQL RLS) if migration possible.
-- Monitor performance overhead of triggers for high-transaction tables.
+- If high throughput causes RLS to become a bottleneck, evaluate partitioning by `clientId`.
+- Continue regular audits of RLS policies to ensure coverage.
 
 ---

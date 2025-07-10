@@ -15,7 +15,7 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   host: DB_HOST,
   port: DB_PORT,
   pool: {
-    max: 100,
+    max: 20,
     min: 0,
     acquire: 30000,
     idle: 10000,
@@ -80,7 +80,6 @@ async function initialise() {
     files.forEach((file) => {
       if (file.endsWith(".model.js")) {
         const model = require(path.join(modelPath, file))(sequelize);
-        console.log(`Loaded model: ${file}`);
         const name = model.name.charAt(0).toUpperCase() + model.name.slice(1);
         db[name] = model;
       }
@@ -154,7 +153,7 @@ async function initialise() {
     db.ESGMetric.belongsTo(db.ESGIndicator, { foreignKey: "indicatorId" });
   }
 
-  // Sync models
+  // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
   await sequelize.sync();
 
   // Initialise RLS policies (if using them)
@@ -196,3 +195,11 @@ if (process.env.DISABLE_DB !== "true") {
 } else {
   logger.logEvent("info", "DB init skipped (DISABLE_DB=true)");
 }
+
+process.on("SIGTERM", async () => {
+  logger.logEvent("info", "Shutting down DB connections...", {
+    action: "DatabaseShutdown",
+  });
+  await sequelize.close();
+  process.exit(0);
+});

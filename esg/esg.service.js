@@ -25,18 +25,10 @@ async function createIndicator(params, options = {}) {
     });
 
     await t.commit();
-    logger.info("ESG Indicator created & committed", {
-      action: "CreateESGIndicator",
-      ...params,
-    });
 
     return result.get({ plain: true });
   } catch (error) {
-    await t.rollback();
-    logger.error("Error creating ESG Indicator, rolled back", {
-      action: "CreateESGIndicator",
-      error: error.message,
-    });
+    if (!t.finished) await t.rollback();
     throw error;
   }
 }
@@ -64,19 +56,13 @@ async function createMetric(params, options = {}) {
     });
 
     await t.commit();
-    logger.info("ESG Metric created & committed", {
-      action: "CreateESGMetric",
-      ...params,
-    });
 
     return result.get({ plain: true });
   } catch (error) {
     if (!t.finished) await t.rollback();
-    logger.error("Error creating ESG Metric, rolled back", {
-      action: "CreateESGMetric",
-      error: error.message,
-    });
     throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
@@ -88,19 +74,8 @@ async function getMetricsByClient(clientId, options = {}) {
       transaction: t,
     });
 
-    logger.info("Fetched ESG Metrics by client", {
-      action: "GetESGMetrics",
-      clientId,
-      count: Array.isArray(metrics) ? metrics.length : 0,
-    });
-
     return metrics;
   } catch (error) {
-    logger.error("Error fetching ESG Metrics by client", {
-      action: "GetESGMetrics",
-      clientId,
-      error: error.message,
-    });
     throw error;
   }
 }
@@ -114,18 +89,10 @@ async function createReportingPeriod(params, options = {}) {
     });
 
     await t.commit();
-    logger.info("ESG Reporting Period created & committed", {
-      action: "CreateReportingPeriod",
-      ...params,
-    });
 
     return result.get({ plain: true });
   } catch (error) {
-    await t.rollback();
-    logger.error("Error creating ESG Reporting Period, rolled back", {
-      action: "CreateReportingPeriod",
-      error: error.message,
-    });
+    if (!t.finished) await t.rollback();
     throw error;
   }
 }
@@ -138,20 +105,11 @@ async function getReportingPeriodsByClient(clientId, options = {}) {
       transaction: t,
     });
 
-    logger.info("Fetched ESG ReportingPeriods by client", {
-      action: "GetReportingPeriods",
-      clientId,
-      count: Array.isArray(periods) ? periods.length : 0,
-    });
-
     return periods;
   } catch (error) {
-    logger.error("Error fetching ESG ReportingPeriods by client", {
-      action: "GetReportingPeriods",
-      clientId,
-      error: error.message,
-    });
     throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
@@ -168,22 +126,11 @@ async function getIndicatorsByReportingPeriodId(
       transaction: t,
     });
 
-    logger.info("Fetched ESG Indicators by reporting period", {
-      action: "GetIndicatorsByReportingPeriod",
-      clientId,
-      reportingPeriodId,
-      count: Array.isArray(indicators) ? indicators.length : 0,
-    });
-
     return indicators;
   } catch (error) {
-    logger.error("Error fetching ESG Indicators by reporting period", {
-      action: "GetIndicatorsByReportingPeriod",
-      clientId,
-      reportingPeriodId,
-      error: error.message,
-    });
     throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
@@ -200,22 +147,11 @@ async function getMetricsByReportingPeriodId(
       transaction: t,
     });
 
-    logger.info("Fetched ESG Metrics by reporting period", {
-      action: "GetMetricsByReportingPeriod",
-      clientId,
-      reportingPeriodId,
-      count: Array.isArray(metrics) ? metrics.length : 0,
-    });
-
     return metrics;
   } catch (error) {
-    logger.error("Error fetching ESG Metrics by reporting period", {
-      action: "GetMetricsByReportingPeriod",
-      clientId,
-      reportingPeriodId,
-      error: error.message,
-    });
     throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
@@ -230,19 +166,8 @@ async function deleteIndicator(clientId, indicatorId, options = {}) {
     });
 
     await t.commit();
-    logger.info("Soft deleted ESG Indicator", {
-      action: "DeleteESGIndicator",
-      clientId,
-      indicatorId,
-    });
   } catch (error) {
-    await t.rollback();
-    logger.error("Error soft deleting ESG Indicator", {
-      action: "DeleteESGIndicator",
-      clientId,
-      indicatorId,
-      error: error.message,
-    });
+    if (!t.finished) await t.rollback();
     throw error;
   }
 }
@@ -258,19 +183,8 @@ async function deleteMetric(clientId, metricId, options = {}) {
     });
 
     await t.commit();
-    logger.info("Soft deleted ESG Metric", {
-      action: "DeleteESGMetric",
-      clientId,
-      metricId,
-    });
   } catch (error) {
-    await t.rollback();
-    logger.error("Error soft deleting ESG Metric", {
-      action: "DeleteESGMetric",
-      clientId,
-      metricId,
-      error: error.message,
-    });
+    if (!t.finished) await t.rollback();
     throw error;
   }
 }

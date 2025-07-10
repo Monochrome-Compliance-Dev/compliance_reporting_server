@@ -150,7 +150,17 @@ app.use("/api/booking", emailLimiter);
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
+
 app.use(helmet());
+if (process.env.NODE_ENV === "production") {
+  app.use(
+    helmet.hsts({
+      maxAge: 63072000, // 2 years
+      includeSubDomains: true,
+      preload: true,
+    })
+  );
+}
 
 // Log incoming request IPs
 app.use((req, res, next) => {
@@ -162,29 +172,26 @@ app.use((req, res, next) => {
   next();
 });
 
-if (process.env.NODE_ENV === "production") {
-  app.use(
-    helmet.hsts({
-      maxAge: 63072000, // 2 years
-      includeSubDomains: true,
-      preload: true,
-    })
-  );
-}
-
 app.use(setCspHeaders);
 
 // Set up WebSocket server
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws) => {
-  console.log("WebSocket client connected");
+  logger.logEvent("info", "WebSocket client connected", {
+    action: "WebSocketConnect",
+  });
 
   ws.on("message", (message) => {
-    console.log("Received from client:", message);
+    logger.logEvent("info", "Received message from WebSocket client", {
+      action: "WebSocketMessage",
+      message,
+    });
   });
 
   ws.on("close", () => {
-    console.log("WebSocket connection closed");
+    logger.logEvent("info", "WebSocket connection closed", {
+      action: "WebSocketClose",
+    });
   });
 
   ws.send(JSON.stringify({ message: "Connected to WebSocket updates!" }));
@@ -252,14 +259,14 @@ async function verifyAppClientIdGUC() {
     const [[{ current_client_id }]] = await sequelize.query(
       "SELECT current_setting('app.current_client_id', true) AS current_client_id;"
     );
-    console.log(
-      "✅ Verified: app.current_client_id is available with value:",
-      current_client_id
-    );
+    logger.logEvent("info", "Verified Postgres app.current_client_id GUC", {
+      current_client_id,
+    });
   } catch (error) {
-    console.error(
-      "❌ Postgres custom GUC app.current_client_id not found or not accessible:",
-      error.message
+    logger.logEvent(
+      "error",
+      "Postgres custom GUC app.current_client_id not found or not accessible",
+      { error: error.message }
     );
   }
 }
@@ -282,5 +289,15 @@ if ((process.env.NODE_ENV || "development") !== "test") {
     });
   });
 }
+
+process.on("SIGTERM", () => {
+  logger.logEvent("info", "SIGTERM received, shutting down gracefully", {
+    action: "ServerShutdown",
+  });
+  server.close(() => {
+    logger.logEvent("info", "HTTP server closed", { action: "ServerShutdown" });
+    process.exit(0);
+  });
+});
 
 module.exports = app;

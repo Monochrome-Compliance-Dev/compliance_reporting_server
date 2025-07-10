@@ -3,29 +3,35 @@ const { logger } = require("../helpers/logger");
 module.exports = errorHandler;
 
 function errorHandler(err, req, res, next) {
+  let statusCode;
+  switch (true) {
+    case typeof err === "string":
+      const is404 = err.toLowerCase().endsWith("not found");
+      statusCode = is404 ? 404 : 400;
+      break;
+    case err.name === "UnauthorizedError":
+      statusCode = 401;
+      break;
+    default:
+      statusCode = 500;
+  }
+
   logger.logEvent("error", "Unhandled error", {
     action: "UnhandledException",
     path: req.originalUrl,
     method: req.method,
     ip: req.ip,
+    clientId: req.auth?.clientId,
+    userId: req.auth?.id,
+    statusCode,
     error: err.message,
     stack: err.stack,
   });
 
-  switch (true) {
-    case typeof err === "string":
-      // custom application error
-      const is404 = err.toLowerCase().endsWith("not found");
-      const statusCode = is404 ? 404 : 400;
-      return res.status(statusCode).json({ message: err });
-    case err.name === "UnauthorizedError":
-      // jwt authentication error
-      return res.status(401).json({ message: "Unauthorized" });
-    default:
-      const message =
-        process.env.NODE_ENV === "production"
-          ? "An unexpected error occurred. Please try again later."
-          : err.message;
-      return res.status(500).json({ message });
-  }
+  const message =
+    process.env.NODE_ENV === "production"
+      ? "An unexpected error occurred. Please try again later."
+      : err.message;
+
+  return res.status(statusCode).json({ message });
 }

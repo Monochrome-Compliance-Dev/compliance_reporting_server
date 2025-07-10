@@ -6,16 +6,21 @@ async function beginTransactionWithClientContext(clientId) {
     throw new Error("Client ID is required to set RLS context.");
   }
 
-  const safeClientId = clientId.replace(/[^a-zA-Z0-9-_]/g, "");
+  if (!/^[a-zA-Z0-9_-]{10}$/.test(clientId)) {
+    throw new Error(
+      "Invalid clientId format. Must be exactly 10 alphanumeric or -_ characters."
+    );
+  }
+
   const t = await sequelize.transaction();
 
   try {
-    await sequelize.query(
-      `SET LOCAL app.current_client_id = '${safeClientId}'`,
-      { transaction: t }
-    );
+    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
+      transaction: t,
+    });
   } catch (error) {
-    console.warn("SET LOCAL failed — continuing without enforced RLS.");
+    await t.rollback();
+    throw new Error(`SET LOCAL failed, transaction aborted: ${error.message}`);
   }
 
   return t;

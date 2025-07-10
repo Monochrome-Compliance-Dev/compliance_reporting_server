@@ -8,6 +8,7 @@ const { Op } = require("sequelize");
 const { sendEmail } = require("../helpers/send-email");
 const db = require("../db/database");
 const Role = require("../helpers/role");
+const { beginTransactionWithClientContext } = require("../db/database");
 
 module.exports = {
   authenticate,
@@ -28,222 +29,237 @@ module.exports = {
   delete: _delete,
 };
 
-async function authenticate({ email, password, ipAddress }, options = {}) {
-  const user = await db.User.scope("withHash").findOne({
-    where: { email },
-    ...options,
-  });
-  if (
-    !user ||
-    !user.verified ||
-    !(await bcrypt.compare(password, user.passwordHash))
-  ) {
-    logger.logEvent("warn", "Failed login attempt", {
-      action: "Authenticate",
-      email,
-      ip: ipAddress,
-      device: os.hostname(),
+async function authenticate({ email, password, ipAddress, clientId }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await db.User.scope("withHash").findOne({
+      where: { email },
+      transaction: t,
     });
-    throw { status: 401, message: "Email or password is incorrect" };
-  }
+    if (
+      !user ||
+      !user.verified ||
+      !(await bcrypt.compare(password, user.passwordHash))
+    ) {
+      logger.logEvent("warn", "Failed login attempt", {
+        action: "Authenticate",
+        email,
+        ip: ipAddress,
+        device: os.hostname(),
+      });
+      throw { status: 401, message: "Email or password is incorrect" };
+    }
 
-  // authentication successful so generate jwt and refresh tokens
-  const jwtToken = generateJwtToken(user);
-  const refreshToken = generateRefreshToken(user, ipAddress);
+    // authentication successful so generate jwt and refresh tokens
+    const jwtToken = generateJwtToken(user);
+    const refreshToken = generateRefreshToken(user, ipAddress);
 
-  // save refresh token
-  await refreshToken.save(options);
+    // save refresh token
+    await refreshToken.save({ transaction: t });
 
-  // return basic details and tokens
-  logger.logEvent("info", "User authenticated", {
-    action: "Authenticate",
-    userId: user.id,
-    email: user.email,
-    ip: ipAddress,
-    device: os.hostname(),
-  });
-  return {
-    ...basicDetails(user),
-    jwtToken,
-    refreshToken: refreshToken.token,
-  };
-}
-
-async function refreshToken({ token, ipAddress }, options = {}) {
-  const refreshToken = await getRefreshToken(token, options);
-  const user = await refreshToken.getUser(options);
-  const newRefreshToken = generateRefreshToken(user, ipAddress);
-
-  refreshToken.revoked = Date.now();
-  refreshToken.revokedByIp = ipAddress;
-  refreshToken.replacedByToken = newRefreshToken.token;
-  await refreshToken.save(options);
-  await newRefreshToken.save(options);
-
-  // generate new jwt
-  const jwtToken = generateJwtToken(user);
-
-  // return basic details and tokens
-  logger.logEvent("info", "Refresh token rotated", {
-    action: "RotateToken",
-    userId: user.id,
-    email: user.email,
-    ip: ipAddress,
-    device: os.hostname(),
-  });
-  return {
-    ...basicDetails(user),
-    jwtToken,
-    refreshToken: newRefreshToken.token,
-  };
-}
-
-async function revokeToken({ token, ipAddress }, options = {}) {
-  const refreshToken = await getRefreshToken(token, options);
-
-  // revoke token and save
-  refreshToken.revoked = Date.now();
-  refreshToken.revokedByIp = ipAddress;
-  await refreshToken.save(options);
-  logger.logEvent("info", "Refresh token revoked", {
-    action: "RevokeToken",
-    userId: refreshToken.userId,
-    ip: ipAddress,
-    device: os.hostname(),
-  });
-}
-
-async function register(params, origin, options = {}) {
-  // validate
-  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
-    // send already registered error in email to prevent user enumeration
-    await sendAlreadyRegisteredEmail(params.email, origin);
-    logger.logEvent("warn", "Duplicate registration attempt", {
-      action: "Register",
-      email: params.email,
-      device: os.hostname(),
-    });
-    throw {
-      status: 400,
-      message: `Email "${params.email}" is already registered`,
+    // return basic details and tokens
+    await t.rollback();
+    return {
+      ...basicDetails(user),
+      jwtToken,
+      refreshToken: refreshToken.token,
     };
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-
-  // create user object
-  const user = new db.User(params);
-  user.verificationToken = randomTokenString();
-
-  // save user
-  await user.save(options);
-
-  // send email
-  await sendVerificationEmail(user, origin);
-  logger.logEvent("info", "New user registered", {
-    action: "Register",
-    userId: user.id,
-    email: user.email,
-    device: os.hostname(),
-  });
 }
 
-async function registerFirstUser(params, origin, options = {}) {
-  // validate
-  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
-    // send already registered error in email to prevent user enumeration
-    await sendAlreadyRegisteredEmail(params.email, origin);
-    logger.logEvent("warn", "Duplicate first user registration attempt", {
-      action: "RegisterFirstUser",
-      email: params.email,
-      device: os.hostname(),
-    });
-    throw {
-      status: 400,
-      message: `Email "${params.email}" is already registered`,
+async function refreshToken({ token, ipAddress, clientId }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const refreshToken = await getRefreshToken(token, { transaction: t });
+    const user = await refreshToken.getUser({ transaction: t });
+    const newRefreshToken = generateRefreshToken(user, ipAddress);
+
+    refreshToken.revoked = Date.now();
+    refreshToken.revokedByIp = ipAddress;
+    refreshToken.replacedByToken = newRefreshToken.token;
+    await refreshToken.save({ transaction: t });
+    await newRefreshToken.save({ transaction: t });
+
+    // generate new jwt
+    const jwtToken = generateJwtToken(user);
+
+    // return basic details and tokens
+    await t.rollback();
+    return {
+      ...basicDetails(user),
+      jwtToken,
+      refreshToken: newRefreshToken.token,
     };
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-
-  // create user object
-  const user = new db.User(params);
-  user.role = Role.Admin;
-  user.verified = Date.now();
-
-  // hash password
-  user.passwordHash = await hash(params.password);
-
-  // save user
-  await user.save(options);
-
-  // send email
-  await sendFirstUserWelcomeEmail(user, origin);
-  logger.logEvent("info", "First user registered", {
-    action: "RegisterFirstUser",
-    userId: user.id,
-    email: user.email,
-    device: os.hostname(),
-  });
 }
 
-async function verifyToken(token, options = {}) {
-  const user = await db.User.findOne({
-    where: { verificationToken: token },
-    ...options,
-  });
-  if (!user) throw { status: 401, message: "Verification failed" };
-  if (user.verified) {
-    throw { status: 400, message: "Email already verified" };
+async function revokeToken({ token, ipAddress, clientId }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const refreshToken = await getRefreshToken(token, { transaction: t });
+
+    // revoke token and save
+    refreshToken.revoked = Date.now();
+    refreshToken.revokedByIp = ipAddress;
+    await refreshToken.save({ transaction: t });
+    await t.rollback();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-
-  logger.logEvent("info", "Verification token validated", {
-    action: "VerifyToken",
-    userId: user.id,
-    email: user.email,
-    device: os.hostname(),
-  });
-  return;
 }
 
-async function verifyEmail(params, options = {}) {
-  const { token, password } = params;
-  const user = await db.User.findOne({
-    where: { verificationToken: token },
-    ...options,
-  });
+async function register(params, origin) {
+  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    if (
+      await db.User.findOne({ where: { email: params.email }, transaction: t })
+    ) {
+      await sendAlreadyRegisteredEmail(params.email, origin);
+      throw {
+        status: 400,
+        message: `Email "${params.email}" is already registered`,
+      };
+    }
 
-  if (!user) throw { status: 401, message: "Verification failed" };
+    const user = new db.User(params);
+    user.verificationToken = randomTokenString();
 
-  user.verified = Date.now();
-  user.verificationToken = null;
+    await user.save({ transaction: t });
 
-  // hash password
-  user.passwordHash = await hash(password);
-
-  await user.save(options);
-  logger.logEvent("info", "Email verified", {
-    action: "VerifyEmail",
-    userId: user.id,
-    email: user.email,
-  });
-  return basicDetails(user);
+    await sendVerificationEmail(user, origin);
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function forgotPassword({ email }, origin, options = {}) {
-  const user = await db.User.findOne({ where: { email }, ...options });
+async function registerFirstUser(params, origin) {
+  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    if (
+      await db.User.findOne({ where: { email: params.email }, transaction: t })
+    ) {
+      await sendAlreadyRegisteredEmail(params.email, origin);
+      logger.logEvent("warn", "Duplicate first user registration attempt", {
+        action: "RegisterFirstUser",
+        email: params.email,
+        device: os.hostname(),
+      });
+      throw {
+        status: 400,
+        message: `Email "${params.email}" is already registered`,
+      };
+    }
 
-  // always return ok response to prevent email enumeration
-  if (!user) return;
+    const user = new db.User(params);
+    user.role = Role.Admin;
+    user.verified = Date.now();
 
-  // create reset token that expires after 24 hours
-  user.resetToken = randomTokenString();
-  user.resetTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  await user.save(options);
+    user.passwordHash = await hash(params.password);
 
-  // send email
-  await sendPasswordResetEmail(user, origin);
-  logger.logEvent("info", "Password reset token generated", {
-    action: "ForgotPassword",
-    userId: user.id,
-    email: user.email,
-  });
+    await user.save({ transaction: t });
+
+    await sendFirstUserWelcomeEmail(user, origin);
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function verifyToken(token, clientId) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await db.User.findOne({
+      where: { verificationToken: token },
+      transaction: t,
+    });
+    if (!user) throw { status: 401, message: "Verification failed" };
+    if (user.verified) {
+      throw { status: 400, message: "Email already verified" };
+    }
+
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function verifyEmail(params) {
+  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    const { token, password } = params;
+    const user = await db.User.findOne({
+      where: { verificationToken: token },
+      transaction: t,
+    });
+
+    if (!user) throw { status: 401, message: "Verification failed" };
+
+    user.verified = Date.now();
+    user.verificationToken = null;
+
+    user.passwordHash = await hash(password);
+
+    await user.save({ transaction: t });
+    await t.commit();
+    return basicDetails(user);
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function forgotPassword({ email, clientId }, origin) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await db.User.findOne({ where: { email }, transaction: t });
+
+    if (!user) {
+      await t.rollback();
+      return;
+    }
+
+    user.resetToken = randomTokenString();
+    user.resetTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await user.save({ transaction: t });
+
+    await sendPasswordResetEmail(user, origin);
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
 async function validateResetToken({ token }, options = {}) {
@@ -260,100 +276,158 @@ async function validateResetToken({ token }, options = {}) {
   return user;
 }
 
-async function resetPassword({ token, password }, options = {}) {
-  const user = await validateResetToken({ token }, options);
+async function resetPassword({ token, password, clientId }) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await validateResetToken({ token }, { transaction: t });
 
-  // update password and remove reset token
-  user.passwordHash = await hash(password);
-  user.passwordReset = Date.now();
-  user.resetToken = null;
-  await user.save(options);
-  logger.logEvent("info", "Password reset successful", {
-    action: "ResetPassword",
-    userId: user.id,
-    email: user.email,
-  });
-}
-
-async function getAll(options = {}) {
-  const users = await db.User.findAll({ ...options });
-  return users.map((x) => basicDetails(x));
-}
-
-async function getAllByClientId(clientId, options = {}) {
-  const users = await db.User.findAll({
-    where: { clientId },
-    ...options,
-  });
-  return users.map((x) => basicDetails(x));
-}
-
-async function getById(id, options = {}) {
-  const user = await getUser(id, options);
-  return basicDetails(user);
-}
-
-async function create(params, options = {}) {
-  // validate
-  if (await db.User.findOne({ where: { email: params.email }, ...options })) {
-    throw {
-      status: 500,
-      message: 'Email "' + params.email + '" is already registered',
-    };
+    user.passwordHash = await hash(password);
+    user.passwordReset = Date.now();
+    user.resetToken = null;
+    await user.save({ transaction: t });
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-
-  const user = new db.User(params);
-  user.verified = Date.now();
-
-  // hash password
-  user.passwordHash = await hash(params.password);
-
-  // save user
-  await user.save(options);
-
-  return basicDetails(user);
 }
 
-async function update(id, params, options = {}) {
-  const user = await getUser(id, options);
-
-  // validate (if email was changed)
-  if (
-    params.email &&
-    user.email !== params.email &&
-    (await db.User.findOne({ where: { email: params.email }, ...options }))
-  ) {
-    throw {
-      status: 500,
-      message: 'Email "' + params.email + '" is already taken',
-    };
+async function getAll(clientId) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const users = await db.User.findAll({ transaction: t });
+    await t.rollback();
+    return users.map((x) => basicDetails(x));
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-
-  // hash password if it was entered
-  if (params.password) {
-    params.passwordHash = await hash(params.password);
-  }
-
-  // copy params to user and save
-  Object.assign(user, params);
-  user.updated = Date.now();
-  await user.save(options);
-  logger.logEvent("info", "User updated", {
-    action: "UpdateUser",
-    userId: user.id,
-    email: user.email,
-  });
-  return basicDetails(user);
 }
 
-async function _delete(id, options = {}) {
-  const user = await getUser(id, options);
-  await user.destroy(options);
-  logger.logEvent("warn", "User account deleted", {
-    action: "DeleteUser",
-    userId: user.id,
-    email: user.email,
-  });
+async function getAllByClientId(clientId) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const users = await db.User.findAll({
+      where: { clientId },
+      transaction: t,
+    });
+    await t.rollback();
+    return users.map((x) => basicDetails(x));
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getById(id, clientId) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await getUser(id, { transaction: t });
+    await t.rollback();
+    return basicDetails(user);
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function create(params) {
+  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    if (
+      await db.User.findOne({ where: { email: params.email }, transaction: t })
+    ) {
+      throw {
+        status: 500,
+        message: 'Email "' + params.email + '" is already registered',
+      };
+    }
+
+    const user = new db.User(params);
+    user.verified = Date.now();
+
+    user.passwordHash = await hash(params.password);
+
+    await user.save({ transaction: t });
+
+    await t.commit();
+    return basicDetails(user);
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function update(id, params) {
+  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    const user = await getUser(id, { transaction: t });
+
+    if (
+      params.email &&
+      user.email !== params.email &&
+      (await db.User.findOne({
+        where: { email: params.email },
+        transaction: t,
+      }))
+    ) {
+      throw {
+        status: 500,
+        message: 'Email "' + params.email + '" is already taken',
+      };
+    }
+
+    if (params.password) {
+      params.passwordHash = await hash(params.password);
+    }
+
+    Object.assign(user, params);
+    user.updated = Date.now();
+    await user.save({ transaction: t });
+    await t.commit();
+    return basicDetails(user);
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function _delete(id, clientId) {
+  if (!clientId) throw { status: 400, message: "clientId is required" };
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const user = await getUser(id, { transaction: t });
+    await user.destroy({ transaction: t });
+    logger.logEvent("warn", "User account deleted", {
+      action: "DeleteUser",
+      userId: user.id,
+      email: user.email,
+    });
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
 // helper functions
