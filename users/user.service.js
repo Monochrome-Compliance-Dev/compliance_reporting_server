@@ -8,7 +8,9 @@ const { Op } = require("sequelize");
 const { sendEmail } = require("../helpers/send-email");
 const db = require("../db/database");
 const Role = require("../helpers/role");
-const { beginTransactionWithClientContext } = require("../db/database");
+const {
+  beginTransactionWithClientContext,
+} = require("../helpers/setClientIdRLS");
 
 module.exports = {
   authenticate,
@@ -58,7 +60,7 @@ async function authenticate({ email, password, ipAddress, clientId }) {
     await refreshToken.save({ transaction: t });
 
     // return basic details and tokens
-    await t.rollback();
+    await t.commit();
     return {
       ...basicDetails(user),
       jwtToken,
@@ -72,8 +74,8 @@ async function authenticate({ email, password, ipAddress, clientId }) {
   }
 }
 
-async function refreshToken({ token, ipAddress, clientId }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function refreshToken({ token, ipAddress }) {
+  const t = await db.sequelize.transaction();
   try {
     const refreshToken = await getRefreshToken(token, { transaction: t });
     const user = await refreshToken.getUser({ transaction: t });
@@ -89,22 +91,22 @@ async function refreshToken({ token, ipAddress, clientId }) {
     const jwtToken = generateJwtToken(user);
 
     // return basic details and tokens
-    await t.rollback();
+    await t.commit();
     return {
       ...basicDetails(user),
       jwtToken,
       refreshToken: newRefreshToken.token,
     };
   } catch (err) {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
     throw err;
   } finally {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
   }
 }
 
-async function revokeToken({ token, ipAddress, clientId }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function revokeToken({ token, ipAddress }) {
+  const t = await db.sequelize.transaction();
   try {
     const refreshToken = await getRefreshToken(token, { transaction: t });
 
@@ -112,18 +114,18 @@ async function revokeToken({ token, ipAddress, clientId }) {
     refreshToken.revoked = Date.now();
     refreshToken.revokedByIp = ipAddress;
     await refreshToken.save({ transaction: t });
-    await t.rollback();
+    await t.commit();
   } catch (err) {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
     throw err;
   } finally {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
   }
 }
 
 async function register(params, origin) {
   if (!params.clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await db.sequelize.transaction();
   try {
     if (
       await db.User.findOne({ where: { email: params.email }, transaction: t })
@@ -143,10 +145,10 @@ async function register(params, origin) {
     await sendVerificationEmail(user, origin);
     await t.commit();
   } catch (err) {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
     throw err;
   } finally {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
   }
 }
 

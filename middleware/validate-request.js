@@ -1,7 +1,8 @@
 const { logger } = require("../helpers/logger");
 module.exports = function validateRequest(schema) {
   return function (req, res, next) {
-    if (!req?.auth?.clientId) {
+    const clientId = req.auth?.clientId || req.body?.clientId;
+    if (!clientId) {
       logger.logEvent("error", "Client ID missing in auth context", {
         action: "ValidateRequest",
         path: req.originalUrl,
@@ -23,7 +24,6 @@ module.exports = function validateRequest(schema) {
     const errors = [];
 
     records.forEach((record, index) => {
-      const clientId = req.auth.clientId;
       const fullRecord = { ...record, clientId };
       const { error, value } = schema.validate(fullRecord, options);
       if (error) {
@@ -43,7 +43,7 @@ module.exports = function validateRequest(schema) {
       logger.logEvent("warn", "Validation failed", {
         action: "ValidateRequest",
         path: req.originalUrl,
-        clientId: req.auth.clientId,
+        clientId,
         errors,
       });
       return res

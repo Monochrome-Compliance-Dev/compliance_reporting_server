@@ -68,7 +68,7 @@ router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 module.exports = router;
 
 function authenticate(req, res, next) {
-  const { email, password } = req.body;
+  const { email, password, clientId } = req.body;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   userService
@@ -76,7 +76,7 @@ function authenticate(req, res, next) {
       email,
       password,
       ipAddress: ip,
-      clientId: req.auth.clientId,
+      clientId: clientId,
     })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
@@ -103,7 +103,6 @@ function refreshToken(req, res, next) {
     .refreshToken({
       token,
       ipAddress: ip,
-      clientId: req.auth.clientId,
     })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
@@ -154,7 +153,6 @@ function revokeToken(req, res, next) {
     .revokeToken({
       token,
       ipAddress: ip,
-      clientId: req.auth.clientId,
     })
     .then(() => {
       res.clearCookie("refreshToken", {

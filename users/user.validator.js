@@ -1,8 +1,10 @@
+const { cli } = require("winston/lib/winston/config");
 const Joi = require("../middleware/joiSanitizer");
 
 const authSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
+  clientId: Joi.string().required(),
 });
 
 const registerSchema = Joi.object({

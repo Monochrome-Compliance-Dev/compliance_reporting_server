@@ -7,9 +7,9 @@ const { logger } = require("../helpers/logger");
 const { clientSchema, clientUpdateSchema } = require("./client.validator");
 
 // routes
-router.get("/", authorise(), getAll);
+router.get("/", getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", validateRequest(clientSchema), create);
+router.post("/", authorise(), validateRequest(clientSchema), create);
 router.put(
   "/:id",
   authorise(["Admin", "Boss"]),
@@ -23,7 +23,8 @@ module.exports = router;
 function getAll(req, res, next) {
   logger.logEvent("info", "Retrieved all clients", {
     action: "GetAllClients",
-    userId: req?.user?.id || "unknown",
+    ip: req.ip,
+    device: req.headers["user-agent"],
   });
   clientService
     .getAll()
@@ -34,8 +35,10 @@ function getAll(req, res, next) {
 function getById(req, res, next) {
   logger.logEvent("info", "Retrieved client by ID", {
     action: "GetClient",
-    clientId: req.params.id,
-    userId: req?.user?.id || "unknown",
+    clientId: req.auth?.clientId,
+    userId: req.auth?.id,
+    ip: req.ip,
+    device: req.headers["user-agent"],
   });
   clientService
     .getById(req.params.id)
@@ -46,9 +49,10 @@ function getById(req, res, next) {
 function create(req, res, next) {
   logger.logEvent("info", "Creating client", {
     action: "CreateClient",
-    userId: req?.user?.id || "anonymous",
+    clientId: req.auth?.clientId,
+    userId: req.auth?.id,
     ip: req.ip,
-    userAgent: req.headers["user-agent"],
+    device: req.headers["user-agent"],
     payload: req.body,
   });
   clientService
@@ -72,8 +76,10 @@ function create(req, res, next) {
 function update(req, res, next) {
   logger.logEvent("info", "Updating client", {
     action: "UpdateClient",
-    clientId: req.params.id,
-    userId: req?.user?.id || "unknown",
+    clientId: req.auth?.clientId,
+    userId: req.auth?.id,
+    ip: req.ip,
+    device: req.headers["user-agent"],
     payload: req.body,
   });
   clientService
@@ -92,8 +98,10 @@ function update(req, res, next) {
 function _delete(req, res, next) {
   logger.logEvent("info", "Deleting client", {
     action: "DeleteClient",
-    clientId: req.params.id,
-    userId: req?.user?.id || "unknown",
+    clientId: req.auth?.clientId,
+    userId: req.auth?.id,
+    ip: req.ip,
+    device: req.headers["user-agent"],
   });
   clientService
     .delete(req.params.id)

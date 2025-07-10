@@ -1,5 +1,4 @@
 const db = require("../db/database");
-const { logger } = require("../helpers/logger");
 const reportService = require("../reports/report.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
 const { sequelize } = require("../db/database");
@@ -33,7 +32,6 @@ module.exports = {
   getErrorsByReportId,
 };
 
-// Accept optional options param, default to empty object, and pass to sequelize queries for RLS/transactions
 async function getAll(options = {}) {
   return await db.Tcp.findAll(options);
 }
@@ -45,36 +43,14 @@ async function getAllByReportId(reportId, clientId) {
 
 async function getTcpByReportId(reportId, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
-
-  try {
-    const rows = await db.Tcp.findAll({
-      where: { reportId },
-      transaction: t,
-    });
-
-    logger.logEvent("info", "Fetched TCP records for report", {
-      action: "GetTCPByReportId",
-      reportId,
-      count: rows?.length ?? 0,
-    });
-
-    return rows;
-  } catch (error) {
-    logger.logEvent("error", "Failed to fetch TCP records", {
-      action: "GetTCPByReportId",
-      reportId,
-      error: error.message,
-    });
-    throw error;
-  }
+  return await db.Tcp.findAll({
+    where: { reportId },
+    transaction: t,
+  });
 }
 
 async function partialUpdate(id, updates, options = {}) {
   await db.Tcp.update(updates, { where: { id }, ...options });
-  logger.logEvent("info", "TCP record partially updated", {
-    action: "PartialUpdateTCP",
-    tcpId: id,
-  });
   return db.Tcp.findOne({ where: { id }, ...options });
 }
 
@@ -98,38 +74,24 @@ async function getById(id, clientId) {
 
 async function create(params, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
-  const result = await db.Tcp.create(params, { transaction: t });
-  logger.logEvent("info", "TCP record created", {
-    action: "CreateTCP",
-  });
-  return result;
+  return await db.Tcp.create(params, { transaction: t });
 }
 
 async function update(id, params, options = {}) {
   await db.Tcp.update(params, { where: { id }, ...options });
-  logger.logEvent("info", "TCP record updated", {
-    action: "UpdateTCP",
-    tcpId: id,
-  });
   return db.Tcp.findOne({ where: { id }, ...options });
 }
 
 async function _delete(id, options = {}) {
-  logger.logEvent("warn", "TCP record deleted", {
-    action: "DeleteTCP",
-    tcpId: id,
-  });
   await db.Tcp.destroy({ where: { id }, ...options });
 }
 
-// helper functions
 async function getTcp(id, options = {}) {
   const record = await db.Tcp.findOne({ where: { id }, ...options });
   if (!record) throw { status: 404, message: "Tcp not found" };
   return record;
 }
 
-// Check if there are any TCP records missing isSb flag (SBI completeness check)
 async function hasMissingIsSbFlag(options = {}) {
   const count = await db.Tcp.count({
     where: {
@@ -142,9 +104,7 @@ async function hasMissingIsSbFlag(options = {}) {
   return count > 0;
 }
 
-// Finalise report: delegate to reportService
 async function finaliseReport(options = {}) {
-  // If reportService.finaliseSubmission needs transaction, pass options
   return await reportService.finaliseSubmission(options);
 }
 
@@ -182,27 +142,11 @@ async function generateSummaryCsv(options = {}) {
 
 async function patchRecord(id, update, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
-  try {
-    logger.logEvent("info", "TCP PATCH update requested", {
-      action: "patchRecordTCP",
-    });
-    await db.Tcp.update(update, { where: { id }, transaction: t });
-    logger.logEvent("info", "Bulk PATCH update completed", {
-      action: "patchRecordTCP",
-    });
-    return db.Tcp.findOne({ where: { id }, transaction: t });
-  } catch (error) {
-    logger.logEvent("error", "Bulk PATCH update failed", {
-      action: "patchRecordTCP",
-      error: error.message,
-    });
-    throw error;
-  }
+  await db.Tcp.update(update, { where: { id }, transaction: t });
+  return db.Tcp.findOne({ where: { id }, transaction: t });
 }
 
 async function getCurrentFieldValue(tcpId, field_name, options = {}) {
-  // Note: field_name is not parameterized for column names, so validate/sanitize if used from user input!
-  // Only allow access to certain fields, or ensure field_name is safe!
   const allowedFields = [
     "payeeEntityName",
     "payeeEntityAbn",
@@ -213,7 +157,6 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
     "paymentTime",
     "isTcp",
     "excludedTcp",
-    // Add more allowed fields as needed
   ];
   if (!allowedFields.includes(field_name)) {
     throw new Error("Invalid field_name requested");
@@ -224,15 +167,9 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
     raw: true,
     ...options,
   });
-  if (!row) return null;
-  return row[field_name] !== undefined ? row[field_name] : null;
+  return row ? row[field_name] : null;
 }
 
-/**
- * Save transformed TCP data in bulk.
- * @param {Array} transformedRecords - The records to save.
- * @param {Object} options - Additional Sequelize options (e.g., transaction, RLS).
- */
 async function saveTransformedDataToTcp(
   transformedRecords,
   reportId,
@@ -245,23 +182,12 @@ async function saveTransformedDataToTcp(
     throw new Error("Expected an array of transformed TCP records");
   }
 
-  logger.logEvent("info", "Starting bulk save of transformed TCP records", {
-    action: "BulkSaveTCP",
-    recordCount: transformedRecords.length,
-  });
-
-  // Normalise numeric fields
   transformedRecords.forEach((record) => {
-    console.log("Processing record:", record);
     if (typeof record.paymentAmount === "string") {
       record.paymentAmount = parseFloat(
         record.paymentAmount.replace(/[^0-9.-]+/g, "")
       );
     }
-  });
-
-  // Normalise date fields
-  transformedRecords.forEach((record) => {
     if (
       record.invoiceIssueDate &&
       typeof record.invoiceIssueDate === "string"
@@ -271,15 +197,9 @@ async function saveTransformedDataToTcp(
     if (record.invoiceDueDate && typeof record.invoiceDueDate === "string") {
       record.invoiceDueDate = new Date(record.invoiceDueDate);
     }
-    // if (!record.description) {
-    //   record.description = "No description provided";
-    // }
   });
 
-  // Validate each record using tcpBulkImportSchema
-  // Add reportId, clientId, createdBy to each record
   for (let i = 0; i < transformedRecords.length; i++) {
-    // console.log(`Validating record at index ${i}:`, transformedRecords[i]);
     transformedRecords[i].createdBy = createdBy;
     transformedRecords[i].reportId = reportId;
     transformedRecords[i].clientId = clientId;
@@ -289,42 +209,20 @@ async function saveTransformedDataToTcp(
       throw new Error(
         `Validation failed for record at index ${i}: ${error.message}`
       );
-      // transformedRecords[i].hasError = true; // Mark as error record
-      // transformedRecords[i].errorReason = error.message; // Store error reason
-      // logger.logEvent("error", "TCP record validation error", {
-      //   action: "BulkSaveTCP",
-      //   index: i,
-      //   error: error.message,
-      // });
     }
   }
 
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const { validate = true } = options || {};
-
     await db.Tcp.bulkCreate(transformedRecords, {
       validate,
       transaction: t,
     });
-
     const insertedRecords = await db.Tcp.findAll({
       where: { reportId },
       transaction: t,
     });
-
-    logger.logEvent("info", "✅ Successfully created transformed TCP records", {
-      action: "BulkSaveTCP",
-      savedCount: transformedRecords.length,
-    });
-
-    if (global.sendWebSocketUpdate) {
-      global.sendWebSocketUpdate({
-        message: "Transformed TCP records saved successfully",
-        type: "status",
-      });
-    }
-
     await t.commit();
     return insertedRecords;
   } catch (err) {
@@ -333,15 +231,6 @@ async function saveTransformedDataToTcp(
   }
 }
 
-/**
- * Save TCP error records in bulk.
- * @param {Array} errorRecords - The records with validation errors to save.
- * @param {String} reportId - The report ID for the batch.
- * @param {String} clientId - The client ID for RLS.
- * @param {String} createdBy - The ID of the user who initiated the upload.
- * @param {String} source - The origin of the data (e.g., 'csv_upload').
- * @param {Object} options - Additional Sequelize options (e.g., transaction).
- */
 async function saveErrorsToTcpError(
   errorRecords,
   reportId,
@@ -354,12 +243,6 @@ async function saveErrorsToTcpError(
     throw new Error("Expected an array of TCP error records");
   }
 
-  logger.logEvent("info", "Saving TCP error records", {
-    action: "BulkSaveTcpError",
-    errorCount: errorRecords.length,
-  });
-
-  // Set metadata fields on each error record
   for (let i = 0; i < errorRecords.length; i++) {
     errorRecords[i].createdBy = createdBy;
     errorRecords[i].reportId = reportId;
@@ -372,18 +255,11 @@ async function saveErrorsToTcpError(
       transaction,
     });
 
-    console.log("db.TcpError: ", db.TcpError);
-
     const { validate = true } = options || {};
     await db.TcpError.bulkCreate(errorRecords, {
       validate,
       transaction,
     });
-  });
-
-  logger.logEvent("info", "✅ Successfully saved TCP error records", {
-    action: "BulkSaveTcpError",
-    savedCount: errorRecords.length,
   });
 
   return true;

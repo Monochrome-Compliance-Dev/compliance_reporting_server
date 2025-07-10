@@ -71,13 +71,22 @@ async function patchRecord(req, res, next) {
     // Patch the record
     const updated = await tcpService.patchRecord(id, updates, clientId);
 
+    logger.logEvent("info", "TCP record updated successfully", {
+      action: "PatchRecordTCP",
+      tcpId: id,
+      clientId,
+      userId,
+    });
     res.json({
       success: true,
       message: "Record updated successfully",
       data: updated,
     });
   } catch (error) {
-    console.error("Error patching record:", error);
+    logger.logEvent("error", "Error patching record", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
@@ -91,51 +100,51 @@ function getTcpByReportId(req, res, next) {
 
 function sbiUpdate(req, res, next) {
   try {
-    // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
-
     const promises = records.flatMap((item) => {
-      // Check if item is an array and process each object individually
       const itemsToProcess = Array.isArray(item) ? item : [item];
-
       return itemsToProcess.map(async (record) => {
         try {
-          // Validate each record using sbiSchema
           const reqForValidation = { body: record };
           await validateSbiRecord(reqForValidation);
-
-          // Save each record using tcpService
           return await tcpService.sbiUpdate(req.params.id, record, {
             transaction: req.dbTransaction,
           });
         } catch (error) {
-          console.error("Error processing record:", error);
-          throw error; // Propagate the error to Promise.all
+          logger.logEvent("error", "Error processing SBI record", {
+            error: error.message,
+            stack: error.stack,
+          });
+          throw error;
         }
       });
     });
-
-    // Wait for all records to be saved
     Promise.all(promises)
       .then((results) => {
-        res.json({
-          success: true,
-          message: "All records saved successfully",
-          results,
-        });
         logger.auditEvent("SBI result uploaded", {
           action: "SBIUpload",
           userId: req.auth.id,
           clientId: req.auth.clientId,
         });
+        res.json({
+          success: true,
+          message: "All records saved successfully",
+          results,
+        });
       })
       .catch((error) => {
-        console.error("Error saving records:", error);
-        next(error); // Pass the error to the global error handler
+        logger.logEvent("error", "Error saving SBI records", {
+          error: error.message,
+          stack: error.stack,
+        });
+        next(error);
       });
   } catch (error) {
-    console.error("Error processing bulk records:", error);
-    next(error); // Pass the error to the global error handler
+    logger.logEvent("error", "Error processing bulk SBI records", {
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
   }
 }
 
@@ -149,50 +158,52 @@ async function validateSbiRecord(req) {
 
 function partialUpdate(req, res, next) {
   try {
-    // Ensure req.body is an object and iterate through its keys
     const records = Object.values(req.body);
-    console.log("Records to update:", records);
-
     const promises = records.flatMap((item) => {
-      // Check if item is an array and process each object individually
       const itemsToProcess = Array.isArray(item) ? item : [item];
-
       return itemsToProcess.map(async (record) => {
         try {
-          // Exclude id and createdAt fields from the record
           const { id, createdAt, ...recordToUpdate } = record;
-
-          // Validate each record using bulkUpdateSchema
           const reqForValidation = { body: recordToUpdate };
-          await partialUpdateSchema(reqForValidation); // Validate the record
-
-          // Save each record using tcpService
+          await partialUpdateSchema(reqForValidation);
           return await tcpService.update(record.id, recordToUpdate, {
             transaction: req.dbTransaction,
           });
         } catch (error) {
-          console.error("Error processing record:", error);
-          throw error; // Propagate the error to Promise.all
+          logger.logEvent("error", "Error processing partial update record", {
+            error: error.message,
+            stack: error.stack,
+          });
+          throw error;
         }
       });
     });
-
-    // Wait for all records to be saved
     Promise.all(promises)
-      .then((results) =>
+      .then((results) => {
+        logger.logEvent("info", "Partial update for TCP records successful", {
+          action: "PartialUpdateTCP",
+          clientId: req.auth.clientId,
+          count: results.length,
+        });
         res.json({
           success: true,
           message: "All records updated successfully",
           results,
-        })
-      )
+        });
+      })
       .catch((error) => {
-        console.error("Error updating records:", error);
-        next(error); // Pass the error to the global error handler
+        logger.logEvent("error", "Error updating records in partialUpdate", {
+          error: error.message,
+          stack: error.stack,
+        });
+        next(error);
       });
   } catch (error) {
-    console.error("Error processing bulk records:", error);
-    next(error); // Pass the error to the global error handler
+    logger.logEvent("error", "Error processing bulk records in partialUpdate", {
+      error: error.message,
+      stack: error.stack,
+    });
+    next(error);
   }
 }
 
@@ -231,11 +242,12 @@ async function bulkCreate(req, res, next) {
         const created = await tcpService.create(record, clientId);
         results.push(created);
       } catch (error) {
-        console.error("Error processing record:", error);
-        return res.status(400).json({
-          success: false,
-          message: "Error saving some records.",
+        logger.logEvent("error", "Error processing record in bulkCreate", {
           error: error.message,
+          stack: error.stack,
+        });
+        return res.status(400).json({
+          message: "Error saving some records.",
         });
       }
     }
@@ -246,7 +258,6 @@ async function bulkCreate(req, res, next) {
       count: results.length,
     });
 
-    // await transaction.commit();
     res.json({
       success: true,
       message: "All records saved successfully",
@@ -254,7 +265,10 @@ async function bulkCreate(req, res, next) {
     });
   } catch (error) {
     await transaction.rollback();
-    console.error("Error processing bulk records:", error);
+    logger.logEvent("error", "Error processing bulk records in bulkCreate", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
@@ -277,7 +291,10 @@ async function bulkUpdate(req, res, next) {
           const updated = await tcpService.update(id, recordToUpdate, clientId);
           results.push(updated);
         } catch (error) {
-          console.error("Error processing record:", error);
+          logger.logEvent("error", "Error processing record in bulkUpdate", {
+            error: error.message,
+            stack: error.stack,
+          });
           throw error;
         }
       }
@@ -297,7 +314,10 @@ async function bulkUpdate(req, res, next) {
     });
   } catch (error) {
     await transaction.rollback();
-    console.error("Error processing bulk records:", error);
+    logger.logEvent("error", "Error processing bulk records in bulkUpdate", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
@@ -321,11 +341,15 @@ async function _delete(req, res, next) {
 
     await transaction.commit();
     res.json({
+      success: true,
       message: "Tcp deleted successfully",
     });
   } catch (error) {
     await transaction.rollback();
-    console.error("Error deleting tcp:", error);
+    logger.logEvent("error", "Error deleting tcp", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
@@ -372,9 +396,6 @@ function downloadSummaryReport(req, res, next) {
 
 // Bulk bulk patch route handler
 async function bulkPatchUpdate(req, res, next) {
-  logger.logEvent("info", "Incoming bulk patch request", {
-    clientId: req.auth.clientId,
-  }); // log start of request
   try {
     if (!Array.isArray(req.body)) {
       logger.logEvent("warn", "Invalid request body for bulk patch", {
@@ -386,7 +407,6 @@ async function bulkPatchUpdate(req, res, next) {
     }
 
     const clientId = req.auth.clientId;
-    console.log("Client ID for bulk patch:", clientId);
     const userId = req.auth.id;
 
     const updatePromises = req.body.map(async (record) => {
@@ -400,7 +420,6 @@ async function bulkPatchUpdate(req, res, next) {
         );
       }
       const { step, ...filteredUpdates } = updates;
-      // const oldRecord = await tcpService.getById(id, req.auth?.clientId);
       const updated = await tcpService.patchRecord(
         id,
         filteredUpdates,
@@ -415,7 +434,6 @@ async function bulkPatchUpdate(req, res, next) {
       action: "BulkPatchUpdateTCP",
       clientId: clientId,
       count: results.length,
-      // updatedIds: results.map((r) => r.id),
     });
 
     res.json({
@@ -427,8 +445,8 @@ async function bulkPatchUpdate(req, res, next) {
     logger.logEvent("error", "Error in bulk patch update", {
       clientId: req.auth.clientId,
       error: error.message,
+      stack: error.stack,
     });
-    console.error("Error bulk patch updating records:", error);
     next(error);
   }
 }
@@ -440,9 +458,7 @@ if (!fs.existsSync(tmpUploadPath)) {
 }
 
 async function uploadFile(req, res) {
-  // console.log("req.file in uploadFile:", req.file);
   try {
-    // console.log("[DEBUG] File received by route:", req.file);
     if (!req.file || !req.file.path) {
       logger.logEvent("warn", "Missing file or file path in request", {
         action: "PtrsDataUpload",
@@ -468,7 +484,6 @@ async function uploadFile(req, res) {
     fs.createReadStream(destPath)
       .pipe(csv())
       .on("data", (row) => {
-        // Filter only allowed fields at the start
         const allowedFields = [
           "payerEntityName",
           "payerEntityAbn",
@@ -497,7 +512,6 @@ async function uploadFile(req, res) {
           Object.entries(row).filter(([key]) => allowedFields.includes(key))
         );
 
-        // Convert 'NULL' strings and empty strings to actual null
         for (const key in row) {
           if (
             (typeof row[key] === "string" &&
@@ -509,17 +523,14 @@ async function uploadFile(req, res) {
             row[key] = null;
           }
         }
-        // Force string fields to remain strings and strip ".0" float artifacts
         const forceStringFields = ["payerEntityAcnArbn", "payeeEntityAcnArbn"];
         for (const key of forceStringFields) {
           if (row[key]) {
             row[key] = String(row[key]).trim().replace(/\.0$/, "");
           }
         }
-        // Robust, case-insensitive conversion for isReconciled
         if (row.hasOwnProperty("isReconciled")) {
           const val = String(row["isReconciled"]).trim().toLowerCase();
-          // console.log("Processing isReconciled value:", row["isReconciled"]);
           if (["1", "true", "t"].includes(val)) {
             row["isReconciled"] = true;
           } else if (["0", "false", "f"].includes(val)) {
@@ -529,8 +540,6 @@ async function uploadFile(req, res) {
           }
         }
 
-        // Set default values for each processed row
-        // console.log("Processing req.body.reportId:", req.body.reportId);
         const now = new Date();
         row.createdBy = req.auth.id;
         row.updatedBy = req.auth.id;
@@ -575,7 +584,6 @@ async function uploadFile(req, res) {
       })
       .on("end", async () => {
         try {
-          // Insert valid rows using saveTransformedDataToTcp
           const source = "csv_upload";
           const insertResults = await tcpService.saveTransformedDataToTcp(
             results,
@@ -588,7 +596,6 @@ async function uploadFile(req, res) {
             }
           );
 
-          // Save invalid rows to tcp_error table
           if (invalidRows.length > 0) {
             await tcpService.saveErrorsToTcpError(
               invalidRows,
@@ -602,7 +609,6 @@ async function uploadFile(req, res) {
             );
           }
 
-          // Insert metadata into tbl_report_upload (reportUploadService)
           try {
             await reportService.saveUploadMetadata(
               {
@@ -621,41 +627,53 @@ async function uploadFile(req, res) {
             logger.logEvent("error", "Failed to log file upload metadata", {
               action: "uploadFile-metadata",
               error: err.message,
+              stack: err.stack,
             });
-            // Do not block overall process if metadata save fails
           }
 
+          logger.logEvent("info", "File uploaded and processed successfully", {
+            action: "uploadFile",
+            clientId: req.auth.clientId,
+            userId: req.auth.id,
+            reportId: req.body.reportId,
+            validRows: results.length,
+            invalidRows: invalidRows.length,
+          });
           res.status(200).json({
+            success: true,
             message:
               "File uploaded, parsed, and records inserted successfully.",
             totalRows: results.length + invalidRows.length,
             validRows: results.length,
             invalidRows: invalidRows.length,
             inserted: insertResults,
-            errors: invalidRows, // Include full invalid rows with reasons
-            validRecordsPreview: results.slice(0, 20), // Preview for UI
+            errors: invalidRows,
+            validRecordsPreview: results.slice(0, 20),
           });
         } catch (insertErr) {
           logger.logEvent("error", "Bulk insert failed", {
             action: "uploadFile-insert",
             error: insertErr.message,
+            stack: insertErr.stack,
           });
-          res.status(500).json({ error: "Failed to insert valid records." });
+          res.status(500).json({ message: "Failed to insert valid records." });
         }
       })
       .on("error", (err) => {
         logger.logEvent("error", "CSV parsing failed", {
           action: "uploadFile-parse",
           error: err.message,
+          stack: err.stack,
         });
-        res.status(500).json({ error: "Failed to parse CSV file." });
+        res.status(500).json({ message: "Failed to parse CSV file." });
       });
   } catch (err) {
     logger.logEvent("error", "Error uploading file", {
       action: "uploadFile",
       error: err.message,
+      stack: err.stack,
     });
-    return res.status(500).json({ error: "Failed to upload file." });
+    return res.status(500).json({ message: "Failed to upload file." });
   }
 }
 
@@ -670,9 +688,16 @@ async function getErrorsByReportId(req, res, next) {
         .status(404)
         .json({ message: "No errors found for this report." });
     }
-    res.json(errors);
+    res.json({
+      success: true,
+      message: "Errors retrieved successfully",
+      data: errors,
+    });
   } catch (error) {
-    console.error("Error fetching errors by report ID:", error);
+    logger.logEvent("error", "Error fetching errors by report ID", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
@@ -682,15 +707,18 @@ async function recalculateMetrics(req, res, next) {
   try {
     const reportId = req.params.id;
     const clientId = req.auth.clientId;
-    console.log(
-      "Recalculating TCP metrics for reportId:",
-      reportId,
-      "and clientId:",
-      clientId
-    );
     await processTcpMetrics(reportId, clientId);
+    logger.logEvent("info", "TCP metrics recalculated", {
+      action: "RecalculateMetrics",
+      reportId,
+      clientId,
+    });
     res.json({ success: true, message: "TCP metrics recalculated." });
   } catch (error) {
+    logger.logEvent("error", "Error recalculating TCP metrics", {
+      error: error.message,
+      stack: error.stack,
+    });
     next(error);
   }
 }
