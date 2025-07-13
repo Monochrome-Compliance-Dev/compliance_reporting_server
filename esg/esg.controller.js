@@ -29,10 +29,13 @@ router.get(
   getIndicatorsByReportingPeriodId
 );
 router.get(
-  "/metrics/:reportingPeriodId",
+  "/metrics/by-reporting-period/:reportingPeriodId",
   authorise(),
   getMetricsByReportingPeriodId
 );
+
+// Get a single metric by ID
+router.get("/metrics/:metricId", authorise(), getMetricById);
 router.delete("/indicators/:indicatorId", authorise(), deleteIndicator);
 router.delete("/metrics/:metricId", authorise(), deleteMetric);
 
@@ -457,6 +460,33 @@ async function getReportingPeriodById(req, res, next) {
     });
 
     res.json(period.get ? period.get({ plain: true }) : period);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMetricById(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const metricId = req.params.metricId;
+
+    const metric = await esgService.getMetricById(clientId, metricId);
+    if (!metric) return res.status(404).json({ error: "Not found" });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetMetric",
+      entity: "ESGMetric",
+      entityId: metricId,
+    });
+
+    res.json(metric.get ? metric.get({ plain: true }) : metric);
   } catch (err) {
     next(err);
   }

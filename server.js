@@ -10,6 +10,17 @@ if (process.env.NODE_ENV === "development") {
   dotenv.config({ path: ".env.development" });
 }
 
+const { logger } = require("./helpers/logger");
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
+  "https://monochrome-compliance.com",
+  "https://www.monochrome-compliance.com",
+  "http://localhost:3000",
+  "https://sit.monochrome-compliance.com",
+  "https://www.sit.monochrome-compliance.com",
+];
+console.log("🧾 Final allowed origins:", allowedOrigins);
+
 console.log("Running in environment:", process.env.NODE_ENV);
 
 if (!process.env.JWT_SECRET) {
@@ -37,7 +48,6 @@ process.on("unhandledRejection", (reason) => {
   });
 });
 const express = require("express");
-const { WebSocketServer } = require("ws");
 const http = require("http");
 const app = express();
 
@@ -45,16 +55,52 @@ app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]); // Trust local
 
 const server = http.createServer(app);
 
-// Make sendWebSocketUpdate globally available
-global.sendWebSocketUpdate = function (update) {
-  // console.log("Sending WebSocket update:", update);
-  wss.clients.forEach((client) => {
-    // console.log("Checking client readyState:", client.readyState);
-    if (client.readyState === 1) {
-      client.send(JSON.stringify(update));
-    }
+// --- Socket.io setup for robust event-based updates ---
+const { Server } = require("socket.io");
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+  },
+});
+
+io.on("connection", (socket) => {
+  console.log("✅ [SOCKET] Client connected:", socket.id);
+  logger.logEvent("info", "Socket.io client connected", {
+    action: "SocketConnect",
+    socketId: socket.id,
   });
-};
+
+  // Emit a standard structured socket message on connect
+  socket.emit("message", {
+    type: "file",
+    stage: "connected",
+    payload: { message: "Welcome to Monochrome Compliance socket updates!" },
+  });
+
+  socket.on("disconnect", () => {
+    console.log("⚠️ [SOCKET] Client disconnected:", socket.id);
+    logger.logEvent("info", "Socket.io client disconnected", {
+      action: "SocketDisconnect",
+      socketId: socket.id,
+    });
+  });
+});
+
+// Also add a low-level debug for engine upgrade
+io.engine.on("upgrade", (req) => {
+  console.log(
+    "🔥 [SOCKET] Upgrading transport to websocket for origin:",
+    req.headers.origin
+  );
+});
+
+io.engine.on("connection", (rawSocket) => {
+  console.log("🟢 [ENGINE] Engine.IO raw connection established", rawSocket.id);
+});
+
+// Make io accessible from controllers
+app.set("socketio", io);
 
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
@@ -63,20 +109,10 @@ const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
 const setCspHeaders = require("./cspHeaders");
 const rateLimit = require("express-rate-limit");
-const { logger } = require("./helpers/logger");
 
 // Middleware to set clientId for RLS
 // const setClientIdRLS = require("./helpers/setClientIdRLS");
 // const transactionCleanup = require("./middleware/transactionCleanup");
-
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
-  "https://monochrome-compliance.com",
-  "https://www.monochrome-compliance.com",
-  "http://localhost:3000",
-  "https://sit.monochrome-compliance.com",
-  "https://www.sit.monochrome-compliance.com",
-];
-console.log("🧾 Final allowed origins:", allowedOrigins);
 
 // Apply CORS middleware globally with custom origin logic
 app.use(
@@ -163,39 +199,16 @@ if (process.env.NODE_ENV === "production") {
 }
 
 // Log incoming request IPs
-app.use((req, res, next) => {
-  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-  logger.logEvent("info", "Incoming request", {
-    action: "RequestIPLog",
-    ip,
-  });
-  next();
-});
+// app.use((req, res, next) => {
+//   const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+//   logger.logEvent("info", "Incoming request", {
+//     action: "RequestIPLog",
+//     ip,
+//   });
+//   next();
+// });
 
 app.use(setCspHeaders);
-
-// Set up WebSocket server
-const wss = new WebSocketServer({ server });
-wss.on("connection", (ws) => {
-  logger.logEvent("info", "WebSocket client connected", {
-    action: "WebSocketConnect",
-  });
-
-  ws.on("message", (message) => {
-    logger.logEvent("info", "Received message from WebSocket client", {
-      action: "WebSocketMessage",
-      message,
-    });
-  });
-
-  ws.on("close", () => {
-    logger.logEvent("info", "WebSocket connection closed", {
-      action: "WebSocketClose",
-    });
-  });
-
-  ws.send(JSON.stringify({ message: "Connected to WebSocket updates!" }));
-});
 
 app.disable("x-powered-by");
 
@@ -228,27 +241,28 @@ app.use("/api/xero", require("./xero/xero.controller"));
 app.use("/api/data-cleanse", require("./data_cleanse/data_cleanse.controller"));
 app.use("/api/tcp/dashboard", require("./dashboard/dashboard.controller"));
 app.use("/api/esg", require("./esg/esg.controller"));
+app.use("/api/files", require("./files/file.controller"));
 
 // Middleware to log all registered routes
-app._router.stack.forEach((middleware) => {
-  if (middleware.route) {
-    logger.logEvent("info", "Registered route", {
-      action: "RouteRegistration",
-      path: middleware.route?.path,
-      methods: Object.keys(middleware.route?.methods || {}).join(", "),
-    });
-  } else if (middleware.name === "router") {
-    middleware.handle.stack.forEach((handler) => {
-      if (handler.route) {
-        logger.logEvent("info", "Registered route", {
-          action: "RouteRegistration",
-          path: handler.route?.path,
-          methods: Object.keys(handler.route?.methods || {}).join(", "),
-        });
-      }
-    });
-  }
-});
+// app._router.stack.forEach((middleware) => {
+//   if (middleware.route) {
+//     logger.logEvent("info", "Registered route", {
+//       action: "RouteRegistration",
+//       path: middleware.route?.path,
+//       methods: Object.keys(middleware.route?.methods || {}).join(", "),
+//     });
+//   } else if (middleware.name === "router") {
+//     middleware.handle.stack.forEach((handler) => {
+//       if (handler.route) {
+//         logger.logEvent("info", "Registered route", {
+//           action: "RouteRegistration",
+//           path: handler.route?.path,
+//           methods: Object.keys(handler.route?.methods || {}).join(", "),
+//         });
+//       }
+//     });
+//   }
+// });
 
 // --- BEGIN: Check Postgres custom GUC app.current_client_id on startup ---
 const { sequelize } = require("./db/database");
@@ -259,9 +273,9 @@ async function verifyAppClientIdGUC() {
     const [[{ current_client_id }]] = await sequelize.query(
       "SELECT current_setting('app.current_client_id', true) AS current_client_id;"
     );
-    logger.logEvent("info", "Verified Postgres app.current_client_id GUC", {
-      current_client_id,
-    });
+    // logger.logEvent("info", "Verified Postgres app.current_client_id GUC", {
+    //   current_client_id,
+    // });
   } catch (error) {
     logger.logEvent(
       "error",
@@ -273,6 +287,10 @@ async function verifyAppClientIdGUC() {
 // Run this check on server startup
 verifyAppClientIdGUC();
 // --- END: Check Postgres custom GUC app.current_client_id on startup ---
+
+// Commented out noisy DB and RLS info logs
+// logger.logEvent("info", "Database connection established", { action: "DatabaseInit" });
+// logger.logEvent("info", "RLS policies initialised", { action: "DatabaseInit" });
 
 // global error handler
 app.use(errorHandler);

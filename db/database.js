@@ -20,7 +20,8 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
     acquire: 30000,
     idle: 10000,
   },
-  logging: console.log,
+  // logging: console.log,
+  logging: false,
   schema: process.env.DB_SCHEMA || "public", // Use environment variable or default to 'public'
   dialectOptions:
     DB_SSL === "true"
@@ -72,6 +73,7 @@ async function initialise() {
     "../xero",
     "../audit", // added to load AuditEvent model
     "../esg", // added to load ESGIndicator and ESGMetric models
+    "../files", // added to load File model
   ];
 
   modelDirs.forEach((dir) => {
@@ -153,6 +155,30 @@ async function initialise() {
     db.ESGMetric.belongsTo(db.ESGIndicator, { foreignKey: "indicatorId" });
   }
 
+  // ESG Metric has many Files
+  if (db.ESGMetric && db.File) {
+    db.ESGMetric.hasMany(db.File, {
+      foreignKey: "metricId",
+      onDelete: "CASCADE",
+    });
+    db.File.belongsTo(db.ESGMetric, {
+      foreignKey: "metricId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // ESG Indicator has many Files
+  if (db.ESGIndicator && db.File) {
+    db.ESGIndicator.hasMany(db.File, {
+      foreignKey: "indicatorId",
+      onDelete: "CASCADE",
+    });
+    db.File.belongsTo(db.ESGIndicator, {
+      foreignKey: "indicatorId",
+      onDelete: "CASCADE",
+    });
+  }
+
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
   await sequelize.sync();
 
@@ -166,9 +192,9 @@ async function initialiseRLS() {
     const sql = fs.readFileSync(rlsFile, "utf8");
     try {
       await sequelize.query(sql);
-      logger.logEvent("info", "RLS policies initialised", {
-        action: "DatabaseInit",
-      });
+      // logger.logEvent("info", "RLS policies initialised", {
+      //   action: "DatabaseInit",
+      // });
     } catch (error) {
       logger.logEvent("error", "RLS policy initialisation failed", {
         action: "DatabaseInit",
@@ -176,9 +202,9 @@ async function initialiseRLS() {
       });
     }
   } else {
-    logger.logEvent("warn", "No RLS setup file found", {
-      action: "DatabaseInit",
-    });
+    // logger.logEvent("warn", "No RLS setup file found", {
+    //   action: "DatabaseInit",
+    // });
   }
 }
 

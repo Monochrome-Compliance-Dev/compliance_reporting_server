@@ -39,7 +39,7 @@ async function scanFile(filePath, ext, originalname) {
         action: "AntivirusScan",
         fileName: originalname,
       });
-      throw new Error("File failed antivirus scan.");
+      throw { status: 400, message: "File failed antivirus scan." };
     }
 
     logger.logEvent("info", "File passed scan", {
@@ -52,7 +52,7 @@ async function scanFile(filePath, ext, originalname) {
       fileName: originalname,
       error: err.message,
     });
-    throw new Error("Antivirus scan failed.");
+    throw { status: 400, message: "Antivirus scan failed." };
   }
 }
 
@@ -77,7 +77,7 @@ async function scanFileBuffer(buffer, name) {
         action: "AntivirusScanBuffer",
         fileName: name,
       });
-      throw new Error("File failed antivirus scan.");
+      throw { status: 400, message: "File failed antivirus scan." };
     }
     logger.logEvent("info", "Buffer passed scan", {
       action: "AntivirusScanBuffer",
@@ -89,7 +89,7 @@ async function scanFileBuffer(buffer, name) {
       fileName: name,
       error: err.message,
     });
-    throw new Error("Antivirus scan failed.");
+    throw { status: 400, message: "Antivirus scan failed." };
   }
 }
 

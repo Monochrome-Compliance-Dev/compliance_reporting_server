@@ -2,7 +2,6 @@ const {
   beginTransactionWithClientContext,
 } = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
-const { logger } = require("../helpers/logger");
 
 module.exports = {
   createIndicator,
@@ -12,6 +11,7 @@ module.exports = {
   getReportingPeriodsByClient,
   getIndicatorsByReportingPeriodId,
   getMetricsByReportingPeriodId,
+  getMetricById,
   deleteIndicator,
   deleteMetric,
   getReportingPeriodById,
@@ -150,6 +150,23 @@ async function getMetricsByReportingPeriodId(
     });
 
     return metrics;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getMetricById(clientId, metricId, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const metric = await db.ESGMetric.findOne({
+      where: { id: metricId },
+      ...options,
+      transaction: t,
+    });
+
+    return metric;
   } catch (error) {
     throw error;
   } finally {
