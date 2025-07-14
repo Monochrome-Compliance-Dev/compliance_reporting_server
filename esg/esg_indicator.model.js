@@ -12,7 +12,6 @@ module.exports = (sequelize) => {
       id: {
         type: DataTypes.STRING(10),
         primaryKey: true,
-        defaultValue: () => nanoid(10),
       },
       clientId: {
         type: DataTypes.STRING(10),
@@ -28,6 +27,11 @@ module.exports = (sequelize) => {
       category: {
         type: DataTypes.ENUM("environment", "social", "governance"),
         allowNull: false,
+      },
+      isTemplate: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
       },
     },
     { tableName: "tbl_esg_indicators", timestamps: true, paranoid: true }

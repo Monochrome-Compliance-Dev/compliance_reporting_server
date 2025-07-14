@@ -6,8 +6,8 @@ let nanoid;
 })();
 
 module.exports = (sequelize) => {
-  const ESGMetric = sequelize.define(
-    "ESGMetric",
+  const Unit = sequelize.define(
+    "Unit",
     {
       id: {
         type: DataTypes.STRING(10),
@@ -17,33 +17,24 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(10),
         allowNull: false,
       },
-      indicatorId: {
-        type: DataTypes.STRING(10),
+      name: {
+        type: DataTypes.STRING,
         allowNull: false,
       },
-      reportingPeriodId: {
-        type: DataTypes.STRING(10),
+      symbol: {
+        type: DataTypes.STRING,
         allowNull: false,
       },
-      value: {
-        type: DataTypes.DECIMAL,
-        allowNull: false,
-      },
-      unitId: {
-        type: DataTypes.STRING(10),
+      description: {
+        type: DataTypes.TEXT,
         allowNull: true,
-      },
-      isTemplate: {
-        type: DataTypes.BOOLEAN,
-        allowNull: false,
-        defaultValue: false,
       },
     },
     {
-      tableName: "tbl_esg_metrics",
+      tableName: "tbl_esg_units",
       timestamps: true,
       paranoid: true,
     }
   );
-  return ESGMetric;
+  return Unit;
 };

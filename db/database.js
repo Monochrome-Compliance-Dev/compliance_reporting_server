@@ -179,6 +179,12 @@ async function initialise() {
     });
   }
 
+  // ESG Metric belongs to Unit
+  if (db.ESGMetric && db.Unit) {
+    db.Unit.hasMany(db.ESGMetric, { foreignKey: "unitId" });
+    db.ESGMetric.belongsTo(db.Unit, { foreignKey: "unitId" });
+  }
+
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
   await sequelize.sync();
 

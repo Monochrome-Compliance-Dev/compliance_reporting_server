@@ -59,3 +59,14 @@ CREATE POLICY tbl_esg_metrics_rls_policy
   WITH CHECK ("clientId" = current_setting('app.current_client_id', true)::text);
 
 ALTER TABLE tbl_esg_metrics FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_esg_units ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_esg_units_rls_policy ON tbl_esg_units;
+CREATE POLICY tbl_esg_units_rls_policy
+  ON tbl_esg_units
+  FOR ALL
+  USING ("clientId" = current_setting('app.current_client_id', true)::text)
+  WITH CHECK ("clientId" = current_setting('app.current_client_id', true)::text);
+
+ALTER TABLE tbl_esg_units FORCE ROW LEVEL SECURITY;

@@ -1,10 +1,15 @@
+const esgAnalytics = require("./esg_analytics.service");
 const express = require("express");
 const router = express.Router();
 const esgService = require("./esg.service");
 const auditService = require("../audit/audit.service");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const { esgIndicatorSchema, esgMetricSchema } = require("./esg.validator");
+const {
+  esgIndicatorSchema,
+  esgMetricSchema,
+  esgUnitSchema,
+} = require("./esg.validator");
 
 // routes
 router.post(
@@ -34,6 +39,26 @@ router.get(
   getMetricsByReportingPeriodId
 );
 
+// Dashboard analytics routes
+router.get(
+  "/dashboard/category-totals/:reportingPeriodId",
+  authorise(),
+  getCategoryTotals
+);
+
+router.get(
+  "/dashboard/indicators-with-metrics/:reportingPeriodId",
+  authorise(),
+  getAllIndicatorsWithLatestMetrics
+);
+
+// New route for dashboard totals by indicator
+router.get(
+  "/dashboard/totals-by-indicator/:reportingPeriodId",
+  authorise(),
+  getTotalsByIndicator
+);
+
 // Get a single metric by ID
 router.get("/metrics/:metricId", authorise(), getMetricById);
 router.delete("/indicators/:indicatorId", authorise(), deleteIndicator);
@@ -55,6 +80,25 @@ router.post(
   authorise(),
   rollbackReportingPeriod
 );
+
+// Clone templates for reporting period
+router.post(
+  "/reporting-periods/:id/clone-templates",
+  authorise(),
+  cloneTemplatesForReportingPeriod
+);
+
+// Unit routes
+router.post("/units", authorise(), validateRequest(esgUnitSchema), createUnit);
+router.get("/units", authorise(), getUnitsByClient);
+router.get("/units/:id", authorise(), getUnitById);
+router.put(
+  "/units/:id",
+  authorise(),
+  validateRequest(esgUnitSchema),
+  updateUnit
+);
+router.delete("/units/:id", authorise(), deleteUnit);
 
 async function getReportingPeriodsByClient(req, res, next) {
   try {
@@ -149,7 +193,8 @@ async function createIndicator(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { code, name, description, category, reportingPeriodId } = req.body;
+    const { code, name, description, category, reportingPeriodId, isTemplate } =
+      req.body;
 
     const indicator = await esgService.createIndicator({
       clientId,
@@ -158,6 +203,7 @@ async function createIndicator(req, res, next) {
       description,
       category,
       reportingPeriodId,
+      isTemplate,
     });
 
     await auditService.logEvent({
@@ -185,7 +231,8 @@ async function createMetric(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { indicatorId, reportingPeriodId, value, unit } = req.body;
+    const { indicatorId, reportingPeriodId, value, unit, isTemplate } =
+      req.body;
 
     const metric = await esgService.createMetric({
       clientId,
@@ -193,6 +240,7 @@ async function createMetric(req, res, next) {
       reportingPeriodId,
       value,
       unit,
+      isTemplate,
     });
 
     await auditService.logEvent({
@@ -487,6 +535,269 @@ async function getMetricById(req, res, next) {
     });
 
     res.json(metric.get ? metric.get({ plain: true }) : metric);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Unit controller handlers
+async function createUnit(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const { name, symbol, description } = req.body;
+
+    const unit = await esgService.createUnit({
+      clientId,
+      name,
+      symbol,
+      description,
+    });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "CreateUnit",
+      entity: "Unit",
+      entityId: unit.id,
+      details: { name, symbol },
+    });
+
+    res.status(201).json(unit);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getUnitsByClient(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const units = await esgService.getUnitsByClient(clientId);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetUnits",
+      entity: "Unit",
+      details: { count: units.length },
+    });
+
+    res.json(units);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getUnitById(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    const unit = await esgService.getUnitById(clientId, id);
+    if (!unit) return res.status(404).json({ error: "Not found" });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetUnit",
+      entity: "Unit",
+      entityId: id,
+    });
+
+    res.json(unit);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateUnit(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+    const { name, symbol, description } = req.body;
+
+    await esgService.updateUnit(clientId, id, { name, symbol, description });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "UpdateUnit",
+      entity: "Unit",
+      entityId: id,
+      details: { name, symbol },
+    });
+
+    res.json({ message: "Unit updated." });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteUnit(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+
+    await esgService.deleteUnit(clientId, id);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "DeleteUnit",
+      entity: "Unit",
+      entityId: id,
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler to clone templates for a reporting period
+async function cloneTemplatesForReportingPeriod(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const reportingPeriodId = req.params.id;
+
+    const result = await esgService.cloneTemplatesForReportingPeriod(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "CloneTemplatesForPeriod",
+      entity: "ReportingPeriod",
+      entityId: reportingPeriodId,
+      details: { message: "Templates cloned" },
+    });
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler to get category totals for dashboard
+async function getCategoryTotals(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const reportingPeriodId = req.params.reportingPeriodId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const totals = await esgAnalytics.getCategoryTotals(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetCategoryTotals",
+      entity: "ESGDashboard",
+      entityId: reportingPeriodId,
+      details: { count: totals.length },
+    });
+
+    res.json(totals);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler to get all indicators with latest metrics for dashboard
+async function getAllIndicatorsWithLatestMetrics(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const reportingPeriodId = req.params.reportingPeriodId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const data = await esgAnalytics.getAllIndicatorsWithLatestMetrics(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetIndicatorsWithLatestMetrics",
+      entity: "ESGDashboard",
+      entityId: reportingPeriodId,
+      details: { count: data.length },
+    });
+
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handler to get totals by indicator for dashboard
+async function getTotalsByIndicator(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const reportingPeriodId = req.params.reportingPeriodId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const totals = await esgAnalytics.getTotalsByIndicator(
+      clientId,
+      reportingPeriodId
+    );
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTotalsByIndicator",
+      entity: "ESGDashboard",
+      entityId: reportingPeriodId,
+      details: { count: totals.length },
+    });
+
+    res.json(totals);
   } catch (err) {
     next(err);
   }

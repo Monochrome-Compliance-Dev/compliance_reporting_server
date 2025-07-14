@@ -13,14 +13,16 @@ const esgIndicatorSchema = Joi.object({
     .required(),
   reportingPeriodId: Joi.string().length(10).required(),
   clientId: Joi.string().length(10),
+  isTemplate: Joi.boolean(),
 });
 
 const esgMetricSchema = Joi.object({
   indicatorId: Joi.string().length(10).required(),
   reportingPeriodId: Joi.string().length(10).required(),
   value: Joi.number().required(),
-  unit: Joi.string().max(50).sanitize().required(),
+  unitId: Joi.string().length(10).required(),
   clientId: Joi.string().length(10),
+  isTemplate: Joi.boolean(),
 });
 
 const esgReportingPeriodSchema = Joi.object({
@@ -42,8 +44,15 @@ const esgReportingPeriodSchema = Joi.object({
   clientId: Joi.string().length(10), // still optional, injected by server
 });
 
+const esgUnitSchema = Joi.object({
+  name: Joi.string().max(100).sanitize().required(),
+  symbol: Joi.string().max(20).sanitize().required(),
+  description: Joi.string().allow(null, "").sanitize(),
+});
+
 module.exports = {
   esgIndicatorSchema,
   esgMetricSchema,
   esgReportingPeriodSchema,
+  esgUnitSchema,
 };

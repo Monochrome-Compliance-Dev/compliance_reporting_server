@@ -16,9 +16,17 @@ module.exports = {
   deleteMetric,
   getReportingPeriodById,
   updateReportingPeriod,
+  // Units CRUD
+  createUnit,
+  getUnitsByClient,
+  getUnitById,
+  updateUnit,
+  deleteUnit,
+  cloneTemplatesForReportingPeriod,
 };
 
 async function createIndicator(params, options = {}) {
+  // params may include isTemplate: boolean
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const result = await db.ESGIndicator.create(params, {
@@ -36,6 +44,7 @@ async function createIndicator(params, options = {}) {
 }
 
 async function createMetric(params, options = {}) {
+  // params may include isTemplate: boolean
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const indicator = await db.ESGIndicator.findByPk(params.indicatorId, {
@@ -235,6 +244,139 @@ async function updateReportingPeriod(clientId, id, updates, options = {}) {
 
     await t.commit();
     return result;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
+}
+
+// ---- Unit CRUD ----
+async function createUnit(params, options = {}) {
+  const t = await beginTransactionWithClientContext(params.clientId);
+  try {
+    const result = await db.Unit.create(params, {
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+    return result.get({ plain: true });
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
+}
+
+async function getUnitsByClient(clientId, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const units = await db.Unit.findAll({
+      ...options,
+      transaction: t,
+    });
+    return units;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getUnitById(clientId, id, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const unit = await db.Unit.findByPk(id, {
+      ...options,
+      transaction: t,
+    });
+    return unit;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function updateUnit(clientId, id, updates, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const result = await db.Unit.update(updates, {
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+    return result;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
+}
+
+async function deleteUnit(clientId, id, options = {}) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Unit.destroy({
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
+}
+
+async function cloneTemplatesForReportingPeriod(
+  clientId,
+  reportingPeriodId,
+  options = {}
+) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    // Clone ESG Indicators
+    const templateIndicators = await db.ESGIndicator.findAll({
+      where: { clientId, isTemplate: true },
+      transaction: t,
+    });
+
+    const clonedIndicators = await Promise.all(
+      templateIndicators.map(async (indicator) => {
+        const clone = indicator.toJSON();
+        delete clone.id;
+        clone.reportingPeriodId = reportingPeriodId;
+        clone.isTemplate = false;
+        return await db.ESGIndicator.create(clone, { transaction: t });
+      })
+    );
+
+    // Clone ESG Metrics linked to those indicators
+    const templateMetrics = await db.ESGMetric.findAll({
+      where: { clientId, isTemplate: true },
+      transaction: t,
+    });
+
+    await Promise.all(
+      templateMetrics.map(async (metric) => {
+        const clone = metric.toJSON();
+        delete clone.id;
+        clone.reportingPeriodId = reportingPeriodId;
+        clone.isTemplate = false;
+
+        // attempt to match the new cloned indicator by original template's indicatorId
+        const matchingIndicator = clonedIndicators.find(
+          (ci) => ci.code === metric.indicatorId
+        );
+        if (matchingIndicator) {
+          clone.indicatorId = matchingIndicator.id;
+        }
+
+        return await db.ESGMetric.create(clone, { transaction: t });
+      })
+    );
+
+    await t.commit();
+    return { message: "Templates cloned for reporting period." };
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
