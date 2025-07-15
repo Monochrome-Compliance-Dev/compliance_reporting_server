@@ -12,12 +12,13 @@ async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
   try {
     const totals = await db.ESGMetric.findAll({
       attributes: [
-        [db.sequelize.col("indicator.category"), "category"],
+        [db.sequelize.col("ESGIndicator.category"), "category"],
         [db.sequelize.fn("SUM", db.sequelize.col("value")), "totalValue"],
       ],
       include: [
         {
           model: db.ESGIndicator,
+          as: "ESGIndicator",
           attributes: [],
           required: true,
         },
@@ -26,7 +27,7 @@ async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
         clientId,
         reportingPeriodId,
       },
-      group: ["indicator.category"],
+      group: ["ESGIndicator.category"],
       transaction: t,
       ...options,
     });

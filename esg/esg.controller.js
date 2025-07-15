@@ -9,6 +9,7 @@ const {
   esgIndicatorSchema,
   esgMetricSchema,
   esgUnitSchema,
+  esgTemplateSchema,
 } = require("./esg.validator");
 
 // routes
@@ -87,6 +88,16 @@ router.post(
   authorise(),
   cloneTemplatesForReportingPeriod
 );
+// Template routes
+router.post(
+  "/templates",
+  authorise(),
+  validateRequest(esgTemplateSchema),
+  createTemplate
+);
+router.get("/templates", authorise(), getTemplatesByClient);
+router.get("/templates/:id", authorise(), getTemplateById);
+router.delete("/templates/:id", authorise(), deleteTemplate);
 
 // Unit routes
 router.post("/units", authorise(), validateRequest(esgUnitSchema), createUnit);
@@ -798,6 +809,120 @@ async function getTotalsByIndicator(req, res, next) {
     });
 
     res.json(totals);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Handlers for template system
+async function createTemplate(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const { fieldType, fieldName, description, category, defaultUnit } =
+      req.body;
+
+    const template = await esgService.createTemplate({
+      clientId,
+      fieldType,
+      fieldName,
+      description,
+      category,
+      defaultUnit,
+    });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "CreateTemplate",
+      entity: "Template",
+      entityId: template.id,
+      details: { fieldType, fieldName, category },
+    });
+
+    res.status(201).json(template);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getTemplatesByClient(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const templates = await esgService.getTemplatesByClient(clientId);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTemplates",
+      entity: "Template",
+      details: { count: templates.length },
+    });
+
+    res.json(templates);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getTemplateById(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const id = req.params.id;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const template = await esgService.getTemplateById(clientId, id);
+    if (!template) return res.status(404).json({ error: "Not found" });
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTemplate",
+      entity: "Template",
+      entityId: id,
+    });
+
+    res.json(template);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteTemplate(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const id = req.params.id;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    await esgService.deleteTemplate(clientId, id);
+
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "DeleteTemplate",
+      entity: "Template",
+      entityId: id,
+    });
+
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

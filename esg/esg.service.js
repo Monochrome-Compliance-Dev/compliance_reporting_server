@@ -2,6 +2,11 @@ const {
   beginTransactionWithClientContext,
 } = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = {
   createIndicator,
@@ -334,44 +339,59 @@ async function cloneTemplatesForReportingPeriod(
 ) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    // Clone ESG Indicators
-    const templateIndicators = await db.ESGIndicator.findAll({
-      where: { clientId, isTemplate: true },
+    // Fetch global templates plus client-specific templates
+    const templates = await db.Template.findAll({
+      where: {
+        [db.Sequelize.Op.or]: [{ clientId: null }, { clientId: clientId }],
+      },
       transaction: t,
     });
 
+    // Separate by type
+    const indicatorTemplates = templates.filter(
+      (t) => t.fieldType === "indicator"
+    );
+    const metricTemplates = templates.filter((t) => t.fieldType === "metric");
+
+    // Clone indicators
     const clonedIndicators = await Promise.all(
-      templateIndicators.map(async (indicator) => {
-        const clone = indicator.toJSON();
-        delete clone.id;
-        clone.reportingPeriodId = reportingPeriodId;
-        clone.isTemplate = false;
-        return await db.ESGIndicator.create(clone, { transaction: t });
+      indicatorTemplates.map(async (template) => {
+        return await db.ESGIndicator.create(
+          {
+            id: nanoid(10),
+            clientId,
+            reportingPeriodId,
+            code: template.fieldName,
+            name: template.fieldName,
+            description: template.description,
+            category: template.category,
+            isTemplate: false,
+          },
+          { transaction: t }
+        );
       })
     );
 
-    // Clone ESG Metrics linked to those indicators
-    const templateMetrics = await db.ESGMetric.findAll({
-      where: { clientId, isTemplate: true },
-      transaction: t,
-    });
-
+    // Clone metrics, matching to cloned indicators by fieldName
     await Promise.all(
-      templateMetrics.map(async (metric) => {
-        const clone = metric.toJSON();
-        delete clone.id;
-        clone.reportingPeriodId = reportingPeriodId;
-        clone.isTemplate = false;
-
-        // attempt to match the new cloned indicator by original template's indicatorId
+      metricTemplates.map(async (template) => {
         const matchingIndicator = clonedIndicators.find(
-          (ci) => ci.code === metric.indicatorId
+          (ci) => ci.code === template.fieldName
         );
-        if (matchingIndicator) {
-          clone.indicatorId = matchingIndicator.id;
-        }
+        if (!matchingIndicator) return;
 
-        return await db.ESGMetric.create(clone, { transaction: t });
+        return await db.ESGMetric.create(
+          {
+            id: nanoid(10),
+            clientId,
+            reportingPeriodId,
+            indicatorId: matchingIndicator.id,
+            value: 0,
+            unitId: null, // can be improved to look up unit by template.defaultUnit
+            isTemplate: false,
+          },
+          { transaction: t }
+        );
       })
     );
 

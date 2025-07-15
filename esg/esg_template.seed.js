@@ -4,388 +4,400 @@ const db = require("../db/database");
 console.log("Loaded models:", Object.keys(db.sequelize.models));
 
 async function seedESGTemplates() {
+  await db.sequelize.sync();
   const { nanoid } = await import("nanoid");
+  const { Template } = db.sequelize.models;
+
+  console.log("Loaded Template model:", !!Template);
+  if (!Template) {
+    console.error(
+      "Template model is not loaded. Check your db/database.js exports."
+    );
+    process.exit(1);
+  }
 
   try {
-    await db.sequelize.sync();
-    await db.sequelize.query(`SET app.current_client_id = 'TESTCLIENT'`);
     console.log("Database synced, models:", Object.keys(db.sequelize.models));
 
-    const { ESGIndicator, ESGMetric, Unit } = db.sequelize.models;
+    // Delete all existing templates
+    await Template.destroy({ where: {}, truncate: true, cascade: true });
 
-    const indicators = await ESGIndicator.bulkCreate([
-      // Environmental
+    // Prepare the templates
+    const templates = [
+      // Indicators
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "SCOPE_1",
-        name: "Scope 1 Emissions",
-        description: "Direct GHG emissions.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Scope 1 Emissions",
+        description: "Direct GHG emissions from owned or controlled sources.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "kg CO₂e",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "SCOPE_2",
-        name: "Scope 2 Emissions",
-        description: "Indirect GHG emissions.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Scope 2 Emissions",
+        description: "Indirect GHG emissions from purchased electricity.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "kg CO₂e",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "SCOPE_3",
-        name: "Scope 3 Emissions",
-        description: "Value chain GHG emissions.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Scope 3 Emissions",
+        description: "Other indirect emissions in value chain.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "kg CO₂e",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "ENERGY_USE",
-        name: "Total Energy Consumption",
-        description: "Energy used in operations.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Energy Consumption",
+        description: "Total energy consumed.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "MWh",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "RENEWABLE_ENERGY",
-        name: "% Renewable Energy Used",
-        description: "Portion from renewables.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Water Usage",
+        description: "Total water withdrawn.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "m³",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "WATER_USE",
-        name: "Water Withdrawal",
-        description: "Total water use.",
-        category: "environment",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "WASTE_GEN",
-        name: "Waste Generated",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Waste Generation",
         description: "Total waste generated.",
         category: "environment",
-        isTemplate: true,
+        defaultUnit: "tons",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "WASTE_RECYCLED",
-        name: "% Waste Recycled",
-        description: "Portion of waste recycled.",
-        category: "environment",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "ENV_FINES",
-        name: "Environmental Fines",
-        description: "Monetary penalties.",
-        category: "environment",
-        isTemplate: true,
-      },
-
-      // Social
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "WOMEN_LEADERSHIP",
-        name: "Women in Leadership",
-        description: "% women in leadership roles.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Women in Leadership",
+        description: "% women in leadership positions.",
         category: "social",
-        isTemplate: true,
+        defaultUnit: "%",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "TURNOVER",
-        name: "Workforce Turnover Rate",
-        description: "Annual employee turnover.",
-        category: "social",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "LTIFR",
-        name: "Lost Time Injury Frequency Rate",
-        description: "Safety incidents metric.",
-        category: "social",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "TRAINING_HOURS",
-        name: "Employee Training Hours",
-        description: "Avg hours of training per FTE.",
-        category: "social",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "DIVERSITY",
-        name: "Workforce Diversity %",
-        description: "% of underrepresented groups.",
-        category: "social",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "COMMUNITY_INVEST",
-        name: "Community Investment",
-        description: "Spending on community programs.",
-        category: "social",
-        isTemplate: true,
-      },
-
-      // Governance
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "SUPPLIER_RATING",
-        name: "Supplier ESG Rating",
-        description: "Average supplier ESG scores.",
-        category: "governance",
-        isTemplate: true,
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "BOARD_DIVERSITY",
-        name: "Board Diversity %",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Board Diversity %",
         description: "% diversity on board.",
         category: "governance",
-        isTemplate: true,
+        defaultUnit: "%",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "DATA_BREACHES",
-        name: "Data Breaches",
-        description: "Reported security incidents.",
-        category: "governance",
-        isTemplate: true,
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Employee Turnover Rate",
+        description: "Annual employee turnover rate.",
+        category: "social",
+        defaultUnit: "%",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "ANTI_CORRUPTION",
-        name: "Anti-Corruption Training Coverage",
-        description: "% of employees trained.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Anti-Corruption Incidents",
+        description: "Number of anti-corruption incidents.",
         category: "governance",
-        isTemplate: true,
+        defaultUnit: "count",
       },
       {
         id: nanoid(10),
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        code: "GOV_FINES",
-        name: "Governance Fines",
-        description: "Fines from compliance failures.",
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Data Breaches",
+        description: "Number of data breaches.",
         category: "governance",
-        isTemplate: true,
+        defaultUnit: "count",
       },
-    ]);
-
-    console.log(`Seeded ${indicators.length} ESG Indicator templates.`);
-
-    // Seed a zero-value metric for each template indicator tied to common units
-    const unitMap = {};
-    const unitRecords = await Unit.findAll();
-    unitRecords.forEach((unit) => {
-      unitMap[unit.symbol] = unit.id;
-    });
-
-    const metrics = indicators.map((ind) => {
-      let unitId = null;
-      switch (ind.code) {
-        case "SCOPE_1":
-        case "SCOPE_2":
-        case "SCOPE_3":
-          unitId = unitMap["kg CO₂e"];
-          break;
-        case "ENERGY_USE":
-          unitId = unitMap["MWh"];
-          break;
-        case "RENEWABLE_ENERGY":
-        case "WASTE_RECYCLED":
-        case "WOMEN_LEADERSHIP":
-        case "DIVERSITY":
-        case "ANTI_CORRUPTION":
-        case "BOARD_DIVERSITY":
-          unitId = unitMap["%"];
-          break;
-        case "WATER_USE":
-        case "WASTE_GEN":
-          unitId = unitMap["m³"];
-          break;
-        case "ENV_FINES":
-        case "COMMUNITY_INVEST":
-        case "GOV_FINES":
-          unitId = unitMap["$"];
-          break;
-        case "TRAINING_HOURS":
-          unitId = unitMap["hrs"];
-          break;
-        case "DATA_BREACHES":
-        case "LTIFR":
-        case "TURNOVER":
-          unitId = unitMap["count"];
-          break;
-        case "SUPPLIER_RATING":
-          unitId = null; // could be score or letter, TBD
-          break;
-      }
-
-      const metric = {
+      {
         id: nanoid(10),
-        indicatorId: ind.id,
-        clientId: "TESTCLIENT",
-        reportingPeriodId: "TEMPLATE",
-        value: 0,
-        unitId,
-        isTemplate: true,
-      };
-      console.log("Prepared metric:", metric);
-      return metric;
-    });
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Health & Safety Incidents",
+        description: "Workplace health & safety incidents.",
+        category: "social",
+        defaultUnit: "count",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Community Engagement Hours",
+        description: "Hours spent on community engagement.",
+        category: "social",
+        defaultUnit: "hours",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Employee Training Hours",
+        description: "Hours of employee training.",
+        category: "social",
+        defaultUnit: "hours",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Supplier ESG Rating",
+        description: "Percentage of sustainable suppliers.",
+        category: "governance",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "% Renewable Energy Used",
+        description: "Percentage of energy from renewable sources.",
+        category: "environment",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "GHG Emissions Intensity",
+        description: "GHG emissions intensity per unit output.",
+        category: "environment",
+        defaultUnit: "kg CO₂e/unit",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "% Waste Recycled",
+        description: "Percentage of waste recycled.",
+        category: "environment",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Workforce Diversity %",
+        description: "% employee diversity.",
+        category: "social",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "indicator",
+        fieldName: "Customer Satisfaction Score",
+        description: "Customer satisfaction score.",
+        category: "social",
+        defaultUnit: "score",
+      },
 
-    await ESGMetric.bulkCreate(metrics);
+      // Metrics
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Scope 1 Emissions",
+        description: "Direct emissions metric.",
+        category: "environment",
+        defaultUnit: "kg CO₂e",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Scope 2 Emissions",
+        description: "Indirect emissions metric.",
+        category: "environment",
+        defaultUnit: "kg CO₂e",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Scope 3 Emissions",
+        description: "Other indirect emissions metric.",
+        category: "environment",
+        defaultUnit: "kg CO₂e",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Energy Consumption",
+        description: "Energy consumption metric.",
+        category: "environment",
+        defaultUnit: "MWh",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Water Usage",
+        description: "Water usage metric.",
+        category: "environment",
+        defaultUnit: "m³",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Waste Generation",
+        description: "Waste generation metric.",
+        category: "environment",
+        defaultUnit: "tons",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Women in Leadership",
+        description: "Gender balance metric.",
+        category: "social",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Board Diversity %",
+        description: "Board diversity metric.",
+        category: "governance",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Employee Turnover Rate",
+        description: "Employee turnover metric.",
+        category: "social",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Anti-Corruption Incidents",
+        description: "Anti-corruption metric.",
+        category: "governance",
+        defaultUnit: "count",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Data Breaches",
+        description: "Data breaches metric.",
+        category: "governance",
+        defaultUnit: "count",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Health & Safety Incidents",
+        description: "Health & safety metric.",
+        category: "social",
+        defaultUnit: "count",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Community Engagement Hours",
+        description: "Community engagement metric.",
+        category: "social",
+        defaultUnit: "hours",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Employee Training Hours",
+        description: "Employee training metric.",
+        category: "social",
+        defaultUnit: "hours",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Supplier ESG Rating",
+        description: "Supplier sustainability metric.",
+        category: "governance",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "% Renewable Energy Used",
+        description: "Renewable energy usage metric.",
+        category: "environment",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "GHG Emissions Intensity",
+        description: "GHG intensity metric.",
+        category: "environment",
+        defaultUnit: "kg CO₂e/unit",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "% Waste Recycled",
+        description: "Waste recycling rate metric.",
+        category: "environment",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Workforce Diversity %",
+        description: "Employee diversity metric.",
+        category: "social",
+        defaultUnit: "%",
+      },
+      {
+        id: nanoid(10),
+        clientId: null,
+        fieldType: "metric",
+        fieldName: "Customer Satisfaction Score",
+        description: "Customer satisfaction metric.",
+        category: "social",
+        defaultUnit: "score",
+      },
+    ];
+
+    await Template.bulkCreate(templates);
     console.log(
-      `Seeded ${metrics.length} ESG Metric templates with linked units.`
+      `Seeded ${templates.length} ESG templates (20 indicators + 20 metrics) with descriptive names.`
     );
-
-    console.log("Done seeding expanded ESG templates.");
   } catch (err) {
     console.error("Error seeding ESG templates:", err);
   }
 }
 
-// Seed units first, then ESG templates
 (async () => {
-  await seedUnits();
   await seedESGTemplates();
 })();
-
-// --------------------------
-// Common Measurement Units Seed
-// --------------------------
-
-async function seedUnits() {
-  const { nanoid } = await import("nanoid");
-
-  try {
-    await db.sequelize.sync();
-    await db.sequelize.query(`SET app.current_client_id = 'TESTCLIENT'`);
-    console.log("Database synced, models:", Object.keys(db.sequelize.models));
-
-    const { Unit } = db.sequelize.models;
-
-    console.log("Seeding common units...");
-
-    await Unit.destroy({ where: {}, truncate: true, cascade: true });
-
-    const units = await Unit.bulkCreate([
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Percentage",
-        symbol: "%",
-        description:
-          "Represents a portion of 100, commonly used for ratios and shares.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Kilograms of CO₂ equivalent",
-        symbol: "kg CO₂e",
-        description:
-          "Standard unit to express greenhouse gas emissions as CO₂ equivalents.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Megawatt Hours",
-        symbol: "MWh",
-        description:
-          "Unit of energy representing one million watts consumed or generated for one hour.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Cubic Meters",
-        symbol: "m³",
-        description:
-          "Volume measurement typically used for water withdrawal or waste.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Dollars",
-        symbol: "$",
-        description: "Monetary value, usually reported in local currency.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Hours",
-        symbol: "hrs",
-        description:
-          "Used for time-based metrics such as employee training hours.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Number of incidents",
-        symbol: "count",
-        description:
-          "Simple count of occurrences like data breaches or safety incidents.",
-      },
-      {
-        id: nanoid(10),
-        clientId: "TESTCLIENT",
-        name: "Metric Tons CO₂ equivalent",
-        symbol: "t CO₂e",
-        description: "Commonly used for aggregated GHG emissions reporting.",
-      },
-    ]);
-
-    console.log(`Seeded ${units.length} common units.`);
-  } catch (err) {
-    console.error("Error seeding units:", err);
-  }
-}

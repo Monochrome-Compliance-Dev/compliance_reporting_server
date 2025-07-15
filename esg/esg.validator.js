@@ -50,9 +50,21 @@ const esgUnitSchema = Joi.object({
   description: Joi.string().allow(null, "").sanitize(),
 });
 
+const esgTemplateSchema = Joi.object({
+  fieldType: Joi.string().valid("indicator", "metric").required(),
+  fieldName: Joi.string().max(255).sanitize().required(),
+  description: Joi.string().allow(null, "").sanitize(),
+  category: Joi.string()
+    .valid("environment", "social", "governance")
+    .allow(null),
+  defaultUnit: Joi.string().max(50).allow(null),
+  clientId: Joi.string().length(10).allow(null), // null for global templates
+});
+
 module.exports = {
   esgIndicatorSchema,
   esgMetricSchema,
   esgReportingPeriodSchema,
   esgUnitSchema,
+  esgTemplateSchema,
 };
