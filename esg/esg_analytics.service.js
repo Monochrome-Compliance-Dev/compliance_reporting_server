@@ -19,15 +19,23 @@ async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
         {
           model: db.ESGIndicator,
           as: "ESGIndicator",
-          attributes: [],
+          attributes: [], // no extra fields needed
           required: true,
         },
+        {
+          model: db.Unit,
+          as: "Unit",
+          attributes: ["id", "name", "description"],
+          required: false,
+        },
       ],
-      where: {
-        clientId,
-        reportingPeriodId,
-      },
-      group: ["ESGIndicator.category"],
+      where: { clientId, reportingPeriodId },
+      group: [
+        "ESGIndicator.category",
+        "Unit.id",
+        "Unit.name",
+        "Unit.description",
+      ],
       transaction: t,
       ...options,
     });
@@ -51,10 +59,12 @@ async function getAllIndicatorsWithLatestMetrics(
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const data = await db.ESGIndicator.findAll({
+      attributes: ["id", "name", "code", "description", "category"],
       where: { clientId, reportingPeriodId },
       include: [
         {
           model: db.ESGMetric,
+          attributes: ["id", "value", "unitId", "createdAt"],
           required: false,
         },
       ],
@@ -77,8 +87,31 @@ async function getTotalsByIndicator(clientId, reportingPeriodId, options = {}) {
         "indicatorId",
         [db.sequelize.fn("SUM", db.sequelize.col("value")), "totalValue"],
       ],
+      include: [
+        {
+          model: db.ESGIndicator,
+          as: "ESGIndicator",
+          attributes: ["id", "name", "code", "category"],
+          required: true,
+        },
+        {
+          model: db.Unit,
+          as: "Unit",
+          attributes: ["id", "name", "description"],
+          required: false,
+        },
+      ],
       where: { clientId, reportingPeriodId },
-      group: ["indicatorId"],
+      group: [
+        "indicatorId",
+        "ESGIndicator.id",
+        "ESGIndicator.name",
+        "ESGIndicator.code",
+        "ESGIndicator.category",
+        "Unit.id",
+        "Unit.name",
+        "Unit.description",
+      ],
       transaction: t,
       ...options,
     });
