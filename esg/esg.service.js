@@ -30,14 +30,17 @@ module.exports = {
   cloneTemplatesForReportingPeriod,
 };
 
-async function createIndicator(params, options = {}) {
+async function createIndicator(params, userId, options = {}) {
   // params may include isTemplate: boolean
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    const result = await db.ESGIndicator.create(params, {
-      ...options,
-      transaction: t,
-    });
+    const result = await db.ESGIndicator.create(
+      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...options,
+        transaction: t,
+      }
+    );
 
     await t.commit();
 
@@ -48,7 +51,7 @@ async function createIndicator(params, options = {}) {
   }
 }
 
-async function createMetric(params, options = {}) {
+async function createMetric(params, userId, options = {}) {
   // params may include isTemplate: boolean
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
@@ -66,10 +69,13 @@ async function createMetric(params, options = {}) {
       throw { status: 400, message: "Invalid reportingPeriodId" };
     }
 
-    const result = await db.ESGMetric.create(params, {
-      ...options,
-      transaction: t,
-    });
+    const result = await db.ESGMetric.create(
+      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...options,
+        transaction: t,
+      }
+    );
 
     await t.commit();
 
@@ -96,13 +102,16 @@ async function getMetricsByClient(clientId, options = {}) {
   }
 }
 
-async function createReportingPeriod(params, options = {}) {
+async function createReportingPeriod(params, userId, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    const result = await db.ReportingPeriod.create(params, {
-      ...options,
-      transaction: t,
-    });
+    const result = await db.ReportingPeriod.create(
+      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...options,
+        transaction: t,
+      }
+    );
 
     await t.commit();
 
@@ -238,14 +247,23 @@ async function getReportingPeriodById(clientId, id, options = {}) {
   }
 }
 
-async function updateReportingPeriod(clientId, id, updates, options = {}) {
+async function updateReportingPeriod(
+  clientId,
+  userId,
+  id,
+  updates,
+  options = {}
+) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const result = await db.ReportingPeriod.update(updates, {
-      where: { id },
-      ...options,
-      transaction: t,
-    });
+    const result = await db.ReportingPeriod.update(
+      { ...updates, updatedBy: userId },
+      {
+        where: { id },
+        ...options,
+        transaction: t,
+      }
+    );
 
     await t.commit();
     return result;
@@ -256,13 +274,16 @@ async function updateReportingPeriod(clientId, id, updates, options = {}) {
 }
 
 // ---- Unit CRUD ----
-async function createUnit(params, options = {}) {
+async function createUnit(params, userId, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    const result = await db.Unit.create(params, {
-      ...options,
-      transaction: t,
-    });
+    const result = await db.Unit.create(
+      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...options,
+        transaction: t,
+      }
+    );
     await t.commit();
     return result.get({ plain: true });
   } catch (error) {
@@ -301,14 +322,17 @@ async function getUnitById(clientId, id, options = {}) {
   }
 }
 
-async function updateUnit(clientId, id, updates, options = {}) {
+async function updateUnit(clientId, userId, id, updates, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const result = await db.Unit.update(updates, {
-      where: { id },
-      ...options,
-      transaction: t,
-    });
+    const result = await db.Unit.update(
+      { ...updates, updatedBy: userId },
+      {
+        where: { id },
+        ...options,
+        transaction: t,
+      }
+    );
     await t.commit();
     return result;
   } catch (error) {
@@ -334,6 +358,7 @@ async function deleteUnit(clientId, id, options = {}) {
 
 async function cloneTemplatesForReportingPeriod(
   clientId,
+  userId,
   reportingPeriodId,
   options = {}
 ) {
@@ -366,6 +391,8 @@ async function cloneTemplatesForReportingPeriod(
             description: template.description,
             category: template.category,
             isTemplate: false,
+            createdBy: userId,
+            updatedBy: userId,
           },
           { transaction: t }
         );
@@ -389,6 +416,8 @@ async function cloneTemplatesForReportingPeriod(
             value: 0,
             unitId: null, // can be improved to look up unit by template.defaultUnit
             isTemplate: false,
+            createdBy: userId,
+            updatedBy: userId,
           },
           { transaction: t }
         );

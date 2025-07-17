@@ -25,6 +25,14 @@ module.exports = (sequelize) => {
         type: DataTypes.ENUM("Draft", "PendingApproval", "Approved"),
         defaultValue: "Draft",
       },
+      createdBy: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
+      updatedBy: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+      },
     },
     {
       tableName: "tbl_esg_reporting_periods",

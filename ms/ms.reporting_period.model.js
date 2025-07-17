@@ -6,28 +6,24 @@ let nanoid;
 })();
 
 module.exports = (sequelize) => {
-  const Unit = sequelize.define(
-    "Unit",
+  const MSReportingPeriod = sequelize.define(
+    "MSReportingPeriod",
     {
       id: {
         type: DataTypes.STRING(10),
         primaryKey: true,
+        defaultValue: () => nanoid(10),
       },
       clientId: {
         type: DataTypes.STRING(10),
         allowNull: false,
       },
-      name: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
-      symbol: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
-      description: {
-        type: DataTypes.TEXT,
-        allowNull: true,
+      name: { type: DataTypes.STRING, allowNull: false },
+      startDate: { type: DataTypes.DATEONLY, allowNull: false },
+      endDate: { type: DataTypes.DATEONLY, allowNull: false },
+      status: {
+        type: DataTypes.ENUM("Draft", "PendingApproval", "Approved"),
+        defaultValue: "Draft",
       },
       createdBy: {
         type: DataTypes.STRING(10),
@@ -39,10 +35,11 @@ module.exports = (sequelize) => {
       },
     },
     {
-      tableName: "tbl_esg_units",
+      tableName: "tbl_ms_reporting_periods",
       timestamps: true,
       paranoid: true,
     }
   );
-  return Unit;
+
+  return MSReportingPeriod;
 };

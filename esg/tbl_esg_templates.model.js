@@ -37,6 +37,14 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      createdBy: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
+      updatedBy: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+      },
     },
     {
       tableName: "tbl_esg_templates",

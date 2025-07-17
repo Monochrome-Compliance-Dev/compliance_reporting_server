@@ -6,8 +6,8 @@ let nanoid;
 })();
 
 module.exports = (sequelize) => {
-  const Unit = sequelize.define(
-    "Unit",
+  const MSSupplierRisk = sequelize.define(
+    "MSSupplierRisk",
     {
       id: {
         type: DataTypes.STRING(10),
@@ -17,17 +17,24 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(10),
         allowNull: false,
       },
+      reportingPeriodId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
       name: {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      symbol: {
+      country: {
         type: DataTypes.STRING,
         allowNull: false,
       },
-      description: {
-        type: DataTypes.TEXT,
-        allowNull: true,
+      risk: {
+        type: DataTypes.ENUM("Low", "Medium", "High"),
+        allowNull: false,
+      },
+      reviewed: {
+        type: DataTypes.DATE,
       },
       createdBy: {
         type: DataTypes.STRING(10),
@@ -38,11 +45,7 @@ module.exports = (sequelize) => {
         allowNull: true,
       },
     },
-    {
-      tableName: "tbl_esg_units",
-      timestamps: true,
-      paranoid: true,
-    }
+    { tableName: "tbl_ms_supplier_risks", timestamps: true, paranoid: true }
   );
-  return Unit;
+  return MSSupplierRisk;
 };

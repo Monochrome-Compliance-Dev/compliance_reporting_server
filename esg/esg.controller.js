@@ -118,7 +118,10 @@ async function getReportingPeriodsByClient(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const periods = await esgService.getReportingPeriodsByClient(clientId);
+    const periods = await esgService.getReportingPeriodsByClient(
+      clientId,
+      userId
+    );
 
     await auditService.logEvent({
       clientId,
@@ -278,7 +281,7 @@ async function getMetricsByClient(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const metrics = await esgService.getMetricsByClient(clientId);
+    const metrics = await esgService.getMetricsByClient(clientId, userId);
 
     await auditService.logEvent({
       clientId,
@@ -338,7 +341,7 @@ async function deleteIndicator(req, res, next) {
     const device = req.headers["user-agent"];
     const indicatorId = req.params.indicatorId;
 
-    await esgService.deleteIndicator(clientId, indicatorId);
+    await esgService.deleteIndicator(clientId, userId, indicatorId);
 
     await auditService.logEvent({
       clientId,
@@ -365,7 +368,7 @@ async function deleteMetric(req, res, next) {
     const device = req.headers["user-agent"];
     const metricId = req.params.metricId;
 
-    await esgService.deleteMetric(clientId, metricId);
+    await esgService.deleteMetric(clientId, userId, metricId);
 
     await auditService.logEvent({
       clientId,
@@ -392,13 +395,17 @@ async function submitReportingPeriod(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const period = await esgService.getReportingPeriodById(clientId, id);
+    const period = await esgService.getReportingPeriodById(
+      clientId,
+      userId,
+      id
+    );
     if (!period) return res.status(404).json({ error: "Not found" });
 
     if (period.status !== "Draft")
       return res.status(400).json({ error: "Only Draft can be submitted." });
 
-    await esgService.updateReportingPeriod(clientId, id, {
+    await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "PendingApproval",
       submittedBy: userId,
       submittedAt: new Date(),
@@ -429,7 +436,11 @@ async function approveReportingPeriod(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const period = await esgService.getReportingPeriodById(clientId, id);
+    const period = await esgService.getReportingPeriodById(
+      clientId,
+      userId,
+      id
+    );
     if (!period) return res.status(404).json({ error: "Not found" });
 
     if (period.status !== "PendingApproval")
@@ -437,7 +448,7 @@ async function approveReportingPeriod(req, res, next) {
         .status(400)
         .json({ error: "Only PendingApproval can be approved." });
 
-    await esgService.updateReportingPeriod(clientId, id, {
+    await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "Approved",
       approvedBy: userId,
       approvedAt: new Date(),
@@ -468,7 +479,11 @@ async function rollbackReportingPeriod(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const period = await esgService.getReportingPeriodById(clientId, id);
+    const period = await esgService.getReportingPeriodById(
+      clientId,
+      userId,
+      id
+    );
     if (!period) return res.status(404).json({ error: "Not found" });
 
     if (period.status !== "PendingApproval" && period.status !== "Approved")
@@ -476,7 +491,7 @@ async function rollbackReportingPeriod(req, res, next) {
         .status(400)
         .json({ error: "Only PendingApproval or Approved can rollback." });
 
-    await esgService.updateReportingPeriod(clientId, id, {
+    await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "Draft",
     });
 
@@ -505,7 +520,11 @@ async function getReportingPeriodById(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const period = await esgService.getReportingPeriodById(clientId, id);
+    const period = await esgService.getReportingPeriodById(
+      clientId,
+      userId,
+      id
+    );
     if (!period) return res.status(404).json({ error: "Not found" });
 
     await auditService.logEvent({
@@ -532,7 +551,7 @@ async function getMetricById(req, res, next) {
     const device = req.headers["user-agent"];
     const metricId = req.params.metricId;
 
-    const metric = await esgService.getMetricById(clientId, metricId);
+    const metric = await esgService.getMetricById(clientId, userId, metricId);
     if (!metric) return res.status(404).json({ error: "Not found" });
 
     await auditService.logEvent({
@@ -591,7 +610,7 @@ async function getUnitsByClient(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const units = await esgService.getUnitsByClient(clientId);
+    const units = await esgService.getUnitsByClient(clientId, userId);
 
     await auditService.logEvent({
       clientId,
@@ -617,7 +636,7 @@ async function getUnitById(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const unit = await esgService.getUnitById(clientId, id);
+    const unit = await esgService.getUnitById(clientId, userId, id);
     if (!unit) return res.status(404).json({ error: "Not found" });
 
     await auditService.logEvent({
@@ -645,7 +664,11 @@ async function updateUnit(req, res, next) {
     const id = req.params.id;
     const { name, symbol, description } = req.body;
 
-    await esgService.updateUnit(clientId, id, { name, symbol, description });
+    await esgService.updateUnit(clientId, userId, id, {
+      name,
+      symbol,
+      description,
+    });
 
     await auditService.logEvent({
       clientId,
@@ -672,7 +695,7 @@ async function deleteUnit(req, res, next) {
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    await esgService.deleteUnit(clientId, id);
+    await esgService.deleteUnit(clientId, userId, id);
 
     await auditService.logEvent({
       clientId,
@@ -857,7 +880,7 @@ async function getTemplatesByClient(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const templates = await esgService.getTemplatesByClient(clientId);
+    const templates = await esgService.getTemplatesByClient(clientId, userId);
 
     await auditService.logEvent({
       clientId,
@@ -883,7 +906,7 @@ async function getTemplateById(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const template = await esgService.getTemplateById(clientId, id);
+    const template = await esgService.getTemplateById(clientId, userId, id);
     if (!template) return res.status(404).json({ error: "Not found" });
 
     await auditService.logEvent({
@@ -910,7 +933,7 @@ async function deleteTemplate(req, res, next) {
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    await esgService.deleteTemplate(clientId, id);
+    await esgService.deleteTemplate(clientId, userId, id);
 
     await auditService.logEvent({
       clientId,

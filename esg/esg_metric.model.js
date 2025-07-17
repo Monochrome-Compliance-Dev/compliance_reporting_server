@@ -38,6 +38,14 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: false,
       },
+      createdBy: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+      },
+      updatedBy: {
+        type: DataTypes.STRING(10),
+        allowNull: true,
+      },
     },
     {
       tableName: "tbl_esg_metrics",

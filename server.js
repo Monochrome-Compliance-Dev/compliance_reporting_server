@@ -242,6 +242,7 @@ app.use("/api/data-cleanse", require("./data_cleanse/data_cleanse.controller"));
 app.use("/api/tcp/dashboard", require("./dashboard/dashboard.controller"));
 app.use("/api/esg", require("./esg/esg.controller"));
 app.use("/api/files", require("./files/file.controller"));
+app.use("/api/ms", require("./ms/ms.controller"));
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

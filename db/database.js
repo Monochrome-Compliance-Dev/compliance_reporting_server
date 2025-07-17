@@ -74,6 +74,7 @@ async function initialise() {
     "../audit", // added to load AuditEvent model
     "../esg", // added to load ESGIndicator and ESGMetric models
     "../files", // added to load File model
+    "../ms", // added to load MSGrievance, MSSupplierRisk and MSTraining models
   ];
 
   modelDirs.forEach((dir) => {
@@ -183,6 +184,43 @@ async function initialise() {
   if (db.ESGMetric && db.Unit) {
     db.Unit.hasMany(db.ESGMetric, { foreignKey: "unitId" });
     db.ESGMetric.belongsTo(db.Unit, { foreignKey: "unitId" });
+  }
+
+  // Modern Slavery relationships
+  if (db.Client && db.MSSupplierRisk) {
+    db.Client.hasMany(db.MSSupplierRisk, { onDelete: "CASCADE" });
+    db.MSSupplierRisk.belongsTo(db.Client);
+  }
+  if (db.User && db.MSSupplierRisk) {
+    db.User.hasMany(db.MSSupplierRisk, { foreignKey: "createdBy" });
+    db.MSSupplierRisk.belongsTo(db.User, { foreignKey: "createdBy" });
+  }
+
+  if (db.Client && db.MSTraining) {
+    db.Client.hasMany(db.MSTraining, { onDelete: "CASCADE" });
+    db.MSTraining.belongsTo(db.Client);
+  }
+  if (db.User && db.MSTraining) {
+    db.User.hasMany(db.MSTraining, { foreignKey: "createdBy" });
+    db.MSTraining.belongsTo(db.User, { foreignKey: "createdBy" });
+  }
+
+  if (db.Client && db.MSGrievance) {
+    db.Client.hasMany(db.MSGrievance, { onDelete: "CASCADE" });
+    db.MSGrievance.belongsTo(db.Client);
+  }
+  if (db.User && db.MSGrievance) {
+    db.User.hasMany(db.MSGrievance, { foreignKey: "createdBy" });
+    db.MSGrievance.belongsTo(db.User, { foreignKey: "createdBy" });
+  }
+
+  if (db.Client && db.MSInterviewResponse) {
+    db.Client.hasMany(db.MSInterviewResponse, { onDelete: "CASCADE" });
+    db.MSInterviewResponse.belongsTo(db.Client);
+  }
+  if (db.User && db.MSInterviewResponse) {
+    db.User.hasMany(db.MSInterviewResponse, { foreignKey: "createdBy" });
+    db.MSInterviewResponse.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
