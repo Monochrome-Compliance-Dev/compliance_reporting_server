@@ -16,58 +16,6 @@ router.get("/reporting-periods", authorise(), getReportingPeriods);
 router.get("/reporting-periods/:id", authorise(), getReportingPeriodById);
 router.post("/reporting-periods", authorise(), createReportingPeriod);
 
-// --- Nested Reporting Period Routes ---
-router.get(
-  "/reporting-periods/:reportingPeriodId/supplier-risks",
-  authorise(),
-  getSupplierRisksByReportingPeriod
-);
-router.post(
-  "/reporting-periods/:reportingPeriodId/supplier-risks",
-  authorise(),
-  validateRequest(supplierRiskSchema),
-  createSupplierRisk
-);
-router.delete(
-  "/reporting-periods/:reportingPeriodId/supplier-risks/:id",
-  authorise(),
-  deleteSupplierRisk
-);
-
-router.get(
-  "/reporting-periods/:reportingPeriodId/training",
-  authorise(),
-  getTrainingByReportingPeriod
-);
-router.post(
-  "/reporting-periods/:reportingPeriodId/training",
-  authorise(),
-  validateRequest(trainingSchema),
-  createTraining
-);
-router.delete(
-  "/reporting-periods/:reportingPeriodId/training/:id",
-  authorise(),
-  deleteTraining
-);
-
-router.get(
-  "/reporting-periods/:reportingPeriodId/grievances",
-  authorise(),
-  getGrievancesByReportingPeriod
-);
-router.post(
-  "/reporting-periods/:reportingPeriodId/grievances",
-  authorise(),
-  validateRequest(grievanceSchema),
-  createGrievance
-);
-router.delete(
-  "/reporting-periods/:reportingPeriodId/grievances/:id",
-  authorise(),
-  deleteGrievance
-);
-
 // General Service Routes
 router.post(
   "/supplier-risks",
@@ -75,11 +23,7 @@ router.post(
   validateRequest(supplierRiskSchema),
   createSupplierRisk
 );
-router.get(
-  "/supplier-risks/:reportingPeriodId",
-  authorise(),
-  getSupplierRisksByReportingPeriod
-);
+router.put("/supplier-risks/:id", authorise(), updateSupplierRisk);
 router.delete("/supplier-risks/:id", authorise(), deleteSupplierRisk);
 
 router.post(
@@ -88,11 +32,7 @@ router.post(
   validateRequest(trainingSchema),
   createTraining
 );
-router.get(
-  "/training/:reportingPeriodId",
-  authorise(),
-  getTrainingByReportingPeriod
-);
+router.put("/training/:id", authorise(), updateTrainingRecord);
 router.delete("/training/:id", authorise(), deleteTraining);
 
 router.post(
@@ -101,11 +41,13 @@ router.post(
   validateRequest(grievanceSchema),
   createGrievance
 );
-router.get(
-  "/grievances/:reportingPeriodId",
-  authorise(),
-  getGrievancesByReportingPeriod
-);
+router.put("/grievances/:id", authorise(), updateGrievanceRecord);
+router.delete("/grievances/:id", authorise(), deleteGrievance);
+
+// New general GET routes for records
+router.get("/training", authorise(), getTrainingRecords);
+router.get("/grievances", authorise(), getGrievanceRecords);
+router.get("/supplier-risks", authorise(), getSupplierRisks);
 router.delete("/grievances/:id", authorise(), deleteGrievance);
 
 // Analytics Routes
@@ -219,10 +161,8 @@ async function createSupplierRisk(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { reportingPeriodId, supplierName, riskLevel, description } =
-      req.body;
+    const { supplierName, riskLevel, description } = req.body;
     const risk = await msService.createSupplierRisk(clientId, userId, {
-      reportingPeriodId,
       supplierName,
       riskLevel,
       description,
@@ -235,7 +175,7 @@ async function createSupplierRisk(req, res, next) {
       action: "CreateSupplierRisk",
       entity: "SupplierRisk",
       entityId: risk.id,
-      details: { supplierName, riskLevel, reportingPeriodId },
+      details: { supplierName, riskLevel },
     });
     res.status(201).json(risk.get ? risk.get({ plain: true }) : risk);
   } catch (err) {
@@ -243,28 +183,32 @@ async function createSupplierRisk(req, res, next) {
   }
 }
 
-async function getSupplierRisksByReportingPeriod(req, res, next) {
+async function updateSupplierRisk(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const reportingPeriodId = req.params.reportingPeriodId;
-    const risks = await msService.getSupplierRisksByReportingPeriodId(
-      clientId,
-      reportingPeriodId
-    );
+    const id = req.params.id;
+    const { name, risk, country, reviewed } = req.body;
+    const updatedRisk = await msService.updateSupplierRisk(clientId, id, {
+      name,
+      risk,
+      country,
+      reviewed,
+      updatedBy: userId,
+    });
     await auditService.logEvent({
       clientId,
       userId,
       ip,
       device,
-      action: "GetSupplierRisksByReportingPeriod",
+      action: "UpdateSupplierRisk",
       entity: "SupplierRisk",
-      entityId: reportingPeriodId,
-      details: { count: risks.length },
+      entityId: id,
+      details: { name, risk, country, reviewed },
     });
-    res.json(risks);
+    res.json(updatedRisk.get ? updatedRisk.get({ plain: true }) : updatedRisk);
   } catch (err) {
     next(err);
   }
@@ -299,10 +243,8 @@ async function createTraining(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { reportingPeriodId, trainingType, participants, description } =
-      req.body;
+    const { trainingType, participants, description } = req.body;
     const training = await msService.createTrainingRecord(clientId, userId, {
-      reportingPeriodId,
       trainingType,
       participants,
       description,
@@ -315,7 +257,7 @@ async function createTraining(req, res, next) {
       action: "CreateTraining",
       entity: "Training",
       entityId: training.id,
-      details: { trainingType, participants, reportingPeriodId },
+      details: { trainingType, participants },
     });
     res
       .status(201)
@@ -325,28 +267,41 @@ async function createTraining(req, res, next) {
   }
 }
 
-async function getTrainingByReportingPeriod(req, res, next) {
+async function updateTrainingRecord(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const reportingPeriodId = req.params.reportingPeriodId;
-    const trainings = await msService.getTrainingRecordsByReportingPeriodId(
-      clientId,
-      reportingPeriodId
-    );
+    const id = req.params.id;
+    const { employeeName, department, completed, completedAt } = req.body;
+    const updatedTraining = await msService.updateTrainingRecord(clientId, id, {
+      employeeName,
+      department,
+      completed,
+      completedAt,
+      updatedBy: userId,
+    });
     await auditService.logEvent({
       clientId,
       userId,
       ip,
       device,
-      action: "GetTrainingByReportingPeriod",
+      action: "UpdateTraining",
       entity: "Training",
-      entityId: reportingPeriodId,
-      details: { count: trainings.length },
+      entityId: id,
+      details: {
+        employeeName,
+        department,
+        completed,
+        completedAt,
+      },
     });
-    res.json(trainings);
+    res.json(
+      updatedTraining.get
+        ? updatedTraining.get({ plain: true })
+        : updatedTraining
+    );
   } catch (err) {
     next(err);
   }
@@ -381,9 +336,8 @@ async function createGrievance(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { reportingPeriodId, grievanceType, description, status } = req.body;
+    const { grievanceType, description, status } = req.body;
     const grievance = await msService.createGrievance(clientId, userId, {
-      reportingPeriodId,
       grievanceType,
       description,
       status,
@@ -396,7 +350,7 @@ async function createGrievance(req, res, next) {
       action: "CreateGrievance",
       entity: "Grievance",
       entityId: grievance.id,
-      details: { grievanceType, reportingPeriodId, status },
+      details: { grievanceType, status },
     });
     res
       .status(201)
@@ -406,28 +360,135 @@ async function createGrievance(req, res, next) {
   }
 }
 
-async function getGrievancesByReportingPeriod(req, res, next) {
+async function updateGrievanceRecord(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const reportingPeriodId = req.params.reportingPeriodId;
-    const grievances = await msService.getGrievancesByReportingPeriodId(
+    const id = req.params.id;
+    const { description, status } = req.body;
+    const updatedGrievance = await msService.updateGrievanceRecord(
       clientId,
-      reportingPeriodId
+      id,
+      {
+        description,
+        status,
+        updatedBy: userId,
+      }
     );
     await auditService.logEvent({
       clientId,
       userId,
       ip,
       device,
-      action: "GetGrievancesByReportingPeriod",
+      action: "UpdateGrievance",
       entity: "Grievance",
-      entityId: reportingPeriodId,
-      details: { count: grievances.length },
+      entityId: id,
+      details: { description, status },
     });
-    res.json(grievances);
+    res.json(
+      updatedGrievance.get
+        ? updatedGrievance.get({ plain: true })
+        : updatedGrievance
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteGrievance(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+    await msService.deleteGrievance(clientId, id);
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "DeleteGrievance",
+      entity: "Grievance",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Updated handler: getTrainingRecords
+async function getTrainingRecords(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const { startDate, endDate } = req.query;
+    const records = await msService.getTrainingRecords(
+      clientId,
+      startDate,
+      endDate
+    );
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTrainingRecords",
+      entity: "Training",
+      details: { count: records.length },
+    });
+    res.json(records);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// New handler: getGrievanceRecords
+async function getGrievanceRecords(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const records = await msService.getGrievanceRecords(clientId);
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetGrievanceRecords",
+      entity: "Grievance",
+      details: { count: records.length },
+    });
+    res.json(records);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// New handler: getSupplierRisks
+async function getSupplierRisks(req, res, next) {
+  try {
+    const clientId = req.auth.clientId;
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const records = await msService.getSupplierRisks(clientId);
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetSupplierRisks",
+      entity: "SupplierRisk",
+      details: { count: records.length },
+    });
+    res.json(records);
   } catch (err) {
     next(err);
   }

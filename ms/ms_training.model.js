@@ -11,7 +11,6 @@ module.exports = (sequelize) => {
     {
       id: { type: DataTypes.STRING(10), primaryKey: true },
       clientId: { type: DataTypes.STRING(10), allowNull: false },
-      reportingPeriodId: { type: DataTypes.STRING(10), allowNull: false },
       employeeName: { type: DataTypes.STRING, allowNull: false },
       department: { type: DataTypes.STRING },
       completed: { type: DataTypes.BOOLEAN, allowNull: false },

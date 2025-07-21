@@ -17,12 +17,18 @@ async function getSupplierRiskSummary(clientId, options = {}) {
   try {
     const raw = await db.MSSupplierRisk.findAll({
       attributes: [
-        "reportingPeriodId",
+        [
+          db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+          "period",
+        ],
         "risk",
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "count"],
       ],
       where: { clientId },
-      group: ["reportingPeriodId", "risk"],
+      group: [
+        db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+        "risk",
+      ],
       transaction: t,
       ...options,
     });
@@ -31,15 +37,15 @@ async function getSupplierRiskSummary(clientId, options = {}) {
 
     const grouped = {};
     for (const row of raw) {
-      const period = row.reportingPeriodId;
+      const period = row.dataValues.period;
       const risk = row.risk;
       const count = parseInt(row.dataValues.count, 10);
       if (!grouped[period]) grouped[period] = {};
       grouped[period][risk] = count;
     }
 
-    return Object.entries(grouped).map(([reportingPeriodId, summary]) => ({
-      reportingPeriodId,
+    return Object.entries(grouped).map(([period, summary]) => ({
+      period,
       summary,
     }));
   } catch (err) {
@@ -56,35 +62,46 @@ async function getTrainingCompletionStats(clientId, options = {}) {
   try {
     const total = await db.MSTraining.findAll({
       attributes: [
-        "reportingPeriodId",
+        [
+          db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+          "period",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "total"],
       ],
       where: { clientId },
-      group: ["reportingPeriodId"],
+      group: [
+        db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+      ],
       transaction: t,
       ...options,
     });
 
     const completed = await db.MSTraining.findAll({
       attributes: [
-        "reportingPeriodId",
+        [
+          db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+          "period",
+        ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "completed"],
       ],
       where: { clientId, completed: true },
-      group: ["reportingPeriodId"],
+      group: [
+        db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+      ],
       transaction: t,
       ...options,
     });
 
     await t.commit();
 
-    // Combine totals + completed by reportingPeriodId
+    // Combine totals + completed by period
     const summary = total.map((tRow) => {
+      const period = tRow.dataValues.period;
       const completedRow = completed.find(
-        (c) => c.reportingPeriodId === tRow.reportingPeriodId
+        (c) => c.dataValues.period === period
       );
       return {
-        reportingPeriodId: tRow.reportingPeriodId,
+        period,
         total: parseInt(tRow.dataValues.total, 10),
         completed: parseInt(completedRow?.dataValues.completed || 0, 10),
       };
@@ -105,12 +122,18 @@ async function getGrievanceSummary(clientId, options = {}) {
   try {
     const raw = await db.MSGrievance.findAll({
       attributes: [
-        "reportingPeriodId",
+        [
+          db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+          "period",
+        ],
         "status",
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "count"],
       ],
       where: { clientId },
-      group: ["reportingPeriodId", "status"],
+      group: [
+        db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
+        "status",
+      ],
       transaction: t,
       ...options,
     });
@@ -119,15 +142,15 @@ async function getGrievanceSummary(clientId, options = {}) {
 
     const grouped = {};
     for (const row of raw) {
-      const period = row.reportingPeriodId;
+      const period = row.dataValues.period;
       const status = row.status;
       const count = parseInt(row.dataValues.count, 10);
       if (!grouped[period]) grouped[period] = {};
       grouped[period][status] = count;
     }
 
-    return Object.entries(grouped).map(([reportingPeriodId, summary]) => ({
-      reportingPeriodId,
+    return Object.entries(grouped).map(([period, summary]) => ({
+      period,
       summary,
     }));
   } catch (err) {

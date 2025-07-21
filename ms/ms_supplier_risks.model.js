@@ -17,10 +17,6 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(10),
         allowNull: false,
       },
-      reportingPeriodId: {
-        type: DataTypes.STRING(10),
-        allowNull: false,
-      },
       name: {
         type: DataTypes.STRING,
         allowNull: false,

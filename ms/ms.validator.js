@@ -10,7 +10,6 @@ const msSupplierRiskSchema = Joi.object({
     .messages({
       "string.pattern.base": "Reviewed must be in YYYY-MM-DD format",
     }),
-  reportingPeriodId: Joi.string().length(10).required(),
   clientId: Joi.string().length(10),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
@@ -26,7 +25,6 @@ const msTrainingSchema = Joi.object({
     .messages({
       "string.pattern.base": "Completed At must be in YYYY-MM-DD format",
     }),
-  reportingPeriodId: Joi.string().length(10).required(),
   clientId: Joi.string().length(10),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
@@ -41,7 +39,6 @@ const msGrievanceSchema = Joi.object({
     .messages({
       "string.pattern.base": "Reported At must be in YYYY-MM-DD format",
     }),
-  reportingPeriodId: Joi.string().length(10).required(),
   clientId: Joi.string().length(10),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),

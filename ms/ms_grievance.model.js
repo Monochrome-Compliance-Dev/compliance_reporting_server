@@ -11,7 +11,6 @@ module.exports = (sequelize) => {
     {
       id: { type: DataTypes.STRING(10), primaryKey: true },
       clientId: { type: DataTypes.STRING(10), allowNull: false },
-      reportingPeriodId: { type: DataTypes.STRING(10), allowNull: false },
       description: { type: DataTypes.TEXT, allowNull: false },
       status: {
         type: DataTypes.ENUM("Open", "Closed", "Investigating"),

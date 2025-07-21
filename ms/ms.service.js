@@ -2,16 +2,20 @@ const {
   beginTransactionWithClientContext,
 } = require("../helpers/setClientIdRLS");
 const db = require("../db/database");
+const { Op } = require("sequelize");
 
 module.exports = {
   createSupplierRisk,
-  getSupplierRisksByReportingPeriodId,
+  getSupplierRisks,
+  updateSupplierRisk,
   deleteSupplierRisk,
   createTrainingRecord,
-  getTrainingRecordsByReportingPeriodId,
+  getTrainingRecords,
+  updateTrainingRecord,
   deleteTrainingRecord,
   createGrievance,
-  getGrievancesByReportingPeriodId,
+  updateGrievanceRecord,
+  getGrievances,
   deleteGrievance,
   createReportingPeriod,
   getReportingPeriods,
@@ -38,18 +42,37 @@ async function createSupplierRisk(clientId, userId, params) {
   }
 }
 
-async function getSupplierRisksByReportingPeriodId(
-  clientId,
-  reportingPeriodId
-) {
+async function getSupplierRisks(clientId, startDate, endDate) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const where = {};
+    if (startDate && endDate) {
+      where.date = {
+        [Op.between]: [startDate, endDate],
+      };
+    }
     const supplierRisks = await db.MSSupplierRisk.findAll({
-      where: { reportingPeriodId },
+      where,
       transaction: t,
     });
     await t.commit();
     return supplierRisks;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateSupplierRisk(clientId, id, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count, [updatedRisk]] = await db.MSSupplierRisk.update(params, {
+      where: { id },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedRisk;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
@@ -87,18 +110,37 @@ async function createTrainingRecord(clientId, userId, params) {
   }
 }
 
-async function getTrainingRecordsByReportingPeriodId(
-  clientId,
-  reportingPeriodId
-) {
+async function getTrainingRecords(clientId, startDate, endDate) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const where = {};
+    if (startDate && endDate) {
+      where.date = {
+        [Op.between]: [startDate, endDate],
+      };
+    }
     const trainingRecords = await db.MSTraining.findAll({
-      where: { reportingPeriodId },
+      where,
       transaction: t,
     });
     await t.commit();
     return trainingRecords;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateTrainingRecord(clientId, recordId, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count, [updatedRecord]] = await db.MSTraining.update(params, {
+      where: { id: recordId },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedRecord;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
@@ -136,15 +178,37 @@ async function createGrievance(clientId, userId, params) {
   }
 }
 
-async function getGrievancesByReportingPeriodId(clientId, reportingPeriodId) {
+async function getGrievances(clientId, startDate, endDate) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const where = {};
+    if (startDate && endDate) {
+      where.date = {
+        [Op.between]: [startDate, endDate],
+      };
+    }
     const grievances = await db.MSGrievance.findAll({
-      where: { reportingPeriodId },
+      where,
       transaction: t,
     });
     await t.commit();
     return grievances;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateGrievanceRecord(clientId, id, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count, [updatedGrievance]] = await db.MSGrievance.update(params, {
+      where: { id },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedGrievance;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
