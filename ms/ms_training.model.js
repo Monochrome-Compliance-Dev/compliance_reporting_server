@@ -9,12 +9,20 @@ module.exports = (sequelize) => {
   const MSTraining = sequelize.define(
     "MSTraining",
     {
-      id: { type: DataTypes.STRING(10), primaryKey: true },
+      id: {
+        type: DataTypes.STRING(10),
+        primaryKey: true,
+        defaultValue: () => nanoid(10),
+      },
       clientId: { type: DataTypes.STRING(10), allowNull: false },
       employeeName: { type: DataTypes.STRING, allowNull: false },
-      department: { type: DataTypes.STRING },
-      completed: { type: DataTypes.BOOLEAN, allowNull: false },
-      completedAt: { type: DataTypes.DATE },
+      department: { type: DataTypes.STRING, allowNull: false },
+      completed: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      completedAt: { type: DataTypes.DATE, allowNull: true },
       createdBy: { type: DataTypes.STRING(10), allowNull: false },
       updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     },

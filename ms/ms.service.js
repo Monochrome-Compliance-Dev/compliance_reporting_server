@@ -7,15 +7,18 @@ const { Op } = require("sequelize");
 module.exports = {
   createSupplierRisk,
   getSupplierRisks,
+  getSupplierRiskById,
   updateSupplierRisk,
   deleteSupplierRisk,
-  createTrainingRecord,
-  getTrainingRecords,
-  updateTrainingRecord,
-  deleteTrainingRecord,
+  createTraining,
+  getTraining,
+  getTrainingById,
+  updateTraining,
+  deleteTraining,
   createGrievance,
-  updateGrievanceRecord,
   getGrievances,
+  getGrievanceById,
+  updateGrievance,
   deleteGrievance,
   createReportingPeriod,
   getReportingPeriods,
@@ -23,6 +26,12 @@ module.exports = {
   getInterviewResponses,
   submitInterviewResponses,
   generateStatement,
+  updateTrainingById,
+  deleteTrainingById,
+  updateSupplierRiskById,
+  deleteSupplierRiskById,
+  updateGrievanceById,
+  deleteGrievanceById,
 };
 
 async function createSupplierRisk(clientId, userId, params) {
@@ -63,6 +72,21 @@ async function getSupplierRisks(clientId, startDate, endDate) {
   }
 }
 
+async function getSupplierRiskById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const risk = await db.MSSupplierRisk.findOne({
+      where: { id },
+      transaction: t,
+    });
+    await t.commit();
+    return risk;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
 async function updateSupplierRisk(clientId, id, params) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
@@ -93,7 +117,7 @@ async function deleteSupplierRisk(clientId, id) {
   }
 }
 
-async function createTrainingRecord(clientId, userId, params) {
+async function createTraining(clientId, userId, params) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const newTrainingRecord = await db.MSTraining.create(
@@ -110,7 +134,7 @@ async function createTrainingRecord(clientId, userId, params) {
   }
 }
 
-async function getTrainingRecords(clientId, startDate, endDate) {
+async function getTraining(clientId, startDate, endDate) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const where = {};
@@ -131,7 +155,22 @@ async function getTrainingRecords(clientId, startDate, endDate) {
   }
 }
 
-async function updateTrainingRecord(clientId, recordId, params) {
+async function getTrainingById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const training = await db.MSTraining.findOne({
+      where: { id },
+      transaction: t,
+    });
+    await t.commit();
+    return training;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateTraining(clientId, recordId, params) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const [count, [updatedRecord]] = await db.MSTraining.update(params, {
@@ -147,7 +186,7 @@ async function updateTrainingRecord(clientId, recordId, params) {
   }
 }
 
-async function deleteTrainingRecord(clientId, id) {
+async function deleteTraining(clientId, id) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     await db.MSTraining.destroy({
@@ -199,7 +238,22 @@ async function getGrievances(clientId, startDate, endDate) {
   }
 }
 
-async function updateGrievanceRecord(clientId, id, params) {
+async function getGrievanceById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const grievance = await db.MSGrievance.findOne({
+      where: { id },
+      transaction: t,
+    });
+    await t.commit();
+    return grievance;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateGrievance(clientId, id, params) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const [count, [updatedGrievance]] = await db.MSGrievance.update(params, {
@@ -320,6 +374,117 @@ async function generateStatement(clientId, reportingPeriodId) {
       message: "Statement generation is not implemented yet.",
       reportingPeriodId,
     };
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateTrainingById(clientId, id, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    if (params.completed === false) {
+      params.completedAt = null;
+    }
+
+    console.log("Updating training record", {
+      id,
+      params,
+    });
+
+    const [count, [updatedRecord]] = await db.MSTraining.update(params, {
+      where: { id },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedRecord;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function deleteTrainingById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const record = await db.MSTraining.findOne({
+      where: { id },
+      transaction: t,
+    });
+    if (record) {
+      await record.destroy({ transaction: t });
+    }
+    await t.commit();
+    return record;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateSupplierRiskById(clientId, id, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count, [updatedRecord]] = await db.MSSupplierRisk.update(params, {
+      where: { id },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedRecord;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function deleteSupplierRiskById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const record = await db.MSSupplierRisk.findOne({
+      where: { id },
+      transaction: t,
+    });
+    if (record) {
+      await record.destroy({ transaction: t });
+    }
+    await t.commit();
+    return record;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function updateGrievanceById(clientId, id, params) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count, [updatedRecord]] = await db.MSGrievance.update(params, {
+      where: { id },
+      returning: true,
+      transaction: t,
+    });
+    await t.commit();
+    return updatedRecord;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+async function deleteGrievanceById(clientId, id) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const record = await db.MSGrievance.findOne({
+      where: { id },
+      transaction: t,
+    });
+    if (record) {
+      await record.destroy({ transaction: t });
+    }
+    await t.commit();
+    return record;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;

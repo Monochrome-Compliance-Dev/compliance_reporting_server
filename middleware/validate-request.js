@@ -25,6 +25,7 @@ module.exports = function validateRequest(schema) {
 
     records.forEach((record, index) => {
       const fullRecord = { ...record, clientId };
+      console.log("fullRecord: ", fullRecord);
       const { error, value } = schema.validate(fullRecord, options);
       if (error) {
         const details = error.details.map((x) => {

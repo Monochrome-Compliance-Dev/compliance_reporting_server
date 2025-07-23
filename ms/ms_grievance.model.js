@@ -9,7 +9,11 @@ module.exports = (sequelize) => {
   const MSGrievance = sequelize.define(
     "MSGrievance",
     {
-      id: { type: DataTypes.STRING(10), primaryKey: true },
+      id: {
+        type: DataTypes.STRING(10),
+        primaryKey: true,
+        defaultValue: () => nanoid(10),
+      },
       clientId: { type: DataTypes.STRING(10), allowNull: false },
       description: { type: DataTypes.TEXT, allowNull: false },
       status: {

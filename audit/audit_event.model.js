@@ -45,6 +45,14 @@ module.exports = (sequelize) => {
         allowNull: true,
         // Additional context, such as field diffs or counts
       },
+      ip: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      device: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
     },
     {
       tableName: "tbl_audit_events",

@@ -113,6 +113,7 @@ function refreshToken(req, res, next) {
         email: user.email,
         ip,
         device,
+        when: new Date(),
       });
     })
     .catch((next) => {

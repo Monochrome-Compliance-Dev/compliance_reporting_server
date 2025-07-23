@@ -109,8 +109,8 @@ const auditLogger = winston.createLogger({
   ],
 });
 
-logger.audit = (message) => {
-  auditLogger.log({ level: "info", message });
+logger.audit = (message, meta = {}) => {
+  auditLogger.log({ level: "info", message, ...meta });
 };
 
 logger.logEvent = (level, message, meta = {}) => {
