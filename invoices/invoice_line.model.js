@@ -57,7 +57,7 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  const InvoiceLine = sequelize.define("invoice_line", attributes, {
+  const InvoiceLine = sequelize.define("InvoiceLine", attributes, {
     tableName: "tbl_invoice_line",
     timestamps: true,
     paranoid: true,

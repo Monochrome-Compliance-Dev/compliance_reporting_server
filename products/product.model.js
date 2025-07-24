@@ -27,6 +27,17 @@ function model(sequelize) {
       type: DataTypes.ENUM("solution", "module", "addon"),
       allowNull: false,
     },
+    module: {
+      type: DataTypes.ENUM(
+        "ptrs",
+        "esg",
+        "training",
+        "audit",
+        "grievance",
+        "ms"
+      ),
+      allowNull: false,
+    },
     amount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,

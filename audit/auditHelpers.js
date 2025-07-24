@@ -16,8 +16,9 @@ async function logCreateAudit({
     userId,
     action,
     entity: entity.toLowerCase(),
-    entityId: result.id,
-    after: result.get({ plain: true }),
+    entityId: result?.id,
+    after:
+      typeof result.get === "function" ? result.get({ plain: true }) : result,
     ip,
     device,
   });
@@ -51,14 +52,6 @@ async function logUpdateAudit({
   req,
   action,
 }) {
-  console.error("logUpdateAudit called", {
-    entity,
-    clientId,
-    userId,
-    entityId,
-    before,
-    after,
-  });
   const ip = req.ip;
   const device = req.headers["user-agent"];
 

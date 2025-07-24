@@ -17,9 +17,48 @@ router.post(
   validateRequest(generateInvoiceSchema),
   generateInvoicesForPeriod
 );
+router.post(
+  "/generate/partner",
+  authorise(),
+  validateRequest(generateInvoiceSchema),
+  generatePartnerInvoicesForPeriod
+);
+router.get("/", authorise(), getInvoicesByScope);
 router.get("/:id", authorise(), getInvoiceById);
 router.put("/:id", authorise(), updateInvoice);
 router.delete("/:id", authorise(), deleteInvoice);
+
+async function getInvoicesByScope(req, res, next) {
+  try {
+    const userId = req.auth.id;
+    const clientId = req.auth.clientId;
+    const partnerId = req.query.partnerId || null;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const result = await invoiceService.getInvoicesByScope({
+      clientId,
+      partnerId,
+    });
+
+    await logReadAudit({
+      entity: "InvoiceBatch",
+      userId,
+      clientId,
+      req,
+      result,
+      entityId: partnerId || clientId,
+      action: "Read",
+      details: { filter: { clientId, partnerId } },
+      ip,
+      device,
+    });
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
 
 async function generateInvoicesForPeriod(req, res, next) {
   try {
@@ -35,9 +74,45 @@ async function generateInvoicesForPeriod(req, res, next) {
       clientId
     );
 
+    const ids = result.map((r) => r.id);
+
     await logCreateAudit({
       entity: "InvoiceBatch",
       clientId,
+      userId,
+      req,
+      entityId: reportingPeriodId,
+      reqBody: { reportingPeriodId },
+      action: "Create",
+      result,
+      details: { invoiceCount: result.length, invoiceIds: ids },
+      ip,
+      device,
+    });
+
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function generatePartnerInvoicesForPeriod(req, res, next) {
+  try {
+    const reportingPeriodId = req.body.reportingPeriodId;
+    const userId = req.auth.id;
+    const clientId = req.auth.clientId;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    const result = await invoiceService.generatePartnerInvoicesForPeriod(
+      reportingPeriodId,
+      userId,
+      clientId
+    );
+
+    await logCreateAudit({
+      entity: "PartnerInvoiceBatch",
+      clientId: null,
       userId,
       req,
       entityId: reportingPeriodId,
@@ -97,13 +172,17 @@ async function updateInvoice(req, res, next) {
 
     // Fetch the existing invoice before updating
     const before = await invoiceService.getInvoiceById(id, clientId);
+    // console.log("before: ", before);
     const beforeData = before?.get ? before.get({ plain: true }) : before;
+    // console.log("beforeData: ", beforeData);
 
     const result = await invoiceService.updateInvoice(id, clientId, {
       ...data,
       updatedBy: userId,
     });
+    // console.log("result: ", result);
     const afterData = result?.get ? result.get({ plain: true }) : result;
+    // console.log("afterData: ", afterData);
 
     await logUpdateAudit({
       entity: "Invoice",
