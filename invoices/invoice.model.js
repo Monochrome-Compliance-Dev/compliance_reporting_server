@@ -20,7 +20,7 @@ function model(sequelize) {
     },
     clientId: {
       type: DataTypes.STRING(10),
-      allowNull: true,
+      allowNull: false,
       references: {
         model: "tbl_client",
         key: "id",
@@ -56,7 +56,7 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  const Invoice = sequelize.define("invoice", attributes, {
+  const Invoice = sequelize.define("Invoice", attributes, {
     tableName: "tbl_invoice",
     timestamps: true,
     paranoid: true,

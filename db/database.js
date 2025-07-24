@@ -226,6 +226,39 @@ async function initialise() {
     db.MSInterviewResponse.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
+  // Invoice and InvoiceLine relationship
+  if (db.Invoice && db.InvoiceLine) {
+    db.Invoice.hasMany(db.InvoiceLine, {
+      foreignKey: "invoiceId",
+      onDelete: "CASCADE",
+    });
+    db.InvoiceLine.belongsTo(db.Invoice, { foreignKey: "invoiceId" });
+  }
+
+  // Invoice belongs to Client
+  if (db.Invoice && db.Client) {
+    db.Client.hasMany(db.Invoice, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+    db.Invoice.belongsTo(db.Client, { foreignKey: "clientId" });
+  }
+
+  // Invoice belongs to Partner
+  if (db.Invoice && db.Partner) {
+    db.Partner.hasMany(db.Invoice, {
+      foreignKey: "partnerId",
+      onDelete: "CASCADE",
+    });
+    db.Invoice.belongsTo(db.Partner, { foreignKey: "partnerId" });
+  }
+
+  // InvoiceLine belongs to Product
+  if (db.InvoiceLine && db.Product) {
+    db.Product.hasMany(db.InvoiceLine, { foreignKey: "productId" });
+    db.InvoiceLine.belongsTo(db.Product, { foreignKey: "productId" });
+  }
+
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
   await sequelize.sync();
 
