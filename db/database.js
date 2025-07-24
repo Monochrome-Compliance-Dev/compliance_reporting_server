@@ -76,6 +76,8 @@ async function initialise() {
     "../files", // added to load File model
     "../ms", // added to load MSGrievance, MSSupplierRisk and MSTraining models
     "../partners",
+    "../invoices",
+    "../products",
   ];
 
   modelDirs.forEach((dir) => {

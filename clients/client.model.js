@@ -48,7 +48,7 @@ function model(sequelize) {
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     billingType: {
-      type: DataTypes.ENUM("DIRECT", "RESELLER"),
+      type: DataTypes.ENUM("DIRECT", "PARTNER"),
       allowNull: false,
       defaultValue: "DIRECT",
     },
