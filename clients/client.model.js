@@ -47,11 +47,25 @@ function model(sequelize) {
     paymentConfirmed: { type: DataTypes.BOOLEAN, defaultValue: false },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
+    billingType: {
+      type: DataTypes.ENUM("DIRECT", "RESELLER"),
+      allowNull: false,
+      defaultValue: "DIRECT",
+    },
+    partnerId: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      references: {
+        model: "tbl_partner",
+        key: "id",
+      },
+    },
   };
 
   const Client = sequelize.define("client", attributes, {
     tableName: "tbl_client",
     timestamps: true,
+    paranoid: true,
   });
 
   // Correct relationships
@@ -66,6 +80,7 @@ function model(sequelize) {
       foreignKey: "clientId",
       onDelete: "CASCADE",
     });
+    Client.belongsTo(models.Partner, { foreignKey: "partnerId" });
   };
 
   return Client;

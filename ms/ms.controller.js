@@ -3,7 +3,7 @@ const {
   logReadAudit,
   logUpdateAudit,
   logDeleteAudit,
-} = require("./ms.auditHelpers");
+} = require("../audit/auditHelpers");
 const express = require("express");
 const router = express.Router();
 const msService = require("./ms.service");
@@ -97,6 +97,8 @@ async function getReportingPeriods(req, res, next) {
       result: periods,
       details: { count: periods.length },
       action: "Read",
+      ip,
+      device,
     });
     res.json(periods);
   } catch (err) {
@@ -123,6 +125,8 @@ async function getReportingPeriodById(req, res, next) {
       result: period,
       entityId: reportingPeriodId,
       action: "Read",
+      ip,
+      device,
     });
     res.json(period && period.get ? period.get({ plain: true }) : period);
   } catch (err) {
@@ -152,6 +156,8 @@ async function createReportingPeriod(req, res, next) {
       action: "Create",
       details: { name, startDate, endDate },
       result: newPeriod,
+      ip,
+      device,
     });
     res
       .status(201)
@@ -183,6 +189,8 @@ async function createSupplierRisk(req, res, next) {
       action: "Create",
       details: { supplierName, riskLevel },
       result: risk,
+      ip,
+      device,
     });
     res.status(201).json(risk.get ? risk.get({ plain: true }) : risk);
   } catch (err) {
@@ -381,6 +389,8 @@ async function createGrievance(req, res, next) {
       action: "Create",
       details: { grievanceType, status },
       result: grievanceRecord,
+      ip,
+      device,
     });
     res
       .status(201)
@@ -472,6 +482,8 @@ async function getTraining(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const records = await msService.getTraining(
       clientId,
       req.query.startDate,
@@ -484,6 +496,8 @@ async function getTraining(req, res, next) {
       req,
       result: records,
       action: "Read",
+      ip,
+      device,
     });
     res.json(records);
   } catch (err) {
@@ -496,6 +510,8 @@ async function getGrievances(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const records = await msService.getGrievances(clientId);
     await logReadAudit({
       entity: "MSGrievance",
@@ -505,6 +521,8 @@ async function getGrievances(req, res, next) {
       result: records,
       details: { count: records.length },
       action: "Read",
+      ip,
+      device,
     });
     res.json(records);
   } catch (err) {
@@ -517,6 +535,8 @@ async function getSupplierRisks(req, res, next) {
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const records = await msService.getSupplierRisks(clientId);
     await logReadAudit({
       entity: "MSSupplierRisk",
@@ -526,6 +546,8 @@ async function getSupplierRisks(req, res, next) {
       result: records,
       details: { count: records.length },
       action: "Read",
+      ip,
+      device,
     });
     res.json(records);
   } catch (err) {
@@ -550,6 +572,8 @@ async function getSupplierRiskSummary(req, res, next) {
       entityId: "AllPeriods",
       details: { count: Array.isArray(summary) ? summary.length : undefined },
       action: "Read",
+      ip,
+      device,
     });
     res.json(summary);
   } catch (err) {
@@ -573,6 +597,8 @@ async function getTrainingStats(req, res, next) {
       entityId: "AllPeriods",
       details: { count: Array.isArray(stats) ? stats.length : undefined },
       action: "Read",
+      ip,
+      device,
     });
     res.json(stats);
   } catch (err) {
@@ -596,6 +622,8 @@ async function getGrievanceSummary(req, res, next) {
       entityId: "AllPeriods",
       details: { count: Array.isArray(summary) ? summary.length : undefined },
       action: "Read",
+      ip,
+      device,
     });
     res.json(summary);
   } catch (err) {
@@ -626,6 +654,8 @@ async function getInterviewResponses(req, res, next) {
         count: Array.isArray(responses) ? responses.length : undefined,
       },
       action: "Read",
+      ip,
+      device,
     });
     res.json(responses);
   } catch (err) {
@@ -657,6 +687,8 @@ async function submitInterviewResponses(req, res, next) {
       details: { count: Array.isArray(data) ? data.length : 1 },
       action: "Create",
       result,
+      ip,
+      device,
     });
     res.json(result);
   } catch (err) {
@@ -683,6 +715,8 @@ async function generateStatement(req, res, next) {
       result,
       entityId: reportingPeriodId,
       action: "Read",
+      ip,
+      device,
     });
     res.json(result);
   } catch (err) {

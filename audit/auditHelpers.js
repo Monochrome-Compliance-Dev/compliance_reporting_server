@@ -1,4 +1,4 @@
-const { withAudit } = require("../audit/audit.service");
+const { withAudit } = require("./audit.service");
 
 async function logCreateAudit({
   entity,
