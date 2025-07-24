@@ -75,6 +75,7 @@ async function initialise() {
     "../esg", // added to load ESGIndicator and ESGMetric models
     "../files", // added to load File model
     "../ms", // added to load MSGrievance, MSSupplierRisk and MSTraining models
+    "../partners",
   ];
 
   modelDirs.forEach((dir) => {
