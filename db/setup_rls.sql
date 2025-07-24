@@ -114,3 +114,36 @@ CREATE POLICY tbl_ms_interview_responses_rls_policy
   WITH CHECK ("clientId" = current_setting('app.current_client_id', true)::text);
 
 ALTER TABLE tbl_ms_interview_responses FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_invoice ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_invoice_rls_policy ON tbl_invoice;
+CREATE POLICY tbl_invoice_rls_policy
+  ON tbl_invoice
+  FOR ALL
+  USING ("clientId" = current_setting('app.current_client_id', true)::text)
+  WITH CHECK ("clientId" = current_setting('app.current_client_id', true)::text);
+
+ALTER TABLE tbl_invoice FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_invoice_line ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_invoice_line_rls_policy ON tbl_invoice_line;
+CREATE POLICY tbl_invoice_line_rls_policy
+  ON tbl_invoice_line
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+ALTER TABLE tbl_invoice_line FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_product ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_product_rls_policy ON tbl_product;
+CREATE POLICY tbl_product_rls_policy
+  ON tbl_product
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
+
+ALTER TABLE tbl_product FORCE ROW LEVEL SECURITY;

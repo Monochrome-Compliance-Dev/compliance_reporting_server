@@ -36,6 +36,8 @@ const clientSchema = Joi.object({
     .message("Created by must be a string of length 10")
     .required(),
   paymentConfirmed: Joi.boolean().default(false),
+  billingType: Joi.string().valid("DIRECT", "PARTNER").required(),
+  partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 
 const clientUpdateSchema = Joi.object({
@@ -77,6 +79,8 @@ const clientUpdateSchema = Joi.object({
     .message("Updated by must be a string of length 10")
     .required(),
   paymentConfirmed: Joi.boolean(),
+  billingType: Joi.string().valid("DIRECT", "PARTNER").required(),
+  partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 
 module.exports = { clientSchema, clientUpdateSchema };

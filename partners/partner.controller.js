@@ -15,6 +15,7 @@ const {
 // --- Partner Routes ---
 router.post("/", authorise(), validateRequest(partnerSchema), createPartner);
 router.get("/", authorise(), getPartners);
+router.get("/:id", authorise(), getPartnerById);
 router.put("/:id", authorise(), validateRequest(partnerSchema), updatePartner);
 router.delete("/:id", authorise(), deletePartner);
 
@@ -46,6 +47,8 @@ async function createPartner(req, res, next) {
 async function getPartners(req, res, next) {
   try {
     const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
     const partners = await partnerService.getPartners();
     await logReadAudit({
       entity: "Partner",
@@ -55,8 +58,10 @@ async function getPartners(req, res, next) {
       result: partners,
       action: "Read",
       details: { count: partners.length },
+      ip,
+      device,
     });
-    res.json(partners);
+    res.json(partners.map((p) => (p.get ? p.get({ plain: true }) : p)));
   } catch (err) {
     next(err);
   }
@@ -87,6 +92,7 @@ async function updatePartner(req, res, next) {
       entityId: id,
       ip,
       device,
+      details: { name: afterData?.name, contactEmail: afterData?.contactEmail },
     });
     res.json(afterData);
   } catch (err) {
@@ -116,6 +122,10 @@ async function deletePartner(req, res, next) {
       entityId: id,
       ip,
       device,
+      details: {
+        name: beforeData?.name,
+        contactEmail: beforeData?.contactEmail,
+      },
     });
     res.status(204).send();
   } catch (err) {
@@ -124,3 +134,36 @@ async function deletePartner(req, res, next) {
 }
 
 module.exports = router;
+
+// --- New Handler: getPartnerById ---
+async function getPartnerById(req, res, next) {
+  try {
+    const userId = req.auth.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const id = req.params.id;
+    const partner = await partnerService.getPartnerById(id);
+    if (!partner) {
+      return res.status(404).json({ message: "Partner not found" });
+    }
+    const partnerData = partner.get({ plain: true });
+    await logReadAudit({
+      entity: "Partner",
+      clientId: null,
+      userId,
+      req,
+      result: partnerData,
+      entityId: id,
+      action: "Read",
+      ip,
+      device,
+      details: {
+        name: partnerData?.name,
+        contactEmail: partnerData?.contactEmail,
+      },
+    });
+    res.json(partnerData);
+  } catch (err) {
+    next(err);
+  }
+}
