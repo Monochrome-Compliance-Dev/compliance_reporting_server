@@ -226,6 +226,8 @@ async function initialise() {
     db.MSInterviewResponse.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
+  // MSReportingPeriod relationships
+
   // Invoice and InvoiceLine relationship
   if (db.Invoice && db.InvoiceLine) {
     db.Invoice.hasMany(db.InvoiceLine, {

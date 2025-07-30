@@ -10,11 +10,25 @@ module.exports = {
 };
 
 /**
- * Get supplier risk summary: count suppliers grouped by risk across all reporting periods.
+ * Helper to get the last date of the month for a given date.
+ */
+function getMonthEndDate(date) {
+  return new Date(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+/**
+ * Get supplier risk summary: count suppliers grouped by risk, monthly only.
  */
 async function getSupplierRiskSummary(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const { startDate, endDate } = options;
+    console.log("startDate, endDate :", startDate, endDate);
+    const where = { clientId };
+    if (startDate && endDate) {
+      where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
+    }
+    // ---- Monthly summary ----
     const raw = await db.MSSupplierRisk.findAll({
       attributes: [
         [
@@ -24,7 +38,7 @@ async function getSupplierRiskSummary(clientId, options = {}) {
         "risk",
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "count"],
       ],
-      where: { clientId },
+      where,
       group: [
         db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
         "risk",
@@ -32,9 +46,11 @@ async function getSupplierRiskSummary(clientId, options = {}) {
       transaction: t,
       ...options,
     });
+    console.log("raw: ", raw);
 
     await t.commit();
 
+    // --- Monthly grouping ---
     const grouped = {};
     for (const row of raw) {
       const period = row.dataValues.period;
@@ -43,11 +59,21 @@ async function getSupplierRiskSummary(clientId, options = {}) {
       if (!grouped[period]) grouped[period] = {};
       grouped[period][risk] = count;
     }
+    const monthlyArr = Object.entries(grouped).map(([period, summary]) => {
+      const startDate = new Date(period).toISOString().slice(0, 10);
+      const endDate = getMonthEndDate(new Date(period))
+        .toISOString()
+        .slice(0, 10);
+      return {
+        reportingPeriodId: `${startDate}::${endDate}`,
+        startDate,
+        endDate,
+        summary,
+      };
+    });
 
-    return Object.entries(grouped).map(([period, summary]) => ({
-      period,
-      summary,
-    }));
+    console.log("monthlyArr: ", monthlyArr);
+    return monthlyArr;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
@@ -55,11 +81,17 @@ async function getSupplierRiskSummary(clientId, options = {}) {
 }
 
 /**
- * Get training completion stats: counts total vs completed training across all reporting periods.
+ * Get training completion stats: counts total vs completed training, monthly only.
  */
 async function getTrainingCompletionStats(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const { startDate, endDate } = options;
+    const where = { clientId };
+    if (startDate && endDate) {
+      where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
+    }
+    // --- Monthly ---
     const total = await db.MSTraining.findAll({
       attributes: [
         [
@@ -68,14 +100,14 @@ async function getTrainingCompletionStats(clientId, options = {}) {
         ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "total"],
       ],
-      where: { clientId },
+      where,
       group: [
         db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
       ],
       transaction: t,
       ...options,
     });
-
+    const whereCompleted = { ...where, completed: true };
     const completed = await db.MSTraining.findAll({
       attributes: [
         [
@@ -84,30 +116,35 @@ async function getTrainingCompletionStats(clientId, options = {}) {
         ],
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "completed"],
       ],
-      where: { clientId, completed: true },
+      where: whereCompleted,
       group: [
         db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
       ],
       transaction: t,
       ...options,
     });
-
     await t.commit();
-
-    // Combine totals + completed by period
-    const summary = total.map((tRow) => {
+    // --- Monthly combine ---
+    const monthlyArr = total.map((tRow) => {
       const period = tRow.dataValues.period;
       const completedRow = completed.find(
         (c) => c.dataValues.period === period
       );
+      const startDate = new Date(period).toISOString().slice(0, 10);
+      const endDate = getMonthEndDate(new Date(period))
+        .toISOString()
+        .slice(0, 10);
       return {
-        period,
-        total: parseInt(tRow.dataValues.total, 10),
-        completed: parseInt(completedRow?.dataValues.completed || 0, 10),
+        reportingPeriodId: `${startDate}::${endDate}`,
+        startDate,
+        endDate,
+        summary: {
+          total: parseInt(tRow.dataValues.total, 10),
+          completed: parseInt(completedRow?.dataValues.completed || 0, 10),
+        },
       };
     });
-
-    return summary;
+    return monthlyArr;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
@@ -115,11 +152,17 @@ async function getTrainingCompletionStats(clientId, options = {}) {
 }
 
 /**
- * Get grievance summary: count grievances grouped by status across all reporting periods.
+ * Get grievance summary: count grievances grouped by status, monthly only.
  */
 async function getGrievanceSummary(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
+    const { startDate, endDate } = options;
+    const where = { clientId };
+    if (startDate && endDate) {
+      where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
+    }
+    // --- Monthly ---
     const raw = await db.MSGrievance.findAll({
       attributes: [
         [
@@ -129,7 +172,7 @@ async function getGrievanceSummary(clientId, options = {}) {
         "status",
         [db.sequelize.fn("COUNT", db.sequelize.col("id")), "count"],
       ],
-      where: { clientId },
+      where,
       group: [
         db.sequelize.fn("DATE_TRUNC", "month", db.sequelize.col("createdAt")),
         "status",
@@ -137,9 +180,8 @@ async function getGrievanceSummary(clientId, options = {}) {
       transaction: t,
       ...options,
     });
-
     await t.commit();
-
+    // --- Monthly grouping ---
     const grouped = {};
     for (const row of raw) {
       const period = row.dataValues.period;
@@ -148,11 +190,19 @@ async function getGrievanceSummary(clientId, options = {}) {
       if (!grouped[period]) grouped[period] = {};
       grouped[period][status] = count;
     }
-
-    return Object.entries(grouped).map(([period, summary]) => ({
-      period,
-      summary,
-    }));
+    const monthlyArr = Object.entries(grouped).map(([period, summary]) => {
+      const startDate = new Date(period).toISOString().slice(0, 10);
+      const endDate = getMonthEndDate(new Date(period))
+        .toISOString()
+        .slice(0, 10);
+      return {
+        reportingPeriodId: `${startDate}::${endDate}`,
+        startDate,
+        endDate,
+        summary,
+      };
+    });
+    return monthlyArr;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
