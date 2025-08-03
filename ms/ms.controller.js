@@ -532,7 +532,6 @@ async function getGrievances(req, res, next) {
 
 // New handler: getSupplierRisks
 async function getSupplierRisks(req, res, next) {
-  console.log("controller req.body, req.params: ", req.body, req.params);
   try {
     const clientId = req.auth.clientId;
     const userId = req.auth.id;

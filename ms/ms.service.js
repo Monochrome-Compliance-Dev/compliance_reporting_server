@@ -52,7 +52,6 @@ async function createSupplierRisk(clientId, userId, params) {
 }
 
 async function getSupplierRisks(clientId, startDate, endDate) {
-  console.log("clientId, startDate, endDate: ", clientId, startDate, endDate);
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const where = {};
