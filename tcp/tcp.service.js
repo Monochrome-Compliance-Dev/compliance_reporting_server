@@ -1,5 +1,5 @@
 const db = require("../db/database");
-const reportService = require("../reports/report.service");
+const ptrsService = require("../ptrs/ptrs.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
 const { sequelize } = require("../db/database");
 const {
@@ -14,37 +14,37 @@ if (process.env.NODE_ENV !== "test") {
 
 module.exports = {
   getAll,
-  getAllByReportId,
-  getTcpByReportId,
+  getAllByPtrsId,
+  getTcpByPtrsId,
   sbiUpdate,
   getById,
   create,
   update,
   delete: _delete,
   hasMissingIsSbFlag,
-  finaliseReport,
+  finalisePtrs,
   generateSummaryCsv,
   partialUpdate,
   patchRecord,
   getCurrentFieldValue,
   saveTransformedDataToTcp,
   saveErrorsToTcpError,
-  getErrorsByReportId,
+  getErrorsByPtrsId,
 };
 
 async function getAll(options = {}) {
   return await db.Tcp.findAll(options);
 }
 
-async function getAllByReportId(reportId, clientId) {
+async function getAllByPtrsId(ptrsId, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
-  return await db.Tcp.findAll({ where: { reportId }, transaction: t });
+  return await db.Tcp.findAll({ where: { ptrsId }, transaction: t });
 }
 
-async function getTcpByReportId(reportId, clientId) {
+async function getTcpByPtrsId(ptrsId, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
   return await db.Tcp.findAll({
-    where: { reportId },
+    where: { ptrsId },
     transaction: t,
   });
 }
@@ -54,12 +54,12 @@ async function partialUpdate(id, updates, options = {}) {
   return db.Tcp.findOne({ where: { id }, ...options });
 }
 
-async function sbiUpdate(reportId, params, options = {}) {
+async function sbiUpdate(ptrsId, params, options = {}) {
   await db.Tcp.update(
     { isSb: false },
     {
       where: {
-        reportId: reportId,
+        ptrsId: ptrsId,
         payeeEntityAbn: params.payeeEntityAbn,
       },
       ...options,
@@ -104,8 +104,8 @@ async function hasMissingIsSbFlag(options = {}) {
   return count > 0;
 }
 
-async function finaliseReport(options = {}) {
-  return await reportService.finaliseSubmission(options);
+async function finalisePtrs(options = {}) {
+  return await ptrsService.finaliseSubmission(options);
 }
 
 async function generateSummaryCsv(options = {}) {
@@ -172,7 +172,7 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
 
 async function saveTransformedDataToTcp(
   transformedRecords,
-  reportId,
+  ptrsId,
   clientId,
   createdBy,
   source = "xero",
@@ -201,7 +201,7 @@ async function saveTransformedDataToTcp(
 
   for (let i = 0; i < transformedRecords.length; i++) {
     transformedRecords[i].createdBy = createdBy;
-    transformedRecords[i].reportId = reportId;
+    transformedRecords[i].ptrsId = ptrsId;
     transformedRecords[i].clientId = clientId;
     transformedRecords[i].source = source;
     const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
@@ -220,7 +220,7 @@ async function saveTransformedDataToTcp(
       transaction: t,
     });
     const insertedRecords = await db.Tcp.findAll({
-      where: { reportId },
+      where: { ptrsId },
       transaction: t,
     });
     await t.commit();
@@ -233,7 +233,7 @@ async function saveTransformedDataToTcp(
 
 async function saveErrorsToTcpError(
   errorRecords,
-  reportId,
+  ptrsId,
   clientId,
   createdBy,
   source,
@@ -245,7 +245,7 @@ async function saveErrorsToTcpError(
 
   for (let i = 0; i < errorRecords.length; i++) {
     errorRecords[i].createdBy = createdBy;
-    errorRecords[i].reportId = reportId;
+    errorRecords[i].ptrsId = ptrsId;
     errorRecords[i].clientId = clientId;
     errorRecords[i].source = source;
   }
@@ -265,9 +265,9 @@ async function saveErrorsToTcpError(
   return true;
 }
 
-async function getErrorsByReportId(reportId, options = {}) {
+async function getErrorsByPtrsId(ptrsId, options = {}) {
   return await db.TcpError.findAll({
-    where: { reportId },
+    where: { ptrsId },
     ...options,
   });
 }

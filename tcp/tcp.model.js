@@ -88,11 +88,11 @@ function model(sequelize) {
     Tcp.belongsTo(models.Client, { foreignKey: "clientId" });
     models.Client.hasMany(Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
 
-    Tcp.belongsTo(models.Report, {
+    Tcp.belongsTo(models.Ptrs, {
       foreignKey: "reportId",
       onDelete: "CASCADE",
     });
-    models.Report.hasMany(Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
+    models.Ptrs.hasMany(Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
 
     Tcp.hasMany(models.Audit, { foreignKey: "tcpId", onDelete: "CASCADE" });
     models.Audit.belongsTo(Tcp, { foreignKey: "tcpId", onDelete: "CASCADE" });

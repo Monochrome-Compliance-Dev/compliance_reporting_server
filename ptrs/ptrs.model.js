@@ -43,24 +43,24 @@ function model(sequelize) {
     clientId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
-  const Report = sequelize.define("report", attributes, {
-    tableName: "tbl_report",
+  const Ptrs = sequelize.define("ptrs", attributes, {
+    tableName: "tbl_ptrs",
     timestamps: true,
   });
 
-  Report.associate = (models) => {
-    Report.belongsTo(models.Client, { foreignKey: "clientId" });
-    models.Client.hasMany(Report, {
+  Ptrs.associate = (models) => {
+    Ptrs.belongsTo(models.Client, { foreignKey: "clientId" });
+    models.Client.hasMany(Ptrs, {
       foreignKey: "clientId",
       onDelete: "CASCADE",
     });
 
-    Report.hasMany(models.Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
-    models.Tcp.belongsTo(Report, {
+    Ptrs.hasMany(models.Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
+    models.Tcp.belongsTo(Ptrs, {
       foreignKey: "reportId",
       onDelete: "CASCADE",
     });
   };
 
-  return Report;
+  return Ptrs;
 }

@@ -11,14 +11,14 @@ const { logger } = require("../helpers/logger");
 const fs = require("fs");
 const path = require("path");
 const { scanFile } = require("../middleware/virus-scan");
-const reportService = require("../reports/report.service");
+const ptrsService = require("../ptrs/ptrs.service");
 const csv = require("csv-parser");
 const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/report/:id", authorise(), getAllByReportId);
-router.get("/tcp/:id", authorise(), getTcpByReportId);
+router.get("/ptrs/:id", authorise(), getAllByPtrsId);
+router.get("/tcp/:id", authorise(), getTcpByPtrsId);
 router.get("/:id", authorise(), getById);
 router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
 router.patch("/:id", authorise(), patchRecord);
@@ -28,10 +28,10 @@ router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
 router.put("/sbi/:id", authorise(), sbiUpdate);
 router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
-router.put("/submit-final", authorise(), submitFinalReport);
-router.get("/download-summary", authorise(), downloadSummaryReport);
+router.put("/submit-final", authorise(), submitFinalPtrs);
+router.get("/download-summary", authorise(), downloadSummaryPtrs);
 router.post("/upload", authorise(), upload.single("file"), uploadFile);
-router.get("/errors/:id", authorise(), getErrorsByReportId);
+router.get("/errors/:id", authorise(), getErrorsByPtrsId);
 router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
@@ -43,9 +43,9 @@ function getAll(req, res, next) {
     .catch(next);
 }
 
-function getAllByReportId(req, res, next) {
+function getAllByPtrsId(req, res, next) {
   tcpService
-    .getAllByReportId(req.params.id, req.auth?.clientId)
+    .getAllByPtrsId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -91,9 +91,9 @@ async function patchRecord(req, res, next) {
   }
 }
 
-function getTcpByReportId(req, res, next) {
+function getTcpByPtrsId(req, res, next) {
   tcpService
-    .getTcpByReportId(req.params.id, req.auth?.clientId)
+    .getTcpByPtrsId(req.params.id, req.auth?.clientId)
     .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
     .catch(next);
 }
@@ -361,13 +361,13 @@ function checkMissingIsSb(req, res, next) {
     .catch(next);
 }
 
-function submitFinalReport(req, res, next) {
+function submitFinalPtrs(req, res, next) {
   tcpService
-    .finaliseReport({ transaction: req.dbTransaction })
+    .finalisePtrs({ transaction: req.dbTransaction })
     .then((result) => {
       res.json(result);
-      logger.auditEvent("Report submitted", {
-        action: "SubmitFinalReport",
+      logger.auditEvent("Ptrs submitted", {
+        action: "SubmitFinalPtrs",
         userId: req.auth.id,
         clientId: req.auth.clientId,
       });
@@ -375,18 +375,18 @@ function submitFinalReport(req, res, next) {
     .catch(next);
 }
 
-function downloadSummaryReport(req, res, next) {
+function downloadSummaryPtrs(req, res, next) {
   tcpService
     .generateSummaryCsv({ transaction: req.dbTransaction })
     .then((csv) => {
       res.setHeader("Content-Type", "text/csv");
       res.setHeader(
         "Content-Disposition",
-        "attachment; filename=summary_report.csv"
+        "attachment; filename=summary_ptrs.csv"
       );
       res.send(csv);
-      logger.auditEvent("Summary report downloaded", {
-        action: "DownloadSummaryReport",
+      logger.auditEvent("Summary ptrs downloaded", {
+        action: "DownloadSummaryPtrs",
         userId: req.auth.id,
         clientId: req.auth.clientId,
       });
@@ -544,7 +544,7 @@ async function uploadFile(req, res) {
         row.createdBy = req.auth.id;
         row.updatedBy = req.auth.id;
         row.clientId = req.auth.clientId;
-        row.reportId = req.body.reportId;
+        row.ptrsId = req.body.ptrsId;
         const reasons = [];
 
         const hasPayerName =
@@ -587,7 +587,7 @@ async function uploadFile(req, res) {
           const source = "csv_upload";
           const insertResults = await tcpService.saveTransformedDataToTcp(
             results,
-            req.body.reportId,
+            req.body.ptrsId,
             req.auth.clientId,
             req.auth.id,
             source,
@@ -599,7 +599,7 @@ async function uploadFile(req, res) {
           if (invalidRows.length > 0) {
             await tcpService.saveErrorsToTcpError(
               invalidRows,
-              req.body.reportId,
+              req.body.ptrsId,
               req.auth.clientId,
               req.auth.id,
               source,
@@ -610,11 +610,11 @@ async function uploadFile(req, res) {
           }
 
           try {
-            await reportService.saveUploadMetadata(
+            await ptrsService.saveUploadMetadata(
               {
                 clientId: req.auth.clientId,
                 userId: req.auth.id,
-                reportId: req.body.reportId,
+                ptrsId: req.body.ptrsId,
                 filename: req.file.originalname,
                 filepath: destPath,
                 recordCount: results.length,
@@ -635,7 +635,7 @@ async function uploadFile(req, res) {
             action: "uploadFile",
             clientId: req.auth.clientId,
             userId: req.auth.id,
-            reportId: req.body.reportId,
+            ptrsId: req.body.ptrsId,
             validRows: results.length,
             invalidRows: invalidRows.length,
           });
@@ -677,16 +677,16 @@ async function uploadFile(req, res) {
   }
 }
 
-async function getErrorsByReportId(req, res, next) {
+async function getErrorsByPtrsId(req, res, next) {
   try {
-    const reportId = req.params.id;
-    const errors = await tcpService.getErrorsByReportId(reportId, {
+    const ptrsId = req.params.id;
+    const errors = await tcpService.getErrorsByPtrsId(ptrsId, {
       transaction: req.dbTransaction,
     });
     if (!errors || errors.length === 0) {
       return res
         .status(404)
-        .json({ message: "No errors found for this report." });
+        .json({ message: "No errors found for this ptrs." });
     }
     res.json({
       success: true,
@@ -694,7 +694,7 @@ async function getErrorsByReportId(req, res, next) {
       data: errors,
     });
   } catch (error) {
-    logger.logEvent("error", "Error fetching errors by report ID", {
+    logger.logEvent("error", "Error fetching errors by ptrs ID", {
       error: error.message,
       stack: error.stack,
     });
@@ -705,12 +705,12 @@ async function getErrorsByReportId(req, res, next) {
 // Controller for recalculating TCP metrics
 async function recalculateMetrics(req, res, next) {
   try {
-    const reportId = req.params.id;
+    const ptrsId = req.params.id;
     const clientId = req.auth.clientId;
-    await processTcpMetrics(reportId, clientId);
+    await processTcpMetrics(ptrsId, clientId);
     logger.logEvent("info", "TCP metrics recalculated", {
       action: "RecalculateMetrics",
-      reportId,
+      ptrsId,
       clientId,
     });
     res.json({ success: true, message: "TCP metrics recalculated." });
