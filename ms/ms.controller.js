@@ -562,7 +562,16 @@ async function getSupplierRiskSummary(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const summary = await msAnalytics.getSupplierRiskSummary(clientId);
+    let { reportingPeriodId } = req.query;
+    let startDate, endDate;
+    if (reportingPeriodId) {
+      [startDate, endDate] = reportingPeriodId.split("::");
+    }
+    console.log("controller startDate, endDate :", startDate, endDate);
+    const summary = await msAnalytics.getSupplierRiskSummary(clientId, {
+      startDate,
+      endDate,
+    });
     await logReadAudit({
       entity: "MSDashboard",
       clientId,
@@ -575,6 +584,7 @@ async function getSupplierRiskSummary(req, res, next) {
       ip,
       device,
     });
+    console.log("controller response: ", summary);
     res.json(summary);
   } catch (err) {
     next(err);
@@ -587,7 +597,15 @@ async function getTrainingStats(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const stats = await msAnalytics.getTrainingCompletionStats(clientId);
+    let { reportingPeriodId } = req.query;
+    let startDate, endDate;
+    if (reportingPeriodId) {
+      [startDate, endDate] = reportingPeriodId.split("::");
+    }
+    const stats = await msAnalytics.getTrainingCompletionStats(clientId, {
+      startDate,
+      endDate,
+    });
     await logReadAudit({
       entity: "MSDashboard",
       clientId,
@@ -612,7 +630,15 @@ async function getGrievanceSummary(req, res, next) {
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const summary = await msAnalytics.getGrievanceSummary(clientId);
+    let { reportingPeriodId } = req.query;
+    let startDate, endDate;
+    if (reportingPeriodId) {
+      [startDate, endDate] = reportingPeriodId.split("::");
+    }
+    const summary = await msAnalytics.getGrievanceSummary(clientId, {
+      startDate,
+      endDate,
+    });
     await logReadAudit({
       entity: "MSDashboard",
       clientId,

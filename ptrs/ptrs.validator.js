@@ -1,12 +1,12 @@
 const Joi = require("../middleware/joiSanitizer");
 
-const reportSchema = Joi.object({
+const ptrsSchema = Joi.object({
   ReportingPeriodStartDate: Joi.date().required(),
   ReportingPeriodEndDate: Joi.date().required(),
   code: Joi.string().alphanum().max(50).sanitize().required(),
-  reportName: Joi.string().max(255).sanitize().required(),
+  ptrsName: Joi.string().max(255).sanitize().required(),
   currentStep: Joi.number().integer().min(0).max(100).required(),
-  reportStatus: Joi.string()
+  ptrsStatus: Joi.string()
     .valid(
       "Created",
       "Cancelled",
@@ -28,4 +28,4 @@ const reportSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
 });
 
-module.exports = { reportSchema };
+module.exports = { ptrsSchema };

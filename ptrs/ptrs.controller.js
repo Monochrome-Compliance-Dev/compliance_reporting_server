@@ -3,14 +3,14 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const reportService = require("./report.service");
-const { reportSchema } = require("./report.validator");
+const ptrsService = require("./ptrs.service");
+const { ptrsSchema } = require("./ptrs.validator");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/report/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(reportSchema), create);
-router.put("/:id", authorise(), validateRequest(reportSchema), update);
+router.get("/ptrs/:id", authorise(), getById);
+router.post("/", authorise(), validateRequest(ptrsSchema), create);
+router.put("/:id", authorise(), validateRequest(ptrsSchema), update);
 router.patch("/:id", authorise(), patch);
 router.delete("/:id", authorise(), _delete);
 
@@ -21,24 +21,24 @@ async function getAll(req, res, next) {
   try {
     const clientId = req.auth?.clientId;
     const userId = req.auth?.id;
-    logger.logEvent("info", "Fetching all reports", {
-      action: "GetAllReports",
+    logger.logEvent("info", "Fetching all ptrs", {
+      action: "GetAllPtrs",
       userId,
       clientId,
       timestamp,
     });
-    const reports = await reportService.getAll({ clientId });
-    logger.logEvent("info", "Fetched all reports", {
-      action: "GetAllReports",
+    const ptrs = await ptrsService.getAll({ clientId });
+    logger.logEvent("info", "Fetched all ptrs", {
+      action: "GetAllPtrs",
       userId,
       clientId,
-      count: Array.isArray(reports) ? reports.length : undefined,
+      count: Array.isArray(ptrs) ? ptrs.length : undefined,
       timestamp,
     });
-    res.json({ status: "success", data: reports });
+    res.json({ status: "success", data: ptrs });
   } catch (error) {
-    logger.logEvent("error", "Error fetching all reports", {
-      action: "GetAllReports",
+    logger.logEvent("error", "Error fetching all ptrs", {
+      action: "GetAllPtrs",
       userId: req.auth?.id,
       clientId: req.auth?.clientId,
       error: error.message,
@@ -53,27 +53,27 @@ async function getById(req, res, next) {
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Fetching report by ID", {
-    action: "GetReportById",
+  logger.logEvent("info", "Fetching ptrs by ID", {
+    action: "GetPtrsById",
     id,
     clientId,
     userId,
     timestamp,
   });
   try {
-    const report = await reportService.getById({ id, clientId });
-    if (report) {
-      logger.logEvent("info", "Fetched report by ID", {
-        action: "GetReportById",
+    const ptrs = await ptrsService.getById({ id, clientId });
+    if (ptrs) {
+      logger.logEvent("info", "Fetched ptrs by ID", {
+        action: "GetPtrsById",
         id,
         clientId,
         userId,
         timestamp,
       });
-      res.json({ status: "success", data: report });
+      res.json({ status: "success", data: ptrs });
     } else {
-      logger.logEvent("warn", "Report not found", {
-        action: "GetReportById",
+      logger.logEvent("warn", "Ptrs not found", {
+        action: "GetPtrsById",
         id,
         clientId,
         userId,
@@ -82,8 +82,8 @@ async function getById(req, res, next) {
       res.sendStatus(404);
     }
   } catch (error) {
-    logger.logEvent("error", "Error fetching report by ID", {
-      action: "GetReportById",
+    logger.logEvent("error", "Error fetching ptrs by ID", {
+      action: "GetPtrsById",
       id,
       clientId,
       userId,
@@ -98,25 +98,25 @@ async function create(req, res, next) {
   const timestamp = new Date().toISOString();
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Creating report", {
-    action: "CreateReport",
+  logger.logEvent("info", "Creating ptrs", {
+    action: "CreatePtrs",
     clientId,
     userId,
     timestamp,
   });
   try {
-    const report = await reportService.create({ data: req.body, clientId });
-    logger.logEvent("info", "Report created", {
-      action: "CreateReport",
-      id: report.id,
+    const ptrs = await ptrsService.create({ data: req.body, clientId });
+    logger.logEvent("info", "Ptrs created", {
+      action: "CreatePtrs",
+      id: ptrs.id,
       clientId,
       userId,
       timestamp,
     });
-    res.json({ status: "success", data: report });
+    res.json({ status: "success", data: ptrs });
   } catch (error) {
-    logger.logEvent("error", "Error creating report", {
-      action: "CreateReport",
+    logger.logEvent("error", "Error creating ptrs", {
+      action: "CreatePtrs",
       clientId,
       userId,
       error: error.message,
@@ -131,26 +131,26 @@ async function update(req, res, next) {
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Updating report", {
-    action: "UpdateReport",
+  logger.logEvent("info", "Updating ptrs", {
+    action: "UpdatePtrs",
     id,
     clientId,
     userId,
     timestamp,
   });
   try {
-    const report = await reportService.update({ id, data: req.body, clientId });
-    logger.logEvent("info", "Report updated", {
-      action: "UpdateReport",
+    const ptrs = await ptrsService.update({ id, data: req.body, clientId });
+    logger.logEvent("info", "Ptrs updated", {
+      action: "UpdatePtrs",
       id,
       clientId,
       userId,
       timestamp,
     });
-    res.json({ status: "success", data: report });
+    res.json({ status: "success", data: ptrs });
   } catch (error) {
-    logger.logEvent("error", "Error updating report", {
-      action: "UpdateReport",
+    logger.logEvent("error", "Error updating ptrs", {
+      action: "UpdatePtrs",
       id,
       clientId,
       userId,
@@ -166,8 +166,8 @@ async function patch(req, res, next) {
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Patching report", {
-    action: "PatchReport",
+  logger.logEvent("info", "Patching ptrs", {
+    action: "PatchPtrs",
     id,
     clientId,
     userId,
@@ -176,25 +176,25 @@ async function patch(req, res, next) {
   try {
     if (!clientId) {
       logger.logEvent("warn", "No clientId found for RLS - skipping", {
-        action: "PatchReport",
+        action: "PatchPtrs",
         id,
         userId,
         timestamp,
       });
       return res.status(400).json({ message: "Client ID missing" });
     }
-    const report = await reportService.patch({ id, data: req.body, clientId });
-    logger.logEvent("info", "Report patched", {
-      action: "PatchReport",
+    const ptrs = await ptrsService.patch({ id, data: req.body, clientId });
+    logger.logEvent("info", "Ptrs patched", {
+      action: "PatchPtrs",
       id,
       clientId,
       userId,
       timestamp,
     });
-    res.json({ status: "success", data: report });
+    res.json({ status: "success", data: ptrs });
   } catch (error) {
-    logger.logEvent("error", "Error patching report", {
-      action: "PatchReport",
+    logger.logEvent("error", "Error patching ptrs", {
+      action: "PatchPtrs",
       id,
       clientId,
       userId,
@@ -210,8 +210,8 @@ async function _delete(req, res, next) {
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Deleting report", {
-    action: "DeleteReport",
+  logger.logEvent("info", "Deleting ptrs", {
+    action: "DeletePtrs",
     id,
     clientId,
     userId,
@@ -220,16 +220,16 @@ async function _delete(req, res, next) {
   try {
     if (!clientId) {
       logger.logEvent("warn", "No clientId found for RLS - skipping", {
-        action: "DeleteReport",
+        action: "DeletePtrs",
         id,
         userId,
         timestamp,
       });
       return res.status(400).json({ message: "Client ID missing" });
     }
-    await reportService.delete({ id, clientId });
-    logger.logEvent("info", "Report deleted", {
-      action: "DeleteReport",
+    await ptrsService.delete({ id, clientId });
+    logger.logEvent("info", "Ptrs deleted", {
+      action: "DeletePtrs",
       id,
       clientId,
       userId,
@@ -237,8 +237,8 @@ async function _delete(req, res, next) {
     });
     res.status(204).json({ status: "success" });
   } catch (error) {
-    logger.logEvent("error", "Error deleting report", {
-      action: "DeleteReport",
+    logger.logEvent("error", "Error deleting ptrs", {
+      action: "DeletePtrs",
       id,
       clientId,
       userId,

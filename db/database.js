@@ -64,7 +64,7 @@ async function initialise() {
   const modelDirs = [
     "../users",
     "../clients",
-    "../reports",
+    "../ptrs",
     "../tcp",
     "../entities",
     "../booking",
@@ -101,16 +101,16 @@ async function initialise() {
     db.User.belongsTo(db.Client);
     db.Client.hasMany(db.User);
   }
-  if (db.Client && db.Report) {
-    db.Client.hasMany(db.Report, { onDelete: "CASCADE" });
-    db.Report.belongsTo(db.Client);
+  if (db.Client && db.Ptrs) {
+    db.Client.hasMany(db.Ptrs, { onDelete: "CASCADE" });
+    db.Ptrs.belongsTo(db.Client);
   }
   if (db.Client && db.Tcp) {
     db.Client.hasMany(db.Tcp, { onDelete: "CASCADE" });
   }
-  if (db.Report && db.Tcp) {
-    db.Report.hasMany(db.Tcp, { onDelete: "CASCADE" });
-    db.Tcp.belongsTo(db.Report, { onDelete: "CASCADE" });
+  if (db.Ptrs && db.Tcp) {
+    db.Ptrs.hasMany(db.Tcp, { onDelete: "CASCADE" });
+    db.Tcp.belongsTo(db.Ptrs, { onDelete: "CASCADE" });
   }
 
   // Xero Token relationship
@@ -148,9 +148,9 @@ async function initialise() {
     db.Client.hasMany(db.TcpError, { onDelete: "CASCADE" });
     db.TcpError.belongsTo(db.Client);
   }
-  if (db.Report && db.TcpError) {
-    db.Report.hasMany(db.TcpError, { onDelete: "CASCADE" });
-    db.TcpError.belongsTo(db.Report);
+  if (db.Ptrs && db.TcpError) {
+    db.Ptrs.hasMany(db.TcpError, { onDelete: "CASCADE" });
+    db.TcpError.belongsTo(db.Ptrs);
   }
 
   // ESG Indicator and Metric relationships
@@ -225,6 +225,8 @@ async function initialise() {
     db.User.hasMany(db.MSInterviewResponse, { foreignKey: "createdBy" });
     db.MSInterviewResponse.belongsTo(db.User, { foreignKey: "createdBy" });
   }
+
+  // MSReportingPeriod relationships
 
   // Invoice and InvoiceLine relationship
   if (db.Invoice && db.InvoiceLine) {
