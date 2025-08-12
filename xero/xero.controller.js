@@ -11,7 +11,7 @@ const { transformXeroData } = require("../scripts/xero/transformXeroData");
 const tcpService = require("../tcp/tcp.service");
 
 router.get(
-  "/connect/:reportId/:createdBy/:startDate/:endDate",
+  "/connect/:ptrsId/:createdBy/:startDate/:endDate",
   authorise(),
   generateAuthUrl
 );
@@ -19,7 +19,7 @@ router.get("/callback", handleOAuthCallback);
 router.post("/extract", authorise(), startXeroExtractionHandler);
 
 // Route to remove a tenant
-router.delete("/tenants/:tenantId", authorise(), async (req, res) => {
+router.delete("/tenants/:tenantId", authorise(), async (req, res, next) => {
   try {
     const { tenantId } = req.params;
     await xeroService.removeTenant(tenantId);
@@ -27,20 +27,17 @@ router.delete("/tenants/:tenantId", authorise(), async (req, res) => {
       tenantId,
       removedBy: req.auth?.userId,
     });
-    res.status(200).json({
-      success: true,
-      message: `Tenant ${tenantId} removed successfully.`,
-    });
+    return res.status(204).send();
   } catch (err) {
     logger.logEvent("error", "Failed to remove tenant", {
       action: "removeTenant",
       error: err.message,
       stack: err.stack,
       ...(err.context || {}),
+      statusCode: err.status || 500,
+      timestamp: new Date().toISOString(),
     });
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to remove tenant." });
+    return next(err);
   }
 });
 
@@ -60,12 +57,14 @@ function generateAuthUrl(req, res) {
         "error",
         "XERO_CLIENT_ID is not set in environment variables"
       );
-      return res.status(500).json({ error: "Server configuration error." });
+      return res
+        .status(500)
+        .json({ status: "error", message: "Server configuration error." });
     }
 
     const state = JSON.stringify({
       clientId: req.auth?.clientId,
-      reportId: req.params?.reportId,
+      ptrsId: req.params?.ptrsId,
       createdBy: req.params?.createdBy,
       startDate: req.params?.startDate,
       endDate: req.params?.endDate,
@@ -81,18 +80,14 @@ function generateAuthUrl(req, res) {
 
     const authUrl = `https://login.xero.com/identity/connect/authorize?${params.toString()}`;
 
-    res.json({
-      success: true,
-      message: "Authorization URL generated.",
-      data: { authUrl },
-    });
+    return res.status(200).json({ status: "success", data: { authUrl } });
   } catch (err) {
     logger.logEvent("error", "Error generating auth URL", {
       error: err.message,
       stack: err.stack,
     });
-    res.status(500).json({
-      success: false,
+    return res.status(500).json({
+      status: "error",
       message: "Failed to generate authorization URL.",
     });
   }
@@ -113,7 +108,7 @@ async function handleOAuthCallback(req, res) {
     return res.status(400).send("Invalid state parameter.");
   }
 
-  const { reportId } = parsedState;
+  const { ptrsId } = parsedState;
 
   try {
     if (error) {
@@ -122,7 +117,6 @@ async function handleOAuthCallback(req, res) {
       logger.logEvent("warn", "Xero auth denied or revoked", {
         error,
         description,
-        ...(err?.context || {}),
       });
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -131,7 +125,7 @@ async function handleOAuthCallback(req, res) {
       }
 
       return res.redirect(
-        `${frontendUrl}/reports/ptrs/${reportId}/selection?error=${encodeURIComponent(description)}`
+        `${frontendUrl}/ptrs/${ptrsId}/selection?error=${encodeURIComponent(description)}`
       );
     }
 
@@ -140,12 +134,12 @@ async function handleOAuthCallback(req, res) {
         "Missing code in OAuth callback — the connection may have failed or been cancelled unexpectedly.";
       logger.logEvent("error", description, {
         action: "OAuthCallback",
-        reportId,
+        ptrsId,
       });
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       return res.redirect(
-        `${frontendUrl}/reports/ptrs/${reportId}/selection?error=${encodeURIComponent(description)}`
+        `${frontendUrl}/ptrs/${ptrsId}/selection?error=${encodeURIComponent(description)}`
       );
     }
 
@@ -159,6 +153,8 @@ async function handleOAuthCallback(req, res) {
         error: err.message,
         stack: err.stack,
         ...(err.context || {}),
+        statusCode: err.status || 500,
+        timestamp: new Date().toISOString(),
       });
       return res.status(500).send("Failed to exchange code for tokens.");
     }
@@ -178,6 +174,8 @@ async function handleOAuthCallback(req, res) {
         error: err.message,
         stack: err.stack,
         ...(err.context || {}),
+        statusCode: err.status || 500,
+        timestamp: new Date().toISOString(),
       });
       return res.status(500).send("Failed to get connections.");
     }
@@ -190,8 +188,6 @@ async function handleOAuthCallback(req, res) {
       );
       return res.status(500).send("No tenant IDs found.");
     }
-
-    // console.log("Retrieved connections:", connections);
 
     // Save token per tenant (removed validation)
     await Promise.all(
@@ -213,7 +209,7 @@ async function handleOAuthCallback(req, res) {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
     const encodedOrgs = encodeURIComponent(JSON.stringify(connections));
     res.redirect(
-      `${frontendUrl}/reports/ptrs/${reportId}/selection?organisations=${encodedOrgs}`
+      `${frontendUrl}/ptrs/${ptrsId}/selection?organisations=${encodedOrgs}`
     );
   } catch (err) {
     logger.logEvent("error", "Error in OAuth callback", {
@@ -226,31 +222,44 @@ async function handleOAuthCallback(req, res) {
   }
 }
 
-async function startXeroExtractionHandler(req, res) {
-  const { clientId, reportId, createdBy, startDate, endDate, tenantIds } =
+async function startXeroExtractionHandler(req, res, next) {
+  // Only support ptrsId (no reportId fallback)
+  const { clientId, ptrsId, createdBy, startDate, endDate, tenantIds } =
     req.body;
+
+  const effectiveCreatedBy = createdBy || req.auth?.userId || "system";
 
   if (!Array.isArray(tenantIds) || tenantIds.length === 0) {
     return res
       .status(400)
-      .json({ success: false, message: "No tenantIds provided." });
+      .json({ status: "error", message: "No tenantIds provided." });
   }
 
   try {
     for (const tenantId of tenantIds) {
+      // Retrieve latest access token for this client/tenant
+      const tokenRecord = await xeroService.getLatestToken({
+        clientId,
+        tenantId,
+      });
+      if (!tokenRecord)
+        throw new Error(`No access token found for tenant ${tenantId}`);
+      const accessToken = tokenRecord.access_token;
+
       await xeroService.startXeroExtraction({
         clientId,
-        reportId,
-        createdBy,
+        ptrsId,
+        createdBy: effectiveCreatedBy,
         startDate,
         endDate,
         tenantId,
+        accessToken,
         onProgress: (status) => {
           const logData = {
             ...status,
             clientId,
-            reportId,
-            createdBy,
+            ptrsId,
+            createdBy: effectiveCreatedBy,
             tenantId,
             timestamp: new Date().toISOString(),
           };
@@ -281,15 +290,15 @@ async function startXeroExtractionHandler(req, res) {
 
     logger.logEvent("info", "Xero extraction completed for all tenants.", {
       clientId,
-      reportId,
-      createdBy,
+      ptrsId,
+      createdBy: effectiveCreatedBy,
       tenantIds,
       startDate,
       endDate,
     });
-    res.status(202).json({
-      success: true,
-      message: "Extraction completed for all tenants.",
+    return res.status(202).json({
+      status: "success",
+      data: { message: "Extraction completed for all tenants." },
     });
   } catch (err) {
     logger.logEvent("error", "Failed during Xero extraction for tenants", {
@@ -298,8 +307,6 @@ async function startXeroExtractionHandler(req, res) {
       stack: err.stack,
       ...(err.context || {}),
     });
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to complete extraction." });
+    return next(err);
   }
 }

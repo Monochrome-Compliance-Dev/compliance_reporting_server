@@ -30,20 +30,21 @@ module.exports = {
   cloneTemplatesForReportingPeriod,
 };
 
-async function createIndicator(params, userId, options = {}) {
-  // params may include isTemplate: boolean
+async function createIndicator(params, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const result = await db.ESGIndicator.create(
-      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...params,
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      },
       {
         ...options,
         transaction: t,
       }
     );
-
     await t.commit();
-
     return result.get({ plain: true });
   } catch (error) {
     if (!t.finished) await t.rollback();
@@ -51,8 +52,7 @@ async function createIndicator(params, userId, options = {}) {
   }
 }
 
-async function createMetric(params, userId, options = {}) {
-  // params may include isTemplate: boolean
+async function createMetric(params, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const indicator = await db.ESGIndicator.findByPk(params.indicatorId, {
@@ -70,7 +70,11 @@ async function createMetric(params, userId, options = {}) {
     }
 
     const result = await db.ESGMetric.create(
-      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...params,
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      },
       {
         ...options,
         transaction: t,
@@ -83,8 +87,6 @@ async function createMetric(params, userId, options = {}) {
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
-  } finally {
-    if (!t.finished) await t.rollback();
   }
 }
 
@@ -95,18 +97,23 @@ async function getMetricsByClient(clientId, options = {}) {
       ...options,
       transaction: t,
     });
-
-    return metrics;
+    return metrics.map((r) => r.get({ plain: true }));
   } catch (error) {
     throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
-async function createReportingPeriod(params, userId, options = {}) {
+async function createReportingPeriod(params, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const result = await db.ReportingPeriod.create(
-      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...params,
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      },
       {
         ...options,
         transaction: t,
@@ -130,7 +137,7 @@ async function getReportingPeriodsByClient(clientId, options = {}) {
       transaction: t,
     });
 
-    return periods;
+    return periods.map((r) => r.get({ plain: true }));
   } catch (error) {
     throw error;
   } finally {
@@ -151,7 +158,7 @@ async function getIndicatorsByReportingPeriodId(
       transaction: t,
     });
 
-    return indicators;
+    return indicators.map((r) => r.get({ plain: true }));
   } catch (error) {
     throw error;
   } finally {
@@ -172,7 +179,7 @@ async function getMetricsByReportingPeriodId(
       transaction: t,
     });
 
-    return metrics;
+    return metrics.map((r) => r.get({ plain: true }));
   } catch (error) {
     throw error;
   } finally {
@@ -189,7 +196,7 @@ async function getMetricById(clientId, metricId, options = {}) {
       transaction: t,
     });
 
-    return metric;
+    return metric ? metric.get({ plain: true }) : null;
   } catch (error) {
     throw error;
   } finally {
@@ -239,7 +246,7 @@ async function getReportingPeriodById(clientId, id, options = {}) {
       transaction: t,
     });
 
-    return period;
+    return period ? period.get({ plain: true }) : null;
   } catch (error) {
     throw error;
   } finally {
@@ -247,26 +254,20 @@ async function getReportingPeriodById(clientId, id, options = {}) {
   }
 }
 
-async function updateReportingPeriod(
-  clientId,
-  userId,
-  id,
-  updates,
-  options = {}
-) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateReportingPeriod(params, options = {}) {
+  const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    const result = await db.ReportingPeriod.update(
-      { ...updates, updatedBy: userId },
+    await db.ReportingPeriod.update(
+      { ...params.updates, updatedBy: params.userId },
       {
-        where: { id },
+        where: { id: params.id },
         ...options,
         transaction: t,
       }
     );
 
     await t.commit();
-    return result;
+    return { message: "ReportingPeriod updated." };
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
@@ -274,11 +275,15 @@ async function updateReportingPeriod(
 }
 
 // ---- Unit CRUD ----
-async function createUnit(params, userId, options = {}) {
+async function createUnit(params, options = {}) {
   const t = await beginTransactionWithClientContext(params.clientId);
   try {
     const result = await db.Unit.create(
-      { ...params, createdBy: userId, updatedBy: userId },
+      {
+        ...params,
+        createdBy: params.userId,
+        updatedBy: params.userId,
+      },
       {
         ...options,
         transaction: t,
@@ -299,7 +304,7 @@ async function getUnitsByClient(clientId, options = {}) {
       ...options,
       transaction: t,
     });
-    return units;
+    return units.map((r) => r.get({ plain: true }));
   } catch (error) {
     throw error;
   } finally {
@@ -314,7 +319,7 @@ async function getUnitById(clientId, id, options = {}) {
       ...options,
       transaction: t,
     });
-    return unit;
+    return unit ? unit.get({ plain: true }) : null;
   } catch (error) {
     throw error;
   } finally {
@@ -322,19 +327,19 @@ async function getUnitById(clientId, id, options = {}) {
   }
 }
 
-async function updateUnit(clientId, userId, id, updates, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateUnit(params, options = {}) {
+  const t = await beginTransactionWithClientContext(params.clientId);
   try {
-    const result = await db.Unit.update(
-      { ...updates, updatedBy: userId },
+    await db.Unit.update(
+      { ...params.updates, updatedBy: params.userId },
       {
-        where: { id },
+        where: { id: params.id },
         ...options,
         transaction: t,
       }
     );
     await t.commit();
-    return result;
+    return { message: "Unit updated." };
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
@@ -356,18 +361,16 @@ async function deleteUnit(clientId, id, options = {}) {
   }
 }
 
-async function cloneTemplatesForReportingPeriod(
-  clientId,
-  userId,
-  reportingPeriodId,
-  options = {}
-) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function cloneTemplatesForReportingPeriod(params, options = {}) {
+  const t = await beginTransactionWithClientContext(params.clientId);
   try {
     // Fetch global templates plus client-specific templates
     const templates = await db.Template.findAll({
       where: {
-        [db.Sequelize.Op.or]: [{ clientId: null }, { clientId: clientId }],
+        [db.Sequelize.Op.or]: [
+          { clientId: null },
+          { clientId: params.clientId },
+        ],
       },
       transaction: t,
     });
@@ -384,15 +387,15 @@ async function cloneTemplatesForReportingPeriod(
         return await db.ESGIndicator.create(
           {
             id: nanoid(10),
-            clientId,
-            reportingPeriodId,
+            clientId: params.clientId,
+            reportingPeriodId: params.reportingPeriodId,
             code: template.fieldName,
             name: template.fieldName,
             description: template.description,
             category: template.category,
             isTemplate: false,
-            createdBy: userId,
-            updatedBy: userId,
+            createdBy: params.userId,
+            updatedBy: params.userId,
           },
           { transaction: t }
         );
@@ -410,14 +413,14 @@ async function cloneTemplatesForReportingPeriod(
         return await db.ESGMetric.create(
           {
             id: nanoid(10),
-            clientId,
-            reportingPeriodId,
+            clientId: params.clientId,
+            reportingPeriodId: params.reportingPeriodId,
             indicatorId: matchingIndicator.id,
             value: 0,
             unitId: null, // can be improved to look up unit by template.defaultUnit
             isTemplate: false,
-            createdBy: userId,
-            updatedBy: userId,
+            createdBy: params.userId,
+            updatedBy: params.userId,
           },
           { transaction: t }
         );

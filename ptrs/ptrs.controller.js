@@ -1,3 +1,4 @@
+const auditService = require("../audit/audit.service");
 const { logger } = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
@@ -8,7 +9,7 @@ const { ptrsSchema } = require("./ptrs.validator");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/ptrs/:id", authorise(), getById);
+router.get("/:id", authorise(), getById);
 router.post("/", authorise(), validateRequest(ptrsSchema), create);
 router.put("/:id", authorise(), validateRequest(ptrsSchema), update);
 router.patch("/:id", authorise(), patch);
@@ -17,23 +18,23 @@ router.delete("/:id", authorise(), _delete);
 module.exports = router;
 
 async function getAll(req, res, next) {
-  const timestamp = new Date().toISOString();
   try {
     const clientId = req.auth?.clientId;
     const userId = req.auth?.id;
-    logger.logEvent("info", "Fetching all ptrs", {
-      action: "GetAllPtrs",
-      userId,
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const ptrs = await ptrsService.getAll({
       clientId,
-      timestamp,
+      order: [["createdAt", "DESC"]],
     });
-    const ptrs = await ptrsService.getAll({ clientId });
-    logger.logEvent("info", "Fetched all ptrs", {
-      action: "GetAllPtrs",
-      userId,
+    await auditService.logEvent({
       clientId,
-      count: Array.isArray(ptrs) ? ptrs.length : undefined,
-      timestamp,
+      userId,
+      ip,
+      device,
+      action: "GetAllPtrs",
+      entity: "PtrsReport",
+      details: { count: Array.isArray(ptrs) ? ptrs.length : undefined },
     });
     res.json({ status: "success", data: ptrs });
   } catch (error) {
@@ -42,44 +43,34 @@ async function getAll(req, res, next) {
       userId: req.auth?.id,
       clientId: req.auth?.clientId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 
 async function getById(req, res, next) {
-  const timestamp = new Date().toISOString();
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Fetching ptrs by ID", {
-    action: "GetPtrsById",
-    id,
-    clientId,
-    userId,
-    timestamp,
-  });
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     const ptrs = await ptrsService.getById({ id, clientId });
     if (ptrs) {
-      logger.logEvent("info", "Fetched ptrs by ID", {
-        action: "GetPtrsById",
-        id,
+      await auditService.logEvent({
         clientId,
         userId,
-        timestamp,
+        ip,
+        device,
+        action: "GetPtrsById",
+        entity: "PtrsReport",
+        entityId: id,
       });
       res.json({ status: "success", data: ptrs });
     } else {
-      logger.logEvent("warn", "Ptrs not found", {
-        action: "GetPtrsById",
-        id,
-        clientId,
-        userId,
-        timestamp,
-      });
-      res.sendStatus(404);
+      res.status(404).json({ status: "error", message: "Ptrs not found" });
     }
   } catch (error) {
     logger.logEvent("error", "Error fetching ptrs by ID", {
@@ -88,64 +79,61 @@ async function getById(req, res, next) {
       clientId,
       userId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 
 async function create(req, res, next) {
-  const timestamp = new Date().toISOString();
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Creating ptrs", {
-    action: "CreatePtrs",
-    clientId,
-    userId,
-    timestamp,
-  });
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     const ptrs = await ptrsService.create({ data: req.body, clientId });
-    logger.logEvent("info", "Ptrs created", {
-      action: "CreatePtrs",
-      id: ptrs.id,
+    await auditService.logEvent({
       clientId,
       userId,
-      timestamp,
+      ip,
+      device,
+      action: "CreatePtrs",
+      entity: "PtrsReport",
+      entityId: ptrs.id,
+      details: { status: ptrs.status },
     });
-    res.json({ status: "success", data: ptrs });
+    res.status(201).json({ status: "success", data: ptrs });
   } catch (error) {
     logger.logEvent("error", "Error creating ptrs", {
       action: "CreatePtrs",
       clientId,
       userId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 
 async function update(req, res, next) {
-  const timestamp = new Date().toISOString();
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Updating ptrs", {
-    action: "UpdatePtrs",
-    id,
-    clientId,
-    userId,
-    timestamp,
-  });
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     const ptrs = await ptrsService.update({ id, data: req.body, clientId });
-    logger.logEvent("info", "Ptrs updated", {
-      action: "UpdatePtrs",
-      id,
+    await auditService.logEvent({
       clientId,
       userId,
-      timestamp,
+      ip,
+      device,
+      action: "UpdatePtrs",
+      entity: "PtrsReport",
+      entityId: id,
+      details: { updates: Object.keys(req.body) },
     });
     res.json({ status: "success", data: ptrs });
   } catch (error) {
@@ -155,41 +143,33 @@ async function update(req, res, next) {
       clientId,
       userId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 
 async function patch(req, res, next) {
-  const timestamp = new Date().toISOString();
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Patching ptrs", {
-    action: "PatchPtrs",
-    id,
-    clientId,
-    userId,
-    timestamp,
-  });
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     if (!clientId) {
-      logger.logEvent("warn", "No clientId found for RLS - skipping", {
-        action: "PatchPtrs",
-        id,
-        userId,
-        timestamp,
-      });
       return res.status(400).json({ message: "Client ID missing" });
     }
     const ptrs = await ptrsService.patch({ id, data: req.body, clientId });
-    logger.logEvent("info", "Ptrs patched", {
-      action: "PatchPtrs",
-      id,
+    await auditService.logEvent({
       clientId,
       userId,
-      timestamp,
+      ip,
+      device,
+      action: "PatchPtrs",
+      entity: "PtrsReport",
+      entityId: id,
+      details: { updates: Object.keys(req.body) },
     });
     res.json({ status: "success", data: ptrs });
   } catch (error) {
@@ -199,43 +179,34 @@ async function patch(req, res, next) {
       clientId,
       userId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 
 async function _delete(req, res, next) {
-  const timestamp = new Date().toISOString();
   const id = req.params.id;
   const clientId = req.auth?.clientId;
   const userId = req.auth?.id;
-  logger.logEvent("info", "Deleting ptrs", {
-    action: "DeletePtrs",
-    id,
-    clientId,
-    userId,
-    timestamp,
-  });
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     if (!clientId) {
-      logger.logEvent("warn", "No clientId found for RLS - skipping", {
-        action: "DeletePtrs",
-        id,
-        userId,
-        timestamp,
-      });
       return res.status(400).json({ message: "Client ID missing" });
     }
-    await ptrsService.delete({ id, clientId });
-    logger.logEvent("info", "Ptrs deleted", {
-      action: "DeletePtrs",
-      id,
+    await ptrsService.delete({ id, clientId, userId });
+    await auditService.logEvent({
       clientId,
       userId,
-      timestamp,
+      ip,
+      device,
+      action: "DeletePtrs",
+      entity: "PtrsReport",
+      entityId: id,
     });
-    res.status(204).json({ status: "success" });
+    res.status(204).send();
   } catch (error) {
     logger.logEvent("error", "Error deleting ptrs", {
       action: "DeletePtrs",
@@ -243,8 +214,9 @@ async function _delete(req, res, next) {
       clientId,
       userId,
       error: error.message,
+      statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }

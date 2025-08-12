@@ -34,81 +34,92 @@ module.exports = {
   deleteGrievanceById,
 };
 
-async function createSupplierRisk(clientId, userId, params) {
+async function createSupplierRisk(params, options = {}) {
+  const { clientId, createdBy, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const newSupplierRisk = await db.MSSupplierRisk.create(
-      { ...params, clientId, createdBy: userId, updatedBy: userId },
+      { ...rest, clientId, createdBy, updatedBy },
       {
         transaction: t,
+        ...options,
       }
     );
     await t.commit();
-    return newSupplierRisk;
+    return newSupplierRisk.get({ plain: true });
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getSupplierRisks(clientId, startDate, endDate) {
+async function getSupplierRisks(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const where = {};
-    if (startDate && endDate) {
+    if (options.startDate && options.endDate) {
       where.date = {
-        [Op.between]: [startDate, endDate],
+        [Op.between]: [options.startDate, options.endDate],
       };
     }
     const supplierRisks = await db.MSSupplierRisk.findAll({
       where,
+      order: [["createdAt", "DESC"]],
       transaction: t,
     });
     await t.commit();
-    return supplierRisks;
+    return supplierRisks.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getSupplierRiskById(clientId, id) {
+async function getSupplierRiskById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const risk = await db.MSSupplierRisk.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return risk;
+    return risk ? risk.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function updateSupplierRisk(clientId, id, params) {
+async function updateSupplierRisk(params, options = {}) {
+  const { clientId, id, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const [count, [updatedRisk]] = await db.MSSupplierRisk.update(params, {
-      where: { id },
-      returning: true,
-      transaction: t,
-    });
+    const [count, [updatedRisk]] = await db.MSSupplierRisk.update(
+      { ...rest, updatedBy },
+      {
+        where: { id },
+        returning: true,
+        transaction: t,
+        ...options,
+      }
+    );
     await t.commit();
-    return updatedRisk;
+    return updatedRisk ? updatedRisk.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteSupplierRisk(clientId, id) {
+async function deleteSupplierRisk(params, options = {}) {
+  const { clientId, id } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     await db.MSSupplierRisk.destroy({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
   } catch (err) {
@@ -117,81 +128,92 @@ async function deleteSupplierRisk(clientId, id) {
   }
 }
 
-async function createTraining(clientId, userId, params) {
+async function createTraining(params, options = {}) {
+  const { clientId, createdBy, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const newTrainingRecord = await db.MSTraining.create(
-      { ...params, clientId, createdBy: userId, updatedBy: userId },
+      { ...rest, clientId, createdBy, updatedBy },
       {
         transaction: t,
+        ...options,
       }
     );
     await t.commit();
-    return newTrainingRecord;
+    return newTrainingRecord.get({ plain: true });
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getTraining(clientId, startDate, endDate) {
+async function getTraining(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const where = {};
-    if (startDate && endDate) {
+    if (options.startDate && options.endDate) {
       where.date = {
-        [Op.between]: [startDate, endDate],
+        [Op.between]: [options.startDate, options.endDate],
       };
     }
     const trainingRecords = await db.MSTraining.findAll({
       where,
+      order: [["createdAt", "DESC"]],
       transaction: t,
     });
     await t.commit();
-    return trainingRecords;
+    return trainingRecords.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getTrainingById(clientId, id) {
+async function getTrainingById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const training = await db.MSTraining.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return training;
+    return training ? training.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function updateTraining(clientId, recordId, params) {
+async function updateTraining(params, options = {}) {
+  const { clientId, id, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const [count, [updatedRecord]] = await db.MSTraining.update(params, {
-      where: { id: recordId },
-      returning: true,
-      transaction: t,
-    });
+    const [count, [updatedRecord]] = await db.MSTraining.update(
+      { ...rest, updatedBy },
+      {
+        where: { id },
+        returning: true,
+        transaction: t,
+        ...options,
+      }
+    );
     await t.commit();
-    return updatedRecord;
+    return updatedRecord ? updatedRecord.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteTraining(clientId, id) {
+async function deleteTraining(params, options = {}) {
+  const { clientId, id } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     await db.MSTraining.destroy({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
   } catch (err) {
@@ -200,81 +222,92 @@ async function deleteTraining(clientId, id) {
   }
 }
 
-async function createGrievance(clientId, userId, params) {
+async function createGrievance(params, options = {}) {
+  const { clientId, createdBy, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const newGrievance = await db.MSGrievance.create(
-      { ...params, clientId, createdBy: userId, updatedBy: userId },
+      { ...rest, clientId, createdBy, updatedBy },
       {
         transaction: t,
+        ...options,
       }
     );
     await t.commit();
-    return newGrievance;
+    return newGrievance.get({ plain: true });
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getGrievances(clientId, startDate, endDate) {
+async function getGrievances(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const where = {};
-    if (startDate && endDate) {
+    if (options.startDate && options.endDate) {
       where.date = {
-        [Op.between]: [startDate, endDate],
+        [Op.between]: [options.startDate, options.endDate],
       };
     }
     const grievances = await db.MSGrievance.findAll({
       where,
+      order: [["createdAt", "DESC"]],
       transaction: t,
     });
     await t.commit();
-    return grievances;
+    return grievances.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getGrievanceById(clientId, id) {
+async function getGrievanceById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const grievance = await db.MSGrievance.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return grievance;
+    return grievance ? grievance.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function updateGrievance(clientId, id, params) {
+async function updateGrievance(params, options = {}) {
+  const { clientId, id, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const [count, [updatedGrievance]] = await db.MSGrievance.update(params, {
-      where: { id },
-      returning: true,
-      transaction: t,
-    });
+    const [count, [updatedGrievance]] = await db.MSGrievance.update(
+      { ...rest, updatedBy },
+      {
+        where: { id },
+        returning: true,
+        transaction: t,
+        ...options,
+      }
+    );
     await t.commit();
-    return updatedGrievance;
+    return updatedGrievance ? updatedGrievance.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteGrievance(clientId, id) {
+async function deleteGrievance(params, options = {}) {
+  const { clientId, id } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     await db.MSGrievance.destroy({
       where: { id },
       transaction: t,
+      ...options,
     });
     await t.commit();
   } catch (err) {
@@ -283,89 +316,100 @@ async function deleteGrievance(clientId, id) {
   }
 }
 
-async function createReportingPeriod(clientId, userId, params) {
+async function createReportingPeriod(params, options = {}) {
+  const { clientId, createdBy, updatedBy, ...rest } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const newPeriod = await db.MSReportingPeriod.create(
-      { ...params, clientId, createdBy: userId, updatedBy: userId },
+      { ...rest, clientId, createdBy, updatedBy },
       {
         transaction: t,
+        ...options,
       }
     );
     await t.commit();
-    return newPeriod;
+    return newPeriod.get({ plain: true });
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getReportingPeriods(clientId) {
+async function getReportingPeriods(clientId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const periods = await db.MSReportingPeriod.findAll({ transaction: t });
+    const periods = await db.MSReportingPeriod.findAll({
+      order: [["createdAt", "DESC"]],
+      transaction: t,
+      ...options,
+    });
     await t.commit();
-    return periods;
+    return periods.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getReportingPeriodById(clientId, id) {
+async function getReportingPeriodById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const period = await db.MSReportingPeriod.findByPk(id, { transaction: t });
+    const period = await db.MSReportingPeriod.findByPk(id, {
+      transaction: t,
+      ...options,
+    });
     await t.commit();
-    return period;
+    return period ? period.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function getInterviewResponses(clientId, reportingPeriodId) {
+async function getInterviewResponses(
+  clientId,
+  reportingPeriodId,
+  options = {}
+) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const responses = await db.MSInterviewResponse.findAll({
       where: { reportingPeriodId },
+      order: [["createdAt", "DESC"]],
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return responses;
+    return responses.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function submitInterviewResponses(
-  clientId,
-  userId,
-  reportingPeriodId,
-  params
-) {
+async function submitInterviewResponses(params, options = {}) {
+  const { clientId, createdBy, reportingPeriodId, responses } = params;
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const responses = await db.MSInterviewResponse.bulkCreate(
-      params.map((r) => ({
+    const dbResponses = await db.MSInterviewResponse.bulkCreate(
+      responses.map((r) => ({
         ...r,
         reportingPeriodId,
         clientId,
-        createdBy: userId,
-        updatedBy: userId,
+        createdBy,
+        updatedBy: createdBy,
       })),
-      { transaction: t }
+      { transaction: t, ...options }
     );
     await t.commit();
-    return responses;
+    return dbResponses.map((r) => r.get({ plain: true }));
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function generateStatement(clientId, reportingPeriodId) {
+async function generateStatement(clientId, reportingPeriodId, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     // Stub implementation for now
@@ -380,111 +424,112 @@ async function generateStatement(clientId, reportingPeriodId) {
   }
 }
 
-async function updateTrainingById(clientId, id, params) {
+async function updateTrainingById(clientId, id, params, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    if (params.completed === false) {
-      params.completedAt = null;
+    const updateParams = { ...params };
+    if (updateParams.completed === false) {
+      updateParams.completedAt = null;
     }
-
-    console.log("Updating training record", {
-      id,
-      params,
-    });
-
-    const [count, [updatedRecord]] = await db.MSTraining.update(params, {
+    const [count, [updatedRecord]] = await db.MSTraining.update(updateParams, {
       where: { id },
       returning: true,
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return updatedRecord;
+    return updatedRecord ? updatedRecord.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteTrainingById(clientId, id) {
+async function deleteTrainingById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const record = await db.MSTraining.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     if (record) {
       await record.destroy({ transaction: t });
     }
     await t.commit();
-    return record;
+    // Do not return anything for deletes
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function updateSupplierRiskById(clientId, id, params) {
+async function updateSupplierRiskById(clientId, id, params, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const [count, [updatedRecord]] = await db.MSSupplierRisk.update(params, {
       where: { id },
       returning: true,
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return updatedRecord;
+    return updatedRecord ? updatedRecord.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteSupplierRiskById(clientId, id) {
+async function deleteSupplierRiskById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const record = await db.MSSupplierRisk.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     if (record) {
       await record.destroy({ transaction: t });
     }
     await t.commit();
-    return record;
+    // Do not return anything for deletes
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function updateGrievanceById(clientId, id, params) {
+async function updateGrievanceById(clientId, id, params, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const [count, [updatedRecord]] = await db.MSGrievance.update(params, {
       where: { id },
       returning: true,
       transaction: t,
+      ...options,
     });
     await t.commit();
-    return updatedRecord;
+    return updatedRecord ? updatedRecord.get({ plain: true }) : null;
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
   }
 }
 
-async function deleteGrievanceById(clientId, id) {
+async function deleteGrievanceById(clientId, id, options = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const record = await db.MSGrievance.findOne({
       where: { id },
       transaction: t,
+      ...options,
     });
     if (record) {
       await record.destroy({ transaction: t });
     }
     await t.commit();
-    return record;
+    // Do not return anything for deletes
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;

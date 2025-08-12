@@ -133,7 +133,7 @@ async function getReportingPeriodsByClient(req, res, next) {
       details: { count: periods.length },
     });
 
-    res.json(periods);
+    res.status(200).json({ status: "success", data: periods });
   } catch (err) {
     next(err);
   }
@@ -163,7 +163,7 @@ async function getIndicatorsByReportingPeriodId(req, res, next) {
       details: { count: indicators.length },
     });
 
-    res.json(indicators);
+    res.status(200).json({ status: "success", data: indicators });
   } catch (err) {
     next(err);
   }
@@ -193,7 +193,7 @@ async function getMetricsByReportingPeriodId(req, res, next) {
       details: { count: metrics.length },
     });
 
-    res.json(metrics);
+    res.status(200).json({ status: "success", data: metrics });
   } catch (err) {
     next(err);
   }
@@ -233,7 +233,10 @@ async function createIndicator(req, res, next) {
 
     res
       .status(201)
-      .json(indicator.get ? indicator.get({ plain: true }) : indicator);
+      .json({
+        status: "success",
+        data: indicator.get ? indicator.get({ plain: true }) : indicator,
+      });
   } catch (err) {
     next(err);
   }
@@ -268,7 +271,12 @@ async function createMetric(req, res, next) {
       details: { indicatorId, reportingPeriodId, value, unit },
     });
 
-    res.status(201).json(metric.get ? metric.get({ plain: true }) : metric);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: metric.get ? metric.get({ plain: true }) : metric,
+      });
   } catch (err) {
     next(err);
   }
@@ -293,7 +301,7 @@ async function getMetricsByClient(req, res, next) {
       details: { count: metrics.length },
     });
 
-    res.json(metrics);
+    res.status(200).json({ status: "success", data: metrics });
   } catch (err) {
     next(err);
   }
@@ -326,7 +334,12 @@ async function createReportingPeriod(req, res, next) {
       details: { name, startDate, endDate },
     });
 
-    res.status(201).json(period.get ? period.get({ plain: true }) : period);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: period.get ? period.get({ plain: true }) : period,
+      });
   } catch (err) {
     next(err);
   }
@@ -400,10 +413,13 @@ async function submitReportingPeriod(req, res, next) {
       userId,
       id
     );
-    if (!period) return res.status(404).json({ error: "Not found" });
+    if (!period)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     if (period.status !== "Draft")
-      return res.status(400).json({ error: "Only Draft can be submitted." });
+      return res
+        .status(400)
+        .json({ status: "error", message: "Only Draft can be submitted." });
 
     await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "PendingApproval",
@@ -422,7 +438,12 @@ async function submitReportingPeriod(req, res, next) {
       details: { status: "PendingApproval" },
     });
 
-    res.json({ message: "Reporting period submitted for approval." });
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: { message: "Reporting period submitted for approval." },
+      });
   } catch (err) {
     next(err);
   }
@@ -441,12 +462,16 @@ async function approveReportingPeriod(req, res, next) {
       userId,
       id
     );
-    if (!period) return res.status(404).json({ error: "Not found" });
+    if (!period)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     if (period.status !== "PendingApproval")
       return res
         .status(400)
-        .json({ error: "Only PendingApproval can be approved." });
+        .json({
+          status: "error",
+          message: "Only PendingApproval can be approved.",
+        });
 
     await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "Approved",
@@ -465,7 +490,12 @@ async function approveReportingPeriod(req, res, next) {
       details: { status: "Approved" },
     });
 
-    res.json({ message: "Reporting period approved and locked." });
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: { message: "Reporting period approved and locked." },
+      });
   } catch (err) {
     next(err);
   }
@@ -484,12 +514,16 @@ async function rollbackReportingPeriod(req, res, next) {
       userId,
       id
     );
-    if (!period) return res.status(404).json({ error: "Not found" });
+    if (!period)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     if (period.status !== "PendingApproval" && period.status !== "Approved")
       return res
         .status(400)
-        .json({ error: "Only PendingApproval or Approved can rollback." });
+        .json({
+          status: "error",
+          message: "Only PendingApproval or Approved can rollback.",
+        });
 
     await esgService.updateReportingPeriod(clientId, userId, id, {
       status: "Draft",
@@ -506,7 +540,12 @@ async function rollbackReportingPeriod(req, res, next) {
       details: { status: "Draft" },
     });
 
-    res.json({ message: "Reporting period rolled back to Draft." });
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: { message: "Reporting period rolled back to Draft." },
+      });
   } catch (err) {
     next(err);
   }
@@ -525,7 +564,8 @@ async function getReportingPeriodById(req, res, next) {
       userId,
       id
     );
-    if (!period) return res.status(404).json({ error: "Not found" });
+    if (!period)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
       clientId,
@@ -537,7 +577,8 @@ async function getReportingPeriodById(req, res, next) {
       entityId: id,
     });
 
-    res.json(period.get ? period.get({ plain: true }) : period);
+    const data = period.get ? period.get({ plain: true }) : period;
+    res.status(200).json({ status: "success", data });
   } catch (err) {
     next(err);
   }
@@ -552,7 +593,8 @@ async function getMetricById(req, res, next) {
     const metricId = req.params.metricId;
 
     const metric = await esgService.getMetricById(clientId, userId, metricId);
-    if (!metric) return res.status(404).json({ error: "Not found" });
+    if (!metric)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
       clientId,
@@ -564,7 +606,8 @@ async function getMetricById(req, res, next) {
       entityId: metricId,
     });
 
-    res.json(metric.get ? metric.get({ plain: true }) : metric);
+    const data = metric.get ? metric.get({ plain: true }) : metric;
+    res.status(200).json({ status: "success", data });
   } catch (err) {
     next(err);
   }
@@ -597,7 +640,12 @@ async function createUnit(req, res, next) {
       details: { name, symbol },
     });
 
-    res.status(201).json(unit);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: unit.get ? unit.get({ plain: true }) : unit,
+      });
   } catch (err) {
     next(err);
   }
@@ -622,7 +670,7 @@ async function getUnitsByClient(req, res, next) {
       details: { count: units.length },
     });
 
-    res.json(units);
+    res.status(200).json({ status: "success", data: units });
   } catch (err) {
     next(err);
   }
@@ -637,7 +685,8 @@ async function getUnitById(req, res, next) {
     const id = req.params.id;
 
     const unit = await esgService.getUnitById(clientId, userId, id);
-    if (!unit) return res.status(404).json({ error: "Not found" });
+    if (!unit)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
       clientId,
@@ -649,7 +698,7 @@ async function getUnitById(req, res, next) {
       entityId: id,
     });
 
-    res.json(unit);
+    res.status(200).json({ status: "success", data: unit });
   } catch (err) {
     next(err);
   }
@@ -681,7 +730,9 @@ async function updateUnit(req, res, next) {
       details: { name, symbol },
     });
 
-    res.json({ message: "Unit updated." });
+    res
+      .status(200)
+      .json({ status: "success", data: { message: "Unit updated." } });
   } catch (err) {
     next(err);
   }
@@ -738,7 +789,7 @@ async function cloneTemplatesForReportingPeriod(req, res, next) {
       details: { message: "Templates cloned" },
     });
 
-    res.json(result);
+    res.status(200).json({ status: "success", data: result });
   } catch (err) {
     next(err);
   }
@@ -769,7 +820,7 @@ async function getCategoryTotals(req, res, next) {
       details: { count: totals.length },
     });
 
-    res.json(totals);
+    res.status(200).json({ status: "success", data: totals });
   } catch (err) {
     next(err);
   }
@@ -800,7 +851,7 @@ async function getAllIndicatorsWithLatestMetrics(req, res, next) {
       details: { count: data.length },
     });
 
-    res.json(data);
+    res.status(200).json({ status: "success", data });
   } catch (err) {
     next(err);
   }
@@ -831,7 +882,7 @@ async function getTotalsByIndicator(req, res, next) {
       details: { count: totals.length },
     });
 
-    res.json(totals);
+    res.status(200).json({ status: "success", data: totals });
   } catch (err) {
     next(err);
   }
@@ -867,7 +918,12 @@ async function createTemplate(req, res, next) {
       details: { fieldType, fieldName, category },
     });
 
-    res.status(201).json(template);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: template.get ? template.get({ plain: true }) : template,
+      });
   } catch (err) {
     next(err);
   }
@@ -892,7 +948,7 @@ async function getTemplatesByClient(req, res, next) {
       details: { count: templates.length },
     });
 
-    res.json(templates);
+    res.status(200).json({ status: "success", data: templates });
   } catch (err) {
     next(err);
   }
@@ -907,7 +963,8 @@ async function getTemplateById(req, res, next) {
     const device = req.headers["user-agent"];
 
     const template = await esgService.getTemplateById(clientId, userId, id);
-    if (!template) return res.status(404).json({ error: "Not found" });
+    if (!template)
+      return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
       clientId,
@@ -919,7 +976,7 @@ async function getTemplateById(req, res, next) {
       entityId: id,
     });
 
-    res.json(template);
+    res.status(200).json({ status: "success", data: template });
   } catch (err) {
     next(err);
   }

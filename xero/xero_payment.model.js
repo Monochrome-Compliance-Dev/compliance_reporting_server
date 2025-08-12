@@ -19,7 +19,7 @@ module.exports = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      reportId: {
+      ptrsId: {
         type: DataTypes.STRING(10),
         allowNull: true,
         references: {
@@ -46,7 +46,7 @@ module.exports = (sequelize) => {
         allowNull: true,
       },
       PaymentType: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
       IsReconciled: {

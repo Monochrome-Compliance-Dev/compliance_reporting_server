@@ -14,14 +14,12 @@ function model(sequelize) {
       defaultValue: () => nanoid(10),
       primaryKey: true,
     },
-    ReportingPeriodStartDate: { type: DataTypes.DATE, allowNull: false },
-    ReportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
-    code: { type: DataTypes.STRING, allowNull: false },
-    reportName: { type: DataTypes.STRING, allowNull: false },
+    reportingPeriodStartDate: { type: DataTypes.DATE, allowNull: false },
+    reportingPeriodEndDate: { type: DataTypes.DATE, allowNull: false },
     submittedDate: { type: DataTypes.DATE, allowNull: true },
     submittedBy: { type: DataTypes.STRING(10), allowNull: true },
     currentStep: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    reportStatus: {
+    status: {
       type: DataTypes.ENUM(
         "Created",
         "Cancelled",

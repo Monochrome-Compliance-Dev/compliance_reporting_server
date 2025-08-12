@@ -10,109 +10,149 @@ module.exports = {
   update,
   patch,
   delete: _delete,
-  getAllByReportId,
+  getAllByPtrsId,
   finaliseSubmission,
   saveUploadMetadata,
 };
 
-async function getAll(options = {}) {
-  const t = await beginTransactionWithClientContext(options.clientId);
-  try {
-    const whereClause = options.includeDeleted
-      ? {}
-      : { reportStatus: { [db.Sequelize.Op.ne]: "Deleted" } };
-
-    const rows = await db.Report.findAll({
-      where: whereClause,
-      ...options,
-      transaction: t,
-    });
-
-    return rows;
-  } catch (error) {
-    throw error;
-  }
-}
-
-async function getAllByReportId(reportId, options = {}) {
-  try {
-    const rows = await db.Report.findAll({
-      where: { reportId },
-      ...options,
-      transaction: options.transaction,
-    });
-    return rows;
-  } catch (error) {
-    throw error;
-  }
-}
-
-async function create(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
-  try {
-    const result = await db.Report.create(params, {
-      ...options,
-      transaction: t,
-    });
-
-    await t.commit();
-
-    return result?.get?.({ plain: true }) || result;
-  } catch (error) {
-    await t.rollback();
-    throw error;
-  }
-}
-
-async function update(id, params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
-  try {
-    await db.Report.update(params, {
-      where: { id },
-      ...options,
-      transaction: t,
-    });
-    const result = await db.Report.findOne({
-      where: { id },
-      ...options,
-      transaction: t,
-    });
-    await t.commit();
-    return result?.get?.({ plain: true }) || result;
-  } catch (error) {
-    await t.rollback();
-    throw error;
-  }
-}
-
-async function patch(id, params, options = {}) {
-  const t =
-    options.transaction ||
-    (await beginTransactionWithClientContext(params.clientId));
-  try {
-    const [count, [updatedReport]] = await db.Report.update(params, {
-      where: { id },
-      returning: true,
-      ...options,
-      transaction: t,
-    });
-
-    if (count === 0) {
-      throw new Error("Report not found or update blocked by RLS.");
-    }
-    if (!options.transaction) await t.commit();
-    return updatedReport?.get?.({ plain: true }) || updatedReport;
-  } catch (error) {
-    if (!options.transaction) await t.rollback();
-    throw error;
-  }
-}
-
-async function _delete(id, clientId, options = {}) {
+async function getAll({ clientId, includeDeleted = false, ...options } = {}) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const [count] = await db.Report.update(
-      { reportStatus: "Deleted" },
+    const whereClause = includeDeleted
+      ? {}
+      : { status: { [db.Sequelize.Op.ne]: "Deleted" } };
+
+    const rows = await db.Ptrs.findAll({
+      where: whereClause,
+      order: [["createdAt", "DESC"]],
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+
+    return rows.map((row) => row.get({ plain: true }));
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getAllByPtrsId({ ptrsId, ...options } = {}) {
+  const t = await beginTransactionWithClientContext(options.clientId);
+  try {
+    const rows = await db.Ptrs.findAll({
+      where: { ptrsId },
+      ...options,
+      transaction: t,
+    });
+
+    await t.commit();
+
+    return rows.map((row) => row.get({ plain: true }));
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function create({ data, clientId, ...options }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const result = await db.Ptrs.create(
+      {
+        ...data,
+        clientId,
+        createdBy: data.createdBy,
+        updatedBy: data.updatedBy,
+      },
+      {
+        ...options,
+        transaction: t,
+      }
+    );
+
+    await t.commit();
+
+    return result.get({ plain: true });
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function update({ id, data, clientId, userId, ...options }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Ptrs.update(
+      { ...data, updatedBy: userId },
+      {
+        where: { id },
+        ...options,
+        transaction: t,
+      }
+    );
+    const result = await db.Ptrs.findOne({
+      where: { id },
+      ...options,
+      transaction: t,
+    });
+
+    if (!result) {
+      throw { status: 404, message: "Ptrs not found" };
+    }
+
+    await t.commit();
+
+    return result.get({ plain: true });
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function patch({ id, data, clientId, userId, transaction, ...options }) {
+  const t = transaction || (await beginTransactionWithClientContext(clientId));
+  try {
+    const [count, [updatedPtrs]] = await db.Ptrs.update(
+      { ...data, updatedBy: userId },
+      {
+        where: { id },
+        returning: true,
+        ...options,
+        transaction: t,
+      }
+    );
+
+    if (count === 0) {
+      throw {
+        status: 404,
+        message: "Ptrs not found or update blocked by RLS.",
+      };
+    }
+    if (!transaction) await t.commit();
+    return updatedPtrs.get({ plain: true });
+  } catch (error) {
+    if (!transaction) await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!transaction && !t.finished) await t.rollback();
+  }
+}
+
+async function _delete({ id, clientId, userId, ...options }) {
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const [count] = await db.Ptrs.update(
+      { status: "Deleted", updatedBy: userId },
       {
         ...options,
         where: { id },
@@ -121,29 +161,38 @@ async function _delete(id, clientId, options = {}) {
     );
 
     if (count === 0) {
-      throw new Error("Report not found or update blocked by RLS.");
+      throw {
+        status: 404,
+        message: "Ptrs not found or update blocked by RLS.",
+      };
     }
 
     await t.commit();
   } catch (error) {
     await t.rollback();
-    throw error;
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
-async function getById(id, clientId) {
+async function getById({ id, clientId }) {
   const t = await beginTransactionWithClientContext(clientId);
   try {
-    const report = await db.Report.findOne({
+    const report = await db.Ptrs.findOne({
       where: { id },
       transaction: t,
     });
     if (!report) {
-      throw { status: 404, message: "Report not found" };
+      throw { status: 404, message: "Ptrs not found" };
     }
+    await t.commit();
     return report.get({ plain: true });
   } catch (error) {
-    throw error;
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
@@ -156,44 +205,52 @@ async function finaliseSubmission() {
     throw { status: 400, message: "Some records are missing isSb flags" };
   }
 
-  const [reportIds] = await db.sequelize.query(
-    `SELECT DISTINCT reportId FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false`
+  const [ptrsIds] = await db.sequelize.query(
+    `SELECT DISTINCT ptrsId FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false`
   );
 
   const now = new Date();
   const updatePayload = {
-    reportStatus: "Submitted",
+    status: "Submitted",
     submittedDate: now,
   };
 
-  for (const { reportId } of reportIds) {
-    await db.Report.update(updatePayload, {
-      where: { id: reportId },
+  for (const { ptrsId } of ptrsIds) {
+    await db.Ptrs.update(updatePayload, {
+      where: { id: ptrsId },
     });
   }
 
-  return { success: true, message: "Report(s) marked as Submitted" };
+  return { success: true, message: "Ptrs(s) marked as Submitted" };
 }
 
 /**
  * Save upload metadata to the reportUpload table.
  * @param {Object} metadata - The metadata to save.
  * @param {Object} options - Optional Sequelize options (e.g. transaction).
- * @returns {Promise<Object>} The created ReportUpload instance.
+ * @returns {Promise<Object>} The created PtrsUpload instance.
  */
 async function saveUploadMetadata(metadata, options = {}) {
   const transaction = options.transaction;
   const clientId = metadata.clientId;
 
   if (!transaction) {
-    throw new Error("Transaction is required for saveUploadMetadata");
+    throw {
+      status: 400,
+      message: "Transaction is required for saveUploadMetadata",
+    };
   }
 
-  await db.sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
-    transaction,
-  });
+  if (!transaction.finished) {
+    await db.sequelize.query(
+      `SET LOCAL app.current_client_id = '${clientId}'`,
+      {
+        transaction,
+      }
+    );
+  }
 
-  const result = await db.ReportUpload.create(metadata, { transaction });
+  const result = await db.PtrsUpload.create(metadata, { transaction });
 
-  return result;
+  return result.get({ plain: true });
 }

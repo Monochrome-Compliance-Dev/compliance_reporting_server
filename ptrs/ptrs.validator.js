@@ -1,12 +1,10 @@
 const Joi = require("../middleware/joiSanitizer");
 
 const ptrsSchema = Joi.object({
-  ReportingPeriodStartDate: Joi.date().required(),
-  ReportingPeriodEndDate: Joi.date().required(),
-  code: Joi.string().alphanum().max(50).sanitize().required(),
-  ptrsName: Joi.string().max(255).sanitize().required(),
+  reportingPeriodStartDate: Joi.date().required(),
+  reportingPeriodEndDate: Joi.date().required(),
   currentStep: Joi.number().integer().min(0).max(100).required(),
-  ptrsStatus: Joi.string()
+  status: Joi.string()
     .valid(
       "Created",
       "Cancelled",

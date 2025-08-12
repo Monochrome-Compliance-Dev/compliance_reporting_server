@@ -49,11 +49,10 @@ router.post(
 router.put("/grievances/:id", authorise(), updateGrievance);
 router.delete("/grievances/:id", authorise(), deleteGrievance);
 
-// New general GET routes for records
+// General GET routes for records
 router.get("/training", authorise(), getTraining);
 router.get("/grievances", authorise(), getGrievances);
 router.get("/supplier-risks", authorise(), getSupplierRisks);
-router.delete("/grievances/:id", authorise(), deleteGrievance);
 
 // Analytics Routes
 router.get(
@@ -100,9 +99,20 @@ async function getReportingPeriods(req, res, next) {
       ip,
       device,
     });
-    res.json(periods);
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: periods.map((p) => (p.get ? p.get({ plain: true }) : p)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -114,8 +124,8 @@ async function getReportingPeriodById(req, res, next) {
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.id;
     const period = await msService.getReportingPeriodById(
-      reportingPeriodId,
-      clientId
+      clientId,
+      reportingPeriodId
     );
     await logReadAudit({
       entity: "MSReportingPeriod",
@@ -128,9 +138,23 @@ async function getReportingPeriodById(req, res, next) {
       ip,
       device,
     });
-    res.json(period && period.get ? period.get({ plain: true }) : period);
+    if (!period) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: period.get ? period.get({ plain: true }) : period,
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -161,9 +185,18 @@ async function createReportingPeriod(req, res, next) {
     });
     res
       .status(201)
-      .json(newPeriod.get ? newPeriod.get({ plain: true }) : newPeriod);
+      .json({
+        status: "success",
+        data: newPeriod.get ? newPeriod.get({ plain: true }) : newPeriod,
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -192,9 +225,20 @@ async function createSupplierRisk(req, res, next) {
       ip,
       device,
     });
-    res.status(201).json(risk.get ? risk.get({ plain: true }) : risk);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: risk.get ? risk.get({ plain: true }) : risk,
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -208,7 +252,12 @@ async function updateSupplierRisk(req, res, next) {
     // Fetch and update via service
     const before = await msService.getSupplierRiskById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "SupplierRisk not found" });
+      logger.logEvent({
+        message: "SupplierRisk not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const { name, risk, country, reviewed } = req.body;
     const beforeData = before.get({ plain: true });
@@ -235,9 +284,15 @@ async function updateSupplierRisk(req, res, next) {
       ip,
       device,
     });
-    res.json(afterData);
+    res.status(200).json({ status: "success", data: afterData });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -251,7 +306,12 @@ async function deleteSupplierRisk(req, res, next) {
     // Fetch and delete via service
     const before = await msService.getSupplierRiskById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "SupplierRisk not found" });
+      logger.logEvent({
+        message: "SupplierRisk not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const beforeData = before.get({ plain: true });
     const deleted = await msService.deleteSupplierRiskById(clientId, id);
@@ -268,7 +328,13 @@ async function deleteSupplierRisk(req, res, next) {
     });
     res.status(204).send();
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -294,9 +360,18 @@ async function createTraining(req, res, next) {
     });
     res
       .status(201)
-      .json(training.get ? training.get({ plain: true }) : training);
+      .json({
+        status: "success",
+        data: training.get ? training.get({ plain: true }) : training,
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -311,7 +386,12 @@ async function updateTraining(req, res, next) {
     // Fetch and update via service
     const before = await msService.getTrainingById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "Training not found" });
+      logger.logEvent({
+        message: "Training not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const beforeData = before.get({ plain: true });
     const after = await msService.updateTrainingById(clientId, id, req.body);
@@ -330,9 +410,15 @@ async function updateTraining(req, res, next) {
       ip,
       device,
     });
-    res.json(afterData);
+    res.status(200).json({ status: "success", data: afterData });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -346,7 +432,12 @@ async function deleteTraining(req, res, next) {
     // Fetch and delete via service
     const before = await msService.getTrainingById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "Training not found" });
+      logger.logEvent({
+        message: "Training not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const beforeData = before.get({ plain: true });
     const deleted = await msService.deleteTrainingById(clientId, id);
@@ -363,7 +454,13 @@ async function deleteTraining(req, res, next) {
     });
     res.status(204).send();
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -394,13 +491,20 @@ async function createGrievance(req, res, next) {
     });
     res
       .status(201)
-      .json(
-        grievanceRecord.get
+      .json({
+        status: "success",
+        data: grievanceRecord.get
           ? grievanceRecord.get({ plain: true })
-          : grievanceRecord
-      );
+          : grievanceRecord,
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -414,7 +518,12 @@ async function updateGrievance(req, res, next) {
     // Fetch and update via service
     const before = await msService.getGrievanceById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "Grievance not found" });
+      logger.logEvent({
+        message: "Grievance not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const beforeData = before.get({ plain: true });
     const after = await msService.updateGrievanceById(clientId, id, {
@@ -441,9 +550,15 @@ async function updateGrievance(req, res, next) {
       ip,
       device,
     });
-    res.json(afterData);
+    res.status(200).json({ status: "success", data: afterData });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -457,7 +572,12 @@ async function deleteGrievance(req, res, next) {
     // Fetch and delete via service
     const before = await msService.getGrievanceById(clientId, id);
     if (!before) {
-      return res.status(404).json({ message: "Grievance not found" });
+      logger.logEvent({
+        message: "Grievance not found",
+        statusCode: 404,
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(404).json({ status: "error", message: "Not found" });
     }
     const beforeData = before.get({ plain: true });
     const deleted = await msService.deleteGrievanceById(clientId, id);
@@ -474,7 +594,13 @@ async function deleteGrievance(req, res, next) {
     });
     res.status(204).send();
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -499,9 +625,20 @@ async function getTraining(req, res, next) {
       ip,
       device,
     });
-    res.json(records);
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: records.map((r) => (r.get ? r.get({ plain: true }) : r)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -524,9 +661,20 @@ async function getGrievances(req, res, next) {
       ip,
       device,
     });
-    res.json(records);
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: records.map((r) => (r.get ? r.get({ plain: true }) : r)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -549,9 +697,20 @@ async function getSupplierRisks(req, res, next) {
       ip,
       device,
     });
-    res.json(records);
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: records.map((r) => (r.get ? r.get({ plain: true }) : r)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -585,9 +744,15 @@ async function getSupplierRiskSummary(req, res, next) {
       device,
     });
     console.log("controller response: ", summary);
-    res.json(summary);
+    res.status(200).json({ status: "success", data: summary });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -618,9 +783,15 @@ async function getTrainingStats(req, res, next) {
       ip,
       device,
     });
-    res.json(stats);
+    res.status(200).json({ status: "success", data: stats });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -651,9 +822,15 @@ async function getGrievanceSummary(req, res, next) {
       ip,
       device,
     });
-    res.json(summary);
+    res.status(200).json({ status: "success", data: summary });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -666,8 +843,8 @@ async function getInterviewResponses(req, res, next) {
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
     const responses = await msService.getInterviewResponses(
-      reportingPeriodId,
-      clientId
+      clientId,
+      reportingPeriodId
     );
     await logReadAudit({
       entity: "MSInterview",
@@ -683,9 +860,20 @@ async function getInterviewResponses(req, res, next) {
       ip,
       device,
     });
-    res.json(responses);
+    res
+      .status(200)
+      .json({
+        status: "success",
+        data: responses.map((r) => (r.get ? r.get({ plain: true }) : r)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -716,9 +904,20 @@ async function submitInterviewResponses(req, res, next) {
       ip,
       device,
     });
-    res.json(result);
+    res
+      .status(201)
+      .json({
+        status: "success",
+        data: result.map((r) => (r.get ? r.get({ plain: true }) : r)),
+      });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 
@@ -730,8 +929,8 @@ async function generateStatement(req, res, next) {
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
     const result = await msService.generateStatement(
-      reportingPeriodId,
-      clientId
+      clientId,
+      reportingPeriodId
     );
     await logReadAudit({
       entity: "MSStatement",
@@ -744,9 +943,15 @@ async function generateStatement(req, res, next) {
       ip,
       device,
     });
-    res.json(result);
+    res.status(200).json({ status: "success", data: result });
   } catch (err) {
-    next(err);
+    logger.logEvent({
+      message: err.message,
+      stack: err.stack,
+      statusCode: 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(err);
   }
 }
 module.exports = router;

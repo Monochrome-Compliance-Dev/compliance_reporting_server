@@ -19,7 +19,7 @@ const XeroInvoice = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      reportId: {
+      ptrsId: {
         type: DataTypes.STRING(10),
         allowNull: true,
         references: {
@@ -35,11 +35,11 @@ const XeroInvoice = (sequelize) => {
         unique: true,
       },
       InvoiceNumber: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
       Reference: {
-        type: DataTypes.STRING(50),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
       Url: {

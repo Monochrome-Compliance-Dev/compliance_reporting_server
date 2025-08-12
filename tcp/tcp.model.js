@@ -76,7 +76,7 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys
     clientId: { type: DataTypes.STRING(10), allowNull: false },
-    reportId: { type: DataTypes.STRING(10), allowNull: false },
+    ptrsId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const Tcp = sequelize.define("tcp", attributes, {
@@ -89,10 +89,10 @@ function model(sequelize) {
     models.Client.hasMany(Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
 
     Tcp.belongsTo(models.Ptrs, {
-      foreignKey: "reportId",
+      foreignKey: "ptrsId",
       onDelete: "CASCADE",
     });
-    models.Ptrs.hasMany(Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
+    models.Ptrs.hasMany(Tcp, { foreignKey: "ptrsId", onDelete: "CASCADE" });
 
     Tcp.hasMany(models.Audit, { foreignKey: "tcpId", onDelete: "CASCADE" });
     models.Audit.belongsTo(Tcp, { foreignKey: "tcpId", onDelete: "CASCADE" });

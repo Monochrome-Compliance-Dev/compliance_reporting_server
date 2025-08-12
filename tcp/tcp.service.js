@@ -6,147 +6,382 @@ const {
   beginTransactionWithClientContext,
 } = require("../helpers/setClientIdRLS");
 
-if (process.env.NODE_ENV !== "test") {
-  import("nanoid").then((mod) => {
-    nanoid = mod.nanoid;
-  });
-}
-
 module.exports = {
+  /**
+   * Retrieve all TCP records.
+   * @param {Object} params - Parameters object.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Array>} List of TCP records.
+   */
   getAll,
-  getAllByPtrsId,
-  getTcpByPtrsId,
+
+  /**
+   * Retrieve TCP records by PTRS ID.
+   * @param {Object} params - Parameters object containing clientId and ptrsId.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Array>} List of TCP records for the given ptrsId.
+   */
+  getByPtrsId,
+
+  /**
+   * Update the isSb flag to false for TCP records matching ptrsId and payeeEntityAbn.
+   * @param {Object} params - Parameters object containing ptrsId and payeeEntityAbn.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<void>}
+   */
   sbiUpdate,
+
+  /**
+   * Retrieve a TCP record by its ID.
+   * @param {Object} params - Parameters object containing clientId and id.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Object|null>} The TCP record or null if not found.
+   */
   getById,
+
+  /**
+   * Create a new TCP record.
+   * @param {Object} params - Parameters object containing clientId and TCP data.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Object>} The created TCP record.
+   */
   create,
+
+  /**
+   * Update a TCP record by ID.
+   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} options - Query options.
+   * @returns {Promise<Object|null>} The updated TCP record or null if not found.
+   */
   update,
+
+  /**
+   * Delete a TCP record by ID.
+   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} options - Query options.
+   * @returns {Promise<void>}
+   */
   delete: _delete,
+
+  /**
+   * Check if there are any TCP records missing the isSb flag.
+   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<boolean>} True if any records are missing the isSb flag.
+   */
   hasMissingIsSbFlag,
+
+  /**
+   * Finalise PTRS submission.
+   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} [options] - Options.
+   * @returns {Promise<Object>} Result of finalisation.
+   */
   finalisePtrs,
+
+  /**
+   * Generate a CSV summary of TCP records.
+   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<string>} CSV string.
+   */
   generateSummaryCsv,
+
+  /**
+   * Partially update a TCP record by ID.
+   * @param {Object} params - Parameters object containing clientId and id.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Object|null>} The updated TCP record or null if not found.
+   */
   partialUpdate,
+
+  /**
+   * Patch a TCP record by ID.
+   * @param {Object} params - Parameters object containing clientId, id, and update data.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Object|null>} The patched TCP record or null if not found.
+   */
   patchRecord,
+
+  /**
+   * Get current value of a specific field for a TCP record.
+   * @param {Object} params - Parameters object containing tcpId and field_name.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<any>} Current field value or null if not found.
+   */
   getCurrentFieldValue,
+
+  /**
+   * Save transformed TCP records.
+   * @param {Object} params - Parameters object containing clientId, transformedRecords, ptrsId, createdBy, source.
+   * @param {Object} [options] - Options.
+   * @returns {Promise<Array>} Inserted TCP records.
+   */
   saveTransformedDataToTcp,
+
+  /**
+   * Save TCP error records.
+   * @param {Object} params - Parameters object containing clientId, errorRecords, ptrsId, createdBy, source.
+   * @param {Object} [options] - Options.
+   * @returns {Promise<boolean>} True if saved successfully.
+   */
   saveErrorsToTcpError,
+
+  /**
+   * Get TCP error records by PTRS ID.
+   * @param {Object} params - Parameters object containing ptrsId.
+   * @param {Object} [options] - Query options.
+   * @returns {Promise<Array>} List of TCP error records.
+   */
   getErrorsByPtrsId,
 };
 
-async function getAll(options = {}) {
-  return await db.Tcp.findAll(options);
-}
-
-async function getAllByPtrsId(ptrsId, clientId) {
+async function getAll(clientId, options = {}) {
+  console.log("options: ", options);
   const t = await beginTransactionWithClientContext(clientId);
-  return await db.Tcp.findAll({ where: { ptrsId }, transaction: t });
-}
-
-async function getTcpByPtrsId(ptrsId, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
-  return await db.Tcp.findAll({
-    where: { ptrsId },
-    transaction: t,
-  });
-}
-
-async function partialUpdate(id, updates, options = {}) {
-  await db.Tcp.update(updates, { where: { id }, ...options });
-  return db.Tcp.findOne({ where: { id }, ...options });
-}
-
-async function sbiUpdate(ptrsId, params, options = {}) {
-  await db.Tcp.update(
-    { isSb: false },
-    {
-      where: {
-        ptrsId: ptrsId,
-        payeeEntityAbn: params.payeeEntityAbn,
-      },
+  try {
+    const rows = await db.Tcp.findAll({
       ...options,
-    }
-  );
+      transaction: t,
+    });
+    await t.commit();
+    return rows.map((row) => row.get({ plain: true }));
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function getById(id, clientId) {
+async function getByPtrsId(params, options = {}) {
+  const { clientId, ptrsId } = params;
   const t = await beginTransactionWithClientContext(clientId);
-  return await db.Tcp.findByPk(id, { transaction: t });
+  try {
+    const rows = await db.Tcp.findAll({
+      where: { ptrsId },
+      transaction: t,
+      ...options,
+    });
+    await t.commit();
+    return rows.map((row) => row.get({ plain: true }));
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function create(params, clientId) {
+async function sbiUpdate(params, options = {}) {
+  const { ptrsId, payeeEntityAbn, clientId, updatedBy } = params;
   const t = await beginTransactionWithClientContext(clientId);
-  return await db.Tcp.create(params, { transaction: t });
+  try {
+    await db.Tcp.update(
+      { isSb: false, ...(updatedBy && { updatedBy }) },
+      {
+        where: {
+          ptrsId,
+          payeeEntityAbn,
+        },
+        transaction: t,
+        ...options,
+      }
+    );
+    await t.commit();
+    // No return
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function update(id, params, options = {}) {
-  await db.Tcp.update(params, { where: { id }, ...options });
-  return db.Tcp.findOne({ where: { id }, ...options });
-}
-
-async function _delete(id, options = {}) {
-  await db.Tcp.destroy({ where: { id }, ...options });
-}
-
-async function getTcp(id, options = {}) {
-  const record = await db.Tcp.findOne({ where: { id }, ...options });
-  if (!record) throw { status: 404, message: "Tcp not found" };
-  return record;
-}
-
-async function hasMissingIsSbFlag(options = {}) {
-  const count = await db.Tcp.count({
-    where: {
-      isTcp: true,
-      excludedTcp: false,
-      isSb: null,
-    },
-    ...options,
-  });
-  return count > 0;
-}
-
-async function finalisePtrs(options = {}) {
-  return await ptrsService.finaliseSubmission(options);
-}
-
-async function generateSummaryCsv(options = {}) {
-  const rows = await db.Tcp.findAll({
-    attributes: [
-      "payeeEntityName",
-      "payeeEntityAbn",
-      "paymentAmount",
-      "paymentDate",
-      "invoiceIssueDate",
-      "isSb",
-      "paymentTime",
-    ],
-    where: {
-      isTcp: true,
-      excludedTcp: false,
-    },
-    raw: true,
-    ...options,
-  });
-
-  const header =
-    "Payee Name,ABN,Amount,Payment Date,Invoice Date,Is Small Business,Payment Time";
-  const csv = [
-    header,
-    ...rows.map(
-      (r) =>
-        `"${r.payeeEntityName}","${r.payeeEntityAbn}",${r.paymentAmount},"${r.paymentDate}","${r.invoiceIssueDate}",${r.isSb},${r.paymentTime}`
-    ),
-  ].join("\n");
-
-  return csv;
-}
-
-async function patchRecord(id, update, clientId) {
+async function getById(params, options = {}) {
+  const { clientId, id } = params;
   const t = await beginTransactionWithClientContext(clientId);
-  await db.Tcp.update(update, { where: { id }, transaction: t });
-  return db.Tcp.findOne({ where: { id }, transaction: t });
+  try {
+    const row = await db.Tcp.findByPk(id, { transaction: t, ...options });
+    await t.commit();
+    return row ? row.get({ plain: true }) : null;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function getCurrentFieldValue(tcpId, field_name, options = {}) {
+async function create(params, options = {}) {
+  const { clientId, createdBy, ...rest } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const record = await db.Tcp.create(
+      { ...rest, ...(createdBy && { createdBy }) },
+      { transaction: t, ...options }
+    );
+    await t.commit();
+    return record.get({ plain: true });
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function update(params, options = {}) {
+  const { clientId, id, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Tcp.update(
+      { ...rest, ...(updatedBy && { updatedBy }) },
+      { where: { id }, transaction: t, ...options }
+    );
+    const record = await db.Tcp.findOne({
+      where: { id },
+      transaction: t,
+      ...options,
+    });
+    await t.commit();
+    return record ? record.get({ plain: true }) : null;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function _delete(params, options = {}) {
+  const { clientId, id } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Tcp.destroy({ where: { id }, transaction: t, ...options });
+    await t.commit();
+    // Do not return anything
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function hasMissingIsSbFlag(params = {}, options = {}) {
+  const { clientId } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const count = await db.Tcp.count({
+      where: {
+        isTcp: true,
+        excludedTcp: false,
+        isSb: null,
+      },
+      transaction: t,
+      ...options,
+    });
+    await t.commit();
+    return count > 0;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function finalisePtrs(params = {}, options = {}) {
+  // This is delegated, but we keep signature for consistency.
+  return await ptrsService.finaliseSubmission(params, options);
+}
+
+async function generateSummaryCsv(params = {}, options = {}) {
+  const { clientId } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const rows = await db.Tcp.findAll({
+      attributes: [
+        "payeeEntityName",
+        "payeeEntityAbn",
+        "paymentAmount",
+        "paymentDate",
+        "invoiceIssueDate",
+        "isSb",
+        "paymentTime",
+      ],
+      where: {
+        isTcp: true,
+        excludedTcp: false,
+      },
+      raw: true,
+      transaction: t,
+      ...options,
+    });
+    await t.commit();
+    const header =
+      "Payee Name,ABN,Amount,Payment Date,Invoice Date,Is Small Business,Payment Time";
+    const csv = [
+      header,
+      ...rows.map(
+        (r) =>
+          `"${r.payeeEntityName}","${r.payeeEntityAbn}",${r.paymentAmount},"${r.paymentDate}","${r.invoiceIssueDate}",${r.isSb},${r.paymentTime}`
+      ),
+    ].join("\n");
+    return csv;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function partialUpdate(params, options = {}) {
+  const { clientId, id, updates, updatedBy } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Tcp.update(
+      { ...updates, ...(updatedBy && { updatedBy }) },
+      { where: { id }, transaction: t, ...options }
+    );
+    const record = await db.Tcp.findOne({
+      where: { id },
+      transaction: t,
+      ...options,
+    });
+    await t.commit();
+    return record ? record.get({ plain: true }) : null;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function patchRecord(params, options = {}) {
+  const { clientId, id, update, updatedBy } = params;
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    await db.Tcp.update(
+      { ...update, ...(updatedBy && { updatedBy }) },
+      { where: { id }, transaction: t }
+    );
+    const record = await db.Tcp.findOne({ where: { id }, transaction: t });
+    await t.commit();
+    return record ? record.get({ plain: true }) : null;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getCurrentFieldValue(params, options = {}) {
+  const { tcpId, field_name, clientId } = params;
   const allowedFields = [
     "payeeEntityName",
     "payeeEntityAbn",
@@ -159,27 +394,37 @@ async function getCurrentFieldValue(tcpId, field_name, options = {}) {
     "excludedTcp",
   ];
   if (!allowedFields.includes(field_name)) {
-    throw new Error("Invalid field_name requested");
+    throw new Error("Requested field_name is not valid");
   }
-  const row = await db.Tcp.findOne({
-    attributes: [field_name],
-    where: { id: tcpId },
-    raw: true,
-    ...options,
-  });
-  return row ? row[field_name] : null;
+  const t = clientId ? await beginTransactionWithClientContext(clientId) : null;
+  try {
+    const row = await db.Tcp.findOne({
+      attributes: [field_name],
+      where: { id: tcpId },
+      raw: true,
+      ...(t ? { transaction: t } : {}),
+      ...options,
+    });
+    if (t) await t.commit();
+    return row ? row[field_name] : null;
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (t && !t.finished) await t.rollback();
+  }
 }
 
-async function saveTransformedDataToTcp(
-  transformedRecords,
-  ptrsId,
-  clientId,
-  createdBy,
-  source = "xero",
-  options = {}
-) {
+async function saveTransformedDataToTcp(params, options = {}) {
+  const {
+    clientId,
+    transformedRecords,
+    ptrsId,
+    createdBy,
+    source = "xero",
+  } = params;
   if (!Array.isArray(transformedRecords)) {
-    throw new Error("Expected an array of transformed TCP records");
+    throw new Error("Transformed TCP records must be an array");
   }
 
   transformedRecords.forEach((record) => {
@@ -207,7 +452,7 @@ async function saveTransformedDataToTcp(
     const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
     if (error) {
       throw new Error(
-        `Validation failed for record at index ${i}: ${error.message}`
+        `Validation error in record at index ${i}: ${error.message}`
       );
     }
   }
@@ -224,23 +469,19 @@ async function saveTransformedDataToTcp(
       transaction: t,
     });
     await t.commit();
-    return insertedRecords;
-  } catch (err) {
-    await t.rollback();
-    throw err;
+    return insertedRecords.map((r) => r.get({ plain: true }));
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }
 
-async function saveErrorsToTcpError(
-  errorRecords,
-  ptrsId,
-  clientId,
-  createdBy,
-  source,
-  options = {}
-) {
+async function saveErrorsToTcpError(params, options = {}) {
+  const { clientId, errorRecords, ptrsId, createdBy, source } = params;
   if (!Array.isArray(errorRecords)) {
-    throw new Error("Expected an array of TCP error records");
+    throw new Error("TCP error records must be an array");
   }
 
   for (let i = 0; i < errorRecords.length; i++) {
@@ -250,24 +491,38 @@ async function saveErrorsToTcpError(
     errorRecords[i].source = source;
   }
 
-  await sequelize.transaction(async (transaction) => {
-    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
-      transaction,
-    });
-
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
     const { validate = true } = options || {};
     await db.TcpError.bulkCreate(errorRecords, {
       validate,
-      transaction,
+      transaction: t,
     });
-  });
-
-  return true;
+    await t.commit();
+    return true;
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
 
-async function getErrorsByPtrsId(ptrsId, options = {}) {
-  return await db.TcpError.findAll({
-    where: { ptrsId },
-    ...options,
-  });
+async function getErrorsByPtrsId(params, options = {}) {
+  const { ptrsId, clientId } = params;
+  const t = clientId ? await beginTransactionWithClientContext(clientId) : null;
+  try {
+    const rows = await db.TcpError.findAll({
+      where: { ptrsId },
+      ...(t ? { transaction: t } : {}),
+      ...options,
+    });
+    if (t) await t.commit();
+    return rows.map((row) => row.get({ plain: true }));
+  } catch (error) {
+    if (t && !t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (t && !t.finished) await t.rollback();
+  }
 }

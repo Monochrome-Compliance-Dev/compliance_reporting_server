@@ -1,11 +1,10 @@
+const auditService = require("../audit/audit.service");
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const upload = multer({ dest: "tmpUploads/" });
-const Joi = require("joi");
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
-const validateRequest = require("../middleware/validate-request");
 const { tcpBulkImportSchema, tcpSchema } = require("./tcp.validator");
 const { logger } = require("../helpers/logger");
 const fs = require("fs");
@@ -14,17 +13,19 @@ const { scanFile } = require("../middleware/virus-scan");
 const ptrsService = require("../ptrs/ptrs.service");
 const csv = require("csv-parser");
 const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
+const { withAudit } = require("../audit/audit.service");
+const Joi = require("joi");
 
 // routes
 router.get("/", authorise(), getAll);
-router.get("/ptrs/:id", authorise(), getAllByPtrsId);
+router.get("/ptrs/:ptrsId", authorise(), getAllByPtrsId);
 router.get("/tcp/:id", authorise(), getTcpByPtrsId);
 router.get("/:id", authorise(), getById);
 router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
 router.patch("/:id", authorise(), patchRecord);
-router.put("/", authorise(), validateRequest(tcpSchema), bulkUpdate);
+router.put("/", authorise(), bulkUpdate);
 router.put("/partial", authorise(), partialUpdate);
-router.post("/", authorise(), validateRequest(tcpBulkImportSchema), bulkCreate);
+router.post("/", authorise(), bulkCreate);
 router.put("/sbi/:id", authorise(), sbiUpdate);
 router.delete("/:id", authorise(), _delete);
 router.get("/missing-isSb", authorise(), checkMissingIsSb);
@@ -36,416 +37,572 @@ router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
 
-function getAll(req, res, next) {
-  tcpService
-    .getAll({ transaction: req.dbTransaction })
-    .then((entities) => res.json(entities))
-    .catch(next);
-}
-
-function getAllByPtrsId(req, res, next) {
-  tcpService
-    .getAllByPtrsId(req.params.id, req.auth?.clientId)
-    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
-    .catch(next);
-}
-
-// Patch a single TCP record
-async function patchRecord(req, res, next) {
+// Fetch all TCPs
+async function getAll(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
-    const { id } = req.params;
-    const userId = req.auth.id;
-    const clientId = req.auth.clientId;
-    const updates = req.body;
-
-    if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
-      return res.status(400).json({ message: "Invalid request body" });
-    }
-
-    // Fetch the old record before updating
-    const oldRecord = await tcpService.getById(id, clientId);
-    if (!oldRecord) {
-      return res.status(404).json({ message: "Record not found" });
-    }
-
-    // Patch the record
-    const updated = await tcpService.patchRecord(id, updates, clientId);
-
-    logger.logEvent("info", "TCP record updated successfully", {
-      action: "PatchRecordTCP",
-      tcpId: id,
+    const data = await tcpService.getAll(clientId);
+    await auditService.logEvent({
       clientId,
       userId,
+      ip,
+      device,
+      action: "GetAllTcp",
+      entity: "Tcp",
+      details: { count: Array.isArray(data) ? data.length : undefined },
     });
-    res.json({
-      success: true,
-      message: "Record updated successfully",
-      data: updated,
-    });
+    res.status(200).json({ status: "success", data: data || [] });
   } catch (error) {
-    logger.logEvent("error", "Error patching record", {
-      error: error.message,
-      stack: error.stack,
-    });
-    next(error);
-  }
-}
-
-function getTcpByPtrsId(req, res, next) {
-  tcpService
-    .getTcpByPtrsId(req.params.id, req.auth?.clientId)
-    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
-    .catch(next);
-}
-
-function sbiUpdate(req, res, next) {
-  try {
-    const records = Object.values(req.body);
-    const promises = records.flatMap((item) => {
-      const itemsToProcess = Array.isArray(item) ? item : [item];
-      return itemsToProcess.map(async (record) => {
-        try {
-          const reqForValidation = { body: record };
-          await validateSbiRecord(reqForValidation);
-          return await tcpService.sbiUpdate(req.params.id, record, {
-            transaction: req.dbTransaction,
-          });
-        } catch (error) {
-          logger.logEvent("error", "Error processing SBI record", {
-            error: error.message,
-            stack: error.stack,
-          });
-          throw error;
-        }
-      });
-    });
-    Promise.all(promises)
-      .then((results) => {
-        logger.auditEvent("SBI result uploaded", {
-          action: "SBIUpload",
-          userId: req.auth.id,
-          clientId: req.auth.clientId,
-        });
-        res.json({
-          success: true,
-          message: "All records saved successfully",
-          results,
-        });
-      })
-      .catch((error) => {
-        logger.logEvent("error", "Error saving SBI records", {
-          error: error.message,
-          stack: error.stack,
-        });
-        next(error);
-      });
-  } catch (error) {
-    logger.logEvent("error", "Error processing bulk SBI records", {
-      error: error.message,
-      stack: error.stack,
-    });
-    next(error);
-  }
-}
-
-async function validateSbiRecord(req) {
-  const schema = Joi.object({
-    payeeEntityAbn: Joi.number().required(),
-  });
-  // Validate the request body
-  await schema.validateAsync(req.body);
-}
-
-function partialUpdate(req, res, next) {
-  try {
-    const records = Object.values(req.body);
-    const promises = records.flatMap((item) => {
-      const itemsToProcess = Array.isArray(item) ? item : [item];
-      return itemsToProcess.map(async (record) => {
-        try {
-          const { id, createdAt, ...recordToUpdate } = record;
-          const reqForValidation = { body: recordToUpdate };
-          await partialUpdateSchema(reqForValidation);
-          return await tcpService.update(record.id, recordToUpdate, {
-            transaction: req.dbTransaction,
-          });
-        } catch (error) {
-          logger.logEvent("error", "Error processing partial update record", {
-            error: error.message,
-            stack: error.stack,
-          });
-          throw error;
-        }
-      });
-    });
-    Promise.all(promises)
-      .then((results) => {
-        logger.logEvent("info", "Partial update for TCP records successful", {
-          action: "PartialUpdateTCP",
-          clientId: req.auth.clientId,
-          count: results.length,
-        });
-        res.json({
-          success: true,
-          message: "All records updated successfully",
-          results,
-        });
-      })
-      .catch((error) => {
-        logger.logEvent("error", "Error updating records in partialUpdate", {
-          error: error.message,
-          stack: error.stack,
-        });
-        next(error);
-      });
-  } catch (error) {
-    logger.logEvent("error", "Error processing bulk records in partialUpdate", {
-      error: error.message,
-      stack: error.stack,
-    });
-    next(error);
-  }
-}
-
-async function partialUpdateSchema(req) {
-  const schema = Joi.object({
-    partialPayment: Joi.boolean().required(),
-    updatedBy: Joi.number().required(),
-  });
-
-  // Validate the request body
-  await schema.validateAsync(req.body);
-}
-
-function getById(req, res, next) {
-  tcpService
-    .getById(req.params.id, { transaction: req.dbTransaction })
-    .then((tcp) => (tcp ? res.json(tcp) : res.sendStatus(404)))
-    .catch(next);
-}
-
-// Bulk create
-async function bulkCreate(req, res, next) {
-  const transaction = req.dbTransaction;
-  try {
-    if (!Array.isArray(req.body)) {
-      return res
-        .status(400)
-        .json({ message: "Request body must be an array." });
-    }
-    const clientId = req.auth.clientId;
-    const userId = req.auth.id;
-    const results = [];
-
-    for (const record of req.body) {
-      try {
-        const created = await tcpService.create(record, clientId);
-        results.push(created);
-      } catch (error) {
-        logger.logEvent("error", "Error processing record in bulkCreate", {
-          error: error.message,
-          stack: error.stack,
-        });
-        return res.status(400).json({
-          message: "Error saving some records.",
-        });
-      }
-    }
-
-    logger.logEvent("info", "Bulk TCP records created", {
-      action: "BulkCreateTCP",
-      clientId: clientId,
-      count: results.length,
-    });
-
-    res.json({
-      success: true,
-      message: "All records saved successfully",
-      results,
-    });
-  } catch (error) {
-    await transaction.rollback();
-    logger.logEvent("error", "Error processing bulk records in bulkCreate", {
-      error: error.message,
-      stack: error.stack,
-    });
-    next(error);
-  }
-}
-
-// PUT: Bulk update
-async function bulkUpdate(req, res, next) {
-  const transaction = req.dbTransaction;
-  try {
-    const clientId = req.auth.clientId;
-    const userId = req.auth.id;
-    const records = Object.values(req.body);
-    const results = [];
-
-    for (const item of records) {
-      const itemsToProcess = Array.isArray(item) ? item : [item];
-      for (const record of itemsToProcess) {
-        try {
-          const { id, createdAt, ...recordToUpdate } = record;
-          const oldRecord = await tcpService.getById(id, clientId);
-          const updated = await tcpService.update(id, recordToUpdate, clientId);
-          results.push(updated);
-        } catch (error) {
-          logger.logEvent("error", "Error processing record in bulkUpdate", {
-            error: error.message,
-            stack: error.stack,
-          });
-          throw error;
-        }
-      }
-    }
-
-    logger.logEvent("info", "Bulk TCP records updated", {
-      action: "BulkUpdateTCP",
-      clientId: clientId,
-      count: results.length,
-    });
-
-    await transaction.commit();
-    res.json({
-      success: true,
-      message: "All records updated successfully",
-      results,
-    });
-  } catch (error) {
-    await transaction.rollback();
-    logger.logEvent("error", "Error processing bulk records in bulkUpdate", {
-      error: error.message,
-      stack: error.stack,
-    });
-    next(error);
-  }
-}
-
-// DELETE: Delete a record
-async function _delete(req, res, next) {
-  const transaction = req.dbTransaction;
-  try {
-    const clientId = req.auth.clientId;
-    const userId = req.auth.id;
-    const id = req.params.id;
-
-    const oldRecord = await tcpService.getById(id, { transaction });
-    await tcpService.delete(id, { transaction });
-
-    logger.logEvent("warn", "TCP record deleted", {
-      action: "DeleteTCP",
-      tcpId: id,
+    logger.logEvent("error", "Error fetching all TCPs", {
+      action: "GetAllTcp",
+      userId,
       clientId,
-    });
-
-    await transaction.commit();
-    res.json({
-      success: true,
-      message: "Tcp deleted successfully",
-    });
-  } catch (error) {
-    await transaction.rollback();
-    logger.logEvent("error", "Error deleting tcp", {
+      ip,
+      device,
       error: error.message,
-      stack: error.stack,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }
 }
 
-function checkMissingIsSb(req, res, next) {
-  tcpService
-    .hasMissingIsSbFlag({ transaction: req.dbTransaction })
-    .then((result) => res.json(result))
-    .catch(next);
+// Fetch all TCPs by ptrsId
+async function getAllByPtrsId(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.ptrsId;
+  try {
+    const data = await tcpService.getByPtrsId({ ptrsId, clientId });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTcpByPtrsId",
+      entity: "Tcp",
+      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
+    });
+    res
+      .status(200)
+      .json({ status: "success", data: Array.isArray(data) ? data : [] });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching TCPs by ptrsId", {
+      action: "GetTcpByPtrsId",
+      ptrsId,
+      userId,
+      clientId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
 }
 
-function submitFinalPtrs(req, res, next) {
-  tcpService
-    .finalisePtrs({ transaction: req.dbTransaction })
-    .then((result) => {
-      res.json(result);
-      logger.auditEvent("Ptrs submitted", {
-        action: "SubmitFinalPtrs",
-        userId: req.auth.id,
-        clientId: req.auth.clientId,
-      });
-    })
-    .catch(next);
+// Fetch a single TCP by id
+async function getById(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const id = req.params.id;
+  try {
+    const data = await tcpService.getById({ id, clientId });
+    if (!data) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTcpById",
+      entity: "Tcp",
+      entityId: id,
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching TCP by ID", {
+      action: "GetTcpById",
+      id,
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
 }
 
-function downloadSummaryPtrs(req, res, next) {
-  tcpService
-    .generateSummaryCsv({ transaction: req.dbTransaction })
-    .then((csv) => {
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=summary_ptrs.csv"
-      );
-      res.send(csv);
-      logger.auditEvent("Summary ptrs downloaded", {
-        action: "DownloadSummaryPtrs",
-        userId: req.auth.id,
-        clientId: req.auth.clientId,
-      });
-    })
-    .catch(next);
+// Fetch TCP by ptrsId (legacy)
+async function getTcpByPtrsId(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const id = req.params.id; // legacy param name for ptrsId
+  try {
+    const data = await tcpService.getByPtrsId({ ptrsId: id, clientId });
+    if (!data || (Array.isArray(data) && data.length === 0)) {
+      return res.status(404).json({ status: "error", message: "Not found" });
+    }
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetTcpByPtrsIdLegacy",
+      entity: "Tcp",
+      details: {
+        ptrsId: id,
+        count: Array.isArray(data) ? data.length : undefined,
+      },
+    });
+    res
+      .status(200)
+      .json({ status: "success", data: Array.isArray(data) ? data : [] });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching TCPs by legacy ptrsId route", {
+      action: "GetTcpByPtrsIdLegacy",
+      ptrsId: id,
+      userId,
+      clientId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
 }
 
-// Bulk bulk patch route handler
+// PATCH a single TCP record
+async function patchRecord(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const id = req.params.id;
+  try {
+    const params = { ...req.body, id, clientId, userId };
+    const data = await withAudit(() => tcpService.patchRecord(params, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      entityId: id,
+      action: "PatchRecordTCP",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "PatchRecordTCP",
+      entity: "Tcp",
+      entityId: id,
+      details: { updates: Object.keys(req.body) },
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error patching TCP record", {
+      action: "PatchRecordTCP",
+      id,
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Bulk PATCH update
 async function bulkPatchUpdate(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
     if (!Array.isArray(req.body)) {
-      logger.logEvent("warn", "Invalid request body for bulk patch", {
-        clientId: req.auth.clientId,
-      });
       return res
         .status(400)
-        .json({ message: "Request body must be an array." });
+        .json({ status: "error", message: "Validation error" });
     }
-
-    const clientId = req.auth.clientId;
-    const userId = req.auth.id;
-
-    const updatePromises = req.body.map(async (record) => {
-      const { id, ...updates } = record;
-      if (!id || typeof updates !== "object" || Array.isArray(updates)) {
-        logger.logEvent("warn", "Invalid record structure in bulk patch", {
-          clientId,
-        });
-        throw new Error(
-          "Each record must have an id and updates must be an object"
-        );
-      }
-      const { step, ...filteredUpdates } = updates;
-      const updated = await tcpService.patchRecord(
-        id,
-        filteredUpdates,
-        clientId
-      );
-      return updated;
-    });
-
-    const results = await Promise.all(updatePromises);
-
-    logger.logEvent("info", "Bulk patch update successful", {
+    const data = await withAudit(
+      () =>
+        tcpService.bulkPatchUpdate({ records: req.body, clientId, userId }, {}),
+      { entity: "Tcp", userId, clientId, action: "BulkPatchUpdateTCP" }
+    );
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
       action: "BulkPatchUpdateTCP",
-      clientId: clientId,
-      count: results.length,
+      entity: "Tcp",
+      details: { count: Array.isArray(data) ? data.length : undefined },
     });
-
-    res.json({
-      success: true,
-      message: "All records patch updated successfully",
-      results,
-    });
+    res.status(200).json({ status: "success", data });
   } catch (error) {
     logger.logEvent("error", "Error in bulk patch update", {
-      clientId: req.auth.clientId,
+      action: "BulkPatchUpdateTCP",
+      clientId,
+      userId,
+      ip,
+      device,
       error: error.message,
-      stack: error.stack,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Bulk CREATE TCPs
+async function bulkCreate(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!Array.isArray(req.body)) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Validation error" });
+    }
+    for (const record of req.body) {
+      const { error: validationError } = tcpBulkImportSchema.validate(record);
+      if (validationError) {
+        return res
+          .status(400)
+          .json({ status: "error", message: "Validation error" });
+      }
+    }
+    const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
+    const params = { records: req.body, clientId, userId, ptrsId };
+    const data = await withAudit(() => tcpService.bulkCreate(params, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      action: "BulkCreateTCP",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "BulkCreateTCP",
+      entity: "Tcp",
+      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
+    });
+    res.status(201).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error in bulk create TCP", {
+      action: "BulkCreateTCP",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Bulk UPDATE TCPs
+async function bulkUpdate(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!Array.isArray(req.body)) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Validation error" });
+    }
+    for (const record of req.body) {
+      const { error: validationError } = tcpSchema.validate(record);
+      if (validationError) {
+        return res
+          .status(400)
+          .json({ status: "error", message: "Validation error" });
+      }
+    }
+    const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
+    const params = { records: req.body, clientId, userId, ptrsId };
+    const data = await withAudit(() => tcpService.bulkUpdate(params, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      action: "BulkUpdateTCP",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "BulkUpdateTCP",
+      entity: "Tcp",
+      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error in bulk update TCP", {
+      action: "BulkUpdateTCP",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// PATCH partial update (custom)
+async function partialUpdate(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const params = { ...req.body, clientId, userId };
+    const data = await withAudit(() => tcpService.partialUpdate(params, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      action: "PartialUpdateTCP",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "PartialUpdateTCP",
+      entity: "Tcp",
+      details: { updates: Object.keys(req.body) },
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error in partial update TCP", {
+      action: "PartialUpdateTCP",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// PUT: SBI update (custom)
+async function sbiUpdate(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const records = Array.isArray(req.body)
+      ? req.body
+      : Object.values(req.body);
+    for (const record of records) {
+      if (!record.payeeEntityAbn) {
+        return res
+          .status(400)
+          .json({ status: "error", message: "Validation error" });
+      }
+    }
+    const ptrsId = req.params.id;
+    const params = { records, clientId, userId, ptrsId };
+    const data = await withAudit(() => tcpService.sbiUpdate(params, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      entityId: ptrsId,
+      action: "SBIUpload",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "SBIUpload",
+      entity: "Tcp",
+      entityId: ptrsId,
+      details: { count: Array.isArray(records) ? records.length : undefined },
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error in SBI upload/update", {
+      action: "SBIUpload",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// DELETE a TCP
+async function _delete(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const id = req.params.id;
+  try {
+    if (!clientId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Validation error" });
+    }
+    await withAudit(() => tcpService.delete({ id, clientId, userId }, {}), {
+      entity: "Tcp",
+      userId,
+      clientId,
+      entityId: id,
+      action: "DeleteTCP",
+    });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "DeleteTCP",
+      entity: "Tcp",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting TCP", {
+      action: "DeleteTCP",
+      id,
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Check for missing isSb flag
+async function checkMissingIsSb(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const data = await tcpService.hasMissingIsSbFlag({ clientId });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "CheckMissingIsSb",
+      entity: "Tcp",
+      details: { result: data },
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error checking missing isSb flag", {
+      action: "CheckMissingIsSb",
+      userId,
+      clientId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Submit final PTRS
+async function submitFinalPtrs(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const data = await withAudit(
+      () => tcpService.finalisePtrs({ clientId, userId }, {}),
+      { entity: "Tcp", userId, clientId, action: "SubmitFinalPtrs" }
+    );
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "SubmitFinalPtrs",
+      entity: "Tcp",
+    });
+    res.status(200).json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error submitting final PTRS", {
+      action: "SubmitFinalPtrs",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Download summary PTRS
+async function downloadSummaryPtrs(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const csvData = await tcpService.generateSummaryCsv({ clientId, userId });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "DownloadSummaryPtrs",
+      entity: "Tcp",
+      details: { size: csvData?.length },
+    });
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=summary_ptrs.csv"
+    );
+    res.status(200).send(csvData);
+  } catch (error) {
+    logger.logEvent("error", "Error downloading summary PTRS", {
+      action: "DownloadSummaryPtrs",
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }
@@ -457,7 +614,8 @@ if (!fs.existsSync(tmpUploadPath)) {
   fs.mkdirSync(tmpUploadPath, { recursive: true });
 }
 
-async function uploadFile(req, res) {
+// Upload file (CSV import)
+async function uploadFile(req, res, next) {
   try {
     if (!req.file || !req.file.path) {
       logger.logEvent("warn", "Missing file or file path in request", {
@@ -586,26 +744,26 @@ async function uploadFile(req, res) {
         try {
           const source = "csv_upload";
           const insertResults = await tcpService.saveTransformedDataToTcp(
-            results,
-            req.body.ptrsId,
-            req.auth.clientId,
-            req.auth.id,
-            source,
             {
-              transaction: req.dbTransaction,
-            }
+              transformedRecords: results,
+              ptrsId: req.body.ptrsId,
+              clientId: req.auth.clientId,
+              createdBy: req.auth.id,
+              source: "csv_upload",
+            },
+            { transaction: req.dbTransaction }
           );
 
           if (invalidRows.length > 0) {
             await tcpService.saveErrorsToTcpError(
-              invalidRows,
-              req.body.ptrsId,
-              req.auth.clientId,
-              req.auth.id,
-              source,
               {
-                transaction: req.dbTransaction,
-              }
+                errorRecords: invalidRows,
+                ptrsId: req.body.ptrsId,
+                clientId: req.auth.clientId,
+                createdBy: req.auth.id,
+                source: "csv_upload",
+              },
+              { transaction: req.dbTransaction }
             );
           }
 
@@ -639,16 +797,30 @@ async function uploadFile(req, res) {
             validRows: results.length,
             invalidRows: invalidRows.length,
           });
+          await auditService.logEvent({
+            clientId: req.auth.clientId,
+            userId: req.auth.id,
+            ip: req.ip,
+            device: req.headers["user-agent"],
+            action: "PtrsDataUpload",
+            entity: "Tcp",
+            details: {
+              ptrsId: req.body.ptrsId,
+              validRows: results.length,
+              invalidRows: invalidRows.length,
+              filename: req.file.originalname,
+            },
+          });
           res.status(200).json({
-            success: true,
-            message:
-              "File uploaded, parsed, and records inserted successfully.",
-            totalRows: results.length + invalidRows.length,
-            validRows: results.length,
-            invalidRows: invalidRows.length,
-            inserted: insertResults,
-            errors: invalidRows,
-            validRecordsPreview: results.slice(0, 20),
+            status: "success",
+            data: {
+              totalRows: results.length + invalidRows.length,
+              validRows: results.length,
+              invalidRows: invalidRows.length,
+              inserted: insertResults,
+              errors: invalidRows,
+              validRecordsPreview: results.slice(0, 20),
+            },
           });
         } catch (insertErr) {
           logger.logEvent("error", "Bulk insert failed", {
@@ -656,7 +828,7 @@ async function uploadFile(req, res) {
             error: insertErr.message,
             stack: insertErr.stack,
           });
-          res.status(500).json({ message: "Failed to insert valid records." });
+          return next(insertErr);
         }
       })
       .on("error", (err) => {
@@ -665,7 +837,7 @@ async function uploadFile(req, res) {
           error: err.message,
           stack: err.stack,
         });
-        res.status(500).json({ message: "Failed to parse CSV file." });
+        return next(err);
       });
   } catch (err) {
     logger.logEvent("error", "Error uploading file", {
@@ -673,51 +845,78 @@ async function uploadFile(req, res) {
       error: err.message,
       stack: err.stack,
     });
-    return res.status(500).json({ message: "Failed to upload file." });
+    return next(err);
   }
 }
 
+// Get errors by PTRS ID
 async function getErrorsByPtrsId(req, res, next) {
+  const ptrsId = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
-    const ptrsId = req.params.id;
-    const errors = await tcpService.getErrorsByPtrsId(ptrsId, {
-      transaction: req.dbTransaction,
+    const data = await tcpService.getErrorsByPtrsId({ ptrsId, clientId });
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "GetErrorsByPtrsId",
+      entity: "Tcp",
+      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
     });
-    if (!errors || errors.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No errors found for this ptrs." });
-    }
-    res.json({
-      success: true,
-      message: "Errors retrieved successfully",
-      data: errors,
-    });
+    res
+      .status(200)
+      .json({ status: "success", data: Array.isArray(data) ? data : [] });
   } catch (error) {
-    logger.logEvent("error", "Error fetching errors by ptrs ID", {
+    logger.logEvent("error", "Error fetching TCP errors by ptrsId", {
+      action: "GetErrorsByPtrsId",
+      ptrsId,
+      clientId,
+      userId,
+      ip,
+      device,
       error: error.message,
-      stack: error.stack,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }
 }
 
-// Controller for recalculating TCP metrics
+// Recalculate TCP metrics
 async function recalculateMetrics(req, res, next) {
+  const ptrsId = req.params.id;
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
   try {
-    const ptrsId = req.params.id;
-    const clientId = req.auth.clientId;
     await processTcpMetrics(ptrsId, clientId);
-    logger.logEvent("info", "TCP metrics recalculated", {
-      action: "RecalculateMetrics",
-      ptrsId,
+    await auditService.logEvent({
       clientId,
+      userId,
+      ip,
+      device,
+      action: "RecalculateTcpMetrics",
+      entity: "Tcp",
+      details: { ptrsId },
     });
-    res.json({ success: true, message: "TCP metrics recalculated." });
+    res.status(200).json({
+      status: "success",
+      data: { message: "TCP metrics recalculated." },
+    });
   } catch (error) {
     logger.logEvent("error", "Error recalculating TCP metrics", {
+      action: "RecalculateTcpMetrics",
+      ptrsId,
+      clientId,
+      userId,
+      ip,
+      device,
       error: error.message,
-      stack: error.stack,
+      timestamp: new Date().toISOString(),
     });
     next(error);
   }

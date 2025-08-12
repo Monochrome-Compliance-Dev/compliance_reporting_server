@@ -19,7 +19,7 @@ const XeroContact = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      reportId: {
+      ptrsId: {
         type: DataTypes.STRING(10),
         allowNull: true,
         references: {

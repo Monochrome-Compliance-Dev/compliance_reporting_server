@@ -109,8 +109,8 @@ async function initialise() {
     db.Client.hasMany(db.Tcp, { onDelete: "CASCADE" });
   }
   if (db.Ptrs && db.Tcp) {
-    db.Ptrs.hasMany(db.Tcp, { onDelete: "CASCADE" });
-    db.Tcp.belongsTo(db.Ptrs, { onDelete: "CASCADE" });
+    db.Ptrs.hasMany(db.Tcp, { foreignKey: "ptrsId", onDelete: "CASCADE" });
+    db.Tcp.belongsTo(db.Ptrs, { foreignKey: "ptrsId", onDelete: "CASCADE" });
   }
 
   // Xero Token relationship
