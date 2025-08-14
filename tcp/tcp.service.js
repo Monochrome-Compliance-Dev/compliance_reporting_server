@@ -134,6 +134,7 @@ module.exports = {
    * @returns {Promise<Array>} List of TCP error records.
    */
   getErrorsByPtrsId,
+  resolveErrors,
 };
 
 async function getAll(clientId, options = {}) {
@@ -428,11 +429,36 @@ async function saveTransformedDataToTcp(params, options = {}) {
   }
 
   transformedRecords.forEach((record) => {
+    // Coerce paymentAmount if provided as a string
     if (typeof record.paymentAmount === "string") {
-      record.paymentAmount = parseFloat(
-        record.paymentAmount.replace(/[^0-9.-]+/g, "")
-      );
+      const cleanedPay = record.paymentAmount.replace(/[^0-9.-]+/g, "").trim();
+      record.paymentAmount =
+        cleanedPay === "" ? undefined : parseFloat(cleanedPay);
     }
+
+    // NEW: Coerce invoiceAmount like paymentAmount; drop if empty/non-numeric
+    if (record.invoiceAmount != null) {
+      if (typeof record.invoiceAmount === "string") {
+        const cleanedInv = record.invoiceAmount
+          .replace(/[^0-9.-]+/g, "")
+          .trim();
+        if (cleanedInv === "") {
+          delete record.invoiceAmount; // treat as not provided
+        } else {
+          const invNum = parseFloat(cleanedInv);
+          if (Number.isNaN(invNum)) {
+            delete record.invoiceAmount;
+          } else {
+            record.invoiceAmount = invNum;
+          }
+        }
+      } else if (typeof record.invoiceAmount !== "number") {
+        // Non-string, non-number -> remove to avoid Joi number type error
+        delete record.invoiceAmount;
+      }
+    }
+
+    // Date coercions
     if (
       record.invoiceIssueDate &&
       typeof record.invoiceIssueDate === "string"
@@ -484,24 +510,114 @@ async function saveErrorsToTcpError(params, options = {}) {
     throw new Error("TCP error records must be an array");
   }
 
-  for (let i = 0; i < errorRecords.length; i++) {
-    errorRecords[i].createdBy = createdBy;
-    errorRecords[i].ptrsId = ptrsId;
-    errorRecords[i].clientId = clientId;
-    errorRecords[i].source = source;
+  const attrs =
+    db.TcpError && db.TcpError.rawAttributes ? db.TcpError.rawAttributes : {};
+  const allowedAttrs = Object.keys(attrs);
+
+  const numKeys = new Set(
+    Object.entries(attrs)
+      .filter(
+        ([, a]) =>
+          a &&
+          a.type &&
+          typeof a.type.key === "string" &&
+          ["DECIMAL", "INTEGER", "FLOAT", "BIGINT", "REAL", "DOUBLE"].includes(
+            a.type.key.toUpperCase()
+          )
+      )
+      .map(([k]) => k)
+  );
+  const dateKeys = new Set(
+    Object.entries(attrs)
+      .filter(
+        ([, a]) =>
+          a &&
+          a.type &&
+          typeof a.type.key === "string" &&
+          ["DATE", "DATEONLY"].includes(a.type.key.toUpperCase())
+      )
+      .map(([k]) => k)
+  );
+  const boolKeys = new Set(
+    Object.entries(attrs)
+      .filter(
+        ([, a]) =>
+          a &&
+          a.type &&
+          typeof a.type.key === "string" &&
+          a.type.key.toUpperCase() === "BOOLEAN"
+      )
+      .map(([k]) => k)
+  );
+
+  function coerceNumber(v) {
+    if (v == null) return null;
+    if (typeof v === "number") return Number.isNaN(v) ? null : v;
+    const s = String(v).trim();
+    if (s === "") return null;
+    const cleaned = s.replace(/[^0-9.-]+/g, "");
+    if (
+      cleaned === "" ||
+      cleaned === "-" ||
+      cleaned === "." ||
+      cleaned === "-."
+    )
+      return null;
+    const n = parseFloat(cleaned);
+    return Number.isNaN(n) ? null : n;
   }
+  function coerceDate(v) {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function coerceBool(v) {
+    if (v == null || v === "") return null;
+    if (typeof v === "boolean") return v;
+    const s = String(v).trim().toLowerCase();
+    if (["1", "true", "t", "y", "yes"].includes(s)) return true;
+    if (["0", "false", "f", "n", "no"].includes(s)) return false;
+    return null;
+  }
+
+  const sanitized = errorRecords.map((rec) => {
+    const base = { ...rec, createdBy, ptrsId, clientId, source };
+
+    const out = {};
+    for (const k of allowedAttrs) {
+      if (base[k] === undefined) continue;
+      let val = base[k];
+      if (numKeys.has(k)) val = coerceNumber(val);
+      else if (dateKeys.has(k)) val = coerceDate(val);
+      else if (boolKeys.has(k)) val = coerceBool(val);
+      else if (k === "issues") {
+        val = Array.isArray(val) ? JSON.stringify(val) : String(val);
+      }
+      out[k] = val;
+    }
+
+    // Ensure required metadata fields are included if present in model
+    if (allowedAttrs.includes("createdBy")) out.createdBy = base.createdBy;
+    if (allowedAttrs.includes("ptrsId")) out.ptrsId = base.ptrsId;
+    if (allowedAttrs.includes("clientId")) out.clientId = base.clientId;
+    if (allowedAttrs.includes("source")) out.source = base.source;
+
+    return out;
+  });
 
   const t = await beginTransactionWithClientContext(clientId);
   try {
     const { validate = true } = options || {};
-    await db.TcpError.bulkCreate(errorRecords, {
-      validate,
-      transaction: t,
-    });
+    await db.TcpError.bulkCreate(sanitized, { validate, transaction: t });
     await t.commit();
     return true;
   } catch (error) {
     if (!t.finished) await t.rollback();
+    if (error && Array.isArray(error.errors) && error.errors.length) {
+      const messages = error.errors.map((e) => e && (e.message || String(e)));
+      throw new Error(`TcpError bulkCreate failed: ${messages.join("; ")}`);
+    }
     throw error;
   } finally {
     if (!t.finished) await t.rollback();
@@ -524,5 +640,173 @@ async function getErrorsByPtrsId(params, options = {}) {
     throw error;
   } finally {
     if (t && !t.finished) await t.rollback();
+  }
+}
+
+// Atomically promote error rows from TcpError to Tcp and delete the error rows
+async function resolveErrors(params, options = {}) {
+  // console.log("params: ", params);
+  const { clientId, userId, records } = params;
+  if (!Array.isArray(records)) {
+    throw new Error("records must be an array");
+  }
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    // Prepare insert payloads for Tcp and collect ids to delete from TcpError
+    const toInsert = [];
+    const errorIds = [];
+    for (const rec of records) {
+      const clean = { ...rec };
+      // Remove TcpError / DB-managed fields early
+      delete clean.id;
+      delete clean.createdAt;
+      delete clean.updatedAt;
+      delete clean.errorReason;
+      delete clean.issues;
+
+      // Coerce numerics similar to saveTransformedDataToTcp
+      if (typeof clean.paymentAmount === "string") {
+        const cleaned = clean.paymentAmount.replace(/[^0-9.-]+/g, "").trim();
+        clean.paymentAmount = cleaned === "" ? undefined : parseFloat(cleaned);
+      }
+      if (
+        clean.invoiceAmount != null &&
+        typeof clean.invoiceAmount === "string"
+      ) {
+        const cleanedInv = clean.invoiceAmount.replace(/[^0-9.-]+/g, "").trim();
+        if (cleanedInv === "") delete clean.invoiceAmount;
+        else {
+          const invNum = parseFloat(cleanedInv);
+          if (Number.isNaN(invNum)) delete clean.invoiceAmount;
+          else clean.invoiceAmount = invNum;
+        }
+      }
+      // Coerce dates
+      if (clean.paymentDate && typeof clean.paymentDate === "string")
+        clean.paymentDate = new Date(clean.paymentDate);
+      if (clean.invoiceIssueDate && typeof clean.invoiceIssueDate === "string")
+        clean.invoiceIssueDate = new Date(clean.invoiceIssueDate);
+      if (clean.invoiceDueDate && typeof clean.invoiceDueDate === "string")
+        clean.invoiceDueDate = new Date(clean.invoiceDueDate);
+
+      // Coerce isReconciled to boolean if present (string/number → boolean, drop invalid)
+      if (Object.prototype.hasOwnProperty.call(clean, "isReconciled")) {
+        const val = clean.isReconciled;
+        if (typeof val === "boolean") {
+          // ok as-is
+        } else if (typeof val === "number") {
+          clean.isReconciled =
+            val === 1 ? true : val === 0 ? false : Boolean(val);
+        } else if (typeof val === "string") {
+          const lower = val.trim().toLowerCase();
+          if (["1", "true", "t", "y", "yes"].includes(lower)) {
+            clean.isReconciled = true;
+          } else if (["0", "false", "f", "n", "no"].includes(lower)) {
+            clean.isReconciled = false;
+          } else if (
+            lower === "" ||
+            lower === "null" ||
+            lower === "undefined"
+          ) {
+            delete clean.isReconciled; // treat empty as absent
+          } else {
+            delete clean.isReconciled; // drop invalid to satisfy Joi.boolean()
+          }
+        } else if (val == null) {
+          delete clean.isReconciled; // null/undefined → absent
+        } else {
+          delete clean.isReconciled; // any other type → absent
+        }
+      }
+
+      // Ensure required metadata
+      clean.clientId = clientId;
+      if (userId) {
+        clean.createdBy = userId;
+        clean.updatedBy = userId;
+      }
+
+      // Whitelist of fields allowed for Tcp insert (must align with validator/model)
+      const allowedInsertKeys = [
+        "payerEntityName",
+        "payerEntityAbn",
+        "payerEntityAcnArbn",
+        "payeeEntityName",
+        "payeeEntityAbn",
+        "payeeEntityAcnArbn",
+        "paymentAmount",
+        "description",
+        "transactionType",
+        "isReconciled",
+        "supplyDate",
+        "paymentDate",
+        "contractPoReferenceNumber",
+        "contractPoPaymentTerms",
+        "noticeForPaymentIssueDate",
+        "noticeForPaymentTerms",
+        "invoiceReferenceNumber",
+        "invoiceIssueDate",
+        "invoiceReceiptDate",
+        "invoiceAmount",
+        "invoicePaymentTerms",
+        "invoiceDueDate",
+        "accountCode",
+        "isTcp",
+        "tcpExclusionComment",
+        "peppolEnabled",
+        "rcti",
+        "creditCardPayment",
+        "creditCardNumber",
+        "partialPayment",
+        "paymentTerm",
+        "excludedTcp",
+        "explanatoryComments1",
+        "isSb",
+        "paymentTime",
+        "explanatoryComments2",
+        // metadata
+        "source",
+        "createdBy",
+        "updatedBy",
+        "ptrsId",
+        "clientId",
+      ];
+
+      // Filter to allowed fields only
+      const filtered = Object.fromEntries(
+        Object.entries(clean).filter(([k]) => allowedInsertKeys.includes(k))
+      );
+
+      // Validate as a normal Tcp import row (against filtered payload)
+      const { error } = tcpBulkImportSchema.validate(filtered);
+      if (error) {
+        throw new Error(
+          `Validation error promoting error row ${rec.id || ""}: ${error.message}`
+        );
+      }
+
+      toInsert.push(filtered);
+      if (rec.id) errorIds.push(rec.id);
+    }
+
+    // Insert into Tcp
+    await db.Tcp.bulkCreate(toInsert, {
+      validate: true,
+      transaction: t,
+      ...(options || {}),
+    });
+
+    // Delete from TcpError if we have ids
+    if (errorIds.length) {
+      await db.TcpError.destroy({ where: { id: errorIds }, transaction: t });
+    }
+
+    await t.commit();
+    return toInsert.length;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
   }
 }

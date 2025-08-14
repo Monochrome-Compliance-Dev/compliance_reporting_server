@@ -9,9 +9,9 @@ let nanoid;
 })();
 
 function generateDiff(before = {}, after = {}, fields = []) {
-  console.log("generateDiff before: ", before);
-  console.log("generateDiff after: ", after);
-  console.log("generateDiff fields: ", fields);
+  // console.log("generateDiff before: ", before);
+  // console.log("generateDiff after: ", after);
+  // console.log("generateDiff fields: ", fields);
   const diff = { before: {}, after: {} };
 
   fields.forEach((field) => {
@@ -101,8 +101,6 @@ function withAudit({
   device,
   transaction = null,
 }) {
-  console.log("before: ", before);
-  console.log("after: ", after);
   const fields = auditFieldConfig[entity];
   const details =
     action === "Update"

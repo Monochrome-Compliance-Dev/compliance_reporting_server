@@ -42,7 +42,7 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys
     clientId: { type: DataTypes.STRING(10), allowNull: false },
-    reportId: { type: DataTypes.STRING(10), allowNull: false },
+    ptrsId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const TcpError = sequelize.define("TcpError", attributes, {
@@ -58,11 +58,11 @@ function model(sequelize) {
     });
 
     TcpError.belongsTo(models.Report, {
-      foreignKey: "reportId",
+      foreignKey: "ptrsId",
       onDelete: "CASCADE",
     });
     models.Report.hasMany(TcpError, {
-      foreignKey: "reportId",
+      foreignKey: "ptrsId",
       onDelete: "CASCADE",
     });
   };

@@ -8,47 +8,39 @@ const sanitize = (value) => {
   return value;
 };
 
+// Common validators for AU identifiers
+const ABN = Joi.string()
+  .pattern(/^\d{11}$/)
+  .allow(null)
+  .empty("")
+  .default(null); // 11 digits
+const ACN_ARBN = Joi.string()
+  .pattern(/^\d{9}$/)
+  .allow(null)
+  .empty("")
+  .default(null); // 9 digits
+
 const tcpSchema = Joi.array().items(
   Joi.object({
     payerEntityName: Joi.string().custom(sanitize).required(),
-    payerEntityAbn: Joi.number()
-      .integer()
-      .optional()
-      .allow(null)
-      .empty("")
-      .default(null),
-    payerEntityAcnArbn: Joi.number()
-      .integer()
-      .optional()
-      .allow(null)
-      .empty("")
-      .default(null),
+    payerEntityAbn: ABN,
+    payerEntityAcnArbn: ACN_ARBN,
     payeeEntityName: Joi.string().custom(sanitize).required(),
-    payeeEntityAbn: Joi.number()
-      .integer()
-      .optional()
-      .allow(null)
-      .empty("")
-      .default(null),
-    payeeEntityAcnArbn: Joi.number()
-      .integer()
-      .optional()
-      .allow(null)
-      .empty("")
-      .default(null),
+    payeeEntityAbn: ABN,
+    payeeEntityAcnArbn: ACN_ARBN,
     paymentAmount: Joi.number().precision(2).required(),
     description: Joi.string().custom(sanitize).allow("", null),
     transactionType: Joi.string().custom(sanitize).optional().allow("", null),
     isReconciled: Joi.boolean().optional().default(false),
-    supplyDate: Joi.string().optional().allow("", null),
+    supplyDate: Joi.date().optional().allow(null),
     paymentDate: Joi.date().required(),
     contractPoReferenceNumber: Joi.string().custom(sanitize).allow("", null),
     contractPoPaymentTerms: Joi.string().custom(sanitize).allow("", null),
-    noticeForPaymentIssueDate: Joi.date().optional().allow("", null),
+    noticeForPaymentIssueDate: Joi.date().optional().allow(null),
     noticeForPaymentTerms: Joi.string().custom(sanitize).allow("", null),
     invoiceReferenceNumber: Joi.string().custom(sanitize).allow("", null),
-    invoiceIssueDate: Joi.date().optional(),
-    invoiceReceiptDate: Joi.date().optional(),
+    invoiceIssueDate: Joi.date().optional().allow(null),
+    invoiceReceiptDate: Joi.date().optional().allow(null),
     invoiceAmount: Joi.number()
       .precision(2)
       .optional()
@@ -56,7 +48,7 @@ const tcpSchema = Joi.array().items(
       .empty("")
       .default(null),
     invoicePaymentTerms: Joi.string().custom(sanitize).allow("", null),
-    invoiceDueDate: Joi.date().optional(),
+    invoiceDueDate: Joi.date().optional().allow(null),
     isTcp: Joi.boolean().required(),
     tcpExclusionComment: Joi.string().custom(sanitize).allow("", null),
     peppolEnabled: Joi.boolean().required(),
@@ -78,7 +70,6 @@ const tcpSchema = Joi.array().items(
     explanatoryComments2: Joi.string().custom(sanitize).allow("", null),
     source: Joi.string().required(),
     createdBy: Joi.string().custom(sanitize).length(10).required(),
-    createdBy: Joi.string().custom(sanitize).length(10).optional(),
     updatedBy: Joi.string().custom(sanitize).length(10).optional(),
     ptrsId: Joi.string().required(),
     clientId: Joi.string().required(),
@@ -87,56 +78,24 @@ const tcpSchema = Joi.array().items(
 
 const tcpBulkImportSchema = Joi.object({
   payerEntityName: Joi.string().custom(sanitize).required(),
-  payerEntityAbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
-  payerEntityAcnArbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
-  payeeEntityAbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
-  payeeEntityAcnArbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
+  payerEntityAbn: ABN,
+  payerEntityAcnArbn: ACN_ARBN,
   payeeEntityName: Joi.string().custom(sanitize).required(),
-  payeeEntityAbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
-  payeeEntityAcnArbn: Joi.number()
-    .integer()
-    .allow(null)
-    .optional()
-    .empty("")
-    .default(null),
+  payeeEntityAbn: ABN,
+  payeeEntityAcnArbn: ACN_ARBN,
   paymentAmount: Joi.number().precision(2).required(),
   description: Joi.string().custom(sanitize).allow("", null),
   transactionType: Joi.string().custom(sanitize).optional().allow("", null),
   isReconciled: Joi.boolean().optional().default(false),
-  supplyDate: Joi.string().optional().allow("", null),
-  paymentDate: Joi.date().optional().allow(null),
+  supplyDate: Joi.date().optional().allow(null),
+  paymentDate: Joi.date().required(),
   contractPoReferenceNumber: Joi.string().custom(sanitize).allow("", null),
   contractPoPaymentTerms: Joi.string().custom(sanitize).allow("", null),
-  noticeForPaymentIssueDate: Joi.string().optional().allow("", null),
+  noticeForPaymentIssueDate: Joi.date().optional().allow(null),
   noticeForPaymentTerms: Joi.string().custom(sanitize).allow("", null),
   invoiceReferenceNumber: Joi.string().custom(sanitize).allow("", null),
   invoiceIssueDate: Joi.date().optional().allow(null),
-  invoiceReceiptDate: Joi.string().optional().allow("", null),
+  invoiceReceiptDate: Joi.date().optional().allow(null),
   invoiceAmount: Joi.number()
     .precision(2)
     .optional()

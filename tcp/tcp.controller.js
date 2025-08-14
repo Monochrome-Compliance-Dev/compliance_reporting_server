@@ -33,6 +33,7 @@ router.put("/submit-final", authorise(), submitFinalPtrs);
 router.get("/download-summary", authorise(), downloadSummaryPtrs);
 router.post("/upload", authorise(), upload.single("file"), uploadFile);
 router.get("/errors/:id", authorise(), getErrorsByPtrsId);
+router.post("/errors/resolve", authorise(), resolveErrors);
 router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
@@ -671,13 +672,10 @@ async function uploadFile(req, res, next) {
         );
 
         for (const key in row) {
-          if (
-            (typeof row[key] === "string" &&
-              row[key].trim().toUpperCase() === "'NULL'") ||
-            "NULL".includes(row[key].trim().toUpperCase())
-          ) {
-            row[key] = null;
-          } else if (row[key] === "") {
+          const v = row[key];
+          const s = v == null ? "" : String(v).trim();
+          const upper = s.toUpperCase();
+          if (upper === "NULL" || upper === "'NULL'" || s === "") {
             row[key] = null;
           }
         }
@@ -755,16 +753,28 @@ async function uploadFile(req, res, next) {
           );
 
           if (invalidRows.length > 0) {
-            await tcpService.saveErrorsToTcpError(
-              {
-                errorRecords: invalidRows,
+            try {
+              await tcpService.saveErrorsToTcpError(
+                {
+                  errorRecords: invalidRows,
+                  ptrsId: req.body.ptrsId,
+                  clientId: req.auth.clientId,
+                  createdBy: req.auth.id,
+                  source: "csv_upload",
+                },
+                { transaction: req.dbTransaction }
+              );
+            } catch (err) {
+              logger.logEvent("error", "Failed to save TCP error rows", {
+                action: "uploadFile-saveErrors",
                 ptrsId: req.body.ptrsId,
                 clientId: req.auth.clientId,
-                createdBy: req.auth.id,
-                source: "csv_upload",
-              },
-              { transaction: req.dbTransaction }
-            );
+                count: invalidRows.length,
+                error: err.message,
+                stack: err.stack,
+              });
+              // Do not fail the whole request just because error rows couldn't be persisted
+            }
           }
 
           try {
@@ -874,6 +884,47 @@ async function getErrorsByPtrsId(req, res, next) {
     logger.logEvent("error", "Error fetching TCP errors by ptrsId", {
       action: "GetErrorsByPtrsId",
       ptrsId,
+      clientId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Promote error rows to Tcp and remove from TcpError
+async function resolveErrors(req, res, next) {
+  const clientId = req.auth?.clientId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const body = Array.isArray(req.body) ? req.body : [req.body];
+
+    // Perform the promotion transaction
+    const count = await tcpService.resolveErrors(
+      { clientId, userId, records: body },
+      {}
+    );
+
+    // Log audit event with the exact shape expected by audit.service
+    await auditService.logEvent({
+      clientId,
+      userId,
+      ip,
+      device,
+      action: "ResolveTcpErrors",
+      entity: "Tcp",
+      details: { count: Array.isArray(body) ? body.length : 1 },
+    });
+
+    res.status(200).json({ status: "success", data: { resolved: count } });
+  } catch (error) {
+    logger.logEvent("error", "Error resolving TCP errors", {
+      action: "ResolveTcpErrors",
       clientId,
       userId,
       ip,

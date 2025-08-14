@@ -231,26 +231,27 @@ async function finaliseSubmission() {
  * @returns {Promise<Object>} The created PtrsUpload instance.
  */
 async function saveUploadMetadata(metadata, options = {}) {
-  const transaction = options.transaction;
+  const externalTx = options.transaction || null;
   const clientId = metadata.clientId;
 
-  if (!transaction) {
-    throw {
-      status: 400,
-      message: "Transaction is required for saveUploadMetadata",
-    };
+  // Start our own transaction if caller didn't provide one
+  const t = externalTx || (await beginTransactionWithClientContext(clientId));
+  try {
+    if (!t.finished) {
+      await db.sequelize.query(
+        `SET LOCAL app.current_client_id = '${clientId}'`,
+        { transaction: t }
+      );
+    }
+
+    const result = await db.PtrsUpload.create(metadata, { transaction: t });
+
+    if (!externalTx) await t.commit();
+    return result.get({ plain: true });
+  } catch (error) {
+    if (!externalTx && !t.finished) await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!externalTx && !t.finished) await t.rollback();
   }
-
-  if (!transaction.finished) {
-    await db.sequelize.query(
-      `SET LOCAL app.current_client_id = '${clientId}'`,
-      {
-        transaction,
-      }
-    );
-  }
-
-  const result = await db.PtrsUpload.create(metadata, { transaction });
-
-  return result.get({ plain: true });
 }

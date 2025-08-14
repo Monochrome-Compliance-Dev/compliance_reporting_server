@@ -25,7 +25,7 @@ function model(sequelize) {
     transactionType: { type: DataTypes.STRING, allowNull: true },
     isReconciled: {
       type: DataTypes.BOOLEAN,
-      allowNull: false,
+      allowNull: true,
       defaultValue: false,
     },
     supplyDate: { type: DataTypes.STRING, allowNull: true },
