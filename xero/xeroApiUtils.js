@@ -2,8 +2,6 @@
  * Utility functions for Xero API calls - retry, pagination, header handling, rate-limiting, and error handling
  */
 
-const xeroService = require("./xero.service");
-
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
@@ -233,7 +231,12 @@ async function paginateXeroApi(fetchPageFn, processPageFn, options = {}) {
  * 1) callXeroApiWithAutoRefresh(() => apiCall(argsBuiltWithFreshToken), clientId)
  * 2) callXeroApiWithAutoRefresh(apiCallFn, clientId, ...args) // legacy: may reuse stale token
  */
-async function callXeroApiWithAutoRefresh(apiCallOrFactory, clientId, ...args) {
+async function callXeroApiWithAutoRefresh(
+  apiCallOrFactory,
+  clientId,
+  refreshFn,
+  ...args
+) {
   const exec = () =>
     args.length ? apiCallOrFactory(...args) : apiCallOrFactory();
   try {
@@ -243,9 +246,12 @@ async function callXeroApiWithAutoRefresh(apiCallOrFactory, clientId, ...args) {
   } catch (error) {
     const statusCode = error?.response?.status || error.statusCode || 500;
     if (statusCode === 401 || statusCode === 403) {
-      await xeroService.refreshToken(clientId);
-      // If caller passed a factory, it should now read the new token
-      return await exec();
+      if (typeof refreshFn === "function") {
+        await refreshFn();
+        const retry = await exec();
+        await handleXeroRateLimitWarnings(retry?.headers || {});
+        return retry;
+      }
     }
     throw enrichXeroError(error);
   }

@@ -102,6 +102,7 @@ module.exports = {
    * @returns {Promise<Object|null>} The patched TCP record or null if not found.
    */
   patchRecord,
+  bulkPatchUpdate,
 
   /**
    * Get current value of a specific field for a TCP record.
@@ -806,6 +807,115 @@ async function resolveErrors(params, options = {}) {
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+// Bulk patch update multiple TCP records
+async function bulkPatchUpdate(params, options = {}) {
+  const { clientId, userId, records } = params || {};
+  if (!Array.isArray(records)) {
+    throw new Error("records must be an array");
+  }
+  const t = await beginTransactionWithClientContext(clientId);
+  try {
+    const normalised = records.map((r) => {
+      if (!r || typeof r !== "object")
+        throw new Error("Invalid record payload");
+      const { id } = r;
+      if (!id) throw new Error("Each record must include an id");
+      const update =
+        r.fields && typeof r.fields === "object"
+          ? { ...r.fields }
+          : (() => {
+              const { id: _id, fields: _fields, ...rest } = r; // spread form
+              return { ...rest };
+            })();
+      return { id, update };
+    });
+
+    // Allowed update keys (mirror of insert list minus immutable/meta)
+    const allowedUpdateKeys = [
+      "payerEntityName",
+      "payerEntityAbn",
+      "payerEntityAcnArbn",
+      "payeeEntityName",
+      "payeeEntityAbn",
+      "payeeEntityAcnArbn",
+      "paymentAmount",
+      "description",
+      "transactionType",
+      "isReconciled",
+      "supplyDate",
+      "paymentDate",
+      "contractPoReferenceNumber",
+      "contractPoPaymentTerms",
+      "noticeForPaymentIssueDate",
+      "noticeForPaymentTerms",
+      "invoiceReferenceNumber",
+      "invoiceIssueDate",
+      "invoiceReceiptDate",
+      "invoiceAmount",
+      "invoicePaymentTerms",
+      "invoiceDueDate",
+      "accountCode",
+      "isTcp",
+      "tcpExclusionComment",
+      "peppolEnabled",
+      "rcti",
+      "creditCardPayment",
+      "creditCardNumber",
+      "partialPayment",
+      "paymentTerm",
+      "excludedTcp",
+      "explanatoryComments1",
+      "isSb",
+      "paymentTime",
+      "explanatoryComments2",
+      // metadata we allow to modify
+      "updatedBy",
+    ];
+
+    const updatedIds = [];
+    for (const { id, update } of normalised) {
+      if (!update || typeof update !== "object") continue;
+      // Strip forbidden keys
+      const cleaned = { ...update };
+      delete cleaned.id;
+      delete cleaned.clientId;
+      delete cleaned.ptrsId;
+      delete cleaned.createdAt;
+      delete cleaned.updatedAt;
+      delete cleaned.createdBy;
+      if (userId) cleaned.updatedBy = userId;
+
+      // Filter to allowed keys only
+      const filtered = Object.fromEntries(
+        Object.entries(cleaned).filter(([k]) => allowedUpdateKeys.includes(k))
+      );
+
+      if (Object.keys(filtered).length === 0) {
+        continue; // nothing to update
+      }
+
+      await db.Tcp.update(filtered, {
+        where: { id },
+        transaction: t,
+        ...(options || {}),
+      });
+      updatedIds.push(id);
+    }
+
+    const updatedRows = updatedIds.length
+      ? await db.Tcp.findAll({ where: { id: updatedIds }, transaction: t })
+      : [];
+
+    await t.commit();
+    return updatedRows.map((r) => r.get({ plain: true }));
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
   } finally {
     if (!t.finished) await t.rollback();
   }

@@ -19,11 +19,11 @@ const XeroOrganisation = (sequelize) => {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      reportId: {
+      ptrsId: {
         type: DataTypes.STRING(10),
         allowNull: true,
         references: {
-          model: "tbl_report",
+          model: "tbl_ptrs",
           key: "id",
         },
         onUpdate: "CASCADE",

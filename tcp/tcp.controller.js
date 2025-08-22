@@ -13,7 +13,6 @@ const { scanFile } = require("../middleware/virus-scan");
 const ptrsService = require("../ptrs/ptrs.service");
 const csv = require("csv-parser");
 const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
-const { withAudit } = require("../audit/audit.service");
 const Joi = require("joi");
 
 // routes
@@ -33,7 +32,12 @@ router.put("/submit-final", authorise(), submitFinalPtrs);
 router.get("/download-summary", authorise(), downloadSummaryPtrs);
 router.post("/upload", authorise(), upload.single("file"), uploadFile);
 router.get("/errors/:id", authorise(), getErrorsByPtrsId);
-router.post("/errors/resolve", authorise(), resolveErrors);
+router.post(
+  "/errors/resolve",
+  express.json({ limit: "10mb" }), // allow larger bulk payloads
+  authorise(),
+  resolveErrors
+);
 router.put("/recalculate/:id", authorise(), recalculateMetrics);
 
 module.exports = router;
@@ -194,13 +198,7 @@ async function patchRecord(req, res, next) {
   const id = req.params.id;
   try {
     const params = { ...req.body, id, clientId, userId };
-    const data = await withAudit(() => tcpService.patchRecord(params, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      entityId: id,
-      action: "PatchRecordTCP",
-    });
+    const data = await tcpService.patchRecord(params, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -239,10 +237,9 @@ async function bulkPatchUpdate(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Validation error" });
     }
-    const data = await withAudit(
-      () =>
-        tcpService.bulkPatchUpdate({ records: req.body, clientId, userId }, {}),
-      { entity: "Tcp", userId, clientId, action: "BulkPatchUpdateTCP" }
+    const data = await tcpService.bulkPatchUpdate(
+      { records: req.body, clientId, userId },
+      {}
     );
     await auditService.logEvent({
       clientId,
@@ -290,12 +287,7 @@ async function bulkCreate(req, res, next) {
     }
     const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
     const params = { records: req.body, clientId, userId, ptrsId };
-    const data = await withAudit(() => tcpService.bulkCreate(params, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      action: "BulkCreateTCP",
-    });
+    const data = await tcpService.bulkCreate(params, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -342,12 +334,7 @@ async function bulkUpdate(req, res, next) {
     }
     const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
     const params = { records: req.body, clientId, userId, ptrsId };
-    const data = await withAudit(() => tcpService.bulkUpdate(params, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      action: "BulkUpdateTCP",
-    });
+    const data = await tcpService.bulkUpdate(params, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -380,12 +367,7 @@ async function partialUpdate(req, res, next) {
   const device = req.headers["user-agent"];
   try {
     const params = { ...req.body, clientId, userId };
-    const data = await withAudit(() => tcpService.partialUpdate(params, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      action: "PartialUpdateTCP",
-    });
+    const data = await tcpService.partialUpdate(params, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -429,13 +411,7 @@ async function sbiUpdate(req, res, next) {
     }
     const ptrsId = req.params.id;
     const params = { records, clientId, userId, ptrsId };
-    const data = await withAudit(() => tcpService.sbiUpdate(params, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      entityId: ptrsId,
-      action: "SBIUpload",
-    });
+    const data = await tcpService.sbiUpdate(params, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -474,13 +450,7 @@ async function _delete(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Validation error" });
     }
-    await withAudit(() => tcpService.delete({ id, clientId, userId }, {}), {
-      entity: "Tcp",
-      userId,
-      clientId,
-      entityId: id,
-      action: "DeleteTCP",
-    });
+    await tcpService.delete({ id, clientId, userId }, {});
     await auditService.logEvent({
       clientId,
       userId,
@@ -545,10 +515,7 @@ async function submitFinalPtrs(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const data = await withAudit(
-      () => tcpService.finalisePtrs({ clientId, userId }, {}),
-      { entity: "Tcp", userId, clientId, action: "SubmitFinalPtrs" }
-    );
+    const data = await tcpService.finalisePtrs({ clientId, userId }, {});
     await auditService.logEvent({
       clientId,
       userId,

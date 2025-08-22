@@ -23,12 +23,13 @@ const XeroInvoice = (sequelize) => {
         type: DataTypes.STRING(10),
         allowNull: true,
         references: {
-          model: "tbl_report",
+          model: "tbl_ptrs",
           key: "id",
         },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
+      tenantId: { type: DataTypes.STRING(50), allowNull: false },
       InvoiceID: {
         type: DataTypes.STRING(255),
         allowNull: false,

@@ -223,7 +223,7 @@ async function handleOAuthCallback(req, res) {
 }
 
 async function startXeroExtractionHandler(req, res, next) {
-  // Only support ptrsId (no reportId fallback)
+  // Only support ptrsId (no ptrsId fallback)
   const { clientId, ptrsId, createdBy, startDate, endDate, tenantIds } =
     req.body;
 
@@ -246,49 +246,55 @@ async function startXeroExtractionHandler(req, res, next) {
         throw new Error(`No access token found for tenant ${tenantId}`);
       const accessToken = tokenRecord.access_token;
 
-      await xeroService.startXeroExtraction({
-        clientId,
-        ptrsId,
-        createdBy: effectiveCreatedBy,
-        startDate,
-        endDate,
-        tenantId,
-        accessToken,
-        onProgress: (status) => {
-          const logData = {
-            ...status,
+      xeroService
+        .startXeroExtraction({
+          clientId,
+          ptrsId,
+          createdBy: effectiveCreatedBy,
+          startDate,
+          endDate,
+          tenantId,
+          accessToken,
+          onProgress: (status) => {
+            const logData = {
+              ...status,
+              clientId,
+              ptrsId,
+              createdBy: effectiveCreatedBy,
+              tenantId,
+              timestamp: new Date().toISOString(),
+            };
+            logger.logEvent("info", "Extraction progress", logData);
+
+            if (req.wss && typeof req.wss.broadcast === "function") {
+              try {
+                // FLAT payload so the client can destructure it directly
+                req.wss.broadcast(JSON.stringify(logData));
+              } catch (wsErr) {
+                logger.logEvent(
+                  "warn",
+                  "Failed to broadcast extraction progress",
+                  {
+                    error: wsErr.message,
+                    stack: wsErr.stack,
+                  }
+                );
+              }
+            }
+          },
+        })
+        .catch((err) => {
+          logger.logEvent("error", "Xero extraction error", {
+            error: err.message,
+            stack: err.stack,
             clientId,
             ptrsId,
-            createdBy: effectiveCreatedBy,
             tenantId,
-            timestamp: new Date().toISOString(),
-          };
-          logger.logEvent("info", "Extraction progress", logData);
-
-          if (req.wss && typeof req.wss.broadcast === "function") {
-            try {
-              req.wss.broadcast(
-                JSON.stringify({
-                  type: "xeroExtractionProgress",
-                  data: logData,
-                })
-              );
-            } catch (wsErr) {
-              logger.logEvent(
-                "warn",
-                "Failed to broadcast extraction progress",
-                {
-                  error: wsErr.message,
-                  stack: wsErr.stack,
-                }
-              );
-            }
-          }
-        },
-      });
+          });
+        });
     }
 
-    logger.logEvent("info", "Xero extraction completed for all tenants.", {
+    logger.logEvent("info", "Xero extraction started for tenants.", {
       clientId,
       ptrsId,
       createdBy: effectiveCreatedBy,
@@ -296,10 +302,9 @@ async function startXeroExtractionHandler(req, res, next) {
       startDate,
       endDate,
     });
-    return res.status(202).json({
-      status: "success",
-      data: { message: "Extraction completed for all tenants." },
-    });
+    return res
+      .status(202)
+      .json({ status: "success", data: { started: true, tenantIds, ptrsId } });
   } catch (err) {
     logger.logEvent("error", "Failed during Xero extraction for tenants", {
       action: "startXeroExtractionHandler",

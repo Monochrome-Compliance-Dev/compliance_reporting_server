@@ -11,22 +11,42 @@ function appendComment(existing, addition) {
   return `${existing} | ${addition}`;
 }
 
-async function processTcpMetrics(reportId, clientId) {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Returns integer day difference or null if inputs invalid.
+// If inclusive is true, adds 1 day when diff is non-negative (for RCTI rule).
+// If clampZero is true, negative values are clamped to 0 (non-RCTI rule).
+function dayDiff(
+  endDate,
+  startDate,
+  { inclusive = false, clampZero = false } = {}
+) {
+  if (!endDate || !startDate) return null;
+  const end = new Date(endDate);
+  const start = new Date(startDate);
+  if (isNaN(end) || isNaN(start)) return null;
+  let days = Math.round((end - start) / DAY_MS);
+  if (inclusive && days >= 0) days += 1;
+  if (clampZero && days < 0) days = 0;
+  return Number.isFinite(days) ? days : null;
+}
+
+async function processTcpMetrics(ptrsId, clientId) {
   const t = await beginTransactionWithClientContext(clientId);
 
   try {
-    // Validate report belongs to client
-    const report = await db.Report.findOne({
-      where: { id: reportId, clientId },
+    // Validate ptrs belongs to client
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, clientId },
       transaction: t,
     });
 
-    if (!report) {
-      throw new Error(`Report ${reportId} not found for client ${clientId}`);
+    if (!ptrs) {
+      throw new Error(`Ptrs ${ptrsId} not found for client ${clientId}`);
     }
 
     const tcpRecords = await db.Tcp.findAll({
-      where: { reportId, clientId, isTcp: true },
+      where: { ptrsId, clientId, isTcp: true },
       transaction: t,
       raw: true,
     });
@@ -46,54 +66,52 @@ async function processTcpMetrics(reportId, clientId) {
         record.invoiceIssueDate &&
         record.paymentDate
       ) {
-        // RCTI: use invoiceIssueDate to paymentDate
-        const diff =
-          new Date(record.paymentDate) - new Date(record.invoiceIssueDate);
-        const days = Math.round(diff / (1000 * 60 * 60 * 24) + 1);
-        if (!isNaN(days)) {
+        // RCTI: inclusive days between invoiceIssueDate and paymentDate
+        const days = dayDiff(record.paymentDate, record.invoiceIssueDate, {
+          inclusive: true,
+          clampZero: true,
+        });
+        if (Number.isFinite(days)) {
           updates.paymentTime = days;
           rctiCount++;
         }
-      }
-      //   if (
-      //     record.isRcti !== true &&
-      //     record.paymentDate &&
-      //     (record.invoiceIssueDate || record.invoiceReceiptDate)
-      //   )
-      else {
-        // Non-RCTI: shorter period between issue/receipt to paymentDate
-        // Where a payment is made on the same day or before an invoice is issued or received, the payment time is 0 days.
-        const issueDiff = record.invoiceIssueDate
-          ? new Date(record.paymentDate) - new Date(record.invoiceIssueDate)
-          : Infinity;
-        const receiptDiff = record.invoiceReceiptDate
-          ? new Date(record.paymentDate) - new Date(record.invoiceReceiptDate)
-          : Infinity;
-
-        const minDays = Math.round(
-          Math.min(issueDiff, receiptDiff) / (1000 * 60 * 60 * 24)
+      } else {
+        // Non-RCTI: choose the shortest valid path to payment
+        // Rule: same-day or pre-issue/receipt payments -> 0 days.
+        const candidates = [];
+        const issueDays = dayDiff(record.paymentDate, record.invoiceIssueDate, {
+          clampZero: true,
+        });
+        if (Number.isFinite(issueDays)) candidates.push(issueDays);
+        const receiptDays = dayDiff(
+          record.paymentDate,
+          record.invoiceReceiptDate,
+          { clampZero: true }
         );
-        if (!isNaN(minDays)) {
+        if (Number.isFinite(receiptDays)) candidates.push(receiptDays);
+
+        if (candidates.length > 0) {
+          const minDays = Math.min(...candidates);
           updates.paymentTime = minDays;
           nonRctiCount++;
-        } else if (record.noticeForPaymentIssueDate && record.paymentDate) {
-          const diff =
-            new Date(record.paymentDate) -
-            new Date(record.noticeForPaymentIssueDate);
-          const days = Math.round(diff / (1000 * 60 * 60 * 24));
-          console.log("Notice for payment diff:", days);
-          if (!isNaN(days)) {
-            updates.paymentTime = days;
+        } else {
+          // Fallback paths
+          const noticeDays = dayDiff(
+            record.paymentDate,
+            record.noticeForPaymentIssueDate,
+            { clampZero: true }
+          );
+          if (Number.isFinite(noticeDays)) {
+            updates.paymentTime = noticeDays;
             noticeCount++;
-          }
-        } else if (record.supplyDate && record.paymentDate) {
-          const diff =
-            new Date(record.paymentDate) - new Date(record.supplyDate);
-          const days = Math.round(diff / (1000 * 60 * 60 * 24));
-          console.log("Supply date diff:", days);
-          if (!isNaN(days)) {
-            updates.paymentTime = days;
-            supplyCount++;
+          } else {
+            const supplyDays = dayDiff(record.paymentDate, record.supplyDate, {
+              clampZero: true,
+            });
+            if (Number.isFinite(supplyDays)) {
+              updates.paymentTime = supplyDays;
+              supplyCount++;
+            }
           }
         }
       }
@@ -166,6 +184,8 @@ async function processTcpMetrics(reportId, clientId) {
         updates.partialPayment = false;
       }
 
+      // console.debug("processTcpMetrics updates", updates);
+
       if (Object.keys(updates).length > 0) {
         await db.Tcp.update(updates, {
           where: { id: record.id },
@@ -186,7 +206,7 @@ async function processTcpMetrics(reportId, clientId) {
     await t.rollback();
     logger.logEvent("error", "Error processing TCP metrics", {
       action: "ProcessTcpMetrics",
-      reportId,
+      ptrsId,
       clientId,
       error,
     });

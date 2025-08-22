@@ -30,6 +30,7 @@ const xeroTokenSchema = Joi.object({
 const xeroInvoiceSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
+  tenantId: Joi.string().required(),
   InvoiceID: Joi.string().optional().allow(null, ""),
   InvoiceNumber: Joi.string().optional().allow(null, ""),
   Reference: Joi.string().optional().allow(null, ""),
@@ -83,6 +84,7 @@ const xeroInvoiceSchema = Joi.object({
 const xeroPaymentSchema = Joi.object({
   clientId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
+  tenantId: Joi.string().required(),
   Reference: Joi.string().optional().allow(null, ""),
   Amount: Joi.number().optional(),
   PaymentID: Joi.string().optional().allow(null, ""),
