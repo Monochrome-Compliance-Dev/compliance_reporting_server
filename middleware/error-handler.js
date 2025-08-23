@@ -21,7 +21,7 @@ function errorHandler(err, req, res, next) {
     path: req.originalUrl,
     method: req.method,
     ip: req.ip,
-    clientId: req.auth?.clientId,
+    customerId: req.auth?.customerId,
     userId: req.auth?.id,
     statusCode,
     error: err.message,

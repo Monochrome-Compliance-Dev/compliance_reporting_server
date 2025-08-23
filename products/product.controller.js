@@ -40,7 +40,7 @@ async function createProduct(req, res, next) {
 
     await logCreateAudit({
       entity: "Product",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       entityId: productData.id,
@@ -68,7 +68,7 @@ async function getProducts(req, res, next) {
 
     await logReadAudit({
       entity: "Product",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       result: data,
@@ -98,7 +98,7 @@ async function getProductById(req, res, next) {
 
     await logReadAudit({
       entity: "Product",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       result: productData,
@@ -134,7 +134,7 @@ async function updateProduct(req, res, next) {
 
     await logUpdateAudit({
       entity: "Product",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       reqBody: req.body,
@@ -167,7 +167,7 @@ async function deleteProduct(req, res, next) {
 
     await logDeleteAudit({
       entity: "Product",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       before: beforeData,

@@ -26,9 +26,9 @@ router.post(
   createMetric
 );
 router.post("/reporting-periods", authorise(), createReportingPeriod);
-router.get("/reporting-periods", authorise(), getReportingPeriodsByClient);
+router.get("/reporting-periods", authorise(), getReportingPeriodsByCustomer);
 router.get("/reporting-periods/:id", authorise(), getReportingPeriodById);
-router.get("/metrics", authorise(), getMetricsByClient);
+router.get("/metrics", authorise(), getMetricsByCustomer);
 router.get(
   "/indicators/:reportingPeriodId",
   authorise(),
@@ -95,13 +95,13 @@ router.post(
   validateRequest(esgTemplateSchema),
   createTemplate
 );
-router.get("/templates", authorise(), getTemplatesByClient);
+router.get("/templates", authorise(), getTemplatesByCustomer);
 router.get("/templates/:id", authorise(), getTemplateById);
 router.delete("/templates/:id", authorise(), deleteTemplate);
 
 // Unit routes
 router.post("/units", authorise(), validateRequest(esgUnitSchema), createUnit);
-router.get("/units", authorise(), getUnitsByClient);
+router.get("/units", authorise(), getUnitsByCustomer);
 router.get("/units/:id", authorise(), getUnitById);
 router.put(
   "/units/:id",
@@ -111,20 +111,20 @@ router.put(
 );
 router.delete("/units/:id", authorise(), deleteUnit);
 
-async function getReportingPeriodsByClient(req, res, next) {
+async function getReportingPeriodsByCustomer(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const periods = await esgService.getReportingPeriodsByClient(
-      clientId,
+    const periods = await esgService.getReportingPeriodsByCustomer(
+      customerId,
       userId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -141,19 +141,19 @@ async function getReportingPeriodsByClient(req, res, next) {
 
 async function getIndicatorsByReportingPeriodId(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
 
     const indicators = await esgService.getIndicatorsByReportingPeriodId(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -171,19 +171,19 @@ async function getIndicatorsByReportingPeriodId(req, res, next) {
 
 async function getMetricsByReportingPeriodId(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.reportingPeriodId;
 
     const metrics = await esgService.getMetricsByReportingPeriodId(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -203,7 +203,7 @@ module.exports = router;
 
 async function createIndicator(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -211,7 +211,7 @@ async function createIndicator(req, res, next) {
       req.body;
 
     const indicator = await esgService.createIndicator({
-      clientId,
+      customerId,
       code,
       name,
       description,
@@ -221,7 +221,7 @@ async function createIndicator(req, res, next) {
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -231,12 +231,10 @@ async function createIndicator(req, res, next) {
       details: { code, name, description, category, reportingPeriodId },
     });
 
-    res
-      .status(201)
-      .json({
-        status: "success",
-        data: indicator.get ? indicator.get({ plain: true }) : indicator,
-      });
+    res.status(201).json({
+      status: "success",
+      data: indicator.get ? indicator.get({ plain: true }) : indicator,
+    });
   } catch (err) {
     next(err);
   }
@@ -244,7 +242,7 @@ async function createIndicator(req, res, next) {
 
 async function createMetric(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -252,7 +250,7 @@ async function createMetric(req, res, next) {
       req.body;
 
     const metric = await esgService.createMetric({
-      clientId,
+      customerId,
       indicatorId,
       reportingPeriodId,
       value,
@@ -261,7 +259,7 @@ async function createMetric(req, res, next) {
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -271,28 +269,26 @@ async function createMetric(req, res, next) {
       details: { indicatorId, reportingPeriodId, value, unit },
     });
 
-    res
-      .status(201)
-      .json({
-        status: "success",
-        data: metric.get ? metric.get({ plain: true }) : metric,
-      });
+    res.status(201).json({
+      status: "success",
+      data: metric.get ? metric.get({ plain: true }) : metric,
+    });
   } catch (err) {
     next(err);
   }
 }
 
-async function getMetricsByClient(req, res, next) {
+async function getMetricsByCustomer(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const metrics = await esgService.getMetricsByClient(clientId, userId);
+    const metrics = await esgService.getMetricsByCustomer(customerId, userId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -310,21 +306,21 @@ async function getMetricsByClient(req, res, next) {
 // Handler for creating ESG reporting periods
 async function createReportingPeriod(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { name, startDate, endDate } = req.body;
 
     const period = await esgService.createReportingPeriod({
-      clientId,
+      customerId,
       name,
       startDate,
       endDate,
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -334,12 +330,10 @@ async function createReportingPeriod(req, res, next) {
       details: { name, startDate, endDate },
     });
 
-    res
-      .status(201)
-      .json({
-        status: "success",
-        data: period.get ? period.get({ plain: true }) : period,
-      });
+    res.status(201).json({
+      status: "success",
+      data: period.get ? period.get({ plain: true }) : period,
+    });
   } catch (err) {
     next(err);
   }
@@ -348,16 +342,16 @@ async function createReportingPeriod(req, res, next) {
 // Handler for deleting an ESG indicator
 async function deleteIndicator(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const indicatorId = req.params.indicatorId;
 
-    await esgService.deleteIndicator(clientId, userId, indicatorId);
+    await esgService.deleteIndicator(customerId, userId, indicatorId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -375,16 +369,16 @@ async function deleteIndicator(req, res, next) {
 // Handler for deleting an ESG metric
 async function deleteMetric(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const metricId = req.params.metricId;
 
-    await esgService.deleteMetric(clientId, userId, metricId);
+    await esgService.deleteMetric(customerId, userId, metricId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -402,14 +396,14 @@ async function deleteMetric(req, res, next) {
 // Approval workflow handlers
 async function submitReportingPeriod(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
     const period = await esgService.getReportingPeriodById(
-      clientId,
+      customerId,
       userId,
       id
     );
@@ -421,14 +415,14 @@ async function submitReportingPeriod(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Only Draft can be submitted." });
 
-    await esgService.updateReportingPeriod(clientId, userId, id, {
+    await esgService.updateReportingPeriod(customerId, userId, id, {
       status: "PendingApproval",
       submittedBy: userId,
       submittedAt: new Date(),
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -438,12 +432,10 @@ async function submitReportingPeriod(req, res, next) {
       details: { status: "PendingApproval" },
     });
 
-    res
-      .status(200)
-      .json({
-        status: "success",
-        data: { message: "Reporting period submitted for approval." },
-      });
+    res.status(200).json({
+      status: "success",
+      data: { message: "Reporting period submitted for approval." },
+    });
   } catch (err) {
     next(err);
   }
@@ -451,14 +443,14 @@ async function submitReportingPeriod(req, res, next) {
 
 async function approveReportingPeriod(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
     const period = await esgService.getReportingPeriodById(
-      clientId,
+      customerId,
       userId,
       id
     );
@@ -466,21 +458,19 @@ async function approveReportingPeriod(req, res, next) {
       return res.status(404).json({ status: "error", message: "Not found" });
 
     if (period.status !== "PendingApproval")
-      return res
-        .status(400)
-        .json({
-          status: "error",
-          message: "Only PendingApproval can be approved.",
-        });
+      return res.status(400).json({
+        status: "error",
+        message: "Only PendingApproval can be approved.",
+      });
 
-    await esgService.updateReportingPeriod(clientId, userId, id, {
+    await esgService.updateReportingPeriod(customerId, userId, id, {
       status: "Approved",
       approvedBy: userId,
       approvedAt: new Date(),
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -490,12 +480,10 @@ async function approveReportingPeriod(req, res, next) {
       details: { status: "Approved" },
     });
 
-    res
-      .status(200)
-      .json({
-        status: "success",
-        data: { message: "Reporting period approved and locked." },
-      });
+    res.status(200).json({
+      status: "success",
+      data: { message: "Reporting period approved and locked." },
+    });
   } catch (err) {
     next(err);
   }
@@ -503,14 +491,14 @@ async function approveReportingPeriod(req, res, next) {
 
 async function rollbackReportingPeriod(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
     const period = await esgService.getReportingPeriodById(
-      clientId,
+      customerId,
       userId,
       id
     );
@@ -518,19 +506,17 @@ async function rollbackReportingPeriod(req, res, next) {
       return res.status(404).json({ status: "error", message: "Not found" });
 
     if (period.status !== "PendingApproval" && period.status !== "Approved")
-      return res
-        .status(400)
-        .json({
-          status: "error",
-          message: "Only PendingApproval or Approved can rollback.",
-        });
+      return res.status(400).json({
+        status: "error",
+        message: "Only PendingApproval or Approved can rollback.",
+      });
 
-    await esgService.updateReportingPeriod(clientId, userId, id, {
+    await esgService.updateReportingPeriod(customerId, userId, id, {
       status: "Draft",
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -540,12 +526,10 @@ async function rollbackReportingPeriod(req, res, next) {
       details: { status: "Draft" },
     });
 
-    res
-      .status(200)
-      .json({
-        status: "success",
-        data: { message: "Reporting period rolled back to Draft." },
-      });
+    res.status(200).json({
+      status: "success",
+      data: { message: "Reporting period rolled back to Draft." },
+    });
   } catch (err) {
     next(err);
   }
@@ -553,14 +537,14 @@ async function rollbackReportingPeriod(req, res, next) {
 
 async function getReportingPeriodById(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
     const period = await esgService.getReportingPeriodById(
-      clientId,
+      customerId,
       userId,
       id
     );
@@ -568,7 +552,7 @@ async function getReportingPeriodById(req, res, next) {
       return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -586,18 +570,18 @@ async function getReportingPeriodById(req, res, next) {
 
 async function getMetricById(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const metricId = req.params.metricId;
 
-    const metric = await esgService.getMetricById(clientId, userId, metricId);
+    const metric = await esgService.getMetricById(customerId, userId, metricId);
     if (!metric)
       return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -616,21 +600,21 @@ async function getMetricById(req, res, next) {
 // Unit controller handlers
 async function createUnit(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { name, symbol, description } = req.body;
 
     const unit = await esgService.createUnit({
-      clientId,
+      customerId,
       name,
       symbol,
       description,
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -640,28 +624,26 @@ async function createUnit(req, res, next) {
       details: { name, symbol },
     });
 
-    res
-      .status(201)
-      .json({
-        status: "success",
-        data: unit.get ? unit.get({ plain: true }) : unit,
-      });
+    res.status(201).json({
+      status: "success",
+      data: unit.get ? unit.get({ plain: true }) : unit,
+    });
   } catch (err) {
     next(err);
   }
 }
 
-async function getUnitsByClient(req, res, next) {
+async function getUnitsByCustomer(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const units = await esgService.getUnitsByClient(clientId, userId);
+    const units = await esgService.getUnitsByCustomer(customerId, userId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -678,18 +660,18 @@ async function getUnitsByClient(req, res, next) {
 
 async function getUnitById(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    const unit = await esgService.getUnitById(clientId, userId, id);
+    const unit = await esgService.getUnitById(customerId, userId, id);
     if (!unit)
       return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -706,21 +688,21 @@ async function getUnitById(req, res, next) {
 
 async function updateUnit(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
     const { name, symbol, description } = req.body;
 
-    await esgService.updateUnit(clientId, userId, id, {
+    await esgService.updateUnit(customerId, userId, id, {
       name,
       symbol,
       description,
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -740,16 +722,16 @@ async function updateUnit(req, res, next) {
 
 async function deleteUnit(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const id = req.params.id;
 
-    await esgService.deleteUnit(clientId, userId, id);
+    await esgService.deleteUnit(customerId, userId, id);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -767,19 +749,19 @@ async function deleteUnit(req, res, next) {
 // Handler to clone templates for a reporting period
 async function cloneTemplatesForReportingPeriod(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const reportingPeriodId = req.params.id;
 
     const result = await esgService.cloneTemplatesForReportingPeriod(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -798,19 +780,19 @@ async function cloneTemplatesForReportingPeriod(req, res, next) {
 // Handler to get category totals for dashboard
 async function getCategoryTotals(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const totals = await esgAnalytics.getCategoryTotals(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -829,19 +811,19 @@ async function getCategoryTotals(req, res, next) {
 // Handler to get all indicators with latest metrics for dashboard
 async function getAllIndicatorsWithLatestMetrics(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const data = await esgAnalytics.getAllIndicatorsWithLatestMetrics(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -860,19 +842,19 @@ async function getAllIndicatorsWithLatestMetrics(req, res, next) {
 // Handler to get totals by indicator for dashboard
 async function getTotalsByIndicator(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const totals = await esgAnalytics.getTotalsByIndicator(
-      clientId,
+      customerId,
       reportingPeriodId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -891,7 +873,7 @@ async function getTotalsByIndicator(req, res, next) {
 // Handlers for template system
 async function createTemplate(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -899,7 +881,7 @@ async function createTemplate(req, res, next) {
       req.body;
 
     const template = await esgService.createTemplate({
-      clientId,
+      customerId,
       fieldType,
       fieldName,
       description,
@@ -908,7 +890,7 @@ async function createTemplate(req, res, next) {
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -918,28 +900,29 @@ async function createTemplate(req, res, next) {
       details: { fieldType, fieldName, category },
     });
 
-    res
-      .status(201)
-      .json({
-        status: "success",
-        data: template.get ? template.get({ plain: true }) : template,
-      });
+    res.status(201).json({
+      status: "success",
+      data: template.get ? template.get({ plain: true }) : template,
+    });
   } catch (err) {
     next(err);
   }
 }
 
-async function getTemplatesByClient(req, res, next) {
+async function getTemplatesByCustomer(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const templates = await esgService.getTemplatesByClient(clientId, userId);
+    const templates = await esgService.getTemplatesByCustomer(
+      customerId,
+      userId
+    );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -956,18 +939,18 @@ async function getTemplatesByClient(req, res, next) {
 
 async function getTemplateById(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const id = req.params.id;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const template = await esgService.getTemplateById(clientId, userId, id);
+    const template = await esgService.getTemplateById(customerId, userId, id);
     if (!template)
       return res.status(404).json({ status: "error", message: "Not found" });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -984,16 +967,16 @@ async function getTemplateById(req, res, next) {
 
 async function deleteTemplate(req, res, next) {
   try {
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const id = req.params.id;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    await esgService.deleteTemplate(clientId, userId, id);
+    await esgService.deleteTemplate(customerId, userId, id);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,

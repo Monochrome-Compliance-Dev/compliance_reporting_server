@@ -18,11 +18,11 @@ function model(sequelize) {
       type: DataTypes.ENUM("DIRECT", "PARTNER"),
       allowNull: false,
     },
-    clientId: {
+    customerId: {
       type: DataTypes.STRING(10),
       allowNull: false,
       references: {
-        model: "tbl_client",
+        model: "tbl_customer",
         key: "id",
       },
     },
@@ -63,7 +63,7 @@ function model(sequelize) {
   });
 
   Invoice.associate = (models) => {
-    Invoice.belongsTo(models.Client, { foreignKey: "clientId" });
+    Invoice.belongsTo(models.Customer, { foreignKey: "customerId" });
     Invoice.belongsTo(models.Partner, { foreignKey: "partnerId" });
     Invoice.hasMany(models.InvoiceLine, {
       foreignKey: "invoiceId",

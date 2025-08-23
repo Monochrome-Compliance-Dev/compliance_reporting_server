@@ -1,6 +1,6 @@
 const Joi = require("../middleware/joiSanitizer");
 
-const clientSchema = Joi.object({
+const customerSchema = Joi.object({
   businessName: Joi.string().required(),
   abn: Joi.string().required(),
   acn: Joi.string().optional().allow(null, ""),
@@ -40,7 +40,7 @@ const clientSchema = Joi.object({
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 
-const clientUpdateSchema = Joi.object({
+const customerUpdateSchema = Joi.object({
   businessName: Joi.string(),
   abn: Joi.string(),
   acn: Joi.string().allow(null, ""),
@@ -83,4 +83,4 @@ const clientUpdateSchema = Joi.object({
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 
-module.exports = { clientSchema, clientUpdateSchema };
+module.exports = { customerSchema, customerUpdateSchema };

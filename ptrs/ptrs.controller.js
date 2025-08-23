@@ -19,16 +19,16 @@ module.exports = router;
 
 async function getAll(req, res, next) {
   try {
-    const clientId = req.auth?.clientId;
+    const customerId = req.auth?.customerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const ptrs = await ptrsService.getAll({
-      clientId,
+      customerId,
       order: [["createdAt", "DESC"]],
     });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -41,7 +41,7 @@ async function getAll(req, res, next) {
     logger.logEvent("error", "Error fetching all ptrs", {
       action: "GetAllPtrs",
       userId: req.auth?.id,
-      clientId: req.auth?.clientId,
+      customerId: req.auth?.customerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -52,15 +52,15 @@ async function getAll(req, res, next) {
 
 async function getById(req, res, next) {
   const id = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const ptrs = await ptrsService.getById({ id, clientId });
+    const ptrs = await ptrsService.getById({ id, customerId });
     if (ptrs) {
       await auditService.logEvent({
-        clientId,
+        customerId,
         userId,
         ip,
         device,
@@ -76,7 +76,7 @@ async function getById(req, res, next) {
     logger.logEvent("error", "Error fetching ptrs by ID", {
       action: "GetPtrsById",
       id,
-      clientId,
+      customerId,
       userId,
       error: error.message,
       statusCode: error.statusCode || 500,
@@ -87,14 +87,14 @@ async function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const ptrs = await ptrsService.create({ data: req.body, clientId });
+    const ptrs = await ptrsService.create({ data: req.body, customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -107,7 +107,7 @@ async function create(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error creating ptrs", {
       action: "CreatePtrs",
-      clientId,
+      customerId,
       userId,
       error: error.message,
       statusCode: error.statusCode || 500,
@@ -119,14 +119,14 @@ async function create(req, res, next) {
 
 async function update(req, res, next) {
   const id = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const ptrs = await ptrsService.update({ id, data: req.body, clientId });
+    const ptrs = await ptrsService.update({ id, data: req.body, customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -140,7 +140,7 @@ async function update(req, res, next) {
     logger.logEvent("error", "Error updating ptrs", {
       action: "UpdatePtrs",
       id,
-      clientId,
+      customerId,
       userId,
       error: error.message,
       statusCode: error.statusCode || 500,
@@ -152,17 +152,17 @@ async function update(req, res, next) {
 
 async function patch(req, res, next) {
   const id = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!clientId) {
-      return res.status(400).json({ message: "Client ID missing" });
+    if (!customerId) {
+      return res.status(400).json({ message: "Customer ID missing" });
     }
-    const ptrs = await ptrsService.patch({ id, data: req.body, clientId });
+    const ptrs = await ptrsService.patch({ id, data: req.body, customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -176,7 +176,7 @@ async function patch(req, res, next) {
     logger.logEvent("error", "Error patching ptrs", {
       action: "PatchPtrs",
       id,
-      clientId,
+      customerId,
       userId,
       error: error.message,
       statusCode: error.statusCode || 500,
@@ -188,17 +188,17 @@ async function patch(req, res, next) {
 
 async function _delete(req, res, next) {
   const id = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!clientId) {
-      return res.status(400).json({ message: "Client ID missing" });
+    if (!customerId) {
+      return res.status(400).json({ message: "Customer ID missing" });
     }
-    await ptrsService.delete({ id, clientId, userId });
+    await ptrsService.delete({ id, customerId, userId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -211,7 +211,7 @@ async function _delete(req, res, next) {
     logger.logEvent("error", "Error deleting ptrs", {
       action: "DeletePtrs",
       id,
-      clientId,
+      customerId,
       userId,
       error: error.message,
       statusCode: error.statusCode || 500,

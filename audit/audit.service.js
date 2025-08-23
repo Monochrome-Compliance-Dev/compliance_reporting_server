@@ -25,7 +25,7 @@ function generateDiff(before = {}, after = {}, fields = []) {
 }
 
 async function logEvent({
-  clientId,
+  customerId,
   userId,
   action,
   entity,
@@ -51,7 +51,7 @@ async function logEvent({
     const auditRecord = await db.AuditEvent.create(
       {
         id: nanoid(10),
-        clientId,
+        customerId,
         userId,
         action,
         entity,
@@ -67,7 +67,7 @@ async function logEvent({
       action,
       entity,
       entityId,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -80,7 +80,7 @@ async function logEvent({
       action,
       entity,
       entityId,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -90,7 +90,7 @@ async function logEvent({
 }
 
 function withAudit({
-  clientId,
+  customerId,
   userId,
   action,
   entity,
@@ -112,7 +112,7 @@ function withAudit({
           : {};
 
   return logEvent({
-    clientId,
+    customerId,
     userId,
     action,
     entity,
@@ -138,7 +138,7 @@ function auditGet(action, entity) {
           : undefined;
 
       logEvent({
-        clientId: req.auth?.clientId,
+        customerId: req.auth?.customerId,
         userId: req.auth?.id,
         action,
         entity,

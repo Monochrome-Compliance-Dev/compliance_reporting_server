@@ -17,15 +17,15 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("🚀 New socket.io connection: ", socket.id);
 
-  socket.emit("hello", { message: "Hi there client!" });
+  socket.emit("hello", { message: "Hi there customer!" });
 
   socket.on("ping-me", (data) => {
-    console.log("💬 Received from client:", data);
+    console.log("💬 Received from customer:", data);
     socket.emit("pong-back", { message: "Pong from server" });
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ Client disconnected:", socket.id);
+    console.log("❌ Customer disconnected:", socket.id);
   });
 });
 

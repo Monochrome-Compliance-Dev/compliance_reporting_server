@@ -54,7 +54,7 @@ async function createThing(req, res, next) {
       entity: "thing",
       entityId: result.id,
       userId: req.auth.userId,
-      clientId: req.auth.clientId,
+      customerId: req.auth.customerId,
       details: params,
     });
 
@@ -94,7 +94,7 @@ function normalizeCreateThingParams(req) {
     effectiveDate: req.body.effectiveDate
       ? new Date(req.body.effectiveDate)
       : null,
-    clientId: req.auth.clientId,
+    customerId: req.auth.customerId,
   };
 }
 ```
@@ -122,7 +122,7 @@ function validateCreateThing(params) {
 
 - Controllers must log all business events (create, update, delete, login, etc.) using `auditService.logEvent` or equivalent.
 - Log after service call, before sending response.
-- Include: `action`, `entity`, `entityId`, `userId`, `clientId`, and relevant details.
+- Include: `action`, `entity`, `entityId`, `userId`, `customerId`, and relevant details.
 - Do not log technical errors as audit events (those go to error logs).
 
 ---
@@ -131,7 +131,7 @@ function validateCreateThing(params) {
 
 - Service throws errors (e.g. `NotFoundError`, `ValidationError`, `ForbiddenError`).
 - Controller catches errors and calls `next(err)`; global error handler formats response.
-- Never leak stack traces or internal error messages to clients.
+- Never leak stack traces or internal error messages to customers.
 - Error responses use envelope:
   ```json
   { "error": { "type": "ValidationError", "message": "Name is required" } }
@@ -199,8 +199,8 @@ function validateCreateThing(params) {
 async function getThing(req, res, next) {
   try {
     const { id } = req.params;
-    const clientId = req.auth.clientId;
-    const result = await thingService.getById(id, clientId);
+    const customerId = req.auth.customerId;
+    const result = await thingService.getById(id, customerId);
     if (!result) throw new NotFoundError("Thing not found");
     res.status(200).json({ data: result });
   } catch (err) {
@@ -222,7 +222,7 @@ async function createThing(req, res, next) {
       entity: "thing",
       entityId: result.id,
       userId: req.auth.userId,
-      clientId: req.auth.clientId,
+      customerId: req.auth.customerId,
       details: params,
     });
     res.status(201).json({ data: result });
@@ -246,7 +246,7 @@ async function patchThing(req, res, next) {
       entity: "thing",
       entityId: id,
       userId: req.auth.userId,
-      clientId: req.auth.clientId,
+      customerId: req.auth.customerId,
       details: params,
     });
     res.status(200).json({ data: result });
@@ -268,7 +268,7 @@ async function deleteThing(req, res, next) {
       entity: "thing",
       entityId: id,
       userId: req.auth.userId,
-      clientId: req.auth.clientId,
+      customerId: req.auth.customerId,
     });
     res.status(204).end();
   } catch (err) {
@@ -281,11 +281,11 @@ async function deleteThing(req, res, next) {
 
 ## ✅ Key Principles
 
-### 1. Auth & Client Context
+### 1. Auth & Customer Context
 
-- JWT must embed `clientId` and `userId`.
+- JWT must embed `customerId` and `userId`.
 - `authorise.js` enforces JWT validity and populates `req.auth`.
-- `validateRequest.js` injects `clientId` into each record from `req.auth.clientId` and fails explicitly if missing.
+- `validateRequest.js` injects `customerId` into each record from `req.auth.customerId` and fails explicitly if missing.
 
 ### 2. Controller
 
@@ -300,7 +300,7 @@ async function deleteThing(req, res, next) {
 
 - Opens transaction using:
   ```js
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   ```
 - Always structured:
   ```js

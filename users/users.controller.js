@@ -54,7 +54,7 @@ router.post(
 router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
 
 router.get("/", authorise(["Admin", "Audit", "Boss"]), getAll);
-router.get("/by-client", authorise(["Admin", "Boss"]), getAllByClientId);
+router.get("/by-customer", authorise(["Admin", "Boss"]), getAllByCustomerId);
 router.get("/:id", authorise(), getById);
 router.post(
   "/",
@@ -68,7 +68,7 @@ router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 module.exports = router;
 
 function authenticate(req, res, next) {
-  const { email, password, clientId } = req.body;
+  const { email, password, customerId } = req.body;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   userService
@@ -76,7 +76,7 @@ function authenticate(req, res, next) {
       email,
       password,
       ipAddress: ip,
-      clientId: clientId,
+      customerId: customerId,
     })
     .then(({ refreshToken, jwtToken, ...user }) => {
       setTokenCookie(res, refreshToken);
@@ -334,18 +334,18 @@ function getAll(req, res, next) {
     .catch(next);
 }
 
-function getAllByClientId(req, res, next) {
-  const clientId = req.auth.clientId;
+function getAllByCustomerId(req, res, next) {
+  const customerId = req.auth.customerId;
   const ip = req.ip;
   const device = req.headers["user-agent"];
 
   userService
-    .getAllByClientId(clientId)
+    .getAllByCustomerId(customerId)
     .then((users) => {
       if (users.length > 0) {
-        logger.logEvent("info", "Fetched users by client ID", {
-          action: "GetUsersByClient",
-          clientId,
+        logger.logEvent("info", "Fetched users by customer ID", {
+          action: "GetUsersByCustomer",
+          customerId,
           requestedBy: req.auth.id,
           ip,
           device,
@@ -354,7 +354,7 @@ function getAllByClientId(req, res, next) {
       } else {
         res
           .status(404)
-          .json({ error: "No users found for this client", code: 404 });
+          .json({ error: "No users found for this customer", code: 404 });
       }
     })
     .catch(next);

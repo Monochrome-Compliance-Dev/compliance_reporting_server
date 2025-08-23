@@ -32,7 +32,7 @@ router.delete("/:id", authorise(), deleteFile);
 async function createFile(req, res, next) {
   try {
     const io = req.app.get("socketio");
-    const { clientId, id: userId } = req.auth;
+    const { customerId, id: userId } = req.auth;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { indicatorId, metricId } = req.body;
@@ -79,7 +79,7 @@ async function createFile(req, res, next) {
       metricId,
     };
 
-    const file = await fileService.createFile(fileData, clientId, userId);
+    const file = await fileService.createFile(fileData, customerId, userId);
 
     console.log("Emitting scanSuccess:", {
       userId,
@@ -96,7 +96,7 @@ async function createFile(req, res, next) {
     });
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -109,8 +109,8 @@ async function createFile(req, res, next) {
     res.status(201).json(file);
   } catch (err) {
     const io = req.app.get("socketio");
-    const { clientId, id: userId } = req.auth || {};
-    if (clientId && userId) {
+    const { customerId, id: userId } = req.auth || {};
+    if (customerId && userId) {
       console.log("Emitting scanFailed:", {
         userId,
         stage: "failed",
@@ -130,15 +130,15 @@ async function createFile(req, res, next) {
 
 async function getFileById(req, res, next) {
   try {
-    const { clientId, id: userId } = req.auth;
+    const { customerId, id: userId } = req.auth;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { id } = req.params;
 
-    const file = await fileService.getFileById(id, clientId);
+    const file = await fileService.getFileById(id, customerId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -155,18 +155,18 @@ async function getFileById(req, res, next) {
 
 async function getFiles(req, res, next) {
   try {
-    const { clientId, id: userId } = req.auth;
+    const { customerId, id: userId } = req.auth;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { indicatorId, metricId } = req.query;
 
     const files = await fileService.getFilesByIndicatorOrMetric(
       { indicatorId, metricId },
-      clientId
+      customerId
     );
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -183,15 +183,15 @@ async function getFiles(req, res, next) {
 
 async function deleteFile(req, res, next) {
   try {
-    const { clientId, id: userId } = req.auth;
+    const { customerId, id: userId } = req.auth;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { id } = req.params;
 
-    await fileService.deleteFile(id, clientId);
+    await fileService.deleteFile(id, customerId);
 
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,

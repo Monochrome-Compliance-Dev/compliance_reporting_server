@@ -62,26 +62,29 @@ function model(sequelize) {
     },
   };
 
-  const Client = sequelize.define("client", attributes, {
-    tableName: "tbl_client",
+  const Customer = sequelize.define("customer", attributes, {
+    tableName: "tbl_customer",
     timestamps: true,
     paranoid: true,
   });
 
   // Correct relationships
-  Client.associate = (models) => {
-    Client.hasMany(models.User, { foreignKey: "clientId" });
-    Client.hasMany(models.Report, {
-      foreignKey: "clientId",
+  Customer.associate = (models) => {
+    Customer.hasMany(models.User, { foreignKey: "customerId" });
+    Customer.hasMany(models.Report, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    Client.hasMany(models.Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
-    Client.hasMany(models.Audit, {
-      foreignKey: "clientId",
+    Customer.hasMany(models.Tcp, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    Client.belongsTo(models.Partner, { foreignKey: "partnerId" });
+    Customer.hasMany(models.Audit, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    Customer.belongsTo(models.Partner, { foreignKey: "partnerId" });
   };
 
-  return Client;
+  return Customer;
 }

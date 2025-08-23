@@ -1,8 +1,8 @@
 const db = require("../db/database");
 const { scanFile } = require("../middleware/virus-scan");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   createFile,
@@ -11,8 +11,8 @@ module.exports = {
   deleteFile,
 };
 
-async function createFile(fileData, clientId, userId) {
-  const transaction = await beginTransactionWithClientContext(clientId);
+async function createFile(fileData, customerId, userId) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
   try {
     if (!fileData.path) {
       throw { status: 400, message: "No file content to scan." };
@@ -22,7 +22,7 @@ async function createFile(fileData, clientId, userId) {
     const savedFile = await db.File.create(
       {
         id: fileData.id,
-        clientId,
+        customerId,
         indicatorId: fileData.indicatorId || null,
         metricId: fileData.metricId || null,
         filename: fileData.filename,
@@ -42,9 +42,9 @@ async function createFile(fileData, clientId, userId) {
   }
 }
 
-async function getFileById(fileId, clientId) {
+async function getFileById(fileId, customerId) {
   const file = await db.File.findOne({
-    where: { id: fileId, clientId },
+    where: { id: fileId, customerId },
   });
   if (!file) {
     throw { status: 404, message: `File ${fileId} not found` };
@@ -54,19 +54,19 @@ async function getFileById(fileId, clientId) {
 
 async function getFilesByIndicatorOrMetric(
   { indicatorId, metricId },
-  clientId
+  customerId
 ) {
-  const where = { clientId };
+  const where = { customerId };
   if (indicatorId) where.indicatorId = indicatorId;
   if (metricId) where.metricId = metricId;
 
   return await db.File.findAll({ where });
 }
 
-async function deleteFile(fileId, clientId) {
-  const transaction = await beginTransactionWithClientContext(clientId);
+async function deleteFile(fileId, customerId) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
   try {
-    const file = await db.File.findOne({ where: { id: fileId, clientId } });
+    const file = await db.File.findOne({ where: { id: fileId, customerId } });
     if (!file) {
       throw { status: 404, message: `File ${fileId} not found` };
     }

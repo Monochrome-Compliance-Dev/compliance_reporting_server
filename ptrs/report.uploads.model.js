@@ -15,7 +15,7 @@ function model(sequelize) {
       primaryKey: true,
     },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
     reportId: { type: DataTypes.STRING(10), allowNull: false },
     filename: { type: DataTypes.STRING, allowNull: false },
     filepath: { type: DataTypes.STRING, allowNull: false },
@@ -37,9 +37,9 @@ function model(sequelize) {
       foreignKey: "reportId",
       as: "report",
     });
-    ReportUploads.belongsTo(models.client, {
-      foreignKey: "clientId",
-      as: "client",
+    ReportUploads.belongsTo(models.customer, {
+      foreignKey: "customerId",
+      as: "customer",
     });
   };
 

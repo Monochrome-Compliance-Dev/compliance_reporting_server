@@ -63,7 +63,7 @@ async function initialise() {
   // Dynamically load models from their folders
   const modelDirs = [
     "../users",
-    "../clients",
+    "../customers",
     "../ptrs",
     "../tcp",
     "../entities",
@@ -100,21 +100,27 @@ async function initialise() {
     });
     db.RefreshToken.belongsTo(db.User, { foreignKey: "userId" });
   }
-  if (db.User && db.Client) {
-    db.User.belongsTo(db.Client, { foreignKey: "clientId" });
-    db.Client.hasMany(db.User, { foreignKey: "clientId" });
+  if (db.User && db.Customer) {
+    db.User.belongsTo(db.Customer, { foreignKey: "customerId" });
+    db.Customer.hasMany(db.User, { foreignKey: "customerId" });
   }
-  if (db.Client && db.Ptrs) {
-    db.Client.hasMany(db.Ptrs, { foreignKey: "clientId", onDelete: "CASCADE" });
-    db.Ptrs.belongsTo(db.Client, {
-      foreignKey: "clientId",
+  if (db.Customer && db.Ptrs) {
+    db.Customer.hasMany(db.Ptrs, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.Ptrs.belongsTo(db.Customer, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
   }
-  if (db.Client && db.Tcp) {
-    db.Client.hasMany(db.Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
-    db.Tcp.belongsTo(db.Client, {
-      foreignKey: "clientId",
+  if (db.Customer && db.Tcp) {
+    db.Customer.hasMany(db.Tcp, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.Tcp.belongsTo(db.Customer, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
   }
@@ -124,57 +130,57 @@ async function initialise() {
   }
 
   // Xero Token relationship
-  if (db.Client && db.XeroToken) {
-    db.Client.hasMany(db.XeroToken, {
-      foreignKey: "clientId",
+  if (db.Customer && db.XeroToken) {
+    db.Customer.hasMany(db.XeroToken, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroToken.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.XeroToken.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Xero Invoice relationship
-  if (db.Client && db.XeroInvoice) {
-    db.Client.hasMany(db.XeroInvoice, {
-      foreignKey: "clientId",
+  if (db.Customer && db.XeroInvoice) {
+    db.Customer.hasMany(db.XeroInvoice, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroInvoice.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.XeroInvoice.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Xero Payment relationship
-  if (db.Client && db.XeroPayment) {
-    db.Client.hasMany(db.XeroPayment, {
-      foreignKey: "clientId",
+  if (db.Customer && db.XeroPayment) {
+    db.Customer.hasMany(db.XeroPayment, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroPayment.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.XeroPayment.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Xero Contact relationship
-  if (db.Client && db.XeroContact) {
-    db.Client.hasMany(db.XeroContact, {
-      foreignKey: "clientId",
+  if (db.Customer && db.XeroContact) {
+    db.Customer.hasMany(db.XeroContact, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroContact.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.XeroContact.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Xero Organisation relationship
-  if (db.Client && db.XeroOrganisation) {
-    db.Client.hasMany(db.XeroOrganisation, {
-      foreignKey: "clientId",
+  if (db.Customer && db.XeroOrganisation) {
+    db.Customer.hasMany(db.XeroOrganisation, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroOrganisation.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.XeroOrganisation.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // TCP csv upload error relationship
-  if (db.Client && db.TcpError) {
-    db.Client.hasMany(db.TcpError, {
-      foreignKey: "clientId",
+  if (db.Customer && db.TcpError) {
+    db.Customer.hasMany(db.TcpError, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.TcpError.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.TcpError.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
   if (db.Ptrs && db.TcpError) {
     db.Ptrs.hasMany(db.TcpError, { foreignKey: "ptrsId", onDelete: "CASCADE" });
@@ -218,48 +224,48 @@ async function initialise() {
   }
 
   // Modern Slavery relationships
-  if (db.Client && db.MSSupplierRisk) {
-    db.Client.hasMany(db.MSSupplierRisk, {
-      foreignKey: "clientId",
+  if (db.Customer && db.MSSupplierRisk) {
+    db.Customer.hasMany(db.MSSupplierRisk, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.MSSupplierRisk.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.MSSupplierRisk.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
   if (db.User && db.MSSupplierRisk) {
     db.User.hasMany(db.MSSupplierRisk, { foreignKey: "createdBy" });
     db.MSSupplierRisk.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
-  if (db.Client && db.MSTraining) {
-    db.Client.hasMany(db.MSTraining, {
-      foreignKey: "clientId",
+  if (db.Customer && db.MSTraining) {
+    db.Customer.hasMany(db.MSTraining, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.MSTraining.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.MSTraining.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
   if (db.User && db.MSTraining) {
     db.User.hasMany(db.MSTraining, { foreignKey: "createdBy" });
     db.MSTraining.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
-  if (db.Client && db.MSGrievance) {
-    db.Client.hasMany(db.MSGrievance, {
-      foreignKey: "clientId",
+  if (db.Customer && db.MSGrievance) {
+    db.Customer.hasMany(db.MSGrievance, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.MSGrievance.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.MSGrievance.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
   if (db.User && db.MSGrievance) {
     db.User.hasMany(db.MSGrievance, { foreignKey: "createdBy" });
     db.MSGrievance.belongsTo(db.User, { foreignKey: "createdBy" });
   }
 
-  if (db.Client && db.MSInterviewResponse) {
-    db.Client.hasMany(db.MSInterviewResponse, {
-      foreignKey: "clientId",
+  if (db.Customer && db.MSInterviewResponse) {
+    db.Customer.hasMany(db.MSInterviewResponse, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.MSInterviewResponse.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.MSInterviewResponse.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
   if (db.User && db.MSInterviewResponse) {
     db.User.hasMany(db.MSInterviewResponse, { foreignKey: "createdBy" });
@@ -277,13 +283,13 @@ async function initialise() {
     db.InvoiceLine.belongsTo(db.Invoice, { foreignKey: "invoiceId" });
   }
 
-  // Invoice belongs to Client
-  if (db.Invoice && db.Client) {
-    db.Client.hasMany(db.Invoice, {
-      foreignKey: "clientId",
+  // Invoice belongs to Customer
+  if (db.Invoice && db.Customer) {
+    db.Customer.hasMany(db.Invoice, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.Invoice.belongsTo(db.Client, { foreignKey: "clientId" });
+    db.Invoice.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Invoice belongs to Partner

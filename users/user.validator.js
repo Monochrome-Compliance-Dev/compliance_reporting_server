@@ -4,7 +4,7 @@ const Joi = require("../middleware/joiSanitizer");
 const authSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
-  clientId: Joi.string().required(),
+  customerId: Joi.string().required(),
 });
 
 const registerSchema = Joi.object({
@@ -25,7 +25,7 @@ const registerSchema = Joi.object({
     // )
     .required(),
   active: Joi.boolean().required(),
-  clientId: Joi.string().required(),
+  customerId: Joi.string().required(),
 });
 
 const registerFirstUserSchema = Joi.object({
@@ -38,7 +38,7 @@ const registerFirstUserSchema = Joi.object({
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
   role: Joi.string().required(),
   active: Joi.boolean().required(),
-  clientId: Joi.string().required(),
+  customerId: Joi.string().required(),
 });
 
 const _updateSchema = Joi.object({

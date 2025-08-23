@@ -7,13 +7,13 @@ const fileCreateSchema = Joi.object({
   storagePath: Joi.string().max(500).sanitize().required(),
   mimeType: Joi.string().max(100).sanitize().required(),
   fileSize: Joi.number().integer().required(),
-  clientId: Joi.string().length(10),
+  customerId: Joi.string().length(10),
 });
 
 const fileQuerySchema = Joi.object({
   indicatorId: Joi.string().length(10),
   metricId: Joi.string().length(10),
-  clientId: Joi.string().length(10),
+  customerId: Joi.string().length(10),
 });
 
 module.exports = {

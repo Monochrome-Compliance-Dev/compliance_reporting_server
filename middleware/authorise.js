@@ -29,12 +29,12 @@ function authorise(roles = []) {
         return res.status(401).json({ message: "Unauthorised" });
       }
 
-      if (user.clientId !== req.auth.clientId) {
-        logger.logEvent("warn", "Forbidden access: client mismatch", {
+      if (user.customerId !== req.auth.customerId) {
+        logger.logEvent("warn", "Forbidden access: customer mismatch", {
           action: "AuthoriseAccessCheck",
           userId: req.auth.id,
           role: user?.role,
-          clientId: user?.clientId,
+          customerId: user?.customerId,
         });
         return res
           .status(403)
@@ -57,7 +57,7 @@ function authorise(roles = []) {
         action: "AuthoriseAccessGranted",
         userId: req.auth.id,
         role: user.role,
-        clientId: user.clientId,
+        customerId: user.customerId,
         ip: req.ip,
       });
 

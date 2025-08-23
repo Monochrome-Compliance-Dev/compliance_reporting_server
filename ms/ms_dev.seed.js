@@ -8,14 +8,14 @@ const db = require("../db/database");
 
 (async () => {
   await db.sequelize.sync();
-  // Set the current client id
-  await db.sequelize.query(`SET app.current_client_id = 'rahfwOLxLN'`);
+  // Set the current customer id
+  await db.sequelize.query(`SET app.current_customer_id = 'rahfwOLxLN'`);
   // Load models
   const { MSSupplierRisk, MSTraining, MSGrievance } = db.sequelize.models;
 
   // Use multiple reporting periods for dev seeding
   const reportingPeriodIds = ["CjscD1oIL_", "SNQ8whsoYD", "SHlUUiHq1d"];
-  const clientId = "rahfwOLxLN";
+  const customerId = "rahfwOLxLN";
   const createdBy = "j3HJwUR_pi";
   const updatedBy = "j3HJwUR_pi";
 
@@ -281,7 +281,7 @@ const db = require("../db/database");
         id: nanoid(10),
         ...variedRisk,
         reportingPeriodId,
-        clientId,
+        customerId,
         createdBy,
         updatedBy,
       });
@@ -302,7 +302,7 @@ const db = require("../db/database");
         id: nanoid(10),
         ...variedTraining,
         reportingPeriodId,
-        clientId,
+        customerId,
         createdBy,
         updatedBy,
       });
@@ -317,7 +317,7 @@ const db = require("../db/database");
         id: nanoid(10),
         ...variedGrievance,
         reportingPeriodId,
-        clientId,
+        customerId,
         createdBy,
         updatedBy,
       });

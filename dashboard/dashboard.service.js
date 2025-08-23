@@ -1,6 +1,6 @@
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
 
@@ -13,11 +13,11 @@ module.exports = {
   getDashboardExtendedMetrics,
 };
 
-async function getDashboardMetrics(reportId, clientId) {
+async function getDashboardMetrics(reportId, customerId) {
   logger.logEvent("info", "Fetching dashboard metrics", {
     action: "GetDashboardMetrics",
     reportId,
-    clientId,
+    customerId,
   });
 
   const query = `
@@ -29,34 +29,34 @@ async function getDashboardMetrics(reportId, clientId) {
       COALESCE(SUM(CASE WHEN "isSb" = true THEN "paymentAmount" ELSE 0 END), 0) AS "smallBusinessSpend",
       COUNT(*) FILTER (WHERE "transactionType" = 'PEPPOL') AS "peppolCount"
     FROM "tbl_tcp"
-    WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
+    WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
   `;
 
   const [results] = await db.sequelize.query(query, {
-    replacements: { reportId, clientId },
+    replacements: { reportId, customerId },
     type: db.sequelize.QueryTypes.SELECT,
   });
 
   return results;
 }
 
-async function getPreviousDashboardMetrics(reportId, clientId) {
+async function getPreviousDashboardMetrics(reportId, customerId) {
   logger.logEvent("info", "Fetching previous dashboard metrics", {
     action: "GetPreviousDashboardMetrics",
     reportId,
-    clientId,
+    customerId,
   });
 
   // Lookup the reportingPeriodStartDate for the current report
   const currentReportQuery = `
     SELECT "reportingPeriodStartDate"
     FROM "tbl_report"
-    WHERE "id" = :reportId AND "clientId" = :clientId
+    WHERE "id" = :reportId AND "customerId" = :customerId
     LIMIT 1
   `;
 
   const [currentReport] = await db.sequelize.query(currentReportQuery, {
-    replacements: { reportId, clientId },
+    replacements: { reportId, customerId },
     type: db.sequelize.QueryTypes.SELECT,
   });
 
@@ -68,14 +68,14 @@ async function getPreviousDashboardMetrics(reportId, clientId) {
   const previousReportQuery = `
     SELECT "id"
     FROM "tbl_report"
-    WHERE "clientId" = :clientId AND "reportingPeriodStartDate" < :currentStartDate
+    WHERE "customerId" = :customerId AND "reportingPeriodStartDate" < :currentStartDate
     ORDER BY "reportingPeriodStartDate" DESC
     LIMIT 1
   `;
 
   const [previousReport] = await db.sequelize.query(previousReportQuery, {
     replacements: {
-      clientId,
+      customerId,
       currentStartDate: currentReport.reportingPeriodStartDate,
     },
     type: db.sequelize.QueryTypes.SELECT,
@@ -86,21 +86,21 @@ async function getPreviousDashboardMetrics(reportId, clientId) {
   }
 
   // Call getDashboardMetrics with the previous reportId
-  return await getDashboardMetrics(previousReport.id, clientId);
+  return await getDashboardMetrics(previousReport.id, customerId);
 }
 
-async function getDashboardFlags(reportId, clientId) {
+async function getDashboardFlags(reportId, customerId) {
   logger.logEvent("info", "Fetching flagged records", {
     action: "GetDashboardFlags",
     reportId,
-    clientId,
+    customerId,
   });
 
   // Fetch TCP records flagged as potentially anomalous
   const query = `
     SELECT *
     FROM "tbl_tcp"
-    WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false
+    WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false
       AND (
         "paymentTime" > 90
         OR ("paymentAmount" > 500000 AND "isSb" = true)
@@ -108,45 +108,45 @@ async function getDashboardFlags(reportId, clientId) {
   `;
 
   const flaggedRecords = await db.sequelize.query(query, {
-    replacements: { reportId, clientId },
+    replacements: { reportId, customerId },
     type: db.sequelize.QueryTypes.SELECT,
   });
 
   return flaggedRecords;
 }
 
-async function getDashboardSnapshot(reportId, clientId) {
+async function getDashboardSnapshot(reportId, customerId) {
   logger.logEvent("info", "Fetching metrics snapshot", {
     action: "GetDashboardSnapshot",
     reportId,
-    clientId,
+    customerId,
   });
 
   // Placeholder snapshot until real snapshot storage is implemented
   return {
     reportId,
-    clientId,
+    customerId,
     snapshotDate: new Date().toISOString(),
-    summary: await getDashboardMetrics(reportId, clientId),
+    summary: await getDashboardMetrics(reportId, customerId),
   };
 }
 
-async function getDashboardSignals(reportId, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getDashboardSignals(reportId, customerId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     console.log(
       "Fetching dashboard signals for reportId:",
       reportId,
-      "clientId:",
-      clientId
+      "customerId:",
+      customerId
     );
     logger.logEvent("info", "Fetching dashboard signals", {
       action: "GetDashboardSignals",
       reportId,
-      clientId,
+      customerId,
     });
 
-    const coreMetrics = await getDashboardMetrics(reportId, clientId);
+    const coreMetrics = await getDashboardMetrics(reportId, customerId);
 
     const [summaryResult] = await db.sequelize.query(
       `
@@ -155,10 +155,10 @@ async function getDashboardSignals(reportId, clientId) {
           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "paymentTime") AS "medianDays",
           ROUND(SUM(CASE WHEN "isSb" = true AND "paymentTime" > 30 THEN 1 ELSE 0 END)::decimal / NULLIF(SUM(CASE WHEN "isSb" = true THEN 1 ELSE 0 END), 0), 4) AS "lateSbRate"
         FROM "tbl_tcp"
-        WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
+        WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
       `,
       {
-        replacements: { reportId, clientId },
+        replacements: { reportId, customerId },
         type: db.sequelize.QueryTypes.SELECT,
         transaction: t,
       }
@@ -170,13 +170,13 @@ async function getDashboardSignals(reportId, clientId) {
       `
         SELECT "payeeEntityAbn", ROUND(AVG("paymentTime")::numeric, 2) AS "avgDays"
         FROM "tbl_tcp"
-        WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "isSb" = true
+        WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false AND "isSb" = true
         GROUP BY "payeeEntityAbn"
         ORDER BY "avgDays" DESC
         LIMIT 10
       `,
       {
-        replacements: { reportId, clientId },
+        replacements: { reportId, customerId },
         type: db.sequelize.QueryTypes.SELECT,
         transaction: t,
       }
@@ -191,10 +191,10 @@ async function getDashboardSignals(reportId, clientId) {
           COUNT(*) FILTER (WHERE "paymentAmount" >= 50000 AND "paymentAmount" < 200000) AS "btw50k200k",
           COUNT(*) FILTER (WHERE "paymentAmount" >= 200000) AS "gt200k"
         FROM "tbl_tcp"
-        WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "isSb" = true
+        WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false AND "isSb" = true
       `,
       {
-        replacements: { reportId, clientId },
+        replacements: { reportId, customerId },
         type: db.sequelize.QueryTypes.SELECT,
         transaction: t,
       }
@@ -207,7 +207,7 @@ async function getDashboardSignals(reportId, clientId) {
     logger.logEvent("info", "Returning dashboard signals", {
       action: "ReturnDashboardSignals",
       reportId,
-      clientId,
+      customerId,
       signals: {
         ...coreMetrics,
         avgDays: summary?.avgDays,
@@ -241,20 +241,20 @@ async function getDashboardSignals(reportId, clientId) {
     logger.logEvent("error", "Failed to fetch dashboard signals", {
       action: "GetDashboardSignals",
       reportId,
-      clientId,
+      customerId,
       error: error.message,
     });
     throw error;
   }
 }
 
-async function getDashboardExtendedMetrics(reportId, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getDashboardExtendedMetrics(reportId, customerId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     logger.logEvent("info", "Fetching extended dashboard metrics", {
       action: "GetExtendedDashboardMetrics",
       reportId,
-      clientId,
+      customerId,
     });
 
     const [results] = await db.sequelize.query(
@@ -269,10 +269,10 @@ async function getDashboardExtendedMetrics(reportId, clientId) {
           SUM(CASE WHEN "isSb" = true AND "transactionType" = 'PEPPOL' THEN 1 ELSE 0 END) AS "sbPeppolNum",
           SUM(CASE WHEN "isSb" = true AND "transactionType" = 'PEPPOL' THEN "paymentAmount" ELSE 0 END) AS "sbPeppolValue"
         FROM "tbl_tcp"
-        WHERE "reportId" = :reportId AND "clientId" = :clientId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
+        WHERE "reportId" = :reportId AND "customerId" = :customerId AND "isTcp" = true AND "excludedTcp" = false AND "paymentTime" IS NOT NULL
       `,
       {
-        replacements: { reportId, clientId },
+        replacements: { reportId, customerId },
         type: db.sequelize.QueryTypes.SELECT,
         transaction: t,
       }
@@ -285,7 +285,7 @@ async function getDashboardExtendedMetrics(reportId, clientId) {
     logger.logEvent("error", "Failed to fetch extended dashboard metrics", {
       action: "GetExtendedDashboardMetrics",
       reportId,
-      clientId,
+      customerId,
       error: error.message,
     });
     throw error;

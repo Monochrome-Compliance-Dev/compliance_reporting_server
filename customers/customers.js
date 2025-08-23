@@ -2,18 +2,21 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
-const clientService = require("./client.service");
+const customerService = require("./customer.service");
 const { logger } = require("../helpers/logger");
-const { clientSchema, clientUpdateSchema } = require("./client.validator");
+const {
+  customerSchema,
+  customerUpdateSchema,
+} = require("./customer.validator");
 
 // routes
 router.get("/", getAll);
 router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(clientSchema), create);
+router.post("/", authorise(), validateRequest(customerSchema), create);
 router.put(
   "/:id",
   authorise(["Admin", "Boss"]),
-  validateRequest(clientUpdateSchema),
+  validateRequest(customerUpdateSchema),
   update
 );
 router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
@@ -21,52 +24,52 @@ router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 module.exports = router;
 
 function getAll(req, res, next) {
-  logger.logEvent("info", "Retrieved all clients", {
-    action: "GetAllClients",
+  logger.logEvent("info", "Retrieved all customers", {
+    action: "GetAllCustomers",
     ip: req.ip,
     device: req.headers["user-agent"],
   });
-  clientService
+  customerService
     .getAll()
     .then((entities) => res.json(entities))
     .catch(next);
 }
 
 function getById(req, res, next) {
-  logger.logEvent("info", "Retrieved client by ID", {
-    action: "GetClient",
-    clientId: req.auth?.clientId,
+  logger.logEvent("info", "Retrieved customer by ID", {
+    action: "GetCustomer",
+    customerId: req.auth?.customerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
   });
-  clientService
+  customerService
     .getById(req.params.id)
-    .then((client) => (client ? res.json(client) : res.sendStatus(404)))
+    .then((customer) => (customer ? res.json(customer) : res.sendStatus(404)))
     .catch(next);
 }
 
 function create(req, res, next) {
-  logger.logEvent("info", "Creating client", {
-    action: "CreateClient",
-    clientId: req.auth?.clientId,
+  logger.logEvent("info", "Creating customer", {
+    action: "CreateCustomer",
+    customerId: req.auth?.customerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
     payload: req.body,
   });
-  clientService
+  customerService
     .create(req.body)
-    .then((client) => {
-      logger.logEvent("info", "Client created via API", {
-        action: "CreateClient",
-        clientId: client.id,
+    .then((customer) => {
+      logger.logEvent("info", "Customer created via API", {
+        action: "CreateCustomer",
+        customerId: customer.id,
       });
-      res.json(client);
+      res.json(customer);
     })
     .catch((error) => {
-      logger.logEvent("error", "Error creating client", {
-        action: "CreateClient",
+      logger.logEvent("error", "Error creating customer", {
+        action: "CreateCustomer",
         error: error.message,
       });
       next(error); // Pass the error to the global error handler
@@ -74,47 +77,47 @@ function create(req, res, next) {
 }
 
 function update(req, res, next) {
-  logger.logEvent("info", "Updating client", {
-    action: "UpdateClient",
-    clientId: req.auth?.clientId,
+  logger.logEvent("info", "Updating customer", {
+    action: "UpdateCustomer",
+    customerId: req.auth?.customerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
     payload: req.body,
   });
-  clientService
+  customerService
     .update(req.params.id, req.body)
-    .then((client) => {
-      logger.logEvent("info", "Client updated via API", {
-        action: "UpdateClient",
-        clientId: req.params.id,
+    .then((customer) => {
+      logger.logEvent("info", "Customer updated via API", {
+        action: "UpdateCustomer",
+        customerId: req.params.id,
         paymentConfirmed: req.body?.paymentConfirmed,
       });
-      res.json(client);
+      res.json(customer);
     })
     .catch(next);
 }
 
 function _delete(req, res, next) {
-  logger.logEvent("info", "Deleting client", {
-    action: "DeleteClient",
-    clientId: req.auth?.clientId,
+  logger.logEvent("info", "Deleting customer", {
+    action: "DeleteCustomer",
+    customerId: req.auth?.customerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
   });
-  clientService
+  customerService
     .delete(req.params.id)
     .then(() => {
-      logger.logEvent("warn", "Client deleted via API", {
-        action: "DeleteClient",
-        clientId: req.params.id,
+      logger.logEvent("warn", "Customer deleted via API", {
+        action: "DeleteCustomer",
+        customerId: req.params.id,
       });
-      res.json({ message: "Client deleted successfully" });
+      res.json({ message: "Customer deleted successfully" });
     })
     .catch((error) => {
-      logger.logEvent("error", "Error deleting client", {
-        action: "DeleteClient",
+      logger.logEvent("error", "Error deleting customer", {
+        action: "DeleteCustomer",
         error: error.message,
       });
       next(error); // Pass the error to the global error handler

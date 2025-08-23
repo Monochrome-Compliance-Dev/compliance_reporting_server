@@ -9,11 +9,11 @@ const XeroInvoice = (sequelize) => {
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true,
       },
-      clientId: {
+      customerId: {
         type: DataTypes.STRING(10),
         allowNull: false,
         references: {
-          model: "tbl_client",
+          model: "tbl_customer",
           key: "id",
         },
         onUpdate: "CASCADE",

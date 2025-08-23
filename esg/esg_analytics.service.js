@@ -1,14 +1,14 @@
 const db = require("../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 /**
- * Get total values by ESG category for a client and reporting period.
- * Transaction-aware, rollback on error, and passes client context.
+ * Get total values by ESG category for a customer and reporting period.
+ * Transaction-aware, rollback on error, and passes customer context.
  */
-async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getCategoryTotals(customerId, reportingPeriodId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const totals = await db.ESGMetric.findAll({
       attributes: [
@@ -29,7 +29,7 @@ async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
           required: false,
         },
       ],
-      where: { clientId, reportingPeriodId },
+      where: { customerId, reportingPeriodId },
       group: [
         "ESGIndicator.category",
         "Unit.id",
@@ -48,19 +48,19 @@ async function getCategoryTotals(clientId, reportingPeriodId, options = {}) {
 }
 
 /**
- * Get all indicators with their latest metrics for a client and reporting period.
- * Transaction-aware and client-context-aware.
+ * Get all indicators with their latest metrics for a customer and reporting period.
+ * Transaction-aware and customer-context-aware.
  */
 async function getAllIndicatorsWithLatestMetrics(
-  clientId,
+  customerId,
   reportingPeriodId,
   options = {}
 ) {
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const data = await db.ESGIndicator.findAll({
       attributes: ["id", "name", "code", "description", "category"],
-      where: { clientId, reportingPeriodId },
+      where: { customerId, reportingPeriodId },
       include: [
         {
           model: db.ESGMetric,
@@ -79,8 +79,12 @@ async function getAllIndicatorsWithLatestMetrics(
   }
 }
 
-async function getTotalsByIndicator(clientId, reportingPeriodId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getTotalsByIndicator(
+  customerId,
+  reportingPeriodId,
+  options = {}
+) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const totals = await db.ESGMetric.findAll({
       attributes: [
@@ -101,7 +105,7 @@ async function getTotalsByIndicator(clientId, reportingPeriodId, options = {}) {
           required: false,
         },
       ],
-      where: { clientId, reportingPeriodId },
+      where: { customerId, reportingPeriodId },
       group: [
         "indicatorId",
         "ESGIndicator.id",

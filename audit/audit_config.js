@@ -7,7 +7,7 @@ const auditFieldConfig = {
   msreportingPeriod: ["name", "startDate", "endDate", "status", "updatedBy"],
   invoice: [
     "billingType",
-    "clientId",
+    "customerId",
     "partnerId",
     "reportingPeriodId",
     "issuedAt",

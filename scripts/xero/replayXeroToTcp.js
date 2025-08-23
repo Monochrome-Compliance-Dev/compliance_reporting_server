@@ -25,30 +25,30 @@ const XeroBankTransaction = require("../../xero/xero_bank_txn.model")(
 // Add other Xero models as needed
 
 async function replay() {
-  const clientId = "rahfwOLxLN"; // replace with actual clientId
+  const customerId = "rahfwOLxLN"; // replace with actual customerId
   const reportId = "Gj476reIr2"; // replace with actual reportId
   const createdBy = "j3HJwUR_pi"; // replace with actual userId
 
   try {
     const xeroData = {
       invoices: await XeroInvoice.findAll({
-        where: { clientId, reportId },
+        where: { customerId, reportId },
         raw: true,
       }),
       payments: await XeroPayment.findAll({
-        where: { clientId, reportId },
+        where: { customerId, reportId },
         raw: true,
       }),
       contacts: await XeroContact.findAll({
-        where: { clientId, reportId },
+        where: { customerId, reportId },
         raw: true,
       }),
       organisations: await XeroOrganisation.findAll({
-        where: { clientId, reportId },
+        where: { customerId, reportId },
         raw: true,
       }),
       bankTransactions: await XeroBankTransaction.findAll({
-        where: { clientId, reportId },
+        where: { customerId, reportId },
         raw: true,
       }),
       // Add others here if needed
@@ -65,7 +65,7 @@ async function replay() {
     const result = await tcpService.saveTransformedDataToTcp(
       transformed,
       reportId,
-      clientId,
+      customerId,
       createdBy
     );
     logger.logEvent("info", "TCP data reloaded from existing Xero records", {

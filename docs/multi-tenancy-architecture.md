@@ -2,7 +2,7 @@
 
 ### 1️⃣ Executive Summary
 
-This document describes the architecture for strict tenant isolation using PostgreSQL Row-Level Security (RLS) with session-based client context. It ensures data belonging to one client cannot be seen or modified by another, while remaining performant and maintainable.
+This document describes the architecture for strict tenant isolation using PostgreSQL Row-Level Security (RLS) with session-based customer context. It ensures data belonging to one customer cannot be seen or modified by another, while remaining performant and maintainable.
 
 ---
 
@@ -10,9 +10,9 @@ This document describes the architecture for strict tenant isolation using Postg
 
 - **Components**:
 
-  - **Base Tables**: All client data is stored together.
+  - **Base Tables**: All customer data is stored together.
   - **RLS Policies**: Enforce data access at the row level, checking against a session variable.
-  - **Session Context**: `SET LOCAL app.current_client_id` for each transaction.
+  - **Session Context**: `SET LOCAL app.current_customer_id` for each transaction.
 
 - **Goal**: Prevent cross-tenant data access, enforced by the database itself.
 
@@ -26,18 +26,18 @@ This document describes the architecture for strict tenant isolation using Postg
 
   ```sql
   ALTER TABLE tbl_tcp ENABLE ROW LEVEL SECURITY;
-  CREATE POLICY client_isolation_policy
+  CREATE POLICY customer_isolation_policy
     ON tbl_tcp
-    USING (clientId = current_setting('app.current_client_id'));
+    USING (customerId = current_setting('app.current_customer_id'));
   ```
 
-- Prevents any `SELECT`, `UPDATE`, or `DELETE` from affecting rows outside the client’s scope.
+- Prevents any `SELECT`, `UPDATE`, or `DELETE` from affecting rows outside the customer’s scope.
 
 #### ✅ Session Context
 
-- Application explicitly sets the client context for each transaction:
+- Application explicitly sets the customer context for each transaction:
   ```sql
-  SET LOCAL app.current_client_id = 'YSPlLRE6ND';
+  SET LOCAL app.current_customer_id = 'YSPlLRE6ND';
   ```
 - Scoped only to the current transaction, ensuring no cross-request leakage.
 
@@ -48,12 +48,12 @@ This document describes the architecture for strict tenant isolation using Postg
 #### **SELECT / UPDATE / DELETE**
 
 - App opens transaction.
-- Sets `app.current_client_id`.
-- Executes queries; RLS ensures rows filtered by client.
+- Sets `app.current_customer_id`.
+- Executes queries; RLS ensures rows filtered by customer.
 
 #### **INSERT**
 
-- `BEFORE INSERT` triggers or check constraints ensure `clientId` matches `app.current_client_id` or is set automatically.
+- `BEFORE INSERT` triggers or check constraints ensure `customerId` matches `app.current_customer_id` or is set automatically.
 
 ---
 
@@ -70,11 +70,11 @@ This document describes the architecture for strict tenant isolation using Postg
 ✅ **RLS Policies**
 
 - Created by migration scripts or helper functions per table.
-- Must add policies whenever a new table with `clientId` is introduced.
+- Must add policies whenever a new table with `customerId` is introduced.
 
 ✅ **Session Context Management**
 
-- Handled by `beginTransactionWithClientContext(clientId)` helper.
+- Handled by `beginTransactionWithCustomerContext(customerId)` helper.
 - Rolls back immediately on failure to set context.
 
 ✅ **Schema Changes**
@@ -85,7 +85,7 @@ This document describes the architecture for strict tenant isolation using Postg
 
 ### 7️⃣ Future Considerations
 
-- If high throughput causes RLS to become a bottleneck, evaluate partitioning by `clientId`.
+- If high throughput causes RLS to become a bottleneck, evaluate partitioning by `customerId`.
 - Continue regular audits of RLS policies to ensure coverage.
 
 ---

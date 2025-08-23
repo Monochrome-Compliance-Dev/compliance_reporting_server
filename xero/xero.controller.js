@@ -63,7 +63,7 @@ function generateAuthUrl(req, res) {
     }
 
     const state = JSON.stringify({
-      clientId: req.auth?.clientId,
+      customerId: req.auth?.customerId,
       ptrsId: req.params?.ptrsId,
       createdBy: req.params?.createdBy,
       startDate: req.params?.startDate,
@@ -197,7 +197,7 @@ async function handleOAuthCallback(req, res) {
           refreshToken: tokenData.refresh_token,
           expiresIn: tokenData.expires_in,
           idToken: tokenData.id_token,
-          clientId: parsedState.clientId,
+          customerId: parsedState.customerId,
           tenantId: connection.tenantId,
           createdBy: parsedState.createdBy,
         };
@@ -224,7 +224,7 @@ async function handleOAuthCallback(req, res) {
 
 async function startXeroExtractionHandler(req, res, next) {
   // Only support ptrsId (no ptrsId fallback)
-  const { clientId, ptrsId, createdBy, startDate, endDate, tenantIds } =
+  const { customerId, ptrsId, createdBy, startDate, endDate, tenantIds } =
     req.body;
 
   const effectiveCreatedBy = createdBy || req.auth?.userId || "system";
@@ -237,9 +237,9 @@ async function startXeroExtractionHandler(req, res, next) {
 
   try {
     for (const tenantId of tenantIds) {
-      // Retrieve latest access token for this client/tenant
+      // Retrieve latest access token for this customer/tenant
       const tokenRecord = await xeroService.getLatestToken({
-        clientId,
+        customerId,
         tenantId,
       });
       if (!tokenRecord)
@@ -248,7 +248,7 @@ async function startXeroExtractionHandler(req, res, next) {
 
       xeroService
         .startXeroExtraction({
-          clientId,
+          customerId,
           ptrsId,
           createdBy: effectiveCreatedBy,
           startDate,
@@ -258,7 +258,7 @@ async function startXeroExtractionHandler(req, res, next) {
           onProgress: (status) => {
             const logData = {
               ...status,
-              clientId,
+              customerId,
               ptrsId,
               createdBy: effectiveCreatedBy,
               tenantId,
@@ -268,7 +268,7 @@ async function startXeroExtractionHandler(req, res, next) {
 
             if (req.wss && typeof req.wss.broadcast === "function") {
               try {
-                // FLAT payload so the client can destructure it directly
+                // FLAT payload so the customer can destructure it directly
                 req.wss.broadcast(JSON.stringify(logData));
               } catch (wsErr) {
                 logger.logEvent(
@@ -287,7 +287,7 @@ async function startXeroExtractionHandler(req, res, next) {
           logger.logEvent("error", "Xero extraction error", {
             error: err.message,
             stack: err.stack,
-            clientId,
+            customerId,
             ptrsId,
             tenantId,
           });
@@ -295,7 +295,7 @@ async function startXeroExtractionHandler(req, res, next) {
     }
 
     logger.logEvent("info", "Xero extraction started for tenants.", {
-      clientId,
+      customerId,
       ptrsId,
       createdBy: effectiveCreatedBy,
       tenantIds,

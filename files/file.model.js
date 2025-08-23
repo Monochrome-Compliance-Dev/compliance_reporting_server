@@ -14,7 +14,7 @@ module.exports = (sequelize) => {
         primaryKey: true,
         defaultValue: () => nanoid(10),
       },
-      clientId: {
+      customerId: {
         type: DataTypes.STRING(10),
         allowNull: false,
       },

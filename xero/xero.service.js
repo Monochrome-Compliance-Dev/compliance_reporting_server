@@ -78,8 +78,8 @@ async function exchangeAuthCodeForTokens(code, state, req) {
       grant_type: "authorization_code",
       code,
       redirect_uri: process.env.XERO_REDIRECT_URI,
-      client_id: process.env.XERO_CLIENT_ID,
-      client_secret: process.env.XERO_CLIENT_SECRET,
+      customer_id: process.env.XERO_CLIENT_ID,
+      customer_secret: process.env.XERO_CLIENT_SECRET,
     });
     const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
@@ -89,21 +89,21 @@ async function exchangeAuthCodeForTokens(code, state, req) {
       3,
       1000
     );
-    // Extract clientId and ptrsId securely from state if encoded, else fallback to req.auth.clientId
-    let clientId = null;
+    // Extract customerId and ptrsId securely from state if encoded, else fallback to req.auth.customerId
+    let customerId = null;
     let ptrsId = null;
     let tenantId = null;
     try {
       const parsedState = JSON.parse(state);
-      clientId = parsedState.clientId || req.auth.clientId;
+      customerId = parsedState.customerId || req.auth.customerId;
       ptrsId = parsedState.ptrsId || req.query?.ptrsId || null;
       tenantId = parsedState.tenantId || null;
     } catch (e) {
-      clientId = req.auth.clientId;
+      customerId = req.auth.customerId;
     }
-    if (!clientId) {
+    if (!customerId) {
       throw new Error(
-        "Missing clientId in request or state. Cannot proceed with token exchange."
+        "Missing customerId in request or state. Cannot proceed with token exchange."
       );
     }
     return tokenData;
@@ -115,18 +115,18 @@ async function exchangeAuthCodeForTokens(code, state, req) {
 async function refreshToken(options = {}) {
   try {
     const rt = options.refreshToken;
-    const cid = options.clientId || process.env.XERO_CLIENT_ID;
-    const csec = options.clientSecret || process.env.XERO_CLIENT_SECRET;
+    const cid = options.customerId || process.env.XERO_CLIENT_ID;
+    const csec = options.customerSecret || process.env.XERO_CLIENT_SECRET;
     if (!rt || !cid || !csec) {
       throw new Error(
-        "refreshToken: missing refreshToken/clientId/clientSecret"
+        "refreshToken: missing refreshToken/customerId/customerSecret"
       );
     }
     const params = querystring.stringify({
       grant_type: "refresh_token",
       refresh_token: rt,
-      client_id: cid,
-      client_secret: csec,
+      customer_id: cid,
+      customer_secret: csec,
     });
     const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
@@ -146,7 +146,7 @@ async function refreshToken(options = {}) {
       revoked: null,
       revokedByIp: null,
       replacedByToken: null,
-      clientId: options.clientId || null,
+      customerId: options.customerId || null,
       tenantId: options.tenantId || null,
       ptrsId: null,
     });
@@ -158,26 +158,26 @@ async function refreshToken(options = {}) {
   }
 }
 
-async function refreshAccessTokenFor(clientId, tenantId) {
+async function refreshAccessTokenFor(customerId, tenantId) {
   let tokenRecord;
   if (tenantId) {
-    tokenRecord = await getLatestToken({ clientId, tenantId });
+    tokenRecord = await getLatestToken({ customerId, tenantId });
   } else {
     tokenRecord = await XeroToken.findOne({
-      where: { clientId, revoked: null },
+      where: { customerId, revoked: null },
       order: [["created", "DESC"]],
     });
   }
   const refreshTok = tokenRecord?.refresh_token || tokenRecord?.refreshToken;
   if (!refreshTok) {
     throw new Error(
-      `No refresh token available for ${tenantId ? `tenant ${tenantId}` : `client ${clientId}`}`
+      `No refresh token available for ${tenantId ? `tenant ${tenantId}` : `customer ${customerId}`}`
     );
   }
   return refreshToken({
     refreshToken: refreshTok,
-    clientId: process.env.XERO_CLIENT_ID,
-    clientSecret: process.env.XERO_CLIENT_SECRET,
+    customerId: process.env.XERO_CLIENT_ID,
+    customerSecret: process.env.XERO_CLIENT_SECRET,
     tenantId,
   });
 }
@@ -185,7 +185,7 @@ async function refreshAccessTokenFor(clientId, tenantId) {
 /**
  * Fetch contacts from Xero API and save them to the database.
  * Accepts payments array, extracts unique contact IDs, fetches missing, upserts, and returns all.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId, payments }
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId, payments }
  */
 // TODO: Request a list of contacts by id only
 // https://developer.xero.com/documentation/api/accounting/contacts#optimised-use-of-the-where-filter
@@ -193,7 +193,7 @@ async function fetchContacts(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     payments,
     createdBy,
@@ -218,11 +218,11 @@ async function fetchContacts(options) {
     console.log(
       "[fetchContacts] No contacts to fetch, returning existing from DB."
     );
-    return db.XeroContact.findAll({ where: { clientId, ptrsId } });
+    return db.XeroContact.findAll({ where: { customerId, ptrsId } });
   }
-  // Check DB for existing contacts for this client/period and only fetch missing ones
+  // Check DB for existing contacts for this customer/period and only fetch missing ones
   const existing = await db.XeroContact.findAll({
-    where: { clientId, ptrsId, ContactID: contactIds },
+    where: { customerId, ptrsId, ContactID: contactIds },
     attributes: ["ContactID"],
   });
   const existingIds = new Set(existing.map((r) => r.ContactID));
@@ -245,15 +245,15 @@ async function fetchContacts(options) {
         onProgress({ stage: "fetchContacts", contactId: id, index: idx });
         const { data } = await callXeroApiWithAutoRefresh(
           () =>
-            withLatestAccessToken(clientId, tenantId, (at) =>
+            withLatestAccessToken(customerId, tenantId, (at) =>
               retryWithExponentialBackoff(
                 () => get(`/Contacts/${encodeURIComponent(id)}`, at, tenantId),
                 3,
                 1000
               )
             ),
-          clientId,
-          () => refreshAccessTokenFor(clientId, tenantId)
+          customerId,
+          () => refreshAccessTokenFor(customerId, tenantId)
         ).catch((err) => {
           console.log(
             `[fetchContacts] Fetch failed for ContactID=${id} :: ${err?.response?.status || err?.status || "n/a"} ${err?.message || ""}`
@@ -264,7 +264,7 @@ async function fetchContacts(options) {
         const contact = data?.Contact || data?.Contacts?.[0];
         if (contact?.ContactID) {
           await db.XeroContact.upsert({
-            clientId,
+            customerId,
             ptrsId,
             ContactID: contact.ContactID,
             Name: trimStringIfTooLong(contact.Name),
@@ -288,23 +288,23 @@ async function fetchContacts(options) {
   );
   // Return all contacts for this ptrsId (including those just fetched)
   const allContacts = await db.XeroContact.findAll({
-    where: { clientId, ptrsId },
+    where: { customerId, ptrsId },
   });
   console.log(
-    `[fetchContacts] Finished. Total contacts now in DB for clientId=${clientId}, ptrsId=${ptrsId}: ${allContacts.length}`
+    `[fetchContacts] Finished. Total contacts now in DB for customerId=${customerId}, ptrsId=${ptrsId}: ${allContacts.length}`
   );
   return allContacts;
 }
 
 /**
- * Extract data from Xero and store in DB for the given client.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId, payments }
+ * Extract data from Xero and store in DB for the given customer.
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId, payments }
  */
 async function fetchInvoices(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     payments,
     createdBy,
@@ -326,21 +326,21 @@ async function fetchInvoices(options) {
         onProgress({ stage: "fetchInvoices", invoiceId: id, index: idx });
         const { data } = await callXeroApiWithAutoRefresh(
           () =>
-            withLatestAccessToken(clientId, tenantId, (at) =>
+            withLatestAccessToken(customerId, tenantId, (at) =>
               retryWithExponentialBackoff(
                 () => get(`/Invoices/${id}`, at, tenantId),
                 3,
                 1000
               )
             ),
-          clientId,
-          () => refreshAccessTokenFor(clientId, tenantId)
+          customerId,
+          () => refreshAccessTokenFor(customerId, tenantId)
         ).catch(() => ({}));
         const invoice = data?.Invoice || data?.Invoices?.[0];
         if (invoice) {
           results.push(invoice);
           await db.XeroInvoice.upsert({
-            clientId,
+            customerId,
             ptrsId,
             tenantId,
             InvoiceID: invoice.InvoiceID,
@@ -376,15 +376,15 @@ async function fetchInvoices(options) {
 }
 
 /**
- * Get transformed data for the current client.
- * @param {Object} options - { clientId, ptrsId }
+ * Get transformed data for the current customer.
+ * @param {Object} options - { customerId, ptrsId }
  */
-// async function getTransformedData(clientId, ptrsId, db) {
+// async function getTransformedData(customerId, ptrsId, db) {
 async function getTransformedData(options) {
-  const { clientId, ptrsId } = options;
+  const { customerId, ptrsId } = options;
   try {
     const transformed = await db.TransformedXeroData.findAll({
-      where: { clientId, ptrsId },
+      where: { customerId, ptrsId },
     });
     return transformed;
   } catch (error) {
@@ -395,13 +395,13 @@ async function getTransformedData(options) {
 /**
  * Fetch payments from Xero API and save them to the database.
  * Includes all relevant fields as per the Xero API dump and transformation logic.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId }
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId }
  */
 async function fetchPayments(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     startDate,
     endDate,
@@ -423,7 +423,7 @@ async function fetchPayments(options) {
       );
       const { data } = await callXeroApiWithAutoRefresh(
         () =>
-          withLatestAccessToken(clientId, tenantId, (at) =>
+          withLatestAccessToken(customerId, tenantId, (at) =>
             retryWithExponentialBackoff(
               () =>
                 get("/Payments", at, tenantId, {
@@ -433,8 +433,8 @@ async function fetchPayments(options) {
               1000
             )
           ),
-        clientId,
-        () => refreshAccessTokenFor(clientId, tenantId)
+        customerId,
+        () => refreshAccessTokenFor(customerId, tenantId)
       );
       const pageItems = data?.Payments || [];
       console.log(
@@ -449,7 +449,7 @@ async function fetchPayments(options) {
         )
           continue;
         await db.XeroPayment.upsert({
-          clientId,
+          customerId,
           ptrsId,
           tenantId,
           Amount: payment.Amount,
@@ -481,13 +481,13 @@ async function fetchPayments(options) {
 
 /**
  * Fetch organisation details from Xero API and save them to the database.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId }
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId }
  */
 async function fetchOrganisationDetails(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     createdBy,
     onProgress = () => {},
@@ -495,15 +495,15 @@ async function fetchOrganisationDetails(options) {
   onProgress({ stage: "fetchOrganisationDetails" });
   const { data } = await callXeroApiWithAutoRefresh(
     () =>
-      withLatestAccessToken(clientId, tenantId, (at) =>
+      withLatestAccessToken(customerId, tenantId, (at) =>
         retryWithExponentialBackoff(
           () => get("/Organisation", at, tenantId),
           3,
           1000
         )
       ),
-    clientId,
-    () => refreshAccessTokenFor(clientId, tenantId)
+    customerId,
+    () => refreshAccessTokenFor(customerId, tenantId)
   );
   const org = data?.Organisations?.[0];
   if (org) {
@@ -514,7 +514,7 @@ async function fetchOrganisationDetails(options) {
       RegistrationNumber: trimStringIfTooLong(org.RegistrationNumber),
       TaxNumber: trimStringIfTooLong(org.TaxNumber),
       PaymentTerms: trimStringIfTooLong(org.PaymentTerms),
-      clientId,
+      customerId,
       ptrsId,
       ...nowTimestamps(createdBy),
     });
@@ -527,11 +527,11 @@ async function fetchOrganisationDetails(options) {
  * @param {string} accessToken
  */
 async function getConnections(options) {
-  // Accept either a raw token string or { accessToken, clientId }
+  // Accept either a raw token string or { accessToken, customerId }
   const providedAccessToken =
     typeof options === "string" ? options : options?.accessToken || null;
-  const clientId =
-    typeof options === "object" ? options?.clientId || null : null;
+  const customerId =
+    typeof options === "object" ? options?.customerId || null : null;
 
   try {
     // If we already have a fresh token (e.g., right after OAuth exchange), use it directly.
@@ -544,20 +544,20 @@ async function getConnections(options) {
       return data;
     }
 
-    // Otherwise, fall back to the latest unrevoked token for this client (tenant-agnostic endpoint).
-    if (!clientId) {
+    // Otherwise, fall back to the latest unrevoked token for this customer (tenant-agnostic endpoint).
+    if (!customerId) {
       throw new Error(
-        "getConnections: clientId is required when no accessToken is provided"
+        "getConnections: customerId is required when no accessToken is provided"
       );
     }
 
     const { data } = await callXeroApiWithAutoRefresh(
       () =>
-        withLatestAccessToken(clientId, null, (at) =>
+        withLatestAccessToken(customerId, null, (at) =>
           retryWithExponentialBackoff(() => get("/connections", at), 3, 1000)
         ),
-      clientId,
-      () => refreshAccessTokenFor(clientId, null)
+      customerId,
+      () => refreshAccessTokenFor(customerId, null)
     );
     return data;
   } catch (error) {
@@ -566,21 +566,21 @@ async function getConnections(options) {
 }
 
 /**
- * Fetch all Xero data for a client and ptrsId.
- * @param {Object} options - { clientId, ptrsId }
+ * Fetch all Xero data for a customer and ptrsId.
+ * @param {Object} options - { customerId, ptrsId }
  * @returns {Promise<Object>} - { organisations, invoices, payments, contacts }
  */
 async function getAllXeroData(options) {
-  const { clientId, ptrsId } = options;
+  const { customerId, ptrsId } = options;
   try {
-    // Fetch all records from each table filtered by clientId and ptrsId
+    // Fetch all records from each table filtered by customerId and ptrsId
     const [organisations, invoices, payments, contacts, bankTransactions] =
       await Promise.all([
-        db.XeroOrganisation.findAll({ where: { clientId, ptrsId } }),
-        db.XeroInvoice.findAll({ where: { clientId, ptrsId } }),
-        db.XeroPayment.findAll({ where: { clientId, ptrsId } }),
-        db.XeroContact.findAll({ where: { clientId, ptrsId } }),
-        db.XeroBankTxn.findAll({ where: { clientId, ptrsId } }),
+        db.XeroOrganisation.findAll({ where: { customerId, ptrsId } }),
+        db.XeroInvoice.findAll({ where: { customerId, ptrsId } }),
+        db.XeroPayment.findAll({ where: { customerId, ptrsId } }),
+        db.XeroContact.findAll({ where: { customerId, ptrsId } }),
+        db.XeroBankTxn.findAll({ where: { customerId, ptrsId } }),
       ]);
     return { organisations, invoices, payments, contacts, bankTransactions };
   } catch (error) {
@@ -636,7 +636,7 @@ async function removeTenant(tenantId) {
   }
 }
 
-// Save a Xero token for a tenant/client
+// Save a Xero token for a tenant/customer
 
 /**
  * Save or update a Xero token for a tenant.
@@ -647,7 +647,7 @@ async function saveToken(options) {
     accessToken,
     refreshToken,
     expiresIn,
-    clientId,
+    customerId,
     tenantId,
     createdByIp = "",
   } = options;
@@ -660,7 +660,7 @@ async function saveToken(options) {
     revoked: null,
     revokedByIp: null,
     replacedByToken: null,
-    clientId,
+    customerId,
     tenantId,
   };
   await XeroToken.upsert(updateData);
@@ -668,32 +668,32 @@ async function saveToken(options) {
 }
 
 /**
- * Retrieve the most recent (unrevoked) token for a given clientId.
- * @param {string} clientId
+ * Retrieve the most recent (unrevoked) token for a given customerId.
+ * @param {string} customerId
  * @returns {Promise<Object|null>}
  */
 async function getLatestToken(options) {
-  const { clientId, tenantId } = options;
+  const { customerId, tenantId } = options;
   const token = await XeroToken.findOne({
-    where: { clientId, tenantId, revoked: null },
+    where: { customerId, tenantId, revoked: null },
     order: [["created", "DESC"]],
   });
   return token;
 }
 
-async function withLatestAccessToken(clientId, tenantId, fn) {
+async function withLatestAccessToken(customerId, tenantId, fn) {
   let tokenRecord;
   if (tenantId) {
-    tokenRecord = await getLatestToken({ clientId, tenantId });
+    tokenRecord = await getLatestToken({ customerId, tenantId });
   } else {
     tokenRecord = await XeroToken.findOne({
-      where: { clientId, revoked: null },
+      where: { customerId, revoked: null },
       order: [["created", "DESC"]],
     });
   }
   if (!tokenRecord) {
     throw new Error(
-      `No access token found for ${tenantId ? `tenant ${tenantId}` : `client ${clientId}`}`
+      `No access token found for ${tenantId ? `tenant ${tenantId}` : `customer ${customerId}`}`
     );
   }
   const at = tokenRecord.access_token || tokenRecord.accessToken || "";
@@ -761,13 +761,13 @@ async function withLatestAccessToken(clientId, tenantId, fn) {
 
 /**
  * Fetch bank transactions from Xero API and save them to the database.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId, startDate, endDate, createdBy }
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId, startDate, endDate, createdBy }
  */
 async function fetchBankTransactions(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     startDate,
     endDate,
@@ -789,7 +789,7 @@ async function fetchBankTransactions(options) {
       );
       const { data } = await callXeroApiWithAutoRefresh(
         () =>
-          withLatestAccessToken(clientId, tenantId, (at) =>
+          withLatestAccessToken(customerId, tenantId, (at) =>
             retryWithExponentialBackoff(
               () =>
                 get("/BankTransactions", at, tenantId, {
@@ -799,8 +799,8 @@ async function fetchBankTransactions(options) {
               1000
             )
           ),
-        clientId,
-        () => refreshAccessTokenFor(clientId, tenantId)
+        customerId,
+        () => refreshAccessTokenFor(customerId, tenantId)
       );
       const pageItems = data?.BankTransactions || [];
       console.log(
@@ -811,7 +811,7 @@ async function fetchBankTransactions(options) {
         await db.XeroBankTxn.upsert({
           ...txn,
           Date: parseXeroDate(txn.Date, txn.DateString),
-          clientId,
+          customerId,
           ptrsId,
           tenantId,
           Url: trimStringIfTooLong(txn.Url || null),
@@ -837,13 +837,13 @@ async function fetchBankTransactions(options) {
 
 /**
  * Starts the full extraction process from Xero, orchestrating all sub-fetches and ptrsing progress.
- * @param {Object} options - { accessToken, tenantId, clientId, ptrsId, startDate, endDate, createdBy, onProgress }
+ * @param {Object} options - { accessToken, tenantId, customerId, ptrsId, startDate, endDate, createdBy, onProgress }
  */
 async function startXeroExtraction(options) {
   const {
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     startDate,
     endDate,
@@ -859,7 +859,7 @@ async function startXeroExtraction(options) {
   await fetchOrganisationDetails({
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     createdBy,
     onProgress,
@@ -871,7 +871,7 @@ async function startXeroExtraction(options) {
   const payments = await fetchPayments({
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     startDate,
     endDate,
@@ -885,7 +885,7 @@ async function startXeroExtraction(options) {
   await fetchInvoices({
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     payments,
     createdBy,
@@ -898,7 +898,7 @@ async function startXeroExtraction(options) {
   await fetchBankTransactions({
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     startDate,
     endDate,
@@ -912,7 +912,7 @@ async function startXeroExtraction(options) {
   await fetchContacts({
     accessToken,
     tenantId,
-    clientId,
+    customerId,
     ptrsId,
     payments,
     createdBy,

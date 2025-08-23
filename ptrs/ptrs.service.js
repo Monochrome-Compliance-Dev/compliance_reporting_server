@@ -1,6 +1,6 @@
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 const db = require("../db/database");
 
 module.exports = {
@@ -15,8 +15,8 @@ module.exports = {
   saveUploadMetadata,
 };
 
-async function getAll({ clientId, includeDeleted = false, ...options } = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getAll({ customerId, includeDeleted = false, ...options } = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const whereClause = includeDeleted
       ? {}
@@ -41,7 +41,7 @@ async function getAll({ clientId, includeDeleted = false, ...options } = {}) {
 }
 
 async function getAllByPtrsId({ ptrsId, ...options } = {}) {
-  const t = await beginTransactionWithClientContext(options.clientId);
+  const t = await beginTransactionWithCustomerContext(options.customerId);
   try {
     const rows = await db.Ptrs.findAll({
       where: { ptrsId },
@@ -60,13 +60,13 @@ async function getAllByPtrsId({ ptrsId, ...options } = {}) {
   }
 }
 
-async function create({ data, clientId, ...options }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function create({ data, customerId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const result = await db.Ptrs.create(
       {
         ...data,
-        clientId,
+        customerId,
         createdBy: data.createdBy,
         updatedBy: data.updatedBy,
       },
@@ -87,8 +87,8 @@ async function create({ data, clientId, ...options }) {
   }
 }
 
-async function update({ id, data, clientId, userId, ...options }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function update({ id, data, customerId, userId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Ptrs.update(
       { ...data, updatedBy: userId },
@@ -119,8 +119,16 @@ async function update({ id, data, clientId, userId, ...options }) {
   }
 }
 
-async function patch({ id, data, clientId, userId, transaction, ...options }) {
-  const t = transaction || (await beginTransactionWithClientContext(clientId));
+async function patch({
+  id,
+  data,
+  customerId,
+  userId,
+  transaction,
+  ...options
+}) {
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
   try {
     const [count, [updatedPtrs]] = await db.Ptrs.update(
       { ...data, updatedBy: userId },
@@ -148,8 +156,8 @@ async function patch({ id, data, clientId, userId, transaction, ...options }) {
   }
 }
 
-async function _delete({ id, clientId, userId, ...options }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function _delete({ id, customerId, userId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count] = await db.Ptrs.update(
       { status: "Deleted", updatedBy: userId },
@@ -176,8 +184,8 @@ async function _delete({ id, clientId, userId, ...options }) {
   }
 }
 
-async function getById({ id, clientId }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getById({ id, customerId }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const report = await db.Ptrs.findOne({
       where: { id },
@@ -197,7 +205,7 @@ async function getById({ id, clientId }) {
 }
 
 async function finaliseSubmission() {
-  const viewName = `client_${db.sequelize.config.database}_tbl_tcp`;
+  const viewName = `customer_${db.sequelize.config.database}_tbl_tcp`;
   const [rows] = await db.sequelize.query(
     `SELECT COUNT(*) AS count FROM "${viewName}" WHERE isTcp = true AND excludedTcp = false AND isSb IS NULL`
   );
@@ -232,14 +240,15 @@ async function finaliseSubmission() {
  */
 async function saveUploadMetadata(metadata, options = {}) {
   const externalTx = options.transaction || null;
-  const clientId = metadata.clientId;
+  const customerId = metadata.customerId;
 
   // Start our own transaction if caller didn't provide one
-  const t = externalTx || (await beginTransactionWithClientContext(clientId));
+  const t =
+    externalTx || (await beginTransactionWithCustomerContext(customerId));
   try {
     if (!t.finished) {
       await db.sequelize.query(
-        `SET LOCAL app.current_client_id = '${clientId}'`,
+        `SET LOCAL app.current_customer_id = '${customerId}'`,
         { transaction: t }
       );
     }

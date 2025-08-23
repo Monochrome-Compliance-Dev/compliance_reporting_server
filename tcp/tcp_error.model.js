@@ -41,7 +41,7 @@ function model(sequelize) {
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
     ptrsId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
@@ -51,9 +51,9 @@ function model(sequelize) {
   });
 
   TcpError.associate = (models) => {
-    TcpError.belongsTo(models.Client, { foreignKey: "clientId" });
-    models.Client.hasMany(TcpError, {
-      foreignKey: "clientId",
+    TcpError.belongsTo(models.Customer, { foreignKey: "customerId" });
+    models.Customer.hasMany(TcpError, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
 

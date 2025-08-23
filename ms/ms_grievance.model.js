@@ -14,7 +14,7 @@ module.exports = (sequelize) => {
         primaryKey: true,
         defaultValue: () => nanoid(10),
       },
-      clientId: { type: DataTypes.STRING(10), allowNull: false },
+      customerId: { type: DataTypes.STRING(10), allowNull: false },
       description: { type: DataTypes.TEXT, allowNull: false },
       status: {
         type: DataTypes.ENUM("Open", "Closed", "Investigating"),

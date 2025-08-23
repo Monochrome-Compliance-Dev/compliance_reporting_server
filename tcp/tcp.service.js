@@ -3,8 +3,8 @@ const ptrsService = require("../ptrs/ptrs.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
 const { sequelize } = require("../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   /**
@@ -17,7 +17,7 @@ module.exports = {
 
   /**
    * Retrieve TCP records by PTRS ID.
-   * @param {Object} params - Parameters object containing clientId and ptrsId.
+   * @param {Object} params - Parameters object containing customerId and ptrsId.
    * @param {Object} [options] - Query options.
    * @returns {Promise<Array>} List of TCP records for the given ptrsId.
    */
@@ -33,7 +33,7 @@ module.exports = {
 
   /**
    * Retrieve a TCP record by its ID.
-   * @param {Object} params - Parameters object containing clientId and id.
+   * @param {Object} params - Parameters object containing customerId and id.
    * @param {Object} [options] - Query options.
    * @returns {Promise<Object|null>} The TCP record or null if not found.
    */
@@ -41,7 +41,7 @@ module.exports = {
 
   /**
    * Create a new TCP record.
-   * @param {Object} params - Parameters object containing clientId and TCP data.
+   * @param {Object} params - Parameters object containing customerId and TCP data.
    * @param {Object} [options] - Query options.
    * @returns {Promise<Object>} The created TCP record.
    */
@@ -49,7 +49,7 @@ module.exports = {
 
   /**
    * Update a TCP record by ID.
-   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} params - Parameters object containing customerId.
    * @param {Object} options - Query options.
    * @returns {Promise<Object|null>} The updated TCP record or null if not found.
    */
@@ -57,7 +57,7 @@ module.exports = {
 
   /**
    * Delete a TCP record by ID.
-   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} params - Parameters object containing customerId.
    * @param {Object} options - Query options.
    * @returns {Promise<void>}
    */
@@ -65,7 +65,7 @@ module.exports = {
 
   /**
    * Check if there are any TCP records missing the isSb flag.
-   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} params - Parameters object containing customerId.
    * @param {Object} [options] - Query options.
    * @returns {Promise<boolean>} True if any records are missing the isSb flag.
    */
@@ -73,7 +73,7 @@ module.exports = {
 
   /**
    * Finalise PTRS submission.
-   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} params - Parameters object containing customerId.
    * @param {Object} [options] - Options.
    * @returns {Promise<Object>} Result of finalisation.
    */
@@ -81,7 +81,7 @@ module.exports = {
 
   /**
    * Generate a CSV summary of TCP records.
-   * @param {Object} params - Parameters object containing clientId.
+   * @param {Object} params - Parameters object containing customerId.
    * @param {Object} [options] - Query options.
    * @returns {Promise<string>} CSV string.
    */
@@ -89,7 +89,7 @@ module.exports = {
 
   /**
    * Partially update a TCP record by ID.
-   * @param {Object} params - Parameters object containing clientId and id.
+   * @param {Object} params - Parameters object containing customerId and id.
    * @param {Object} [options] - Query options.
    * @returns {Promise<Object|null>} The updated TCP record or null if not found.
    */
@@ -97,7 +97,7 @@ module.exports = {
 
   /**
    * Patch a TCP record by ID.
-   * @param {Object} params - Parameters object containing clientId, id, and update data.
+   * @param {Object} params - Parameters object containing customerId, id, and update data.
    * @param {Object} [options] - Query options.
    * @returns {Promise<Object|null>} The patched TCP record or null if not found.
    */
@@ -114,7 +114,7 @@ module.exports = {
 
   /**
    * Save transformed TCP records.
-   * @param {Object} params - Parameters object containing clientId, transformedRecords, ptrsId, createdBy, source.
+   * @param {Object} params - Parameters object containing customerId, transformedRecords, ptrsId, createdBy, source.
    * @param {Object} [options] - Options.
    * @returns {Promise<Array>} Inserted TCP records.
    */
@@ -122,7 +122,7 @@ module.exports = {
 
   /**
    * Save TCP error records.
-   * @param {Object} params - Parameters object containing clientId, errorRecords, ptrsId, createdBy, source.
+   * @param {Object} params - Parameters object containing customerId, errorRecords, ptrsId, createdBy, source.
    * @param {Object} [options] - Options.
    * @returns {Promise<boolean>} True if saved successfully.
    */
@@ -138,9 +138,9 @@ module.exports = {
   resolveErrors,
 };
 
-async function getAll(clientId, options = {}) {
+async function getAll(customerId, options = {}) {
   console.log("options: ", options);
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rows = await db.Tcp.findAll({
       ...options,
@@ -157,8 +157,8 @@ async function getAll(clientId, options = {}) {
 }
 
 async function getByPtrsId(params, options = {}) {
-  const { clientId, ptrsId } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, ptrsId } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rows = await db.Tcp.findAll({
       where: { ptrsId },
@@ -176,8 +176,8 @@ async function getByPtrsId(params, options = {}) {
 }
 
 async function sbiUpdate(params, options = {}) {
-  const { ptrsId, payeeEntityAbn, clientId, updatedBy } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { ptrsId, payeeEntityAbn, customerId, updatedBy } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Tcp.update(
       { isSb: false, ...(updatedBy && { updatedBy }) },
@@ -201,8 +201,8 @@ async function sbiUpdate(params, options = {}) {
 }
 
 async function getById(params, options = {}) {
-  const { clientId, id } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const row = await db.Tcp.findByPk(id, { transaction: t, ...options });
     await t.commit();
@@ -216,8 +216,8 @@ async function getById(params, options = {}) {
 }
 
 async function create(params, options = {}) {
-  const { clientId, createdBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const record = await db.Tcp.create(
       { ...rest, ...(createdBy && { createdBy }) },
@@ -234,8 +234,8 @@ async function create(params, options = {}) {
 }
 
 async function update(params, options = {}) {
-  const { clientId, id, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Tcp.update(
       { ...rest, ...(updatedBy && { updatedBy }) },
@@ -257,8 +257,8 @@ async function update(params, options = {}) {
 }
 
 async function _delete(params, options = {}) {
-  const { clientId, id } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Tcp.destroy({ where: { id }, transaction: t, ...options });
     await t.commit();
@@ -272,8 +272,8 @@ async function _delete(params, options = {}) {
 }
 
 async function hasMissingIsSbFlag(params = {}, options = {}) {
-  const { clientId } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const count = await db.Tcp.count({
       where: {
@@ -300,8 +300,8 @@ async function finalisePtrs(params = {}, options = {}) {
 }
 
 async function generateSummaryCsv(params = {}, options = {}) {
-  const { clientId } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rows = await db.Tcp.findAll({
       attributes: [
@@ -341,8 +341,8 @@ async function generateSummaryCsv(params = {}, options = {}) {
 }
 
 async function partialUpdate(params, options = {}) {
-  const { clientId, id, updates, updatedBy } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, updates, updatedBy } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Tcp.update(
       { ...updates, ...(updatedBy && { updatedBy }) },
@@ -364,8 +364,8 @@ async function partialUpdate(params, options = {}) {
 }
 
 async function patchRecord(params, options = {}) {
-  const { clientId, id, update, updatedBy } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, update, updatedBy } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Tcp.update(
       { ...update, ...(updatedBy && { updatedBy }) },
@@ -383,7 +383,7 @@ async function patchRecord(params, options = {}) {
 }
 
 async function getCurrentFieldValue(params, options = {}) {
-  const { tcpId, field_name, clientId } = params;
+  const { tcpId, field_name, customerId } = params;
   const allowedFields = [
     "payeeEntityName",
     "payeeEntityAbn",
@@ -398,7 +398,9 @@ async function getCurrentFieldValue(params, options = {}) {
   if (!allowedFields.includes(field_name)) {
     throw new Error("Requested field_name is not valid");
   }
-  const t = clientId ? await beginTransactionWithClientContext(clientId) : null;
+  const t = customerId
+    ? await beginTransactionWithCustomerContext(customerId)
+    : null;
   try {
     const row = await db.Tcp.findOne({
       attributes: [field_name],
@@ -419,7 +421,7 @@ async function getCurrentFieldValue(params, options = {}) {
 
 async function saveTransformedDataToTcp(params, options = {}) {
   const {
-    clientId,
+    customerId,
     transformedRecords,
     ptrsId,
     createdBy,
@@ -474,7 +476,7 @@ async function saveTransformedDataToTcp(params, options = {}) {
   for (let i = 0; i < transformedRecords.length; i++) {
     transformedRecords[i].createdBy = createdBy;
     transformedRecords[i].ptrsId = ptrsId;
-    transformedRecords[i].clientId = clientId;
+    transformedRecords[i].customerId = customerId;
     transformedRecords[i].source = source;
     const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
     if (error) {
@@ -484,7 +486,7 @@ async function saveTransformedDataToTcp(params, options = {}) {
     }
   }
 
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { validate = true } = options || {};
     await db.Tcp.bulkCreate(transformedRecords, {
@@ -506,7 +508,7 @@ async function saveTransformedDataToTcp(params, options = {}) {
 }
 
 async function saveErrorsToTcpError(params, options = {}) {
-  const { clientId, errorRecords, ptrsId, createdBy, source } = params;
+  const { customerId, errorRecords, ptrsId, createdBy, source } = params;
   if (!Array.isArray(errorRecords)) {
     throw new Error("TCP error records must be an array");
   }
@@ -583,7 +585,7 @@ async function saveErrorsToTcpError(params, options = {}) {
   }
 
   const sanitized = errorRecords.map((rec) => {
-    const base = { ...rec, createdBy, ptrsId, clientId, source };
+    const base = { ...rec, createdBy, ptrsId, customerId, source };
 
     const out = {};
     for (const k of allowedAttrs) {
@@ -601,13 +603,13 @@ async function saveErrorsToTcpError(params, options = {}) {
     // Ensure required metadata fields are included if present in model
     if (allowedAttrs.includes("createdBy")) out.createdBy = base.createdBy;
     if (allowedAttrs.includes("ptrsId")) out.ptrsId = base.ptrsId;
-    if (allowedAttrs.includes("clientId")) out.clientId = base.clientId;
+    if (allowedAttrs.includes("customerId")) out.customerId = base.customerId;
     if (allowedAttrs.includes("source")) out.source = base.source;
 
     return out;
   });
 
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { validate = true } = options || {};
     await db.TcpError.bulkCreate(sanitized, { validate, transaction: t });
@@ -626,8 +628,10 @@ async function saveErrorsToTcpError(params, options = {}) {
 }
 
 async function getErrorsByPtrsId(params, options = {}) {
-  const { ptrsId, clientId } = params;
-  const t = clientId ? await beginTransactionWithClientContext(clientId) : null;
+  const { ptrsId, customerId } = params;
+  const t = customerId
+    ? await beginTransactionWithCustomerContext(customerId)
+    : null;
   try {
     const rows = await db.TcpError.findAll({
       where: { ptrsId },
@@ -647,11 +651,11 @@ async function getErrorsByPtrsId(params, options = {}) {
 // Atomically promote error rows from TcpError to Tcp and delete the error rows
 async function resolveErrors(params, options = {}) {
   // console.log("params: ", params);
-  const { clientId, userId, records } = params;
+  const { customerId, userId, records } = params;
   if (!Array.isArray(records)) {
     throw new Error("records must be an array");
   }
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     // Prepare insert payloads for Tcp and collect ids to delete from TcpError
     const toInsert = [];
@@ -721,7 +725,7 @@ async function resolveErrors(params, options = {}) {
       }
 
       // Ensure required metadata
-      clean.clientId = clientId;
+      clean.customerId = customerId;
       if (userId) {
         clean.createdBy = userId;
         clean.updatedBy = userId;
@@ -770,7 +774,7 @@ async function resolveErrors(params, options = {}) {
         "createdBy",
         "updatedBy",
         "ptrsId",
-        "clientId",
+        "customerId",
       ];
 
       // Filter to allowed fields only
@@ -814,11 +818,11 @@ async function resolveErrors(params, options = {}) {
 
 // Bulk patch update multiple TCP records
 async function bulkPatchUpdate(params, options = {}) {
-  const { clientId, userId, records } = params || {};
+  const { customerId, userId, records } = params || {};
   if (!Array.isArray(records)) {
     throw new Error("records must be an array");
   }
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const normalised = records.map((r) => {
       if (!r || typeof r !== "object")
@@ -883,7 +887,7 @@ async function bulkPatchUpdate(params, options = {}) {
       // Strip forbidden keys
       const cleaned = { ...update };
       delete cleaned.id;
-      delete cleaned.clientId;
+      delete cleaned.customerId;
       delete cleaned.ptrsId;
       delete cleaned.createdAt;
       delete cleaned.updatedAt;

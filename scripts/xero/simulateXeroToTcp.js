@@ -22,22 +22,22 @@ const XeroContact = defineXeroContact(sequelize);
   await sequelize.authenticate();
   console.log("✅ Connected to DB:", sequelize.config.database);
   try {
-    const clientId = "rahfwOLxLN";
+    const customerId = "rahfwOLxLN";
     const reportId = "TLxs1MVSIq";
     const createdBy = "j3HJwUR_pi";
 
     // 1. Fetch raw data
     const organisations = await XeroOrganisation.findAll({
-      where: { clientId, reportId },
+      where: { customerId, reportId },
     });
     const invoices = await XeroInvoice.findAll({
-      where: { clientId, reportId },
+      where: { customerId, reportId },
     });
     const payments = await XeroPayment.findAll({
-      where: { clientId, reportId },
+      where: { customerId, reportId },
     });
     const contacts = await XeroContact.findAll({
-      where: { clientId, reportId },
+      where: { customerId, reportId },
     });
 
     const xeroData = {
@@ -63,7 +63,7 @@ const XeroContact = defineXeroContact(sequelize);
     const result = await tcpService.saveTransformedDataToTcp(
       transformedXeroData,
       reportId,
-      clientId,
+      customerId,
       createdBy
     );
 

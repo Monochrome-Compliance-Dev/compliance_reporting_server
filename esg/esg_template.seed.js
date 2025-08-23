@@ -27,7 +27,7 @@ async function seedESGTemplates() {
       // Indicators
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Scope 1 Emissions",
         description: "Direct GHG emissions from owned or controlled sources.",
@@ -36,7 +36,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Scope 2 Emissions",
         description: "Indirect GHG emissions from purchased electricity.",
@@ -45,7 +45,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Scope 3 Emissions",
         description: "Other indirect emissions in value chain.",
@@ -54,7 +54,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Energy Consumption",
         description: "Total energy consumed.",
@@ -63,7 +63,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Water Usage",
         description: "Total water withdrawn.",
@@ -72,7 +72,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Waste Generation",
         description: "Total waste generated.",
@@ -81,7 +81,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Women in Leadership",
         description: "% women in leadership positions.",
@@ -90,7 +90,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Board Diversity %",
         description: "% diversity on board.",
@@ -99,7 +99,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Employee Turnover Rate",
         description: "Annual employee turnover rate.",
@@ -108,7 +108,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Anti-Corruption Incidents",
         description: "Number of anti-corruption incidents.",
@@ -117,7 +117,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Data Breaches",
         description: "Number of data breaches.",
@@ -126,7 +126,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Health & Safety Incidents",
         description: "Workplace health & safety incidents.",
@@ -135,7 +135,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Community Engagement Hours",
         description: "Hours spent on community engagement.",
@@ -144,7 +144,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Employee Training Hours",
         description: "Hours of employee training.",
@@ -153,7 +153,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Supplier ESG Rating",
         description: "Percentage of sustainable suppliers.",
@@ -162,7 +162,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "% Renewable Energy Used",
         description: "Percentage of energy from renewable sources.",
@@ -171,7 +171,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "GHG Emissions Intensity",
         description: "GHG emissions intensity per unit output.",
@@ -180,7 +180,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "% Waste Recycled",
         description: "Percentage of waste recycled.",
@@ -189,7 +189,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Workforce Diversity %",
         description: "% employee diversity.",
@@ -198,7 +198,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "indicator",
         fieldName: "Customer Satisfaction Score",
         description: "Customer satisfaction score.",
@@ -209,7 +209,7 @@ async function seedESGTemplates() {
       // Metrics
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Scope 1 Emissions",
         description: "Direct emissions metric.",
@@ -218,7 +218,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Scope 2 Emissions",
         description: "Indirect emissions metric.",
@@ -227,7 +227,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Scope 3 Emissions",
         description: "Other indirect emissions metric.",
@@ -236,7 +236,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Energy Consumption",
         description: "Energy consumption metric.",
@@ -245,7 +245,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Water Usage",
         description: "Water usage metric.",
@@ -254,7 +254,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Waste Generation",
         description: "Waste generation metric.",
@@ -263,7 +263,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Women in Leadership",
         description: "Gender balance metric.",
@@ -272,7 +272,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Board Diversity %",
         description: "Board diversity metric.",
@@ -281,7 +281,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Employee Turnover Rate",
         description: "Employee turnover metric.",
@@ -290,7 +290,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Anti-Corruption Incidents",
         description: "Anti-corruption metric.",
@@ -299,7 +299,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Data Breaches",
         description: "Data breaches metric.",
@@ -308,7 +308,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Health & Safety Incidents",
         description: "Health & safety metric.",
@@ -317,7 +317,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Community Engagement Hours",
         description: "Community engagement metric.",
@@ -326,7 +326,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Employee Training Hours",
         description: "Employee training metric.",
@@ -335,7 +335,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Supplier ESG Rating",
         description: "Supplier sustainability metric.",
@@ -344,7 +344,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "% Renewable Energy Used",
         description: "Renewable energy usage metric.",
@@ -353,7 +353,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "GHG Emissions Intensity",
         description: "GHG intensity metric.",
@@ -362,7 +362,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "% Waste Recycled",
         description: "Waste recycling rate metric.",
@@ -371,7 +371,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Workforce Diversity %",
         description: "Employee diversity metric.",
@@ -380,7 +380,7 @@ async function seedESGTemplates() {
       },
       {
         id: nanoid(10),
-        clientId: null,
+        customerId: null,
         fieldType: "metric",
         fieldName: "Customer Satisfaction Score",
         description: "Customer satisfaction metric.",

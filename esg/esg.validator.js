@@ -12,7 +12,7 @@ const esgIndicatorSchema = Joi.object({
     .valid("environment", "social", "governance")
     .required(),
   reportingPeriodId: Joi.string().length(10).required(),
-  clientId: Joi.string().length(10),
+  customerId: Joi.string().length(10),
   isTemplate: Joi.boolean(),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
@@ -23,7 +23,7 @@ const esgMetricSchema = Joi.object({
   reportingPeriodId: Joi.string().length(10).required(),
   value: Joi.number().required(),
   unitId: Joi.string().length(10).required(),
-  clientId: Joi.string().length(10),
+  customerId: Joi.string().length(10),
   isTemplate: Joi.boolean(),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
@@ -45,7 +45,7 @@ const esgReportingPeriodSchema = Joi.object({
     .messages({
       "string.pattern.base": "End Date must be in YYYY-MM-DD format",
     }),
-  clientId: Joi.string().length(10), // still optional, injected by server
+  customerId: Joi.string().length(10), // still optional, injected by server
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
 });
@@ -66,7 +66,7 @@ const esgTemplateSchema = Joi.object({
     .valid("environment", "social", "governance")
     .allow(null),
   defaultUnit: Joi.string().max(50).allow(null),
-  clientId: Joi.string().length(10).allow(null), // null for global templates
+  customerId: Joi.string().length(10).allow(null), // null for global templates
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
 });

@@ -31,25 +31,25 @@ router.delete("/:id", authorise(), deleteInvoice);
 async function getInvoicesByScope(req, res, next) {
   try {
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const partnerId = req.query.partnerId || null;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const result = await invoiceService.getInvoicesByScope({
-      clientId,
+      customerId,
       partnerId,
     });
 
     await logReadAudit({
       entity: "InvoiceBatch",
       userId,
-      clientId,
+      customerId,
       req,
       result,
-      entityId: partnerId || clientId,
+      entityId: partnerId || customerId,
       action: "Read",
-      details: { filter: { clientId, partnerId } },
+      details: { filter: { customerId, partnerId } },
       ip,
       device,
     });
@@ -64,21 +64,21 @@ async function generateInvoicesForPeriod(req, res, next) {
   try {
     const reportingPeriodId = req.body.reportingPeriodId;
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const result = await invoiceService.generateInvoicesForPeriod(
       reportingPeriodId,
       userId,
-      clientId
+      customerId
     );
 
     const ids = result.map((r) => r.id);
 
     await logCreateAudit({
       entity: "InvoiceBatch",
-      clientId,
+      customerId,
       userId,
       req,
       entityId: reportingPeriodId,
@@ -100,19 +100,19 @@ async function generatePartnerInvoicesForPeriod(req, res, next) {
   try {
     const reportingPeriodId = req.body.reportingPeriodId;
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     const result = await invoiceService.generatePartnerInvoicesForPeriod(
       reportingPeriodId,
       userId,
-      clientId
+      customerId
     );
 
     await logCreateAudit({
       entity: "PartnerInvoiceBatch",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       entityId: reportingPeriodId,
@@ -134,15 +134,15 @@ async function getInvoiceById(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
-    const invoice = await invoiceService.getInvoiceById(id, clientId);
+    const invoice = await invoiceService.getInvoiceById(id, customerId);
     const invoiceData = invoice?.get ? invoice.get({ plain: true }) : invoice;
     await logReadAudit({
       entity: "Invoice",
-      clientId,
+      customerId,
       userId,
       req,
       result: invoiceData,
@@ -165,18 +165,18 @@ async function updateInvoice(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const data = req.body;
 
     // Fetch the existing invoice before updating
-    const before = await invoiceService.getInvoiceById(id, clientId);
+    const before = await invoiceService.getInvoiceById(id, customerId);
     // console.log("before: ", before);
     const beforeData = before?.get ? before.get({ plain: true }) : before;
     // console.log("beforeData: ", beforeData);
 
-    const result = await invoiceService.updateInvoice(id, clientId, {
+    const result = await invoiceService.updateInvoice(id, customerId, {
       ...data,
       updatedBy: userId,
     });
@@ -186,7 +186,7 @@ async function updateInvoice(req, res, next) {
 
     await logUpdateAudit({
       entity: "Invoice",
-      clientId,
+      customerId,
       userId,
       reqBody: data,
       req,
@@ -208,18 +208,18 @@ async function deleteInvoice(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const clientId = req.auth.clientId;
+    const customerId = req.auth.customerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
     // Fetch the invoice first, then delete
-    const before = await invoiceService.getInvoiceById(id, clientId);
+    const before = await invoiceService.getInvoiceById(id, customerId);
     const beforeData = before?.get ? before.get({ plain: true }) : before;
 
-    await invoiceService.deleteInvoice(id, clientId);
+    await invoiceService.deleteInvoice(id, customerId);
     await logDeleteAudit({
       entity: "Invoice",
-      clientId,
+      customerId,
       userId,
       req,
       action: "Delete",

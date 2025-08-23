@@ -64,7 +64,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"code\": \"S1_GHG\",\n  \"name\": \"Scope 1 Emissions\",\n  \"description\": \"Tonnes of CO2e\",\n  \"category\": \"environment\"\n}"
+          "raw": "{\n  \"customerId\": \"rahfwOLxLN\",\n  \"code\": \"S1_GHG\",\n  \"name\": \"Scope 1 Emissions\",\n  \"description\": \"Tonnes of CO2e\",\n  \"category\": \"environment\"\n}"
         },
         "url": {
           "raw": "http://localhost:4000/api/esg/indicators",
@@ -93,7 +93,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"indicatorId\": \"abc123xyz1\",\n  \"reportingPeriodId\": \"def456ghi2\",\n  \"value\": 1234.5,\n  \"unit\": \"tonnes\"\n}"
+          "raw": "{\n  \"customerId\": \"rahfwOLxLN\",\n  \"indicatorId\": \"abc123xyz1\",\n  \"reportingPeriodId\": \"def456ghi2\",\n  \"value\": 1234.5,\n  \"unit\": \"tonnes\"\n}"
         },
         "url": {
           "raw": "http://localhost:4000/api/esg/metrics",
@@ -142,7 +142,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"clientId\": \"rahfwOLxLN\",\n  \"name\": \"Q1 FY25\",\n  \"startDate\": \"2025-07-01\",\n  \"endDate\": \"2025-09-30\"\n}"
+          "raw": "{\n  \"customerId\": \"rahfwOLxLN\",\n  \"name\": \"Q1 FY25\",\n  \"startDate\": \"2025-07-01\",\n  \"endDate\": \"2025-09-30\"\n}"
         },
         "url": {
           "raw": "http://localhost:4000/api/esg/reporting-periods",

@@ -37,8 +37,8 @@ function model(sequelize) {
     },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
-    // Foreign key for Client
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    // Foreign key for Customer
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const Ptrs = sequelize.define("ptrs", attributes, {
@@ -47,9 +47,9 @@ function model(sequelize) {
   });
 
   Ptrs.associate = (models) => {
-    Ptrs.belongsTo(models.Client, { foreignKey: "clientId" });
-    models.Client.hasMany(Ptrs, {
-      foreignKey: "clientId",
+    Ptrs.belongsTo(models.Customer, { foreignKey: "customerId" });
+    models.Customer.hasMany(Ptrs, {
+      foreignKey: "customerId",
       onDelete: "CASCADE",
     });
 

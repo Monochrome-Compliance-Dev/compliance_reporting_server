@@ -2,8 +2,8 @@ const db = require("../../db/database");
 const { logger } = require("../../helpers/logger");
 // const { sequelize } = require("../../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../../helpers/setCustomerIdRLS");
 
 function appendComment(existing, addition) {
   if (!existing) return addition;
@@ -31,22 +31,22 @@ function dayDiff(
   return Number.isFinite(days) ? days : null;
 }
 
-async function processTcpMetrics(ptrsId, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function processTcpMetrics(ptrsId, customerId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Validate ptrs belongs to client
+    // Validate ptrs belongs to customer
     const ptrs = await db.Ptrs.findOne({
-      where: { id: ptrsId, clientId },
+      where: { id: ptrsId, customerId },
       transaction: t,
     });
 
     if (!ptrs) {
-      throw new Error(`Ptrs ${ptrsId} not found for client ${clientId}`);
+      throw new Error(`Ptrs ${ptrsId} not found for customer ${customerId}`);
     }
 
     const tcpRecords = await db.Tcp.findAll({
-      where: { ptrsId, clientId, isTcp: true },
+      where: { ptrsId, customerId, isTcp: true },
       transaction: t,
       raw: true,
     });
@@ -207,7 +207,7 @@ async function processTcpMetrics(ptrsId, clientId) {
     logger.logEvent("error", "Error processing TCP metrics", {
       action: "ProcessTcpMetrics",
       ptrsId,
-      clientId,
+      customerId,
       error,
     });
     throw error;

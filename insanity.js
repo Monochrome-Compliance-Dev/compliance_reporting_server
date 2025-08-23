@@ -4,21 +4,24 @@ const { Sequelize, DataTypes } = require("sequelize");
 const app = express();
 app.use(express.json());
 
-// Middleware to inject a hardcoded clientId for RLS testing within a transaction
+// Middleware to inject a hardcoded customerId for RLS testing within a transaction
 app.use(async (req, res, next) => {
-  const clientId = "FzNsRwbtXi"; // Hardcoded clientId for testing
+  const customerId = "FzNsRwbtXi"; // Hardcoded customerId for testing
   try {
     const transaction = await sequelize.transaction();
-    await sequelize.query(`SET LOCAL app.current_client_id = '${clientId}'`, {
-      transaction,
-      raw: true,
-    });
+    await sequelize.query(
+      `SET LOCAL app.current_customer_id = '${customerId}'`,
+      {
+        transaction,
+        raw: true,
+      }
+    );
     // Save the transaction for downstream use
     req.dbTransaction = transaction;
-    req.body.clientId = clientId; // Ensure it's available for validation
+    req.body.customerId = customerId; // Ensure it's available for validation
     next();
   } catch (error) {
-    console.error("Error in clientId middleware:", error.message);
+    console.error("Error in customerId middleware:", error.message);
     next(error);
   }
 });
@@ -51,7 +54,7 @@ const User = sequelize.define("User", {
     type: DataTypes.STRING,
     allowNull: false,
   },
-  clientId: {
+  customerId: {
     type: DataTypes.STRING,
     allowNull: false,
   },
@@ -72,10 +75,10 @@ app.get("/users", async (req, res) => {
 
 // POST a user (with RLS enforced)
 app.post("/users", async (req, res) => {
-  const { email, clientId } = req.body;
+  const { email, customerId } = req.body;
   try {
     const user = await User.create(
-      { email, clientId },
+      { email, customerId },
       { transaction: req.dbTransaction }
     );
     await req.dbTransaction.commit();
@@ -96,10 +99,10 @@ app.listen(PORT, async () => {
     await User.sync();
     await sequelize.query(`
       ALTER TABLE "Users" ENABLE ROW LEVEL SECURITY;
-      DROP POLICY IF EXISTS user_client_rls ON "Users";
-      CREATE POLICY user_client_rls ON "Users"
-        USING ("clientId" = current_setting('app.current_client_id', true)::text)
-        WITH CHECK ("clientId" = current_setting('app.current_client_id', true)::text);
+      DROP POLICY IF EXISTS user_customer_rls ON "Users";
+      CREATE POLICY user_customer_rls ON "Users"
+        USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+        WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
     `);
     console.log("✅ User table synced.");
     console.log(`🚀 Server running at http://localhost:${PORT}`);

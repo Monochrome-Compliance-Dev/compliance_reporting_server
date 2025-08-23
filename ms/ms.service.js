@@ -1,6 +1,6 @@
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 const db = require("../db/database");
 const { Op } = require("sequelize");
 
@@ -35,11 +35,11 @@ module.exports = {
 };
 
 async function createSupplierRisk(params, options = {}) {
-  const { clientId, createdBy, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const newSupplierRisk = await db.MSSupplierRisk.create(
-      { ...rest, clientId, createdBy, updatedBy },
+      { ...rest, customerId, createdBy, updatedBy },
       {
         transaction: t,
         ...options,
@@ -53,8 +53,8 @@ async function createSupplierRisk(params, options = {}) {
   }
 }
 
-async function getSupplierRisks(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getSupplierRisks(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = {};
     if (options.startDate && options.endDate) {
@@ -75,8 +75,8 @@ async function getSupplierRisks(clientId, options = {}) {
   }
 }
 
-async function getSupplierRiskById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getSupplierRiskById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const risk = await db.MSSupplierRisk.findOne({
       where: { id },
@@ -92,8 +92,8 @@ async function getSupplierRiskById(clientId, id, options = {}) {
 }
 
 async function updateSupplierRisk(params, options = {}) {
-  const { clientId, id, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updatedRisk]] = await db.MSSupplierRisk.update(
       { ...rest, updatedBy },
@@ -113,8 +113,8 @@ async function updateSupplierRisk(params, options = {}) {
 }
 
 async function deleteSupplierRisk(params, options = {}) {
-  const { clientId, id } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.MSSupplierRisk.destroy({
       where: { id },
@@ -129,11 +129,11 @@ async function deleteSupplierRisk(params, options = {}) {
 }
 
 async function createTraining(params, options = {}) {
-  const { clientId, createdBy, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const newTrainingRecord = await db.MSTraining.create(
-      { ...rest, clientId, createdBy, updatedBy },
+      { ...rest, customerId, createdBy, updatedBy },
       {
         transaction: t,
         ...options,
@@ -147,8 +147,8 @@ async function createTraining(params, options = {}) {
   }
 }
 
-async function getTraining(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getTraining(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = {};
     if (options.startDate && options.endDate) {
@@ -169,8 +169,8 @@ async function getTraining(clientId, options = {}) {
   }
 }
 
-async function getTrainingById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getTrainingById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const training = await db.MSTraining.findOne({
       where: { id },
@@ -186,8 +186,8 @@ async function getTrainingById(clientId, id, options = {}) {
 }
 
 async function updateTraining(params, options = {}) {
-  const { clientId, id, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updatedRecord]] = await db.MSTraining.update(
       { ...rest, updatedBy },
@@ -207,8 +207,8 @@ async function updateTraining(params, options = {}) {
 }
 
 async function deleteTraining(params, options = {}) {
-  const { clientId, id } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.MSTraining.destroy({
       where: { id },
@@ -223,11 +223,11 @@ async function deleteTraining(params, options = {}) {
 }
 
 async function createGrievance(params, options = {}) {
-  const { clientId, createdBy, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const newGrievance = await db.MSGrievance.create(
-      { ...rest, clientId, createdBy, updatedBy },
+      { ...rest, customerId, createdBy, updatedBy },
       {
         transaction: t,
         ...options,
@@ -241,8 +241,8 @@ async function createGrievance(params, options = {}) {
   }
 }
 
-async function getGrievances(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getGrievances(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = {};
     if (options.startDate && options.endDate) {
@@ -263,8 +263,8 @@ async function getGrievances(clientId, options = {}) {
   }
 }
 
-async function getGrievanceById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getGrievanceById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const grievance = await db.MSGrievance.findOne({
       where: { id },
@@ -280,8 +280,8 @@ async function getGrievanceById(clientId, id, options = {}) {
 }
 
 async function updateGrievance(params, options = {}) {
-  const { clientId, id, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updatedGrievance]] = await db.MSGrievance.update(
       { ...rest, updatedBy },
@@ -301,8 +301,8 @@ async function updateGrievance(params, options = {}) {
 }
 
 async function deleteGrievance(params, options = {}) {
-  const { clientId, id } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, id } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.MSGrievance.destroy({
       where: { id },
@@ -317,11 +317,11 @@ async function deleteGrievance(params, options = {}) {
 }
 
 async function createReportingPeriod(params, options = {}) {
-  const { clientId, createdBy, updatedBy, ...rest } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, updatedBy, ...rest } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const newPeriod = await db.MSReportingPeriod.create(
-      { ...rest, clientId, createdBy, updatedBy },
+      { ...rest, customerId, createdBy, updatedBy },
       {
         transaction: t,
         ...options,
@@ -335,8 +335,8 @@ async function createReportingPeriod(params, options = {}) {
   }
 }
 
-async function getReportingPeriods(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getReportingPeriods(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const periods = await db.MSReportingPeriod.findAll({
       order: [["createdAt", "DESC"]],
@@ -351,8 +351,8 @@ async function getReportingPeriods(clientId, options = {}) {
   }
 }
 
-async function getReportingPeriodById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getReportingPeriodById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const period = await db.MSReportingPeriod.findByPk(id, {
       transaction: t,
@@ -367,11 +367,11 @@ async function getReportingPeriodById(clientId, id, options = {}) {
 }
 
 async function getInterviewResponses(
-  clientId,
+  customerId,
   reportingPeriodId,
   options = {}
 ) {
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const responses = await db.MSInterviewResponse.findAll({
       where: { reportingPeriodId },
@@ -388,14 +388,14 @@ async function getInterviewResponses(
 }
 
 async function submitInterviewResponses(params, options = {}) {
-  const { clientId, createdBy, reportingPeriodId, responses } = params;
-  const t = await beginTransactionWithClientContext(clientId);
+  const { customerId, createdBy, reportingPeriodId, responses } = params;
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const dbResponses = await db.MSInterviewResponse.bulkCreate(
       responses.map((r) => ({
         ...r,
         reportingPeriodId,
-        clientId,
+        customerId,
         createdBy,
         updatedBy: createdBy,
       })),
@@ -409,8 +409,8 @@ async function submitInterviewResponses(params, options = {}) {
   }
 }
 
-async function generateStatement(clientId, reportingPeriodId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function generateStatement(customerId, reportingPeriodId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     // Stub implementation for now
     await t.commit();
@@ -424,8 +424,8 @@ async function generateStatement(clientId, reportingPeriodId, options = {}) {
   }
 }
 
-async function updateTrainingById(clientId, id, params, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateTrainingById(customerId, id, params, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const updateParams = { ...params };
     if (updateParams.completed === false) {
@@ -445,8 +445,8 @@ async function updateTrainingById(clientId, id, params, options = {}) {
   }
 }
 
-async function deleteTrainingById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteTrainingById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const record = await db.MSTraining.findOne({
       where: { id },
@@ -464,8 +464,8 @@ async function deleteTrainingById(clientId, id, options = {}) {
   }
 }
 
-async function updateSupplierRiskById(clientId, id, params, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateSupplierRiskById(customerId, id, params, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updatedRecord]] = await db.MSSupplierRisk.update(params, {
       where: { id },
@@ -481,8 +481,8 @@ async function updateSupplierRiskById(clientId, id, params, options = {}) {
   }
 }
 
-async function deleteSupplierRiskById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteSupplierRiskById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const record = await db.MSSupplierRisk.findOne({
       where: { id },
@@ -500,8 +500,8 @@ async function deleteSupplierRiskById(clientId, id, options = {}) {
   }
 }
 
-async function updateGrievanceById(clientId, id, params, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateGrievanceById(customerId, id, params, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updatedRecord]] = await db.MSGrievance.update(params, {
       where: { id },
@@ -517,8 +517,8 @@ async function updateGrievanceById(clientId, id, params, options = {}) {
   }
 }
 
-async function deleteGrievanceById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteGrievanceById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const record = await db.MSGrievance.findOne({
       where: { id },

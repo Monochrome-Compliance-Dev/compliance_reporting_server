@@ -2,7 +2,7 @@ const Joi = require("../middleware/joiSanitizer");
 
 const invoiceSchema = Joi.object({
   billingType: Joi.string().valid("DIRECT", "PARTNER").required(),
-  clientId: Joi.string().alphanum().length(10).allow(null, ""),
+  customerId: Joi.string().alphanum().length(10).allow(null, ""),
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
   reportingPeriodId: Joi.string().alphanum().length(10).required(),
   issuedAt: Joi.date().optional(),
@@ -15,7 +15,7 @@ const invoiceSchema = Joi.object({
 
 const invoiceUpdateSchema = Joi.object({
   billingType: Joi.string().valid("DIRECT", "PARTNER"),
-  clientId: Joi.string().alphanum().length(10).allow(null, ""),
+  customerId: Joi.string().alphanum().length(10).allow(null, ""),
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
   reportingPeriodId: Joi.string().alphanum().length(10),
   issuedAt: Joi.date().optional(),

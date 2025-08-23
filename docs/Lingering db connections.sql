@@ -2,7 +2,7 @@
 SELECT
   pid,
   usename AS user,
-  client_addr,
+  customer_addr,
   state,
   backend_xid,
   backend_xmin,

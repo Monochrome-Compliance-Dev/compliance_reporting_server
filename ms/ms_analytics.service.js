@@ -1,7 +1,7 @@
 const db = require("../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   getSupplierRiskSummary,
@@ -19,12 +19,12 @@ function getMonthEndDate(date) {
 /**
  * Get supplier risk summary: count suppliers grouped by risk, monthly only.
  */
-async function getSupplierRiskSummary(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getSupplierRiskSummary(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { startDate, endDate } = options;
     console.log("startDate, endDate :", startDate, endDate);
-    const where = { clientId };
+    const where = { customerId };
     if (startDate && endDate) {
       where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
     }
@@ -83,11 +83,11 @@ async function getSupplierRiskSummary(clientId, options = {}) {
 /**
  * Get training completion stats: counts total vs completed training, monthly only.
  */
-async function getTrainingCompletionStats(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getTrainingCompletionStats(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { startDate, endDate } = options;
-    const where = { clientId };
+    const where = { customerId };
     if (startDate && endDate) {
       where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
     }
@@ -154,11 +154,11 @@ async function getTrainingCompletionStats(clientId, options = {}) {
 /**
  * Get grievance summary: count grievances grouped by status, monthly only.
  */
-async function getGrievanceSummary(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getGrievanceSummary(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { startDate, endDate } = options;
-    const where = { clientId };
+    const where = { customerId };
     if (startDate && endDate) {
       where.createdAt = { [db.Sequelize.Op.between]: [startDate, endDate] };
     }

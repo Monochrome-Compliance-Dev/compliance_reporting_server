@@ -9,8 +9,8 @@ const { sendEmail } = require("../helpers/send-email");
 const db = require("../db/database");
 const Role = require("../helpers/role");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   authenticate,
@@ -24,15 +24,15 @@ module.exports = {
   validateResetToken,
   resetPassword,
   getAll,
-  getAllByClientId,
+  getAllByCustomerId,
   getById,
   create,
   update,
   delete: _delete,
 };
 
-async function authenticate({ email, password, ipAddress, clientId }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function authenticate({ email, password, ipAddress, customerId }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await db.User.scope("withHash").findOne({
       where: { email },
@@ -124,7 +124,8 @@ async function revokeToken({ token, ipAddress }) {
 }
 
 async function register(params, origin) {
-  if (!params.clientId) throw { status: 400, message: "clientId is required" };
+  if (!params.customerId)
+    throw { status: 400, message: "customerId is required" };
   const t = await db.sequelize.transaction();
   try {
     if (
@@ -153,8 +154,9 @@ async function register(params, origin) {
 }
 
 async function registerFirstUser(params, origin) {
-  if (!params.clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(params.clientId);
+  if (!params.customerId)
+    throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     if (
       await db.User.findOne({ where: { email: params.email }, transaction: t })
@@ -189,9 +191,9 @@ async function registerFirstUser(params, origin) {
   }
 }
 
-async function verifyToken(token, clientId) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function verifyToken(token, customerId) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await db.User.findOne({
       where: { verificationToken: token },
@@ -212,8 +214,9 @@ async function verifyToken(token, clientId) {
 }
 
 async function verifyEmail(params) {
-  if (!params.clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(params.clientId);
+  if (!params.customerId)
+    throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const { token, password } = params;
     const user = await db.User.findOne({
@@ -239,9 +242,9 @@ async function verifyEmail(params) {
   }
 }
 
-async function forgotPassword({ email, clientId }, origin) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function forgotPassword({ email, customerId }, origin) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await db.User.findOne({ where: { email }, transaction: t });
 
@@ -278,9 +281,9 @@ async function validateResetToken({ token }, options = {}) {
   return user;
 }
 
-async function resetPassword({ token, password, clientId }) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function resetPassword({ token, password, customerId }) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await validateResetToken({ token }, { transaction: t });
 
@@ -297,9 +300,9 @@ async function resetPassword({ token, password, clientId }) {
   }
 }
 
-async function getAll(clientId) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function getAll(customerId) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const users = await db.User.findAll({ transaction: t });
     await t.rollback();
@@ -312,12 +315,12 @@ async function getAll(clientId) {
   }
 }
 
-async function getAllByClientId(clientId) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function getAllByCustomerId(customerId) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const users = await db.User.findAll({
-      where: { clientId },
+      where: { customerId },
       transaction: t,
     });
     await t.rollback();
@@ -330,9 +333,9 @@ async function getAllByClientId(clientId) {
   }
 }
 
-async function getById(id, clientId) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function getById(id, customerId) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await getUser(id, { transaction: t });
     await t.rollback();
@@ -346,8 +349,9 @@ async function getById(id, clientId) {
 }
 
 async function create(params) {
-  if (!params.clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(params.clientId);
+  if (!params.customerId)
+    throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     if (
       await db.User.findOne({ where: { email: params.email }, transaction: t })
@@ -376,8 +380,9 @@ async function create(params) {
 }
 
 async function update(id, params) {
-  if (!params.clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(params.clientId);
+  if (!params.customerId)
+    throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const user = await getUser(id, { transaction: t });
 
@@ -412,9 +417,9 @@ async function update(id, params) {
   }
 }
 
-async function _delete(id, clientId) {
-  if (!clientId) throw { status: 400, message: "clientId is required" };
-  const t = await beginTransactionWithClientContext(clientId);
+async function _delete(id, customerId) {
+  if (!customerId) throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const user = await getUser(id, { transaction: t });
     await user.destroy({ transaction: t });
@@ -493,7 +498,7 @@ async function hash(password) {
 function generateJwtToken(user) {
   // create a jwt token containing the user id that expires in 15 minutes
   return jwt.sign(
-    { id: user.id, role: user.role, clientId: user.clientId },
+    { id: user.id, role: user.role, customerId: user.customerId },
     jwtSecret,
     {
       expiresIn: "15m",
@@ -527,7 +532,7 @@ function basicDetails(user) {
     created,
     updated,
     verified,
-    clientId,
+    customerId,
   } = user;
   return {
     id,
@@ -540,7 +545,7 @@ function basicDetails(user) {
     created,
     updated,
     isVerified: !!verified,
-    clientId,
+    customerId,
   };
 }
 

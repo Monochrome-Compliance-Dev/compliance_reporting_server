@@ -1,6 +1,6 @@
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 const db = require("../db/database");
 let nanoid;
 (async () => {
@@ -11,9 +11,9 @@ let nanoid;
 module.exports = {
   createIndicator,
   createMetric,
-  getMetricsByClient,
+  getMetricsByCustomer,
   createReportingPeriod,
-  getReportingPeriodsByClient,
+  getReportingPeriodsByCustomer,
   getIndicatorsByReportingPeriodId,
   getMetricsByReportingPeriodId,
   getMetricById,
@@ -23,7 +23,7 @@ module.exports = {
   updateReportingPeriod,
   // Units CRUD
   createUnit,
-  getUnitsByClient,
+  getUnitsByCustomer,
   getUnitById,
   updateUnit,
   deleteUnit,
@@ -31,7 +31,7 @@ module.exports = {
 };
 
 async function createIndicator(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const result = await db.ESGIndicator.create(
       {
@@ -53,7 +53,7 @@ async function createIndicator(params, options = {}) {
 }
 
 async function createMetric(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const indicator = await db.ESGIndicator.findByPk(params.indicatorId, {
       transaction: t,
@@ -90,8 +90,8 @@ async function createMetric(params, options = {}) {
   }
 }
 
-async function getMetricsByClient(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getMetricsByCustomer(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const metrics = await db.ESGMetric.findAll({
       ...options,
@@ -106,7 +106,7 @@ async function getMetricsByClient(clientId, options = {}) {
 }
 
 async function createReportingPeriod(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const result = await db.ReportingPeriod.create(
       {
@@ -129,8 +129,8 @@ async function createReportingPeriod(params, options = {}) {
   }
 }
 
-async function getReportingPeriodsByClient(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getReportingPeriodsByCustomer(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const periods = await db.ReportingPeriod.findAll({
       ...options,
@@ -146,11 +146,11 @@ async function getReportingPeriodsByClient(clientId, options = {}) {
 }
 
 async function getIndicatorsByReportingPeriodId(
-  clientId,
+  customerId,
   reportingPeriodId,
   options = {}
 ) {
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const indicators = await db.ESGIndicator.findAll({
       where: { reportingPeriodId },
@@ -167,11 +167,11 @@ async function getIndicatorsByReportingPeriodId(
 }
 
 async function getMetricsByReportingPeriodId(
-  clientId,
+  customerId,
   reportingPeriodId,
   options = {}
 ) {
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const metrics = await db.ESGMetric.findAll({
       where: { reportingPeriodId },
@@ -187,8 +187,8 @@ async function getMetricsByReportingPeriodId(
   }
 }
 
-async function getMetricById(clientId, metricId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getMetricById(customerId, metricId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const metric = await db.ESGMetric.findOne({
       where: { id: metricId },
@@ -205,8 +205,8 @@ async function getMetricById(clientId, metricId, options = {}) {
 }
 
 // Soft delete ESG Indicator by id
-async function deleteIndicator(clientId, indicatorId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteIndicator(customerId, indicatorId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.ESGIndicator.destroy({
       where: { id: indicatorId },
@@ -222,8 +222,8 @@ async function deleteIndicator(clientId, indicatorId, options = {}) {
 }
 
 // Soft delete ESG Metric by id
-async function deleteMetric(clientId, metricId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteMetric(customerId, metricId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.ESGMetric.destroy({
       where: { id: metricId },
@@ -238,8 +238,8 @@ async function deleteMetric(clientId, metricId, options = {}) {
   }
 }
 
-async function getReportingPeriodById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getReportingPeriodById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const period = await db.ReportingPeriod.findByPk(id, {
       ...options,
@@ -255,7 +255,7 @@ async function getReportingPeriodById(clientId, id, options = {}) {
 }
 
 async function updateReportingPeriod(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     await db.ReportingPeriod.update(
       { ...params.updates, updatedBy: params.userId },
@@ -276,7 +276,7 @@ async function updateReportingPeriod(params, options = {}) {
 
 // ---- Unit CRUD ----
 async function createUnit(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     const result = await db.Unit.create(
       {
@@ -297,8 +297,8 @@ async function createUnit(params, options = {}) {
   }
 }
 
-async function getUnitsByClient(clientId, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getUnitsByCustomer(customerId, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const units = await db.Unit.findAll({
       ...options,
@@ -312,8 +312,8 @@ async function getUnitsByClient(clientId, options = {}) {
   }
 }
 
-async function getUnitById(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getUnitById(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const unit = await db.Unit.findByPk(id, {
       ...options,
@@ -328,7 +328,7 @@ async function getUnitById(clientId, id, options = {}) {
 }
 
 async function updateUnit(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
     await db.Unit.update(
       { ...params.updates, updatedBy: params.userId },
@@ -346,8 +346,8 @@ async function updateUnit(params, options = {}) {
   }
 }
 
-async function deleteUnit(clientId, id, options = {}) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteUnit(customerId, id, options = {}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     await db.Unit.destroy({
       where: { id },
@@ -362,14 +362,14 @@ async function deleteUnit(clientId, id, options = {}) {
 }
 
 async function cloneTemplatesForReportingPeriod(params, options = {}) {
-  const t = await beginTransactionWithClientContext(params.clientId);
+  const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
-    // Fetch global templates plus client-specific templates
+    // Fetch global templates plus customer-specific templates
     const templates = await db.Template.findAll({
       where: {
         [db.Sequelize.Op.or]: [
-          { clientId: null },
-          { clientId: params.clientId },
+          { customerId: null },
+          { customerId: params.customerId },
         ],
       },
       transaction: t,
@@ -387,7 +387,7 @@ async function cloneTemplatesForReportingPeriod(params, options = {}) {
         return await db.ESGIndicator.create(
           {
             id: nanoid(10),
-            clientId: params.clientId,
+            customerId: params.customerId,
             reportingPeriodId: params.reportingPeriodId,
             code: template.fieldName,
             name: template.fieldName,
@@ -413,7 +413,7 @@ async function cloneTemplatesForReportingPeriod(params, options = {}) {
         return await db.ESGMetric.create(
           {
             id: nanoid(10),
-            clientId: params.clientId,
+            customerId: params.customerId,
             reportingPeriodId: params.reportingPeriodId,
             indicatorId: matchingIndicator.id,
             value: 0,

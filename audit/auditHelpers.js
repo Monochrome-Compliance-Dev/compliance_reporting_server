@@ -2,7 +2,7 @@ const { withAudit } = require("./audit.service");
 
 async function logCreateAudit({
   entity,
-  clientId,
+  customerId,
   userId,
   result,
   req,
@@ -12,7 +12,7 @@ async function logCreateAudit({
   const device = req.headers["user-agent"];
 
   await withAudit({
-    clientId,
+    customerId,
     userId,
     action,
     entity: entity.toLowerCase(),
@@ -26,12 +26,19 @@ async function logCreateAudit({
   return result;
 }
 
-async function logReadAudit({ entity, clientId, userId, req, result, action }) {
+async function logReadAudit({
+  entity,
+  customerId,
+  userId,
+  req,
+  result,
+  action,
+}) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
 
   await withAudit({
-    clientId,
+    customerId,
     userId,
     action,
     entity: entity.toLowerCase(),
@@ -44,7 +51,7 @@ async function logReadAudit({ entity, clientId, userId, req, result, action }) {
 
 async function logUpdateAudit({
   entity,
-  clientId,
+  customerId,
   userId,
   entityId,
   before,
@@ -56,7 +63,7 @@ async function logUpdateAudit({
   const device = req.headers["user-agent"];
 
   await withAudit({
-    clientId,
+    customerId,
     userId,
     action,
     entity: entity.toLowerCase(),
@@ -70,7 +77,7 @@ async function logUpdateAudit({
 
 async function logDeleteAudit({
   entity,
-  clientId,
+  customerId,
   userId,
   entityId,
   before,
@@ -81,7 +88,7 @@ async function logDeleteAudit({
   const device = req.headers["user-agent"];
 
   await withAudit({
-    clientId,
+    customerId,
     userId,
     action,
     entity: entity.toLowerCase(),

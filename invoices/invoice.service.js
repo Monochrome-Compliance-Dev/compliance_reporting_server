@@ -1,7 +1,7 @@
 const db = require("../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 const { Op } = require("sequelize");
 
 module.exports = {
@@ -13,14 +13,18 @@ module.exports = {
   getInvoicesByScope,
 };
 
-async function generateInvoicesForPeriod(reportingPeriodId, userId, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function generateInvoicesForPeriod(
+  reportingPeriodId,
+  userId,
+  customerId
+) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const allClients = await db.Client.findAll({
-      where: { id: clientId },
+    const allCustomers = await db.Customer.findAll({
+      where: { id: customerId },
       transaction: t,
     });
-    // console.log("allClients: ", allClients);
+    // console.log("allCustomers: ", allCustomers);
     const platformProduct = await db.Product.findOne({
       where: { code: "PLATFORM", active: true },
       transaction: t,
@@ -34,10 +38,11 @@ async function generateInvoicesForPeriod(reportingPeriodId, userId, clientId) {
 
     const invoices = [];
 
-    for (const client of allClients) {
-      const billingType = client.billingType;
+    for (const customer of allCustomers) {
+      const billingType = customer.billingType;
       //   console.log("billingType: ", billingType);
-      const groupKey = billingType === "DIRECT" ? client.id : client.partnerId;
+      const groupKey =
+        billingType === "DIRECT" ? customer.id : customer.partnerId;
       //   console.log("groupKey: ", groupKey);
       const existingInvoice = invoices.find((inv) => inv.groupKey === groupKey);
       //   console.log("existingInvoice: ", existingInvoice);
@@ -60,7 +65,7 @@ async function generateInvoicesForPeriod(reportingPeriodId, userId, clientId) {
             productId: product.id,
             amount: product.amount,
             module: product.code.toLowerCase(),
-            relatedRecordId: client.id,
+            relatedRecordId: customer.id,
           });
         }
       }
@@ -78,8 +83,8 @@ async function generateInvoicesForPeriod(reportingPeriodId, userId, clientId) {
         invoices.push({
           groupKey,
           billingType,
-          clientId: client.id,
-          partnerId: billingType === "PARTNER" ? client.partnerId : null,
+          customerId: customer.id,
+          partnerId: billingType === "PARTNER" ? customer.partnerId : null,
           reportingPeriodId,
           issuedAt: new Date(),
           totalAmount,
@@ -125,8 +130,8 @@ async function generateInvoicesForPeriod(reportingPeriodId, userId, clientId) {
   }
 }
 
-async function getInvoiceById(id, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getInvoiceById(id, customerId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const invoice = await db.Invoice.findByPk(id, {
       include: [{ model: db.InvoiceLine }],
@@ -140,8 +145,8 @@ async function getInvoiceById(id, clientId) {
   }
 }
 
-async function updateInvoice(id, clientId, data) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function updateInvoice(id, customerId, data) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const [count, [updated]] = await db.Invoice.update(data, {
       where: { id },
@@ -156,8 +161,8 @@ async function updateInvoice(id, clientId, data) {
   }
 }
 
-async function deleteInvoice(id, clientId) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function deleteInvoice(id, customerId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const invoice = await db.Invoice.findByPk(id, { transaction: t });
     if (invoice) {
@@ -174,9 +179,9 @@ async function deleteInvoice(id, clientId) {
 async function generatePartnerInvoicesForPeriod(
   reportingPeriodId,
   userId,
-  clientId
+  customerId
 ) {
-  const t = await beginTransactionWithClientContext(clientId);
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const partners = await db.Partner.findAll({ transaction: t });
     const moduleProducts = await db.Product.findAll({
@@ -187,21 +192,21 @@ async function generatePartnerInvoicesForPeriod(
     const invoices = [];
 
     for (const partner of partners) {
-      const clients = await db.Client.findAll({
+      const customers = await db.Customer.findAll({
         where: { partnerId: partner.id },
         transaction: t,
       });
 
       let lineItems = [];
 
-      for (const client of clients) {
+      for (const customer of customers) {
         for (const product of moduleProducts) {
           lineItems.push({
-            description: `${product.name} – ${reportingPeriodId} (Client: ${client.name})`,
+            description: `${product.name} – ${reportingPeriodId} (Customer: ${customer.name})`,
             productId: product.id,
             amount: product.amount,
             module: product.code.toLowerCase(),
-            relatedRecordId: client.id,
+            relatedRecordId: customer.id,
           });
         }
       }
@@ -214,7 +219,7 @@ async function generatePartnerInvoicesForPeriod(
       if (lineItems.length > 0) {
         invoices.push({
           partnerId: partner.id,
-          clientId,
+          customerId,
           billingType: "PARTNER",
           reportingPeriodId,
           issuedAt: new Date(),
@@ -251,15 +256,15 @@ async function generatePartnerInvoicesForPeriod(
   }
 }
 
-async function getInvoicesByScope({ clientId, partnerId }) {
-  const t = await beginTransactionWithClientContext(clientId);
+async function getInvoicesByScope({ customerId, partnerId }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = {};
 
     if (partnerId) {
       where.partnerId = partnerId;
-    } else if (clientId) {
-      where.clientId = clientId;
+    } else if (customerId) {
+      where.customerId = customerId;
     }
 
     const invoices = await db.Invoice.findAll({

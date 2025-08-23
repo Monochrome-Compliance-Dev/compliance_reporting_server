@@ -2,7 +2,7 @@ const Joi = require("joi");
 const { report } = require("./xero.controller");
 
 const xeroOrganisationSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
   OrganisationID: Joi.string().optional().allow(null, ""),
   Name: Joi.string().optional().allow(null, ""),
@@ -23,12 +23,12 @@ const xeroTokenSchema = Joi.object({
   revoked: Joi.date().optional(),
   revokedByIp: Joi.string().optional().allow(null, ""),
   replacedByToken: Joi.string().optional().allow(null, ""),
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   tenantId: Joi.string().required(),
 });
 
 const xeroInvoiceSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
   tenantId: Joi.string().required(),
   InvoiceID: Joi.string().optional().allow(null, ""),
@@ -82,7 +82,7 @@ const xeroInvoiceSchema = Joi.object({
 });
 
 const xeroPaymentSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
   tenantId: Joi.string().required(),
   Reference: Joi.string().optional().allow(null, ""),
@@ -98,7 +98,7 @@ const xeroPaymentSchema = Joi.object({
 });
 
 const xeroContactSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
   ContactID: Joi.string().optional().allow(null, ""),
   Name: Joi.string().optional().allow(null, ""),
@@ -110,13 +110,13 @@ const xeroContactSchema = Joi.object({
 });
 
 const credentialsSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   username: Joi.string().required(),
   password: Joi.string().required(),
 });
 
 const XeroBankTxnSchema = Joi.object({
-  clientId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required(),
   reportId: Joi.string().required(),
   BankTransactionID: Joi.string().optional().allow(null, ""),
   Type: Joi.string().optional().allow(null, ""),

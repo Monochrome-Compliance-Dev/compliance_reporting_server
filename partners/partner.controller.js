@@ -28,7 +28,7 @@ async function createPartner(req, res, next) {
     const partner = await partnerService.createPartner(userId, req.body);
     await logCreateAudit({
       entity: "Partner",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       entityId: partner.id,
@@ -52,7 +52,7 @@ async function getPartners(req, res, next) {
     const partners = await partnerService.getPartners();
     await logReadAudit({
       entity: "Partner",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       result: partners,
@@ -82,7 +82,7 @@ async function updatePartner(req, res, next) {
     const afterData = after ? after.get({ plain: true }) : null;
     await logUpdateAudit({
       entity: "Partner",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       reqBody: req.body,
@@ -114,7 +114,7 @@ async function deletePartner(req, res, next) {
     await partnerService.deletePartner(id);
     await logDeleteAudit({
       entity: "Partner",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       action: "Delete",
@@ -149,7 +149,7 @@ async function getPartnerById(req, res, next) {
     const partnerData = partner.get({ plain: true });
     await logReadAudit({
       entity: "Partner",
-      clientId: null,
+      customerId: null,
       userId,
       req,
       result: partnerData,

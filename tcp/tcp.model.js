@@ -75,7 +75,7 @@ function model(sequelize) {
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     // Foreign keys
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
     ptrsId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
@@ -85,8 +85,11 @@ function model(sequelize) {
   });
 
   Tcp.associate = (models) => {
-    Tcp.belongsTo(models.Client, { foreignKey: "clientId" });
-    models.Client.hasMany(Tcp, { foreignKey: "clientId", onDelete: "CASCADE" });
+    Tcp.belongsTo(models.Customer, { foreignKey: "customerId" });
+    models.Customer.hasMany(Tcp, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
 
     Tcp.belongsTo(models.Ptrs, {
       foreignKey: "ptrsId",

@@ -39,8 +39,8 @@ function model(sequelize) {
         return !!(this.verified || this.passwordReset);
       },
     },
-    // Foreign key for Client
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
+    // Foreign key for Customer
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
   };
 
   const options = {
@@ -62,9 +62,9 @@ function model(sequelize) {
       onDelete: "CASCADE",
     });
 
-    // user - client
-    User.belongsTo(models.Client, { foreignKey: "clientId" });
-    models.Client.hasMany(User, { foreignKey: "clientId" });
+    // user - customer
+    User.belongsTo(models.Customer, { foreignKey: "customerId" });
+    models.Customer.hasMany(User, { foreignKey: "customerId" });
   };
 
   return User;

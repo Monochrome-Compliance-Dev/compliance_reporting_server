@@ -228,12 +228,12 @@ async function paginateXeroApi(fetchPageFn, processPageFn, options = {}) {
  * Wrap an API call so that a 401/403 triggers a token refresh and a single retry.
  *
  * Usage patterns supported:
- * 1) callXeroApiWithAutoRefresh(() => apiCall(argsBuiltWithFreshToken), clientId)
- * 2) callXeroApiWithAutoRefresh(apiCallFn, clientId, ...args) // legacy: may reuse stale token
+ * 1) callXeroApiWithAutoRefresh(() => apiCall(argsBuiltWithFreshToken), customerId)
+ * 2) callXeroApiWithAutoRefresh(apiCallFn, customerId, ...args) // legacy: may reuse stale token
  */
 async function callXeroApiWithAutoRefresh(
   apiCallOrFactory,
-  clientId,
+  customerId,
   refreshFn,
   ...args
 ) {

@@ -15,42 +15,42 @@ module.exports = router;
 
 function getDashboardMetrics(req, res, next) {
   dashboardService
-    .getDashboardMetrics(req.params.id, req.auth.clientId)
+    .getDashboardMetrics(req.params.id, req.auth.customerId)
     .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getDashboardPreviousMetrics(req, res, next) {
   dashboardService
-    .getPreviousDashboardMetrics(req.params.id, req.auth.clientId)
+    .getPreviousDashboardMetrics(req.params.id, req.auth.customerId)
     .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getDashboardFlags(req, res, next) {
   dashboardService
-    .getDashboardFlags(req.params.id, req.auth.clientId)
+    .getDashboardFlags(req.params.id, req.auth.customerId)
     .then((flags) => (flags ? res.json(flags) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getDashboardSnapshot(req, res, next) {
   dashboardService
-    .getDashboardSnapshot(req.params.id, req.auth.clientId)
+    .getDashboardSnapshot(req.params.id, req.auth.customerId)
     .then((snapshot) => (snapshot ? res.json(snapshot) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getDashboardSignals(req, res, next) {
   dashboardService
-    .getDashboardSignals(req.params.id, req.auth.clientId)
+    .getDashboardSignals(req.params.id, req.auth.customerId)
     .then((signals) => (signals ? res.json(signals) : res.sendStatus(404)))
     .catch(next);
 }
 
 function getDashboardExtendedMetrics(req, res, next) {
   dashboardService
-    .getDashboardExtendedMetrics(req.params.id, req.auth.clientId)
+    .getDashboardExtendedMetrics(req.params.id, req.auth.customerId)
     .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
     .catch(next);
 }

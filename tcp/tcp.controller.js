@@ -44,14 +44,14 @@ module.exports = router;
 
 // Fetch all TCPs
 async function getAll(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const data = await tcpService.getAll(clientId);
+    const data = await tcpService.getAll(customerId);
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -64,7 +64,7 @@ async function getAll(req, res, next) {
     logger.logEvent("error", "Error fetching all TCPs", {
       action: "GetAllTcp",
       userId,
-      clientId,
+      customerId,
       ip,
       device,
       error: error.message,
@@ -76,15 +76,15 @@ async function getAll(req, res, next) {
 
 // Fetch all TCPs by ptrsId
 async function getAllByPtrsId(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.ptrsId;
   try {
-    const data = await tcpService.getByPtrsId({ ptrsId, clientId });
+    const data = await tcpService.getByPtrsId({ ptrsId, customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -100,7 +100,7 @@ async function getAllByPtrsId(req, res, next) {
       action: "GetTcpByPtrsId",
       ptrsId,
       userId,
-      clientId,
+      customerId,
       ip,
       device,
       error: error.message,
@@ -112,18 +112,18 @@ async function getAllByPtrsId(req, res, next) {
 
 // Fetch a single TCP by id
 async function getById(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id;
   try {
-    const data = await tcpService.getById({ id, clientId });
+    const data = await tcpService.getById({ id, customerId });
     if (!data) {
       return res.status(404).json({ status: "error", message: "Not found" });
     }
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -136,7 +136,7 @@ async function getById(req, res, next) {
     logger.logEvent("error", "Error fetching TCP by ID", {
       action: "GetTcpById",
       id,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -149,18 +149,18 @@ async function getById(req, res, next) {
 
 // Fetch TCP by ptrsId (legacy)
 async function getTcpByPtrsId(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id; // legacy param name for ptrsId
   try {
-    const data = await tcpService.getByPtrsId({ ptrsId: id, clientId });
+    const data = await tcpService.getByPtrsId({ ptrsId: id, customerId });
     if (!data || (Array.isArray(data) && data.length === 0)) {
       return res.status(404).json({ status: "error", message: "Not found" });
     }
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -179,7 +179,7 @@ async function getTcpByPtrsId(req, res, next) {
       action: "GetTcpByPtrsIdLegacy",
       ptrsId: id,
       userId,
-      clientId,
+      customerId,
       ip,
       device,
       error: error.message,
@@ -191,16 +191,16 @@ async function getTcpByPtrsId(req, res, next) {
 
 // PATCH a single TCP record
 async function patchRecord(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id;
   try {
-    const params = { ...req.body, id, clientId, userId };
+    const params = { ...req.body, id, customerId, userId };
     const data = await tcpService.patchRecord(params, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -214,7 +214,7 @@ async function patchRecord(req, res, next) {
     logger.logEvent("error", "Error patching TCP record", {
       action: "PatchRecordTCP",
       id,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -227,7 +227,7 @@ async function patchRecord(req, res, next) {
 
 // Bulk PATCH update
 async function bulkPatchUpdate(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -238,11 +238,11 @@ async function bulkPatchUpdate(req, res, next) {
         .json({ status: "error", message: "Validation error" });
     }
     const data = await tcpService.bulkPatchUpdate(
-      { records: req.body, clientId, userId },
+      { records: req.body, customerId, userId },
       {}
     );
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -254,7 +254,7 @@ async function bulkPatchUpdate(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error in bulk patch update", {
       action: "BulkPatchUpdateTCP",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -267,7 +267,7 @@ async function bulkPatchUpdate(req, res, next) {
 
 // Bulk CREATE TCPs
 async function bulkCreate(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -286,10 +286,10 @@ async function bulkCreate(req, res, next) {
       }
     }
     const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
-    const params = { records: req.body, clientId, userId, ptrsId };
+    const params = { records: req.body, customerId, userId, ptrsId };
     const data = await tcpService.bulkCreate(params, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -301,7 +301,7 @@ async function bulkCreate(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error in bulk create TCP", {
       action: "BulkCreateTCP",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -314,7 +314,7 @@ async function bulkCreate(req, res, next) {
 
 // Bulk UPDATE TCPs
 async function bulkUpdate(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -333,10 +333,10 @@ async function bulkUpdate(req, res, next) {
       }
     }
     const ptrsId = req.body[0]?.ptrsId || req.params.ptrsId;
-    const params = { records: req.body, clientId, userId, ptrsId };
+    const params = { records: req.body, customerId, userId, ptrsId };
     const data = await tcpService.bulkUpdate(params, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -348,7 +348,7 @@ async function bulkUpdate(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error in bulk update TCP", {
       action: "BulkUpdateTCP",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -361,15 +361,15 @@ async function bulkUpdate(req, res, next) {
 
 // PATCH partial update (custom)
 async function partialUpdate(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const params = { ...req.body, clientId, userId };
+    const params = { ...req.body, customerId, userId };
     const data = await tcpService.partialUpdate(params, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -381,7 +381,7 @@ async function partialUpdate(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error in partial update TCP", {
       action: "PartialUpdateTCP",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -394,7 +394,7 @@ async function partialUpdate(req, res, next) {
 
 // PUT: SBI update (custom)
 async function sbiUpdate(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -410,10 +410,10 @@ async function sbiUpdate(req, res, next) {
       }
     }
     const ptrsId = req.params.id;
-    const params = { records, clientId, userId, ptrsId };
+    const params = { records, customerId, userId, ptrsId };
     const data = await tcpService.sbiUpdate(params, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -426,7 +426,7 @@ async function sbiUpdate(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error in SBI upload/update", {
       action: "SBIUpload",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -439,20 +439,20 @@ async function sbiUpdate(req, res, next) {
 
 // DELETE a TCP
 async function _delete(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id;
   try {
-    if (!clientId) {
+    if (!customerId) {
       return res
         .status(400)
         .json({ status: "error", message: "Validation error" });
     }
-    await tcpService.delete({ id, clientId, userId }, {});
+    await tcpService.delete({ id, customerId, userId }, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -465,7 +465,7 @@ async function _delete(req, res, next) {
     logger.logEvent("error", "Error deleting TCP", {
       action: "DeleteTCP",
       id,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -478,14 +478,14 @@ async function _delete(req, res, next) {
 
 // Check for missing isSb flag
 async function checkMissingIsSb(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const data = await tcpService.hasMissingIsSbFlag({ clientId });
+    const data = await tcpService.hasMissingIsSbFlag({ customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -498,7 +498,7 @@ async function checkMissingIsSb(req, res, next) {
     logger.logEvent("error", "Error checking missing isSb flag", {
       action: "CheckMissingIsSb",
       userId,
-      clientId,
+      customerId,
       ip,
       device,
       error: error.message,
@@ -510,14 +510,14 @@ async function checkMissingIsSb(req, res, next) {
 
 // Submit final PTRS
 async function submitFinalPtrs(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const data = await tcpService.finalisePtrs({ clientId, userId }, {});
+    const data = await tcpService.finalisePtrs({ customerId, userId }, {});
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -528,7 +528,7 @@ async function submitFinalPtrs(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error submitting final PTRS", {
       action: "SubmitFinalPtrs",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -541,14 +541,14 @@ async function submitFinalPtrs(req, res, next) {
 
 // Download summary PTRS
 async function downloadSummaryPtrs(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const csvData = await tcpService.generateSummaryCsv({ clientId, userId });
+    const csvData = await tcpService.generateSummaryCsv({ customerId, userId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -565,7 +565,7 @@ async function downloadSummaryPtrs(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error downloading summary PTRS", {
       action: "DownloadSummaryPtrs",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -666,7 +666,7 @@ async function uploadFile(req, res, next) {
         const now = new Date();
         row.createdBy = req.auth.id;
         row.updatedBy = req.auth.id;
-        row.clientId = req.auth.clientId;
+        row.customerId = req.auth.customerId;
         row.ptrsId = req.body.ptrsId;
         const reasons = [];
 
@@ -712,7 +712,7 @@ async function uploadFile(req, res, next) {
             {
               transformedRecords: results,
               ptrsId: req.body.ptrsId,
-              clientId: req.auth.clientId,
+              customerId: req.auth.customerId,
               createdBy: req.auth.id,
               source: "csv_upload",
             },
@@ -725,7 +725,7 @@ async function uploadFile(req, res, next) {
                 {
                   errorRecords: invalidRows,
                   ptrsId: req.body.ptrsId,
-                  clientId: req.auth.clientId,
+                  customerId: req.auth.customerId,
                   createdBy: req.auth.id,
                   source: "csv_upload",
                 },
@@ -735,7 +735,7 @@ async function uploadFile(req, res, next) {
               logger.logEvent("error", "Failed to save TCP error rows", {
                 action: "uploadFile-saveErrors",
                 ptrsId: req.body.ptrsId,
-                clientId: req.auth.clientId,
+                customerId: req.auth.customerId,
                 count: invalidRows.length,
                 error: err.message,
                 stack: err.stack,
@@ -747,7 +747,7 @@ async function uploadFile(req, res, next) {
           try {
             await ptrsService.saveUploadMetadata(
               {
-                clientId: req.auth.clientId,
+                customerId: req.auth.customerId,
                 userId: req.auth.id,
                 ptrsId: req.body.ptrsId,
                 filename: req.file.originalname,
@@ -768,14 +768,14 @@ async function uploadFile(req, res, next) {
 
           logger.logEvent("info", "File uploaded and processed successfully", {
             action: "uploadFile",
-            clientId: req.auth.clientId,
+            customerId: req.auth.customerId,
             userId: req.auth.id,
             ptrsId: req.body.ptrsId,
             validRows: results.length,
             invalidRows: invalidRows.length,
           });
           await auditService.logEvent({
-            clientId: req.auth.clientId,
+            customerId: req.auth.customerId,
             userId: req.auth.id,
             ip: req.ip,
             device: req.headers["user-agent"],
@@ -829,14 +829,14 @@ async function uploadFile(req, res, next) {
 // Get errors by PTRS ID
 async function getErrorsByPtrsId(req, res, next) {
   const ptrsId = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const data = await tcpService.getErrorsByPtrsId({ ptrsId, clientId });
+    const data = await tcpService.getErrorsByPtrsId({ ptrsId, customerId });
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -851,7 +851,7 @@ async function getErrorsByPtrsId(req, res, next) {
     logger.logEvent("error", "Error fetching TCP errors by ptrsId", {
       action: "GetErrorsByPtrsId",
       ptrsId,
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -864,7 +864,7 @@ async function getErrorsByPtrsId(req, res, next) {
 
 // Promote error rows to Tcp and remove from TcpError
 async function resolveErrors(req, res, next) {
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -873,13 +873,13 @@ async function resolveErrors(req, res, next) {
 
     // Perform the promotion transaction
     const count = await tcpService.resolveErrors(
-      { clientId, userId, records: body },
+      { customerId, userId, records: body },
       {}
     );
 
     // Log audit event with the exact shape expected by audit.service
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -892,7 +892,7 @@ async function resolveErrors(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error resolving TCP errors", {
       action: "ResolveTcpErrors",
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -906,14 +906,14 @@ async function resolveErrors(req, res, next) {
 // Recalculate TCP metrics
 async function recalculateMetrics(req, res, next) {
   const ptrsId = req.params.id;
-  const clientId = req.auth?.clientId;
+  const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    await processTcpMetrics(ptrsId, clientId);
+    await processTcpMetrics(ptrsId, customerId);
     await auditService.logEvent({
-      clientId,
+      customerId,
       userId,
       ip,
       device,
@@ -929,7 +929,7 @@ async function recalculateMetrics(req, res, next) {
     logger.logEvent("error", "Error recalculating TCP metrics", {
       action: "RecalculateTcpMetrics",
       ptrsId,
-      clientId,
+      customerId,
       userId,
       ip,
       device,

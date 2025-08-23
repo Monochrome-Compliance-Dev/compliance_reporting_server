@@ -13,7 +13,7 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING(10),
         primaryKey: true,
       },
-      clientId: {
+      customerId: {
         type: DataTypes.STRING(10),
         allowNull: true, // null means global template
       },

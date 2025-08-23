@@ -65,8 +65,8 @@ const io = new Server(server, {
 });
 
 io.on("connection", (socket) => {
-  console.log("✅ [SOCKET] Client connected:", socket.id);
-  logger.logEvent("info", "Socket.io client connected", {
+  console.log("✅ [SOCKET] Customer connected:", socket.id);
+  logger.logEvent("info", "Socket.io customer connected", {
     action: "SocketConnect",
     socketId: socket.id,
   });
@@ -79,8 +79,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    console.log("⚠️ [SOCKET] Client disconnected:", socket.id);
-    logger.logEvent("info", "Socket.io client disconnected", {
+    console.log("⚠️ [SOCKET] Customer disconnected:", socket.id);
+    logger.logEvent("info", "Socket.io customer disconnected", {
       action: "SocketDisconnect",
       socketId: socket.id,
     });
@@ -110,8 +110,8 @@ const helmet = require("helmet");
 const setCspHeaders = require("./cspHeaders");
 const rateLimit = require("express-rate-limit");
 
-// Middleware to set clientId for RLS
-// const setClientIdRLS = require("./helpers/setClientIdRLS");
+// Middleware to set customerId for RLS
+// const setCustomerIdRLS = require("./helpers/setCustomerIdRLS");
 // const transactionCleanup = require("./middleware/transactionCleanup");
 
 // Apply CORS middleware globally with custom origin logic
@@ -172,7 +172,7 @@ app.use("/api/users/authenticate", loginLimiter);
 app.use("/api/users/forgot-password", loginLimiter);
 app.use("/api/users/reset-password", loginLimiter);
 app.use("/api/booking", loginLimiter);
-app.use("/api/clients/register", loginLimiter);
+app.use("/api/customers/register", loginLimiter);
 
 const emailLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
@@ -223,13 +223,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Set RLS clientId for every request
-// app.use(setClientIdRLS); // Converted to a helper function at the service level
+// Set RLS customerId for every request
+// app.use(setCustomerIdRLS); // Converted to a helper function at the service level
 // app.use(transactionCleanup);
 
 // Add the /api prefix to all routes
 app.use("/api/users", require("./users/users.controller"));
-app.use("/api/clients", require("./clients/clients.controller"));
+app.use("/api/customers", require("./customers/customers.controller"));
 app.use("/api/ptrs", require("./ptrs/ptrs.controller"));
 app.use("/api/tcp", require("./tcp/tcp.controller"));
 app.use("/api/entities", require("./entities/entity.controller"));
@@ -268,29 +268,29 @@ app.use("/api/products", require("./products/product.controller"));
 //   }
 // });
 
-// --- BEGIN: Check Postgres custom GUC app.current_client_id on startup ---
+// --- BEGIN: Check Postgres custom GUC app.current_customer_id on startup ---
 const { sequelize } = require("./db/database");
 // console.log("sequelize:", sequelize);
 
-async function verifyAppClientIdGUC() {
+async function verifyAppCustomerIdGUC() {
   try {
-    const [[{ current_client_id }]] = await sequelize.query(
-      "SELECT current_setting('app.current_client_id', true) AS current_client_id;"
+    const [[{ current_customer_id }]] = await sequelize.query(
+      "SELECT current_setting('app.current_customer_id', true) AS current_customer_id;"
     );
-    // logger.logEvent("info", "Verified Postgres app.current_client_id GUC", {
-    //   current_client_id,
+    // logger.logEvent("info", "Verified Postgres app.current_customer_id GUC", {
+    //   current_customer_id,
     // });
   } catch (error) {
     logger.logEvent(
       "error",
-      "Postgres custom GUC app.current_client_id not found or not accessible",
+      "Postgres custom GUC app.current_customer_id not found or not accessible",
       { error: error.message }
     );
   }
 }
 // Run this check on server startup
-verifyAppClientIdGUC();
-// --- END: Check Postgres custom GUC app.current_client_id on startup ---
+verifyAppCustomerIdGUC();
+// --- END: Check Postgres custom GUC app.current_customer_id on startup ---
 
 // Commented out noisy DB and RLS info logs
 // logger.logEvent("info", "Database connection established", { action: "DatabaseInit" });

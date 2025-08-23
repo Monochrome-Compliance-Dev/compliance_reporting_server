@@ -15,7 +15,7 @@ module.exports = (sequelize) => {
         defaultValue: () => nanoid(10),
         // Unique ID for the audit event itself
       },
-      clientId: {
+      customerId: {
         type: DataTypes.STRING(10),
         allowNull: false,
         // Tenant or customer that owns the data
