@@ -1,7 +1,7 @@
 const db = require("../db/database");
 const {
-  beginTransactionWithClientContext,
-} = require("../helpers/setClientIdRLS");
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   createProduct,
