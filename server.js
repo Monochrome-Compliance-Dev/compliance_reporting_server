@@ -245,7 +245,22 @@ app.use("/api/files", require("./files/file.controller"));
 app.use("/api/ms", require("./ms/ms.controller"));
 app.use("/api/partners", require("./partners/partner.controller"));
 app.use("/api/invoices", require("./invoices/invoice.controller"));
+
 app.use("/api/products", require("./products/product.controller"));
+
+// --- Pulse (Monochrome Compliance) routes ---
+app.use("/api/pulse/clients", require("./clients/client.controller"));
+app.use(
+  "/api/pulse/engagements",
+  require("./engagements/engagement.controller")
+);
+app.use("/api/pulse/resources", require("./resources/resource.controller"));
+app.use(
+  "/api/pulse/assignments",
+  require("./assignments/assignment.controller")
+);
+app.use("/api/pulse/budget-items", require("./budget_items/budget.controller"));
+app.use("/api/pulse/timesheets", require("./timesheets/timesheet.controller"));
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

@@ -78,6 +78,12 @@ async function initialise() {
     "../partners",
     "../invoices",
     "../products",
+    "../clients",
+    "../engagements",
+    "../resources",
+    "../assignments",
+    "../budget_items",
+    "../timesheets",
   ];
 
   modelDirs.forEach((dir) => {
@@ -86,7 +92,12 @@ async function initialise() {
     files.forEach((file) => {
       if (file.endsWith(".model.js")) {
         const model = require(path.join(modelPath, file))(sequelize);
-        const name = model.name.charAt(0).toUpperCase() + model.name.slice(1);
+        const toPascal = (s) =>
+          s
+            .split("_")
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+            .join("");
+        const name = toPascal(model.name);
         db[name] = model;
       }
     });
@@ -305,6 +316,93 @@ async function initialise() {
   if (db.InvoiceLine && db.Product) {
     db.Product.hasMany(db.InvoiceLine, { foreignKey: "productId" });
     db.InvoiceLine.belongsTo(db.Product, { foreignKey: "productId" });
+  }
+
+  // --- Pulse (Monochrome Compliance) relationships ---
+  // Engagement ↔ Client
+  if (db.Engagement && db.Client) {
+    db.Client.hasMany(db.Engagement, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+    db.Engagement.belongsTo(db.Client, {
+      foreignKey: "clientId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // Engagement ↔ BudgetItem
+  if (db.Engagement && db.BudgetItem) {
+    db.Engagement.hasMany(db.BudgetItem, {
+      foreignKey: "engagementId",
+      onDelete: "CASCADE",
+    });
+    db.BudgetItem.belongsTo(db.Engagement, {
+      foreignKey: "engagementId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // Engagement ↔ Assignment ↔ Resource
+  if (db.Engagement && db.Assignment) {
+    db.Engagement.hasMany(db.Assignment, {
+      foreignKey: "engagementId",
+      onDelete: "CASCADE",
+    });
+    db.Assignment.belongsTo(db.Engagement, {
+      foreignKey: "engagementId",
+      onDelete: "CASCADE",
+    });
+  }
+  if (db.Resource && db.Assignment) {
+    db.Resource.hasMany(db.Assignment, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+    db.Assignment.belongsTo(db.Resource, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // Resource ↔ Timesheet
+  if (db.Resource && db.Timesheet) {
+    db.Resource.hasMany(db.Timesheet, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+    db.Timesheet.belongsTo(db.Resource, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // Timesheet ↔ TimesheetRow
+  if (db.Timesheet && db.TimesheetRow) {
+    db.Timesheet.hasMany(db.TimesheetRow, {
+      foreignKey: "timesheetId",
+      onDelete: "CASCADE",
+    });
+    db.TimesheetRow.belongsTo(db.Timesheet, {
+      foreignKey: "timesheetId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  // Optional links from TimesheetRow to Engagement and BudgetItem for reporting
+  if (db.TimesheetRow && db.Engagement) {
+    db.Engagement.hasMany(db.TimesheetRow, {
+      foreignKey: "engagementId",
+      onDelete: "SET NULL",
+    });
+    db.TimesheetRow.belongsTo(db.Engagement, { foreignKey: "engagementId" });
+  }
+  if (db.TimesheetRow && db.BudgetItem) {
+    db.BudgetItem.hasMany(db.TimesheetRow, {
+      foreignKey: "budgetItemId",
+      onDelete: "SET NULL",
+    });
+    db.TimesheetRow.belongsTo(db.BudgetItem, { foreignKey: "budgetItemId" });
   }
 
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
