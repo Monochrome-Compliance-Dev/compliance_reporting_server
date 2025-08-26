@@ -26,6 +26,13 @@ function model(sequelize) {
     rateOverride: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     startDate: { type: DataTypes.DATEONLY, allowNull: true },
     endDate: { type: DataTypes.DATEONLY, allowNull: true },
+    dueDate: { type: DataTypes.DATEONLY, allowNull: true },
+    completedAt: { type: DataTypes.DATE, allowNull: true },
+    allocatedHoursPerWeek: {
+      type: DataTypes.DECIMAL(6, 2),
+      allowNull: false,
+      defaultValue: 0,
+    },
     notes: { type: DataTypes.TEXT, allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
@@ -34,6 +41,14 @@ function model(sequelize) {
   const Assignment = sequelize.define("assignment", attributes, {
     tableName: "tbl_assignment",
     timestamps: true,
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["engagementId"] },
+      { fields: ["resourceId"] },
+      { fields: ["startDate", "endDate"] },
+      { fields: ["dueDate"] },
+      { fields: ["completedAt"] },
+    ],
   });
 
   return Assignment;

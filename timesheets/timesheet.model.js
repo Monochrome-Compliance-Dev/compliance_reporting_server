@@ -33,6 +33,12 @@ function model(sequelize) {
   const Timesheet = sequelize.define("timesheet", attributes, {
     tableName: "tbl_timesheet",
     timestamps: true,
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["resourceId"] },
+      { fields: ["weekKey"] },
+      { fields: ["status"] },
+    ],
   });
 
   return Timesheet;

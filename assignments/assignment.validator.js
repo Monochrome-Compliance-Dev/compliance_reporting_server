@@ -8,6 +8,9 @@ const base = Joi.object({
   rateOverride: Joi.number().min(0).optional(),
   startDate: Joi.date().optional(),
   endDate: Joi.date().optional(),
+  dueDate: Joi.date().optional(),
+  completedAt: Joi.date().optional(),
+  allocatedHoursPerWeek: Joi.number().min(0).optional(),
   notes: Joi.string().max(2000).optional().sanitize(),
 
   createdBy: Joi.string().length(10),
@@ -16,7 +19,7 @@ const base = Joi.object({
   id: Joi.string().max(10),
   createdAt: Joi.date().optional(),
   updatedAt: Joi.date().optional(),
-  customerId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required().sanitize(),
 });
 
 // POST: require createdBy; forbid updatedBy and server-managed fields

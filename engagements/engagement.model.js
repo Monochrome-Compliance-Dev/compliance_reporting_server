@@ -15,7 +15,6 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
-    clientId: { type: DataTypes.STRING(10), allowNull: false },
     name: { type: DataTypes.STRING, allowNull: false },
     startDate: { type: DataTypes.DATEONLY, allowNull: true },
     endDate: { type: DataTypes.DATEONLY, allowNull: true },
@@ -23,7 +22,11 @@ function model(sequelize) {
       type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: "draft",
+      validate: {
+        isIn: [["draft", "budgeted", "ready", "active", "cancelled"]],
+      },
     },
+    statusChangedAt: { type: DataTypes.DATE, allowNull: true },
     budgetHours: {
       type: DataTypes.DECIMAL(8, 2),
       allowNull: false,
@@ -41,6 +44,11 @@ function model(sequelize) {
   const Engagement = sequelize.define("engagement", attributes, {
     tableName: "tbl_engagement",
     timestamps: true,
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["status"] },
+      { fields: ["startDate", "endDate"] },
+    ],
   });
 
   return Engagement;

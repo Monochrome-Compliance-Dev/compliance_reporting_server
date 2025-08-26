@@ -1,7 +1,6 @@
 const Joi = require("../middleware/joiSanitizer");
 
 const base = Joi.object({
-  clientId: Joi.string().length(10).required().sanitize(),
   name: Joi.string().max(255).required().sanitize(),
   startDate: Joi.date().optional(),
   endDate: Joi.date().optional(),
@@ -9,6 +8,7 @@ const base = Joi.object({
     .valid("draft", "budgeted", "ready", "active", "cancelled")
     .sanitize()
     .required(),
+  statusChangedAt: Joi.date().optional(),
   budgetHours: Joi.number().min(0).optional(),
   budgetAmount: Joi.number().min(0).optional(),
 
@@ -18,7 +18,7 @@ const base = Joi.object({
   id: Joi.string().max(10),
   createdAt: Joi.date().optional(),
   updatedAt: Joi.date().optional(),
-  customerId: Joi.string().length(10).required(),
+  customerId: Joi.string().length(10).required().sanitize(),
 });
 
 // POST: require createdBy; forbid updatedBy & server-managed fields

@@ -15,6 +15,8 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
+    phone: { type: DataTypes.STRING, allowNull: true },
+    email: { type: DataTypes.STRING, allowNull: false },
     name: {
       type: DataTypes.STRING,
       allowNull: false,

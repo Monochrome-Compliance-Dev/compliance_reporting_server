@@ -43,6 +43,7 @@ const baseRow = Joi.object({
   budgetItemId: Joi.string().length(10).optional().sanitize(),
   hours: Joi.number().min(0).required(),
   billable: Joi.boolean().optional(),
+  rate: Joi.number().min(0).optional(),
   notes: Joi.string().max(2000).optional().sanitize(),
 
   createdBy: Joi.string().length(10),

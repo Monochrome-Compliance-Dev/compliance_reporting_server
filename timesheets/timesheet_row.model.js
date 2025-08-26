@@ -21,6 +21,7 @@ function model(sequelize) {
     budgetItemId: { type: DataTypes.STRING(10), allowNull: true },
     hours: { type: DataTypes.DECIMAL(5, 2), allowNull: false, defaultValue: 0 },
     billable: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    rate: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     notes: { type: DataTypes.TEXT, allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
@@ -29,6 +30,13 @@ function model(sequelize) {
   const TimesheetRow = sequelize.define("timesheet_row", attributes, {
     tableName: "tbl_timesheet_row",
     timestamps: true,
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["timesheetId"] },
+      { fields: ["engagementId"] },
+      { fields: ["date"] },
+      { fields: ["billable"] },
+    ],
   });
 
   return TimesheetRow;

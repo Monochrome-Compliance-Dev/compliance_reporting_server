@@ -3,6 +3,8 @@ const Joi = require("../middleware/joiSanitizer");
 const base = Joi.object({
   name: Joi.string().max(255).required().sanitize(),
   abn: Joi.string().max(20).optional().sanitize(),
+  email: Joi.string().max(255).optional().sanitize(),
+  phone: Joi.string().max(10).optional().sanitize(),
 
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),

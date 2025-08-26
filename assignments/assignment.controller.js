@@ -114,6 +114,7 @@ async function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
+  console.log("Creating assignment with body:", req.body);
   const customerId = req.auth?.customerId;
   const userId = req.auth?.id;
   const ip = req.ip;

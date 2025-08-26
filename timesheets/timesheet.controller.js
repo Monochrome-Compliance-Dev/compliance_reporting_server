@@ -160,6 +160,7 @@ async function update(req, res, next) {
       id,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
@@ -199,6 +200,7 @@ async function patch(req, res, next) {
       id,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
@@ -346,6 +348,7 @@ async function updateRow(req, res, next) {
       id: rowId,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
@@ -383,6 +386,7 @@ async function patchRow(req, res, next) {
       id: rowId,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
