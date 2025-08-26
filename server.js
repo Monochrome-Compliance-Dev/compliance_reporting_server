@@ -261,6 +261,7 @@ app.use(
 );
 app.use("/api/pulse/budget-items", require("./budget_items/budget.controller"));
 app.use("/api/pulse/timesheets", require("./timesheets/timesheet.controller"));
+app.use("/api/pulse", require("./pulse-dashboard/pulse_dashboard.controller"));
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {
