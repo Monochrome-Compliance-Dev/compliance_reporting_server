@@ -36,25 +36,35 @@ async function getAll(req, res, next) {
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const assignments = await assignmentService.getAll({
-      customerId,
-      order: [["createdAt", "DESC"]],
-    });
+    const { engagementId } = req.query;
+
+    const assignments = engagementId
+      ? await assignmentService.listByEngagement({
+          engagementId,
+          customerId,
+          order: [["createdAt", "DESC"]],
+        })
+      : await assignmentService.getAll({
+          customerId,
+          order: [["createdAt", "DESC"]],
+        });
+
     await auditService.logEvent({
       customerId,
       userId,
       ip,
       device,
-      action: "GetAllAssignments",
+      action: engagementId ? "GetAssignmentsByEngagement" : "GetAllAssignments",
       entity: "Assignment",
       details: {
+        engagementId: engagementId || undefined,
         count: Array.isArray(assignments) ? assignments.length : undefined,
       },
     });
     res.json({ status: "success", data: assignments });
   } catch (error) {
-    logger.logEvent("error", "Error fetching all assignments", {
-      action: "GetAllAssignments",
+    logger.logEvent("error", "Error fetching assignments", {
+      action: "GetAssignments",
       userId: req.auth?.id,
       customerId: req.auth?.customerId,
       error: error.message,
@@ -147,6 +157,7 @@ async function update(req, res, next) {
       id,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
@@ -186,6 +197,7 @@ async function patch(req, res, next) {
       id,
       data: req.body,
       customerId,
+      userId,
     });
     await auditService.logEvent({
       customerId,
