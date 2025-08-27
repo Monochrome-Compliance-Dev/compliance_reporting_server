@@ -62,40 +62,45 @@ const getConfidenceAndComment = (searchTerm, topMatches, selected) => {
   };
 };
 
-const extractBestActiveMatch = (rawResponse, searchTerm) => {
+const extractAllCandidates = (rawResponse, searchTerm) => {
   try {
     const data = JSON.parse(rawResponse.replace(/^callback\((.*)\);?$/, "$1"));
-    if (!data.Names || !Array.isArray(data.Names)) return null;
+    if (!data.Names || !Array.isArray(data.Names)) return [];
 
-    const active = data.Names.filter(
-      (entry) => entry.AbnStatus === "0000000001"
+    const all = Array.isArray(data.Names) ? data.Names : [];
+    if (all.length === 0) return [];
+
+    const highestScore = Math.max(...all.map((a) => a.Score));
+    const topMatches = all.filter((a) => a.Score === highestScore);
+
+    const candidates = all.map((cand) => {
+      const { confidence, comment } = getConfidenceAndComment(
+        searchTerm,
+        topMatches,
+        cand
+      );
+      return {
+        "Search Term": searchTerm,
+        Name: cand.Name,
+        "Suggested ABN": cand.Abn,
+        Postcode: cand.Postcode,
+        State: cand.State,
+        "ABN Status": getStatusLabel(cand.AbnStatus),
+        Score: cand.Score,
+        "Is Top Score": cand.Score === highestScore,
+        "Confidence Level": confidence,
+        Comments: comment,
+      };
+    });
+
+    // Sort by score (desc) then name
+    candidates.sort(
+      (a, b) => b.Score - a.Score || a.Name.localeCompare(b.Name)
     );
-    if (active.length === 0) return null;
-
-    const highestScore = Math.max(...active.map((a) => a.Score));
-    const topMatches = active.filter((a) => a.Score === highestScore);
-    const preferred =
-      topMatches.find((a) => isCleanName(a.Name)) || topMatches[0];
-
-    const { confidence, comment } = getConfidenceAndComment(
-      searchTerm,
-      topMatches,
-      preferred
-    );
-
-    return {
-      "Search Term": searchTerm,
-      Name: preferred.Name,
-      "Suggested ABN": preferred.Abn,
-      Postcode: preferred.Postcode,
-      State: preferred.State,
-      "ABN Status": getStatusLabel(preferred.AbnStatus),
-      "Confidence Level": confidence,
-      Comments: comment,
-    };
+    return candidates;
   } catch (err) {
     console.error(`Error for ${searchTerm}:`, err.message);
-    return null;
+    return [];
   }
 };
 
@@ -104,8 +109,8 @@ async function lookupAbnByName(name) {
   const res = await fetch(url);
   const text = await res.text();
 
-  const match = extractBestActiveMatch(text, name);
-  return match ? [match] : [];
+  const matches = extractAllCandidates(text, name);
+  return matches;
 }
 
 module.exports = { lookupAbnByName };

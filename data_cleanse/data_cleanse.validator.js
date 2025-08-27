@@ -15,13 +15,7 @@ const dcSchema = Joi.alternatives().try(
       .min(1)
       .max(100)
       .required()
-      .custom((value, helpers) => {
-        const sanitizedValue = sanitize(value);
-        if (sanitizedValue !== value) {
-          return helpers.error("any.invalid");
-        }
-        return sanitizedValue;
-      }),
+      .custom((value) => sanitize(value)),
   }),
   Joi.array().items(
     Joi.object({
@@ -30,13 +24,7 @@ const dcSchema = Joi.alternatives().try(
         .min(1)
         .max(100)
         .required()
-        .custom((value, helpers) => {
-          const sanitizedValue = sanitize(value);
-          if (sanitizedValue !== value) {
-            return helpers.error("any.invalid");
-          }
-          return sanitizedValue;
-        }),
+        .custom((value) => sanitize(value)),
     })
   )
 );
