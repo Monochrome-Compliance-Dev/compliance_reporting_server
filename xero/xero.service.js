@@ -46,6 +46,41 @@ function nowTimestamps(createdBy) {
   };
 }
 
+// --- Token scope helpers ---
+function base64UrlDecode(str) {
+  try {
+    const pad = str.length % 4 === 2 ? "==" : str.length % 4 === 3 ? "=" : "";
+    const s = str.replace(/-/g, "+").replace(/_/g, "/") + pad;
+    return Buffer.from(s, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+function decodeJwtPayload(token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const json = base64UrlDecode(parts[1]);
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+function coerceScopeToString(scope) {
+  if (!scope) return "";
+  if (Array.isArray(scope)) return scope.join(" ");
+  if (typeof scope === "string") return scope;
+  return "";
+}
+function extractScopeFromTokenData(tokenData, accessToken) {
+  const explicit = coerceScopeToString(tokenData?.scope);
+  if (explicit) return explicit;
+  const payload = decodeJwtPayload(accessToken);
+  const jwtScope = coerceScopeToString(payload?.scope);
+  return jwtScope;
+}
+
 // --- Exported Functions (grouped by logical feature) ---
 module.exports = {
   // Auth/Token
@@ -55,6 +90,7 @@ module.exports = {
   getLatestToken,
   removeTenant,
   getConnections,
+  extractScopeFromTokenData,
 
   // Fetch
   fetchPayments,
@@ -62,15 +98,176 @@ module.exports = {
   fetchContacts,
   fetchOrganisationDetails,
   fetchInvoices,
+  dumpAllContactsForTenant,
+  dumpAllContactsForAllTenants,
 
   // Save/Transform
   getTransformedData,
   getAllXeroData,
 
+  // Updates
+  applyContactUpdate,
+
   // Orchestration
   startXeroExtraction,
   syncAllTenants,
 };
+
+// Helper to get a tenant token's scope string
+async function getTenantTokenScope(customerId, tenantId) {
+  const tok = await getLatestToken({ customerId, tenantId });
+  return tok?.scope || "";
+}
+// --- Strict helpers: require a tenant-scoped token (no fallback) ---
+async function withTenantAccessTokenOrThrow(customerId, tenantId, fn) {
+  const tokenRecord = await getLatestToken({ customerId, tenantId });
+  if (!tokenRecord) {
+    throw new Error(
+      `No tenant-scoped token found for tenant ${tenantId}. Please (re)authorise this tenant and try again.`
+    );
+  }
+  const at = tokenRecord.access_token || tokenRecord.accessToken || "";
+  if (!at) {
+    throw new Error(
+      `Tenant token record has no access token for tenant ${tenantId}. Re-authorisation required.`
+    );
+  }
+  return fn(at);
+}
+
+async function refreshAccessTokenForStrict(customerId, tenantId) {
+  const tokenRecord = await getLatestToken({ customerId, tenantId });
+  if (!tokenRecord) {
+    throw new Error(
+      `No refresh token available for tenant ${tenantId}. Please (re)authorise this tenant.`
+    );
+  }
+  const refreshTok = tokenRecord?.refresh_token || tokenRecord?.refreshToken;
+  if (!refreshTok) {
+    throw new Error(
+      `Tenant token record missing refresh token for tenant ${tenantId}. Re-authorisation required.`
+    );
+  }
+  return refreshToken({
+    refreshToken: refreshTok,
+    clientId: process.env.XERO_CLIENT_ID,
+    clientSecret: process.env.XERO_CLIENT_SECRET,
+    tenantId,
+    customerId,
+  });
+}
+
+/**
+ * Apply a Xero Contacts update (upsert) for a single contact.
+ * Uses POST /Contacts with a single Contacts item; Xero will update by ContactID if it exists.
+ * @param {Object} options - { customerId, tenantId, payload, dryRun }
+ *   payload example: { Contacts: [{ ContactID, Name, TaxNumber, ... }] }
+ */
+async function applyContactUpdate(options) {
+  const { customerId, tenantId, payload, dryRun = true } = options || {};
+  if (!customerId)
+    throw new Error("applyContactUpdate: customerId is required");
+  if (!tenantId) throw new Error("applyContactUpdate: tenantId is required");
+  if (!payload || typeof payload !== "object") {
+    throw new Error(
+      "applyContactUpdate: payload must be an object { Contacts: [...] }"
+    );
+  }
+  const contacts = Array.isArray(payload.Contacts) ? payload.Contacts : [];
+  if (contacts.length !== 1) {
+    throw new Error(
+      "applyContactUpdate: expected exactly one contact in payload. (One-at-a-time UI)"
+    );
+  }
+  const { ContactID } = contacts[0] || {};
+  if (!ContactID) {
+    throw new Error(
+      "applyContactUpdate: payload.Contacts[0].ContactID is required"
+    );
+  }
+
+  // Preflight: ensure this tenant token includes write scope
+  const scopeStr = await getTenantTokenScope(customerId, tenantId);
+  if (!scopeStr || !scopeStr.split(/\s+/).includes("accounting.contacts")) {
+    throw new Error(
+      `Tenant token missing required scope 'accounting.contacts' for tenant ${tenantId}. Current scopes: '${scopeStr || "(none)"}'. Please re-connect this tenant with write scope.`
+    );
+  }
+
+  // STRICT: Only allow ContactID and TaxNumber to avoid unintended overwrites
+  const allowed = (({ ContactID, TaxNumber }) => ({
+    ...(ContactID ? { ContactID } : {}),
+    ...(TaxNumber ? { TaxNumber: String(TaxNumber).slice(0, 50) } : {}),
+  }))(contacts[0]);
+
+  const body = { Contacts: [allowed] };
+  // Debug: Show the exact request body that will be sent to Xero
+  try {
+    console.log(
+      `[xero.applyContactUpdate] ${dryRun ? "DRY-RUN" : "LIVE"} tenantId=${tenantId} contactId=${allowed.ContactID} -> /Contacts payload:`,
+      JSON.stringify(body)
+    );
+  } catch (_) {
+    console.log("[xero.applyContactUpdate] (payload not serializable)");
+  }
+
+  if (dryRun) {
+    // Echo back what would be sent
+    return {
+      success: true,
+      dryRun: true,
+      tenantId,
+      contactId: ContactID,
+      request: { method: "POST", path: "/Contacts", body },
+    };
+  }
+
+  // Real call – strict token + one 401 retry after refresh
+  let attempt = 0;
+  while (true) {
+    try {
+      const dataResp = await withTenantAccessTokenOrThrow(
+        customerId,
+        tenantId,
+        (at) =>
+          retryWithExponentialBackoff(
+            () => post("/Contacts", body, at, tenantId),
+            3,
+            1000
+          )
+      );
+      return {
+        success: true,
+        tenantId,
+        contactId: ContactID,
+        response: dataResp?.data || dataResp,
+      };
+    } catch (err) {
+      const status = err?.response?.status;
+      const body = err?.response?.data;
+      // Log helpful diagnostics once
+      if (attempt === 0) {
+        try {
+          console.error(
+            "[xero.applyContactUpdate] Error:",
+            status,
+            JSON.stringify(body)
+          );
+        } catch (_) {
+          console.error("[xero.applyContactUpdate] Error:", status);
+        }
+      }
+      if (status === 401 && attempt === 0) {
+        // Force a strict tenant refresh and retry once
+        await refreshAccessTokenForStrict(customerId, tenantId);
+        attempt++;
+        continue;
+      }
+      // Bubble up anything else
+      throw err;
+    }
+  }
+}
 
 async function exchangeAuthCodeForTokens(code, state, req) {
   try {
@@ -78,8 +275,8 @@ async function exchangeAuthCodeForTokens(code, state, req) {
       grant_type: "authorization_code",
       code,
       redirect_uri: process.env.XERO_REDIRECT_URI,
-      customer_id: process.env.XERO_CLIENT_ID,
-      customer_secret: process.env.XERO_CLIENT_SECRET,
+      client_id: process.env.XERO_CLIENT_ID,
+      client_secret: process.env.XERO_CLIENT_SECRET,
     });
     const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
@@ -108,6 +305,17 @@ async function exchangeAuthCodeForTokens(code, state, req) {
     }
     return tokenData;
   } catch (error) {
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    try {
+      console.error(
+        "[xero.exchangeAuthCodeForTokens] Failed:",
+        status,
+        JSON.stringify(data)
+      );
+    } catch (_) {
+      console.error("[xero.exchangeAuthCodeForTokens] Failed:", status);
+    }
     throw error;
   }
 }
@@ -115,18 +323,22 @@ async function exchangeAuthCodeForTokens(code, state, req) {
 async function refreshToken(options = {}) {
   try {
     const rt = options.refreshToken;
-    const cid = options.customerId || process.env.XERO_CLIENT_ID;
-    const csec = options.customerSecret || process.env.XERO_CLIENT_SECRET;
+    let cid =
+      options.clientId || options.customerId || process.env.XERO_CLIENT_ID;
+    let csec =
+      options.clientSecret ||
+      options.customerSecret ||
+      process.env.XERO_CLIENT_SECRET;
     if (!rt || !cid || !csec) {
       throw new Error(
-        "refreshToken: missing refreshToken/customerId/customerSecret"
+        "refreshToken: missing refreshToken/clientId/clientSecret"
       );
     }
     const params = querystring.stringify({
       grant_type: "refresh_token",
       refresh_token: rt,
-      customer_id: cid,
-      customer_secret: csec,
+      client_id: cid,
+      client_secret: csec,
     });
     const { data: tokenData } = await retryWithExponentialBackoff(
       () =>
@@ -137,6 +349,10 @@ async function refreshToken(options = {}) {
       1000
     );
 
+    const scopeStr = extractScopeFromTokenData(
+      tokenData,
+      tokenData?.access_token
+    );
     await XeroToken.upsert({
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
@@ -148,37 +364,69 @@ async function refreshToken(options = {}) {
       replacedByToken: null,
       customerId: options.customerId || null,
       tenantId: options.tenantId || null,
-      ptrsId: null,
+      scope: scopeStr,
     });
 
     return tokenData;
   } catch (error) {
-    console.log(`[xero.refreshToken] Failed: ${error?.message}`);
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    try {
+      console.error(
+        `[xero.refreshToken] Failed: ${error?.message} status=${status} body=${JSON.stringify(data)}`
+      );
+    } catch (_) {
+      console.error(
+        `[xero.refreshToken] Failed: ${error?.message} status=${status}`
+      );
+    }
     throw error;
   }
 }
 
 async function refreshAccessTokenFor(customerId, tenantId) {
-  let tokenRecord;
+  let tokenRecord = null;
   if (tenantId) {
     tokenRecord = await getLatestToken({ customerId, tenantId });
+    if (!tokenRecord) {
+      tokenRecord = await XeroToken.findOne({
+        where: { customerId, revoked: null },
+        order: [["created", "DESC"]],
+      });
+      if (!tokenRecord) {
+        throw new Error(
+          `No refresh token available for ${tenantId ? `tenant ${tenantId}` : `customer ${customerId}`}`
+        );
+      }
+      try {
+        console.warn(
+          `[xero.refreshAccessTokenFor] No token row for tenant ${tenantId}; refreshing latest customer token instead.`
+        );
+      } catch (_) {}
+    }
   } else {
     tokenRecord = await XeroToken.findOne({
       where: { customerId, revoked: null },
       order: [["created", "DESC"]],
     });
+    if (!tokenRecord) {
+      throw new Error(`No refresh token available for customer ${customerId}`);
+    }
   }
+
   const refreshTok = tokenRecord?.refresh_token || tokenRecord?.refreshToken;
   if (!refreshTok) {
     throw new Error(
       `No refresh token available for ${tenantId ? `tenant ${tenantId}` : `customer ${customerId}`}`
     );
   }
+
   return refreshToken({
     refreshToken: refreshTok,
-    customerId: process.env.XERO_CLIENT_ID,
-    customerSecret: process.env.XERO_CLIENT_SECRET,
+    clientId: process.env.XERO_CLIENT_ID,
+    clientSecret: process.env.XERO_CLIENT_SECRET,
     tenantId,
+    customerId,
   });
 }
 
@@ -294,6 +542,151 @@ async function fetchContacts(options) {
     `[fetchContacts] Finished. Total contacts now in DB for customerId=${customerId}, ptrsId=${ptrsId}: ${allContacts.length}`
   );
   return allContacts;
+}
+
+/**
+ * Dump ALL contacts for a tenant into xero_all_contacts (no dedupe, includes tenantId).
+ * @param {Object} options - { customerId, tenantId, createdBy, onProgress }
+ */
+async function dumpAllContactsForTenant(options) {
+  const {
+    customerId,
+    tenantId,
+    createdBy,
+    onProgress = () => {},
+  } = options || {};
+  if (!customerId)
+    throw new Error("dumpAllContactsForTenant: customerId is required");
+  if (!tenantId)
+    throw new Error("dumpAllContactsForTenant: tenantId is required");
+
+  let page = 1;
+  let fetchedAll = false;
+  let total = 0;
+
+  while (!fetchedAll) {
+    onProgress({ stage: "dumpAllContacts", tenantId, page });
+    const { data } = await callXeroApiWithAutoRefresh(
+      () =>
+        withLatestAccessToken(customerId, tenantId, (at) =>
+          retryWithExponentialBackoff(
+            () => get("/Contacts", at, tenantId, { params: { page } }),
+            3,
+            1000
+          )
+        ),
+      customerId,
+      () => refreshAccessTokenFor(customerId, tenantId)
+    );
+
+    const contacts = data?.Contacts || [];
+    if (!contacts.length) {
+      fetchedAll = true;
+      break;
+    }
+
+    const rows = contacts.map((c) => ({
+      // tenancy
+      customerId,
+      tenantId,
+
+      // Xero fields
+      ContactID: c.ContactID ?? null,
+      ContactNumber: trimStringIfTooLong(c.ContactNumber ?? null),
+      AccountNumber: trimStringIfTooLong(c.AccountNumber ?? null),
+      ContactStatus: trimStringIfTooLong(c.ContactStatus ?? null),
+
+      Name: trimStringIfTooLong(c.Name ?? null),
+      FirstName: trimStringIfTooLong(c.FirstName ?? null),
+      LastName: trimStringIfTooLong(c.LastName ?? null),
+      EmailAddress: trimStringIfTooLong(c.EmailAddress ?? null),
+      SkypeUserName: trimStringIfTooLong(c.SkypeUserName ?? null),
+
+      BankAccountDetails: trimStringIfTooLong(c.BankAccountDetails ?? null),
+      CompanyNumber: trimStringIfTooLong(c.CompanyNumber ?? null),
+      TaxNumber: trimStringIfTooLong(c.TaxNumber ?? null),
+
+      AccountsReceivableTaxType: trimStringIfTooLong(
+        c.AccountsReceivableTaxType ?? null
+      ),
+      AccountsPayableTaxType: trimStringIfTooLong(
+        c.AccountsPayableTaxType ?? null
+      ),
+
+      Addresses: c.Addresses ?? null,
+      Phones: c.Phones ?? null,
+
+      IsSupplier: typeof c.IsSupplier === "boolean" ? c.IsSupplier : null,
+      IsCustomer: typeof c.IsCustomer === "boolean" ? c.IsCustomer : null,
+
+      DefaultCurrency: trimStringIfTooLong(c.DefaultCurrency ?? null),
+      UpdatedDateUTC:
+        parseXeroDate(c.UpdatedDateUTC, c.UpdatedDateUTCString || null) || null,
+
+      ...nowTimestamps(createdBy),
+    }));
+
+    await db.XeroAllContacts.bulkCreate(rows, { validate: true });
+    total += rows.length;
+
+    onProgress({
+      stage: "dumpAllContacts",
+      tenantId,
+      page,
+      inserted: rows.length,
+      total,
+    });
+    fetchedAll = contacts.length < 100; // Xero page size is 100
+    page += 1;
+  }
+
+  return { tenantId, inserted: total };
+}
+
+/**
+ * Iterate over supplied tenantIds (or discover them) and dump contacts for each.
+ * @param {Object} options - { customerId, tenantIds?, createdBy, delayMs?, onProgress }
+ */
+async function dumpAllContactsForAllTenants(options) {
+  const {
+    customerId,
+    tenantIds,
+    createdBy,
+    delayMs = 1200,
+    onProgress = () => {},
+  } = options || {};
+  if (!customerId)
+    throw new Error("dumpAllContactsForAllTenants: customerId is required");
+
+  let tenants = tenantIds;
+  if (!Array.isArray(tenants) || tenants.length === 0) {
+    const connections = await getConnections({ customerId });
+    tenants = (connections || []).map((c) => c.tenantId).filter(Boolean);
+  }
+
+  const results = [];
+  for (const tid of tenants) {
+    try {
+      onProgress({ stage: "dumpAllContacts:startTenant", tenantId: tid });
+      const res = await dumpAllContactsForTenant({
+        customerId,
+        tenantId: tid,
+        createdBy,
+        onProgress,
+      });
+      results.push(res);
+      onProgress({ stage: "dumpAllContacts:endTenant", tenantId: tid, ...res });
+    } catch (err) {
+      onProgress({
+        stage: "dumpAllContacts:error",
+        tenantId: tid,
+        error: err?.message || "unknown error",
+      });
+    }
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  }
+
+  return { tenants: results };
 }
 
 /**
@@ -650,7 +1043,12 @@ async function saveToken(options) {
     customerId,
     tenantId,
     createdByIp = "",
+    scope,
   } = options;
+  const scopeStr =
+    scope && typeof scope === "string"
+      ? scope
+      : extractScopeFromTokenData({ scope }, accessToken);
   const updateData = {
     access_token: accessToken,
     refresh_token: refreshToken,
@@ -662,6 +1060,7 @@ async function saveToken(options) {
     replacedByToken: null,
     customerId,
     tenantId,
+    scope: scopeStr,
   };
   await XeroToken.upsert(updateData);
   return null;
@@ -682,15 +1081,30 @@ async function getLatestToken(options) {
 }
 
 async function withLatestAccessToken(customerId, tenantId, fn) {
-  let tokenRecord;
+  let tokenRecord = null;
   if (tenantId) {
     tokenRecord = await getLatestToken({ customerId, tenantId });
+    if (!tokenRecord) {
+      // Fallback: use the most recent unrevoked token for this customer (tenant-agnostic)
+      tokenRecord = await XeroToken.findOne({
+        where: { customerId, revoked: null },
+        order: [["created", "DESC"]],
+      });
+      if (tokenRecord) {
+        try {
+          console.warn(
+            `[xero.withLatestAccessToken] No token row for tenant ${tenantId}; using latest customer token instead.`
+          );
+        } catch (_) {}
+      }
+    }
   } else {
     tokenRecord = await XeroToken.findOne({
       where: { customerId, revoked: null },
       order: [["created", "DESC"]],
     });
   }
+
   if (!tokenRecord) {
     throw new Error(
       `No access token found for ${tenantId ? `tenant ${tenantId}` : `customer ${customerId}`}`

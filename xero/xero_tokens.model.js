@@ -18,6 +18,10 @@ function defineXeroTokenModel(sequelize) {
         type: DataTypes.TEXT,
         allowNull: false,
       },
+      scope: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
       expires: {
         type: DataTypes.DATE,
         allowNull: false,

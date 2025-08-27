@@ -1,14 +1,10 @@
-const csv = require("csv-parser");
 const { logger } = require("../helpers/logger");
 const express = require("express");
 const router = express.Router();
-const fs = require("fs");
-const path = require("path");
 
 const xeroService = require("./xero.service");
+const { extractScopeFromTokenData } = require("./xero.service");
 const authorise = require("../middleware/authorise");
-const { transformXeroData } = require("../scripts/xero/transformXeroData");
-const tcpService = require("../tcp/tcp.service");
 
 router.get(
   "/connect/:ptrsId/:createdBy/:startDate/:endDate",
@@ -17,6 +13,7 @@ router.get(
 );
 router.get("/callback", handleOAuthCallback);
 router.post("/extract", authorise(), startXeroExtractionHandler);
+router.post("/contacts/dump", authorise(), dumpAllContactsHandler);
 
 // Route to remove a tenant
 router.delete("/tenants/:tenantId", authorise(), async (req, res, next) => {
@@ -48,9 +45,13 @@ function generateAuthUrl(req, res) {
     const xeroClientId = process.env.XERO_CLIENT_ID;
     const redirectUri =
       process.env.XERO_REDIRECT_URI || "http://localhost:3000/callback";
+    // const scopes =
+    //   process.env.XERO_SCOPES ||
+    //   "openid profile email accounting.transactions.read accounting.contacts.read accounting.settings.read";
+
     const scopes =
-      process.env.XERO_SCOPES ||
-      "openid profile email accounting.transactions.read accounting.contacts.read accounting.settings.read";
+      // process.env.XERO_SCOPES ||
+      "openid profile email offline_access accounting.transactions.read accounting.contacts.read accounting.contacts accounting.settings.read";
 
     if (!xeroClientId) {
       logger.logEvent(
@@ -76,6 +77,7 @@ function generateAuthUrl(req, res) {
       redirect_uri: redirectUri,
       scope: scopes,
       state,
+      prompt: "consent", // force re-consent so new scopes (e.g., accounting.contacts) are granted
     });
 
     const authUrl = `https://login.xero.com/identity/connect/authorize?${params.toString()}`;
@@ -200,6 +202,7 @@ async function handleOAuthCallback(req, res) {
           customerId: parsedState.customerId,
           tenantId: connection.tenantId,
           createdBy: parsedState.createdBy,
+          scope: extractScopeFromTokenData(tokenData, accessToken),
         };
         await xeroService.saveToken(tokenPayload);
       })
@@ -308,6 +311,100 @@ async function startXeroExtractionHandler(req, res, next) {
   } catch (err) {
     logger.logEvent("error", "Failed during Xero extraction for tenants", {
       action: "startXeroExtractionHandler",
+      error: err.message,
+      stack: err.stack,
+      ...(err.context || {}),
+    });
+    return next(err);
+  }
+}
+
+// apply Xero contact patch (demo/testing -> live via service)
+router.post("/apply", authorise(), async (req, res, next) => {
+  try {
+    const { tenantId, dryRun = true, payload } = req.body || {};
+
+    if (!tenantId) {
+      return res.status(400).json({ message: "tenantId is required" });
+    }
+    if (!payload || typeof payload !== "object") {
+      return res.status(400).json({ message: "payload must be an object" });
+    }
+
+    logger.logEvent("info", "Xero contact patch requested", {
+      action: "ApplyPatch",
+      tenantId,
+      dryRun,
+    });
+
+    const result = await xeroService.applyContactUpdate({
+      customerId: req.auth?.customerId,
+      tenantId,
+      payload,
+      dryRun,
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function dumpAllContactsHandler(req, res, next) {
+  const { tenantIds } = req.body || {};
+  const customerId = req.auth?.customerId;
+  const createdBy = req.auth?.userId || "system";
+
+  if (!customerId) {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing customerId in auth context.",
+    });
+  }
+
+  try {
+    const result = await xeroService.dumpAllContactsForAllTenants({
+      customerId,
+      tenantIds,
+      createdBy,
+      onProgress: (status) => {
+        const logData = {
+          ...status,
+          customerId,
+          createdBy,
+          timestamp: new Date().toISOString(),
+        };
+        logger.logEvent("info", "Dump contacts progress", logData);
+
+        if (req.wss && typeof req.wss.broadcast === "function") {
+          try {
+            req.wss.broadcast(JSON.stringify(logData));
+          } catch (wsErr) {
+            logger.logEvent(
+              "warn",
+              "Failed to broadcast dump contacts progress",
+              {
+                error: wsErr.message,
+                stack: wsErr.stack,
+              }
+            );
+          }
+        }
+      },
+    });
+
+    logger.logEvent("info", "Dump contacts completed", {
+      customerId,
+      createdBy,
+      tenantsProcessed: Array.isArray(result?.tenants)
+        ? result.tenants.length
+        : 0,
+    });
+
+    return res.status(202).json({ status: "success", data: result });
+  } catch (err) {
+    logger.logEvent("error", "Failed to dump contacts", {
+      action: "dumpAllContactsHandler",
       error: err.message,
       stack: err.stack,
       ...(err.context || {}),

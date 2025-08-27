@@ -17,6 +17,7 @@ const xeroOrganisationSchema = Joi.object({
 const xeroTokenSchema = Joi.object({
   access_token: Joi.string().required(),
   refresh_token: Joi.string().required(),
+  scope: Joi.string().required(),
   expires: Joi.date().optional(),
   created: Joi.date().optional(),
   createdByIp: Joi.string().optional().allow(null, ""),
@@ -105,6 +106,7 @@ const xeroContactSchema = Joi.object({
   CompanyNumber: Joi.string().optional().allow(null, ""),
   TaxNumber: Joi.string().optional().allow(null, ""),
   PaymentTerms: Joi.string().optional().allow(null, ""),
+  tenantId: Joi.string().optional().allow(null, ""),
   source: Joi.string().required(),
   createdBy: Joi.string().required(),
 });

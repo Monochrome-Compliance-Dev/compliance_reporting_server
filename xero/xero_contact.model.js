@@ -50,6 +50,7 @@ const XeroContact = (sequelize) => {
         type: DataTypes.JSONB,
         allowNull: true,
       },
+      tenantId: { type: DataTypes.STRING(50), allowNull: false },
       source: {
         type: DataTypes.STRING(50),
         allowNull: false,
