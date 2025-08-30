@@ -29,6 +29,7 @@ module.exports = {
   create,
   update,
   delete: _delete,
+  inviteWithResource,
 };
 
 async function authenticate({ email, password, ipAddress, customerId }) {
@@ -434,6 +435,72 @@ async function _delete(id, customerId) {
     throw err;
   } finally {
     if (!t.finished) await t.rollback();
+  }
+}
+
+async function inviteWithResource({ user, resource, createdBy, origin }) {
+  if (!user?.customerId)
+    throw { status: 400, message: "customerId is required" };
+  const t = await beginTransactionWithCustomerContext(user.customerId);
+  try {
+    // Block duplicate email
+    const existing = await db.User.findOne({
+      where: { email: user.email },
+      transaction: t,
+    });
+    if (existing) {
+      await sendAlreadyRegisteredEmail(user.email, origin);
+      throw {
+        status: 400,
+        message: `Email "${user.email}" is already registered`,
+      };
+    }
+
+    // Create invited user (unverified, email verification required)
+    const invited = new db.User({
+      firstName: user.firstName || "",
+      lastName: user.lastName || "",
+      email: user.email,
+      role: user.role || Role.User,
+      customerId: user.customerId,
+    });
+    invited.verificationToken = randomTokenString();
+    await invited.save({ transaction: t });
+
+    await sendVerificationEmail(invited, origin);
+
+    // Create linked resource with the invited user's id
+    const savedResource = await db.Resource.create(
+      {
+        name: resource.name,
+        role: resource.role || null,
+        hourlyRate: resource.hourlyRate ?? null,
+        capacityHoursPerWeek: resource.capacityHoursPerWeek ?? null,
+        userId: invited.id,
+        customerId: user.customerId,
+        createdBy: createdBy || null,
+      },
+      { transaction: t }
+    );
+
+    await t.commit();
+    return {
+      user: basicDetails(invited),
+      resource: {
+        id: savedResource.id,
+        name: savedResource.name,
+        role: savedResource.role,
+        hourlyRate: savedResource.hourlyRate,
+        capacityHoursPerWeek: savedResource.capacityHoursPerWeek,
+        userId: savedResource.userId,
+        customerId: savedResource.customerId,
+      },
+    };
+  } catch (err) {
+    if (t && !t.finished) await t.rollback();
+    throw err;
+  } finally {
+    if (t && !t.finished) await t.rollback();
   }
 }
 

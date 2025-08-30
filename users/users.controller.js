@@ -53,6 +53,33 @@ router.post(
 );
 router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
 
+// Composite: invite user + create linked resource (Admin/Boss only)
+const inviteWithResourceSchema = Joi.object({
+  user: Joi.object({
+    email: Joi.string().email().required(),
+    role: Joi.string()
+      .valid(Role.User, Role.Admin, Role.Boss)
+      .default(Role.User),
+    firstName: Joi.string().allow(""),
+    lastName: Joi.string().allow(""),
+    customerId: Joi.string().required(),
+  }).required(),
+  resource: Joi.object({
+    name: Joi.string().required(),
+    role: Joi.string().allow(""),
+    hourlyRate: Joi.number().min(0).allow(null),
+    capacityHoursPerWeek: Joi.number().min(0).max(168).allow(null),
+  }).required(),
+  createdBy: Joi.string().allow(""),
+});
+
+router.post(
+  "/invite-with-resource",
+  authorise(["Admin", "Boss"]),
+  validateRequest(inviteWithResourceSchema),
+  inviteWithResource
+);
+
 router.get("/", authorise(["Admin", "Audit", "Boss"]), getAll);
 router.get("/by-customer", authorise(["Admin", "Boss"]), getAllByCustomerId);
 router.get("/:id", authorise(), getById);
@@ -439,6 +466,34 @@ function _delete(req, res, next) {
         ip,
         device,
       });
+    })
+    .catch(next);
+}
+
+function inviteWithResource(req, res, next) {
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const { user, resource, createdBy } = req.body;
+  const createdById = createdBy || req.auth?.id;
+
+  userService
+    .inviteWithResource({
+      user,
+      resource,
+      createdBy: createdById,
+      origin: req.get("origin"),
+    })
+    .then((result) => {
+      logger.logEvent("info", "Invited user and created linked resource", {
+        action: "InviteWithResource",
+        invitedEmail: user.email,
+        resourceName: resource.name,
+        customerId: user.customerId,
+        createdBy: createdById,
+        ip,
+        device,
+      });
+      res.json(result);
     })
     .catch(next);
 }

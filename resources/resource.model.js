@@ -1,4 +1,4 @@
-const { DataTypes } = require("sequelize");
+const { DataTypes, Op } = require("sequelize");
 let nanoid;
 (async () => {
   const { nanoid: importedNanoid } = await import("nanoid");
@@ -20,6 +20,7 @@ function model(sequelize) {
     hourlyRate: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     capacityHoursPerWeek: { type: DataTypes.INTEGER, allowNull: true },
     email: { type: DataTypes.STRING, allowNull: true },
+    userId: { type: DataTypes.STRING(10), allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
@@ -27,6 +28,15 @@ function model(sequelize) {
   const Resource = sequelize.define("resource", attributes, {
     tableName: "tbl_resource",
     timestamps: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ["customerId", "userId"],
+        where: {
+          userId: { [Op.ne]: null },
+        },
+      },
+    ],
   });
 
   return Resource;

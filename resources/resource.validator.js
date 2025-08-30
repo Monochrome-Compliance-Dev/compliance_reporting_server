@@ -6,6 +6,7 @@ const base = Joi.object({
   hourlyRate: Joi.number().min(0).optional(),
   capacityHoursPerWeek: Joi.number().integer().min(0).optional(),
   email: Joi.string().email().optional().sanitize(),
+  userId: Joi.string().length(10).allow(null).optional().sanitize(),
 
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
