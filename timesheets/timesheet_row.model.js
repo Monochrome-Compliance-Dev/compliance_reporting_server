@@ -28,7 +28,7 @@ function model(sequelize) {
   };
 
   const TimesheetRow = sequelize.define("timesheet_row", attributes, {
-    tableName: "tbl_timesheet_row",
+    tableName: "tbl_pulse_timesheet_row",
     timestamps: true,
     indexes: [
       { fields: ["customerId"] },

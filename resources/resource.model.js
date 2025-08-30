@@ -26,7 +26,7 @@ function model(sequelize) {
   };
 
   const Resource = sequelize.define("resource", attributes, {
-    tableName: "tbl_resource",
+    tableName: "tbl_pulse_resource",
     timestamps: true,
     indexes: [
       {

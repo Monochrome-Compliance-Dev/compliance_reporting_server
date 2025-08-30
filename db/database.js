@@ -82,7 +82,7 @@ async function initialise() {
     "../engagements",
     "../resources",
     "../assignments",
-    "../budget_items",
+    "../budgets",
     "../timesheets",
   ];
 

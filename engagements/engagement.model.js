@@ -42,7 +42,7 @@ function model(sequelize) {
   };
 
   const Engagement = sequelize.define("engagement", attributes, {
-    tableName: "tbl_engagement",
+    tableName: "tbl_pulse_engagement",
     timestamps: true,
     indexes: [
       { fields: ["customerId"] },

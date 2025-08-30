@@ -36,7 +36,7 @@ function model(sequelize) {
   };
 
   const Client = sequelize.define("client", attributes, {
-    tableName: "tbl_client",
+    tableName: "tbl_pulse_client",
     timestamps: true,
   });
 

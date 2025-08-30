@@ -39,7 +39,7 @@ function model(sequelize) {
   };
 
   const Assignment = sequelize.define("assignment", attributes, {
-    tableName: "tbl_assignment",
+    tableName: "tbl_pulse_assignment",
     timestamps: true,
     indexes: [
       { fields: ["customerId"] },

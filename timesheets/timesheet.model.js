@@ -31,7 +31,7 @@ function model(sequelize) {
   };
 
   const Timesheet = sequelize.define("timesheet", attributes, {
-    tableName: "tbl_timesheet",
+    tableName: "tbl_pulse_timesheet",
     timestamps: true,
     indexes: [
       { fields: ["customerId"] },

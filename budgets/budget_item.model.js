@@ -15,7 +15,14 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
-    engagementId: { type: DataTypes.STRING(10), allowNull: false },
+
+    // New parent keys
+    budgetId: { type: DataTypes.STRING(10), allowNull: false },
+    sectionId: { type: DataTypes.STRING(10), allowNull: true },
+
+    // Deprecated (kept temporarily for backwards compatibility)
+    engagementId: { type: DataTypes.STRING(10), allowNull: true },
+
     activity: { type: DataTypes.STRING, allowNull: false },
     billingType: {
       type: DataTypes.STRING(10),
@@ -31,13 +38,22 @@ function model(sequelize) {
     },
     billable: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     notes: { type: DataTypes.TEXT, allowNull: true },
+
+    // Stable sort within a budget/section
+    order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
   const BudgetItem = sequelize.define("budget_item", attributes, {
-    tableName: "tbl_budget_item",
+    tableName: "tbl_pulse_budget_item",
     timestamps: true,
+    paranoid: true, // enables soft delete via deletedAt
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["budgetId", "sectionId", "order"] },
+    ],
   });
 
   return BudgetItem;
