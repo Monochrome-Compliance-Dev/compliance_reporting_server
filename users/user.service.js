@@ -192,49 +192,48 @@ async function registerFirstUser(params, origin) {
   }
 }
 
-async function verifyToken(token, customerId) {
-  if (!customerId) throw { status: 400, message: "customerId is required" };
-  const t = await beginTransactionWithCustomerContext(customerId);
+async function verifyToken(token) {
+  console.log("verify in service");
+  const t = await db.sequelize.transaction();
   try {
     const user = await db.User.findOne({
       where: { verificationToken: token },
       transaction: t,
     });
     if (!user) throw { status: 401, message: "Verification failed" };
-    if (user.verified) {
-      throw { status: 400, message: "Email already verified" };
-    }
 
+    // No updates here — just confirm the token is valid.
     await t.commit();
+    // Return basic details (FE currently doesn’t use them but it’s safe and future-proof)
+    return basicDetails(user);
   } catch (err) {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
     throw err;
   } finally {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
   }
 }
 
 async function verifyEmail(params) {
-  if (!params.customerId)
-    throw { status: 400, message: "customerId is required" };
-  const t = await beginTransactionWithCustomerContext(params.customerId);
+  const t = await db.sequelize.transaction();
   try {
     const { token, password } = params;
+
     const user = await db.User.findOne({
       where: { verificationToken: token },
       transaction: t,
     });
-
     if (!user) throw { status: 401, message: "Verification failed" };
 
+    // Activate + verify + clear token + set password
+    user.active = true;
     user.verified = Date.now();
     user.verificationToken = null;
-
     user.passwordHash = await hash(password);
 
     await user.save({ transaction: t });
     await t.commit();
-    return basicDetails(user);
+    return basicDetails(user); // includes firstName, lastName, email, customerId, isVerified, etc.
   } catch (err) {
     if (!t.finished) await t.rollback();
     throw err;
@@ -458,8 +457,10 @@ async function inviteWithResource({ user, resource, createdBy, origin }) {
 
     // Create invited user (unverified, email verification required)
     const invited = new db.User({
-      firstName: user.firstName || "",
-      lastName: user.lastName || "",
+      firstName: user.firstName,
+      lastName: user.lastName,
+      position: user.position,
+      active: user.active,
       email: user.email,
       role: user.role || Role.User,
       customerId: user.customerId,

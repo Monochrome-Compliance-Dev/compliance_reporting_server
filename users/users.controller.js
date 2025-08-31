@@ -16,6 +16,7 @@ const {
   verifyTokenSchema,
   validateResetTokenSchema,
   createSchema,
+  inviteWithResourceSchema,
 } = require("./user.validator");
 
 const setPasswordSchema = Joi.object({
@@ -52,26 +53,6 @@ router.post(
   resetPassword
 );
 router.post("/set-password", validateRequest(setPasswordSchema), setPassword);
-
-// Composite: invite user + create linked resource (Admin/Boss only)
-const inviteWithResourceSchema = Joi.object({
-  user: Joi.object({
-    email: Joi.string().email().required(),
-    role: Joi.string()
-      .valid(Role.User, Role.Admin, Role.Boss)
-      .default(Role.User),
-    firstName: Joi.string().allow(""),
-    lastName: Joi.string().allow(""),
-    customerId: Joi.string().required(),
-  }).required(),
-  resource: Joi.object({
-    name: Joi.string().required(),
-    role: Joi.string().allow(""),
-    hourlyRate: Joi.number().min(0).allow(null),
-    capacityHoursPerWeek: Joi.number().min(0).max(168).allow(null),
-  }).required(),
-  createdBy: Joi.string().allow(""),
-});
 
 router.post(
   "/invite-with-resource",
@@ -253,6 +234,7 @@ function registerFirstUser(req, res, next) {
 }
 
 function verifyToken(req, res, next) {
+  console.log("verify in controller");
   userService
     .verifyToken(req.body.token)
     .then(() => {
@@ -471,6 +453,7 @@ function _delete(req, res, next) {
 }
 
 function inviteWithResource(req, res, next) {
+  console.log("got here");
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const { user, resource, createdBy } = req.body;

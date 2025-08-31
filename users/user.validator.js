@@ -1,5 +1,5 @@
-const { cli } = require("winston/lib/winston/config");
 const Joi = require("../middleware/joiSanitizer");
+const Role = require("../helpers/role");
 
 const authSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -11,7 +11,7 @@ const registerSchema = Joi.object({
   firstName: Joi.string().required(),
   lastName: Joi.string().required(),
   email: Joi.string().email().required(),
-  phone: Joi.string().required(),
+  phone: Joi.string().optional(),
   position: Joi.string().required(),
   // password: Joi.string().min(6).required(),
   // confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
@@ -66,16 +66,38 @@ const resetPasswordSchema = Joi.object({
 
 const verifyTokenSchema = Joi.object({
   token: Joi.string().required(),
-});
+}).meta({ requireCustomer: false });
 
 const verifyEmailSchema = Joi.object({
   token: Joi.string().required(),
   password: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
-});
+}).meta({ requireCustomer: false });
 
 const validateResetTokenSchema = Joi.object({
   token: Joi.string().required(),
+});
+
+// Composite: invite user + create linked resource (Admin/Boss only)
+const inviteWithResourceSchema = Joi.object({
+  user: Joi.object({
+    email: Joi.string().email().required(),
+    role: Joi.string()
+      .valid(Role.User, Role.Admin, Role.Boss)
+      .default(Role.User),
+    position: Joi.string().required(),
+    firstName: Joi.string().allow(""),
+    lastName: Joi.string().allow(""),
+    customerId: Joi.string().required(),
+    active: Joi.boolean(),
+  }).required(),
+  resource: Joi.object({
+    name: Joi.string().required(),
+    role: Joi.string().allow(""),
+    hourlyRate: Joi.number().min(0).allow(null),
+    capacityHoursPerWeek: Joi.number().min(0).max(168).allow(null),
+  }).required(),
+  createdBy: Joi.string().allow(""),
 });
 
 module.exports = {
@@ -90,4 +112,5 @@ module.exports = {
   verifyTokenSchema,
   validateResetTokenSchema,
   createSchema: registerSchema,
+  inviteWithResourceSchema,
 };
