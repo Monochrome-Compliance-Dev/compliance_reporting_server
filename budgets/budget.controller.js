@@ -13,15 +13,20 @@ const {
   budgetCreateSchema,
   budgetUpdateSchema,
   budgetPatchSchema,
+  sectionCreateSchema,
+  sectionUpdateSchema,
+  sectionPatchSchema,
 } = require("./budget.validator");
 
 const router = express.Router();
 const items = express.Router();
 const budgets = express.Router();
+const sections = express.Router();
 
 // Mount sub-routers
 router.use("/budget-items", items);
 router.use("/budgets", budgets);
+router.use("/budget-sections", sections);
 
 module.exports = router;
 
@@ -47,6 +52,81 @@ items.patch(
   patchItem
 );
 items.delete("/:id", authorise(), deleteItem);
+
+// -------- Budget Sections routes (/budget-sections) --------
+sections.patch(
+  "/:sectionId",
+  authorise(),
+  // Inject auth context for validation/update
+  (req, _res, next) => {
+    req.body = {
+      ...req.body,
+      customerId: req.auth?.customerId,
+      updatedBy: req.auth?.id,
+    };
+    next();
+  },
+  validateRequest(sectionPatchSchema),
+  updateSection
+);
+sections.put(
+  "/:sectionId",
+  authorise(),
+  // Inject auth context for validation/update
+  (req, _res, next) => {
+    req.body = {
+      ...req.body,
+      customerId: req.auth?.customerId,
+      updatedBy: req.auth?.id,
+    };
+    next();
+  },
+  validateRequest(sectionUpdateSchema),
+  putSection
+);
+sections.delete("/:sectionId", authorise(), deleteSection);
+
+// -------- Budget Sections via /budgets/:id/sections --------
+budgets.get("/:id/sections", authorise(), listSectionsByBudget);
+budgets.post(
+  "/:id/sections",
+  authorise(),
+  // Inject route/auth context so validation sees required fields
+  (req, _res, next) => {
+    req.body = {
+      ...req.body,
+      budgetId: req.params.id,
+      customerId: req.auth?.customerId,
+      createdBy: req.auth?.id,
+    };
+    next();
+  },
+  validateRequest(sectionCreateSchema),
+  createSectionUnderBudget
+);
+
+// -------- Budgets routes (/budgets) --------
+budgets.get("/", authorise(), getAllBudgets);
+budgets.get("/:id", authorise(), getBudgetById);
+budgets.post(
+  "/",
+  authorise(),
+  validateRequest(budgetCreateSchema),
+  createBudget
+);
+budgets.put(
+  "/:id",
+  authorise(),
+  validateRequest(budgetUpdateSchema),
+  updateBudget
+);
+budgets.patch(
+  "/:id",
+  authorise(),
+  validateRequest(budgetPatchSchema),
+  patchBudget
+);
+budgets.delete("/:id", authorise(), deleteBudget);
 
 async function getAllItems(req, res, next) {
   try {
@@ -288,28 +368,202 @@ async function deleteItem(req, res, next) {
   }
 }
 
-// -------- Budgets routes (/budgets) --------
-budgets.get("/", authorise(), getAllBudgets);
-budgets.get("/:id", authorise(), getBudgetById);
-budgets.post(
-  "/",
-  authorise(),
-  validateRequest(budgetCreateSchema),
-  createBudget
-);
-budgets.put(
-  "/:id",
-  authorise(),
-  validateRequest(budgetUpdateSchema),
-  updateBudget
-);
-budgets.patch(
-  "/:id",
-  authorise(),
-  validateRequest(budgetPatchSchema),
-  patchBudget
-);
-budgets.delete("/:id", authorise(), deleteBudget);
+// ===== Sections Handlers =====
+async function listSectionsByBudget(req, res, next) {
+  const budgetId = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const rows = await budgetService.budgetSections.listByBudget({
+      budgetId,
+      customerId,
+      order: [
+        ["order", "ASC"],
+        ["createdAt", "ASC"],
+      ],
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "GetSectionsByBudget",
+      entity: "BudgetSection",
+      details: {
+        budgetId,
+        count: Array.isArray(rows) ? rows.length : undefined,
+      },
+    });
+    res.json({ status: "success", data: rows });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching budget sections", {
+      action: "GetSectionsByBudget",
+      budgetId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function createSectionUnderBudget(req, res, next) {
+  const budgetId = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const payload = {
+      ...req.body,
+      budgetId,
+      customerId,
+      createdBy: userId,
+    };
+    const row = await budgetService.budgetSections.create({
+      data: payload,
+      customerId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "CreateBudgetSection",
+      entity: "BudgetSection",
+      entityId: row.id,
+      details: { budgetId },
+    });
+    res.status(201).json({ status: "success", data: row });
+  } catch (error) {
+    logger.logEvent("error", "Error creating budget section", {
+      action: "CreateBudgetSection",
+      budgetId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function updateSection(req, res, next) {
+  const sectionId = req.params.sectionId;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const row = await budgetService.budgetSections.update({
+      id: sectionId,
+      data: { ...req.body, customerId, updatedBy: userId },
+      customerId,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PatchBudgetSection",
+      entity: "BudgetSection",
+      entityId: sectionId,
+      details: { updates: Object.keys(req.body) },
+    });
+    res.json({ status: "success", data: row });
+  } catch (error) {
+    logger.logEvent("error", "Error updating budget section", {
+      action: "PatchBudgetSection",
+      id: sectionId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function putSection(req, res, next) {
+  const sectionId = req.params.sectionId;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const row = await budgetService.budgetSections.update({
+      id: sectionId,
+      data: { ...req.body, customerId, updatedBy: userId },
+      customerId,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "UpdateBudgetSection",
+      entity: "BudgetSection",
+      entityId: sectionId,
+      details: { updates: Object.keys(req.body) },
+    });
+    res.json({ status: "success", data: row });
+  } catch (error) {
+    logger.logEvent("error", "Error putting budget section", {
+      action: "UpdateBudgetSection",
+      id: sectionId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function deleteSection(req, res, next) {
+  const sectionId = req.params.sectionId;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    await budgetService.budgetSections.delete({
+      id: sectionId,
+      customerId,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DeleteBudgetSection",
+      entity: "BudgetSection",
+      entityId: sectionId,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting budget section", {
+      action: "DeleteBudgetSection",
+      id: sectionId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
 async function getAllBudgets(req, res, next) {
   try {

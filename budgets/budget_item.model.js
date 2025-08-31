@@ -14,7 +14,7 @@ function model(sequelize) {
       defaultValue: () => nanoid(10),
       primaryKey: true,
     },
-    customerId: { type: DataTypes.STRING, allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
 
     // New parent keys
     budgetId: { type: DataTypes.STRING(10), allowNull: false },
@@ -23,7 +23,11 @@ function model(sequelize) {
     // Deprecated (kept temporarily for backwards compatibility)
     engagementId: { type: DataTypes.STRING(10), allowNull: true },
 
-    activity: { type: DataTypes.STRING, allowNull: false },
+    // New label for resource level/role (e.g., "Auditor (2nd year)")
+    resourceLabel: { type: DataTypes.STRING(200), allowNull: true },
+
+    // Deprecated: kept for backward compatibility; prefer resourceLabel going forward
+    activity: { type: DataTypes.STRING, allowNull: true },
     billingType: {
       type: DataTypes.STRING(10),
       allowNull: false,
@@ -53,6 +57,7 @@ function model(sequelize) {
     indexes: [
       { fields: ["customerId"] },
       { fields: ["budgetId", "sectionId", "order"] },
+      { fields: ["customerId", "budgetId", "sectionId", "order"] },
     ],
   });
 

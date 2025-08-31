@@ -14,9 +14,10 @@ function model(sequelize) {
       defaultValue: () => nanoid(10),
       primaryKey: true,
     },
-    customerId: { type: DataTypes.STRING, allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
     budgetId: { type: DataTypes.STRING(10), allowNull: false },
     name: { type: DataTypes.STRING, allowNull: false },
+    notes: { type: DataTypes.TEXT, allowNull: true },
     order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
@@ -26,6 +27,10 @@ function model(sequelize) {
     tableName: "tbl_pulse_budget_section",
     timestamps: true,
     paranoid: true, // enables soft delete via deletedAt
+    indexes: [
+      { fields: ["customerId"] },
+      { fields: ["customerId", "budgetId", "order"] },
+    ],
   });
 
   return BudgetSection;

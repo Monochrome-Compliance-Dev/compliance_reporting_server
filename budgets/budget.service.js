@@ -217,6 +217,103 @@ const budgetItems = {
   listByBudget,
 };
 
+// ===== Budget Sections namespace =====
+async function sectionsListByBudget({ budgetId, customerId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const rows = await db.BudgetSection.findAll({
+      where: { budgetId, deletedAt: null },
+      order: options.order || [
+        ["order", "ASC"],
+        ["createdAt", "ASC"],
+      ],
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+    return rows.map((r) => r.get({ plain: true }));
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function sectionsCreate({ data, customerId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const result = await db.BudgetSection.create(
+      {
+        ...data,
+        customerId,
+        createdBy: data.createdBy,
+        updatedBy: data.updatedBy,
+      },
+      { ...options, transaction: t }
+    );
+    await t.commit();
+    return result.get({ plain: true });
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function sectionsUpdate({ id, data, customerId, userId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    await db.BudgetSection.update(
+      { ...data, updatedBy: userId },
+      { where: { id, deletedAt: null }, ...options, transaction: t }
+    );
+    const result = await db.BudgetSection.findOne({
+      where: { id, deletedAt: null },
+      ...options,
+      transaction: t,
+    });
+    if (!result) throw { status: 404, message: "Budget section not found" };
+    await t.commit();
+    return result.get({ plain: true });
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function sectionsDelete({ id, customerId, userId, ...options }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const [count] = await db.BudgetSection.update(
+      { deletedAt: new Date(), updatedBy: userId },
+      { where: { id, deletedAt: null }, ...options, transaction: t }
+    );
+    if (count === 0) {
+      throw {
+        status: 404,
+        message: "Budget section not found or delete blocked by RLS.",
+      };
+    }
+    await t.commit();
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+const budgetSections = {
+  listByBudget: sectionsListByBudget,
+  create: sectionsCreate,
+  update: sectionsUpdate,
+  delete: sectionsDelete,
+};
+
 // ===== Budgets (entity) namespace =====
 async function budgetsGetAll({ customerId, ...options } = {}) {
   const t = await beginTransactionWithCustomerContext(customerId);
@@ -365,4 +462,5 @@ const budgets = {
 module.exports = {
   budgetItems,
   budgets,
+  budgetSections,
 };

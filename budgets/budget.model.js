@@ -14,13 +14,13 @@ function model(sequelize) {
       defaultValue: () => nanoid(10),
       primaryKey: true,
     },
-    customerId: { type: DataTypes.STRING, allowNull: false },
+    customerId: { type: DataTypes.STRING(10), allowNull: false },
     engagementId: {
       type: DataTypes.STRING(10),
       allowNull: true,
       defaultValue: null,
     },
-    name: { type: DataTypes.STRING, allowNull: false },
+    name: { type: DataTypes.STRING(200), allowNull: false },
     status: {
       type: DataTypes.STRING(10),
       allowNull: false,

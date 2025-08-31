@@ -6,8 +6,9 @@ const itemBase = Joi.object({
 
   sectionId: Joi.string().length(10).allow(null).optional().sanitize(),
   order: Joi.number().integer().min(0).optional(),
+  resourceLabel: Joi.string().max(200).required().sanitize(),
 
-  activity: Joi.string().max(200).required().sanitize(),
+  activity: Joi.string().max(200).optional().sanitize(),
   billingType: Joi.string().valid("hourly", "fixed").required().sanitize(),
 
   // Numeric fields (conditional rules applied below)
@@ -87,6 +88,38 @@ const budgetPatchSchema = Joi.object({
   updatedBy: Joi.string().length(10).required(),
 }).unknown(true);
 
+// ================= Budget Section Schemas =================
+const sectionBase = Joi.object({
+  name: Joi.string().max(200).required().sanitize(),
+  budgetId: Joi.string().length(10).required().sanitize(),
+  order: Joi.number().integer().min(0).optional(),
+  notes: Joi.string().max(2000).allow("", null).optional().sanitize(),
+
+  createdBy: Joi.string().length(10),
+  updatedBy: Joi.string().length(10),
+
+  id: Joi.string().max(10),
+  createdAt: Joi.date().optional(),
+  updatedAt: Joi.date().optional(),
+  deletedAt: Joi.date().optional(),
+
+  customerId: Joi.string().length(10).required(),
+});
+
+const sectionCreateSchema = sectionBase
+  .fork(["createdBy"], (s) => s.required())
+  .fork(["updatedBy", "id", "createdAt", "updatedAt", "deletedAt"], (s) =>
+    s.forbidden()
+  );
+
+const sectionUpdateSchema = sectionBase
+  .fork(["updatedBy"], (s) => s.required())
+  .fork(["id", "createdAt", "updatedAt", "deletedAt"], (s) => s.forbidden());
+
+const sectionPatchSchema = Joi.object({
+  updatedBy: Joi.string().length(10).required(),
+}).unknown(true);
+
 module.exports = {
   // Items
   budgetItemCreateSchema,
@@ -96,4 +129,8 @@ module.exports = {
   budgetCreateSchema,
   budgetUpdateSchema,
   budgetPatchSchema,
+  // Sections
+  sectionCreateSchema,
+  sectionUpdateSchema,
+  sectionPatchSchema,
 };
