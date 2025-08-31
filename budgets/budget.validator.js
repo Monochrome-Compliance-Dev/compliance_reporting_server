@@ -8,7 +8,7 @@ const itemBase = Joi.object({
   order: Joi.number().integer().min(0).optional(),
   resourceLabel: Joi.string().max(200).required().sanitize(),
 
-  activity: Joi.string().max(200).optional().sanitize(),
+  sectionName: Joi.string().max(200).optional().sanitize(),
   billingType: Joi.string().valid("hourly", "fixed").required().sanitize(),
 
   // Numeric fields (conditional rules applied below)

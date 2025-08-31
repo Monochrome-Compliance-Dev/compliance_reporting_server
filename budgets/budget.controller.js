@@ -105,6 +105,76 @@ budgets.post(
   createSectionUnderBudget
 );
 
+// Link an existing budget to an engagement (used by BudgetBuilder "Link" UI)
+router.post(
+  "/engagements/:engagementId/link-budget/:budgetId",
+  authorise(),
+  async (req, res, next) => {
+    const { engagementId, budgetId } = req.params;
+    const customerId = req.auth?.customerId;
+    const userId = req.auth?.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    try {
+      if (!customerId)
+        return res.status(400).json({ message: "Customer ID missing" });
+
+      // Ensure budget exists and is owned by this customer
+      const budget = await budgetService.budgets.getById({
+        id: budgetId,
+        customerId,
+      });
+      if (!budget) {
+        return res
+          .status(404)
+          .json({ status: "error", message: "Budget not found" });
+      }
+
+      // Prevent linking if it's already linked
+      if (budget.engagementId) {
+        return res.status(409).json({
+          status: "error",
+          message: "Budget already linked to an engagement",
+        });
+      }
+
+      // Patch only the engagementId (no full validation like name/version required)
+      const updated = await budgetService.budgets.linkToEngagement({
+        id: budgetId,
+        engagementId,
+        customerId,
+        userId,
+      });
+
+      await auditService.logEvent({
+        customerId,
+        userId,
+        ip,
+        device,
+        action: "LinkBudgetToEngagement",
+        entity: "Budget",
+        entityId: budgetId,
+        details: { engagementId },
+      });
+
+      return res.json({ status: "success", data: updated });
+    } catch (error) {
+      logger.logEvent("error", "Error linking budget to engagement", {
+        action: "LinkBudgetToEngagement",
+        engagementId,
+        budgetId,
+        customerId,
+        userId,
+        error: error.message,
+        statusCode: error.statusCode || 500,
+        timestamp: new Date().toISOString(),
+      });
+      return next(error);
+    }
+  }
+);
+
 // -------- Budgets routes (/budgets) --------
 budgets.get("/", authorise(), getAllBudgets);
 budgets.get("/:id", authorise(), getBudgetById);
@@ -571,8 +641,13 @@ async function getAllBudgets(req, res, next) {
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
+    const { unlinked } = req.query;
+    const where = {};
+    if (String(unlinked) === "true") where.engagementId = null;
+
     const rows = await budgetService.budgets.getAll({
       customerId,
+      where,
       order: [["createdAt", "DESC"]],
     });
     await auditService.logEvent({

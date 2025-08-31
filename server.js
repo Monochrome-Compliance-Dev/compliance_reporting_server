@@ -259,6 +259,7 @@ app.use(
   "/api/pulse/assignments",
   require("./assignments/assignment.controller")
 );
+app.use("/api/pulse/timesheets", require("./timesheets/timesheet.controller"));
 // Combined controller handles /budget-items and /budgets under /api/pulse
 app.use("/api/pulse", require("./budgets/budget.controller"));
 app.use("/api/pulse", require("./pulse-dashboard/pulse_dashboard.controller"));

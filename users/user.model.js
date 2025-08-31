@@ -19,7 +19,6 @@ function model(sequelize) {
     passwordHash: { type: DataTypes.STRING, allowNull: true },
     firstName: { type: DataTypes.STRING, allowNull: false },
     lastName: { type: DataTypes.STRING, allowNull: false },
-    position: { type: DataTypes.STRING, allowNull: false },
     role: { type: DataTypes.STRING, allowNull: false },
     active: { type: DataTypes.BOOLEAN, allowNull: false },
     verificationToken: { type: DataTypes.STRING },

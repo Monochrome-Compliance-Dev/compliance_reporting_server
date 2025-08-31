@@ -450,6 +450,26 @@ async function budgetsDelete({ id, customerId, userId, ...options }) {
   }
 }
 
+// Convenience helper to link a budget to an engagement
+async function budgetsLinkToEngagement({
+  id,
+  engagementId,
+  customerId,
+  userId,
+  transaction,
+  ...options
+}) {
+  // Thin wrapper over budgetsPatch to make intent explicit
+  return budgetsPatch({
+    id,
+    data: { engagementId, customerId, updatedBy: userId },
+    customerId,
+    userId,
+    transaction,
+    ...options,
+  });
+}
+
 const budgets = {
   getAll: budgetsGetAll,
   getById: budgetsGetById,
@@ -457,6 +477,7 @@ const budgets = {
   update: budgetsUpdate,
   patch: budgetsPatch,
   delete: budgetsDelete,
+  linkToEngagement: budgetsLinkToEngagement,
 };
 
 module.exports = {

@@ -12,7 +12,6 @@ const registerSchema = Joi.object({
   lastName: Joi.string().required(),
   email: Joi.string().email().required(),
   phone: Joi.string().optional(),
-  position: Joi.string().required(),
   // password: Joi.string().min(6).required(),
   // confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
   role: Joi.string()
@@ -33,7 +32,6 @@ const registerFirstUserSchema = Joi.object({
   lastName: Joi.string().required(),
   email: Joi.string().email().required(),
   phone: Joi.string().required(),
-  position: Joi.string().required(),
   password: Joi.string().min(8).required(),
   confirmPassword: Joi.string().valid(Joi.ref("password")).required(),
   role: Joi.string().required(),
@@ -85,7 +83,6 @@ const inviteWithResourceSchema = Joi.object({
     role: Joi.string()
       .valid(Role.User, Role.Admin, Role.Boss)
       .default(Role.User),
-    position: Joi.string().required(),
     firstName: Joi.string().allow(""),
     lastName: Joi.string().allow(""),
     customerId: Joi.string().required(),
@@ -93,7 +90,7 @@ const inviteWithResourceSchema = Joi.object({
   }).required(),
   resource: Joi.object({
     name: Joi.string().required(),
-    role: Joi.string().allow(""),
+    position: Joi.string().required(),
     hourlyRate: Joi.number().min(0).allow(null),
     capacityHoursPerWeek: Joi.number().min(0).max(168).allow(null),
   }).required(),

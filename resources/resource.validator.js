@@ -2,7 +2,7 @@ const Joi = require("../middleware/joiSanitizer");
 
 const base = Joi.object({
   name: Joi.string().max(255).required().sanitize(),
-  role: Joi.string().max(120).optional().sanitize(),
+  position: Joi.string().max(120).required().sanitize(),
   hourlyRate: Joi.number().min(0).optional(),
   capacityHoursPerWeek: Joi.number().integer().min(0).optional(),
   email: Joi.string().email().optional().sanitize(),

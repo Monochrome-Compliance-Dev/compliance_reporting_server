@@ -459,7 +459,6 @@ async function inviteWithResource({ user, resource, createdBy, origin }) {
     const invited = new db.User({
       firstName: user.firstName,
       lastName: user.lastName,
-      position: user.position,
       active: user.active,
       email: user.email,
       role: user.role || Role.User,
@@ -596,7 +595,6 @@ function basicDetails(user) {
     email,
     role,
     phone,
-    position,
     created,
     updated,
     verified,
@@ -608,7 +606,6 @@ function basicDetails(user) {
     lastName,
     email,
     phone,
-    position,
     role,
     created,
     updated,

@@ -27,7 +27,7 @@ function model(sequelize) {
     resourceLabel: { type: DataTypes.STRING(200), allowNull: true },
 
     // Deprecated: kept for backward compatibility; prefer resourceLabel going forward
-    activity: { type: DataTypes.STRING, allowNull: true },
+    sectionName: { type: DataTypes.STRING, allowNull: true },
     billingType: {
       type: DataTypes.STRING(10),
       allowNull: false,
