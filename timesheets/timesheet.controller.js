@@ -15,6 +15,7 @@ const {
 } = require("./timesheet.validator");
 
 router.get("/", authorise(), getAll);
+router.get("/utilisation", authorise(), getUtilisation);
 router.get("/:id", authorise(), getById);
 router.post("/", authorise(), validateRequest(timesheetCreateSchema), create);
 router.put("/:id", authorise(), validateRequest(timesheetUpdateSchema), update);
@@ -435,6 +436,50 @@ async function deleteRow(req, res, next) {
     logger.logEvent("error", "Error deleting timesheet row", {
       action: "DeleteTimesheetRow",
       rowId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function getUtilisation(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const { from, to, includeNonBillable } = req.query || {};
+    const params = {
+      customerId,
+      // Pass raw strings to service; service can parse/validate
+      from: typeof from === "string" ? from : undefined,
+      to: typeof to === "string" ? to : undefined,
+      includeNonBillable:
+        includeNonBillable === "true" || includeNonBillable === true,
+    };
+    const rows = await timesheetService.utilisation(params);
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "GetTimesheetUtilisation",
+      entity: "TimesheetUtilisation",
+      details: {
+        from: params.from,
+        to: params.to,
+        includeNonBillable: params.includeNonBillable,
+        count: Array.isArray(rows) ? rows.length : undefined,
+      },
+    });
+    res.json({ status: "success", data: rows });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching timesheet utilisation", {
+      action: "GetTimesheetUtilisation",
       customerId,
       userId,
       error: error.message,
