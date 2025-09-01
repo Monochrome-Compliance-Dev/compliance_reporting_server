@@ -9,31 +9,40 @@ module.exports = {
 };
 
 async function getAll() {
-  return await db.Customer.findAll();
+  const rows = await db.Customer.findAll();
+  return rows.map((r) =>
+    typeof r.get === "function" ? r.get({ plain: true }) : r
+  );
 }
 
-async function getById(customerId, id) {
-  const customer = await db.Customer.findOne({ where: { id, customerId } });
+async function getById({ id }) {
+  const customer = await db.Customer.findOne({ where: { id } });
   if (!customer) throw { status: 404, message: "Customer not found" };
-  return customer;
+  return typeof customer.get === "function"
+    ? customer.get({ plain: true })
+    : customer;
 }
 
-async function create(customerId, params) {
-  if (await db.Customer.findOne({ where: { abn: params.abn, customerId } })) {
+async function create({ data }) {
+  if (!data) throw { status: 400, message: "Missing payload" };
+  if (await db.Customer.findOne({ where: { abn: data.abn } })) {
     throw { status: 500, message: "Customer with this ABN already exists" };
   }
-  return await db.Customer.create({ ...params, customerId });
+  const created = await db.Customer.create({ ...data });
+  return created.get({ plain: true });
 }
 
-async function update(customerId, id, params) {
-  const customer = await db.Customer.findOne({ where: { id, customerId } });
+async function update({ id, data }) {
+  const customer = await db.Customer.findOne({ where: { id } });
   if (!customer) throw { status: 404, message: "Customer not found" };
-  Object.assign(customer, params);
+  Object.assign(customer, data);
   await customer.save();
+  return customer.get({ plain: true });
 }
 
-async function _delete(customerId, id) {
-  const customer = await db.Customer.findOne({ where: { id, customerId } });
+async function _delete({ id }) {
+  const customer = await db.Customer.findOne({ where: { id } });
   if (!customer) throw { status: 404, message: "Customer not found" };
   await customer.destroy();
+  return { success: true };
 }

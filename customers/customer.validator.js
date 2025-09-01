@@ -36,7 +36,7 @@ const customerSchema = Joi.object({
     .message("Created by must be a string of length 10")
     .required(),
   paymentConfirmed: Joi.boolean().default(false),
-  billingType: Joi.string().valid("DIRECT", "PARTNER").required(),
+  billingType: Joi.string().valid("CUSTOMER", "DIRECT", "PARTNER").required(),
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 

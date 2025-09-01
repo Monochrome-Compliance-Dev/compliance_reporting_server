@@ -84,6 +84,7 @@ async function initialise() {
     "../assignments",
     "../budgets",
     "../timesheets",
+    "../stripe",
   ];
 
   modelDirs.forEach((dir) => {
@@ -403,6 +404,23 @@ async function initialise() {
       onDelete: "SET NULL",
     });
     db.TimesheetRow.belongsTo(db.BudgetItem, { foreignKey: "budgetItemId" });
+  }
+
+  // --- Stripe / Billing relationships ---
+  if (db.Customer && db.StripeUser) {
+    db.Customer.hasMany(db.StripeUser, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.StripeUser.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
+  if (db.User && db.StripeUser) {
+    // One Stripe linkage per (customer, user) by DB unique index, but expose as hasMany for simplicity
+    db.User.hasMany(db.StripeUser, {
+      foreignKey: "userId",
+      onDelete: "CASCADE",
+    });
+    db.StripeUser.belongsTo(db.User, { foreignKey: "userId" });
   }
 
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)

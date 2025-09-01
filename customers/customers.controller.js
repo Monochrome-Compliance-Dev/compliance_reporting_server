@@ -44,7 +44,7 @@ function getById(req, res, next) {
     device: req.headers["user-agent"],
   });
   customerService
-    .getById(req.params.id)
+    .getById({ id: req.params.id })
     .then((customer) => (customer ? res.json(customer) : res.sendStatus(404)))
     .catch(next);
 }
@@ -59,13 +59,16 @@ function create(req, res, next) {
     payload: req.body,
   });
   customerService
-    .create(req.body)
+    .create({
+      data: req.body,
+      userId: req.auth?.id,
+    })
     .then((customer) => {
       logger.logEvent("info", "Customer created via API", {
         action: "CreateCustomer",
         customerId: customer.id,
       });
-      res.json(customer);
+      res.status(201).json({ status: "success", data: customer });
     })
     .catch((error) => {
       logger.logEvent("error", "Error creating customer", {
@@ -86,14 +89,18 @@ function update(req, res, next) {
     payload: req.body,
   });
   customerService
-    .update(req.params.id, req.body)
+    .update({
+      id: req.params.id,
+      data: req.body,
+      userId: req.auth?.id,
+    })
     .then((customer) => {
       logger.logEvent("info", "Customer updated via API", {
         action: "UpdateCustomer",
         customerId: req.params.id,
         paymentConfirmed: req.body?.paymentConfirmed,
       });
-      res.json(customer);
+      res.json({ status: "success", data: customer });
     })
     .catch(next);
 }
@@ -107,13 +114,13 @@ function _delete(req, res, next) {
     device: req.headers["user-agent"],
   });
   customerService
-    .delete(req.params.id)
+    .delete({ id: req.params.id })
     .then(() => {
       logger.logEvent("warn", "Customer deleted via API", {
         action: "DeleteCustomer",
         customerId: req.params.id,
       });
-      res.json({ message: "Customer deleted successfully" });
+      res.json({ status: "success", message: "Customer deleted successfully" });
     })
     .catch((error) => {
       logger.logEvent("error", "Error deleting customer", {

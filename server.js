@@ -183,6 +183,26 @@ const emailLimiter = rateLimit({
 app.use("/api/public/send-attachment-email", emailLimiter);
 app.use("/api/booking", emailLimiter);
 
+// --- Stripe webhook MUST receive raw body BEFORE body parsers ---
+const billingService = require("./stripe/billing.service");
+
+app.post(
+  "/api/billing/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      await billingService.handleWebhook({
+        rawBody: req.body,
+        sig: req.headers["stripe-signature"],
+      });
+      res.status(200).send("ok");
+    } catch (e) {
+      res.status(e.statusCode || 400).send(`Webhook Error: ${e.message}`);
+    }
+  }
+);
+// --- end webhook mount ---
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
@@ -263,6 +283,8 @@ app.use("/api/pulse/timesheets", require("./timesheets/timesheet.controller"));
 // Combined controller handles /budget-items and /budgets under /api/pulse
 app.use("/api/pulse", require("./budgets/budget.controller"));
 app.use("/api/pulse", require("./pulse-dashboard/pulse_dashboard.controller"));
+app.use("/api/stripe", require("./stripe/stripe.controller"));
+app.use("/api/billing", require("./stripe/billing.controller"));
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

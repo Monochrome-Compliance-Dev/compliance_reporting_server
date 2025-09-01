@@ -241,3 +241,15 @@ CREATE POLICY tbl_pulse_timesheet_row_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_pulse_timesheet_row FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- Stripe / Billing: RLS policies
+-- =============================
+ALTER TABLE tbl_stripe_user ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_stripe_user_rls_policy ON tbl_stripe_user;
+CREATE POLICY tbl_stripe_user_rls_policy
+  ON tbl_stripe_user
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_stripe_user FORCE ROW LEVEL SECURITY;
