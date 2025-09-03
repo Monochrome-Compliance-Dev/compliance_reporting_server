@@ -353,6 +353,29 @@ async function create(params) {
     throw { status: 400, message: "customerId is required" };
   const t = await beginTransactionWithCustomerContext(params.customerId);
   try {
+    // Enforce seat cap: count active users vs. tenant seats
+    const customer = await db.Customer.findOne({
+      where: { id: params.customerId },
+      attributes: ["seats"],
+      transaction: t,
+    });
+    const seats = customer?.seats ?? 1;
+
+    // By default, new users are active unless explicitly set to false
+    const willBeActive = params.active !== false;
+
+    const activeCount = await db.User.count({
+      where: { customerId: params.customerId, active: true },
+      transaction: t,
+    });
+
+    if (willBeActive && activeCount >= seats) {
+      throw {
+        status: 403,
+        message: `Seat limit reached (${seats}). Please upgrade your subscription to add more users.`,
+      };
+    }
+
     if (
       await db.User.findOne({ where: { email: params.email }, transaction: t })
     ) {

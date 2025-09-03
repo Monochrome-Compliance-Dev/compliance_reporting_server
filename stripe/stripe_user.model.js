@@ -24,7 +24,7 @@ function model(sequelize) {
 
     // App-facing plan & seats
     planCode: { type: DataTypes.STRING, allowNull: true },
-    seats: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    seats: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 20 },
 
     // Status mirrors Stripe but kept as string to avoid ENUM migrations
     isActive: {

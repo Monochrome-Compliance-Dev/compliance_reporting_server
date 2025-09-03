@@ -36,7 +36,7 @@ module.exports = (sequelize) => {
         // The type of entity affected, e.g. "ReportingPeriod"
       },
       entityId: {
-        type: DataTypes.STRING(10),
+        type: DataTypes.STRING(64),
         allowNull: true,
         // The specific ID of the entity record affected (nullable for bulk actions)
       },

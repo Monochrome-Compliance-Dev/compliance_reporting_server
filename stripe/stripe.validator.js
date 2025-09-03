@@ -13,7 +13,8 @@ const base = Joi.object({
 
   // Plan & seats
   planCode: Joi.string().max(120).allow(null).optional().sanitize(),
-  seats: Joi.number().integer().min(1).optional(),
+  // Seats come from the frontend (/Users/darryllrobinson/Projects/compliance_reporting/src/features/users/FirstUserRegister.js), default 20 here as a safeguard.
+  seats: Joi.number().integer().min(1).max(500).default(20),
 
   // Status/flags
   isActive: Joi.boolean().optional(),

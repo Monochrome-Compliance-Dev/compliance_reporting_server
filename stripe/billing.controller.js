@@ -22,6 +22,7 @@ router.post(
   createCheckoutSession
 );
 router.get("/verify-session", verifySession); // for /welcome
+router.get("/entitlements", authorise(), getEntitlements);
 router.post("/portal-session", authorise(), createPortalSession);
 router.post(
   "/webhook",
@@ -41,25 +42,53 @@ async function createCheckoutSession(req, res, next) {
       planCode,
       req,
     });
-    await auditService.logEvent({
-      action: "CreateCheckoutSession",
-      customerId,
-      userId,
-      ip: req.ip,
-      device: req.headers["user-agent"],
-      details: { planCode, seats },
-    });
-    res
-      .status(201)
-      .json({ status: "success", data: { id: session.id, url: session.url } });
+
+    // Audit with concrete entity + entityId (DB requires entity NOT NULL)
+    try {
+      await auditService.logEvent({
+        action: "CreateCheckoutSession",
+        entity: "stripe.checkout_session",
+        entityId: session.id,
+        customerId,
+        userId,
+        ip: req.ip,
+        device: req.headers["user-agent"],
+        details: { planCode, seats },
+      });
+    } catch (auditErr) {
+      logger.logEvent("error", "Failed to create audit event", {
+        action: "CreateCheckoutSession",
+        customerId,
+        userId,
+        error: auditErr?.message,
+      });
+    }
+
+    // Return plain shape the FE expects
+    return res.status(201).json({ id: session.id, url: session.url });
   } catch (error) {
+    // Attempt to log a failure audit event with a concrete entity
+    try {
+      await auditService.logEvent({
+        action: "CreateCheckoutSessionFailed",
+        entity: "stripe.checkout_session",
+        entityId: null,
+        customerId,
+        userId,
+        ip: req.ip,
+        device: req.headers["user-agent"],
+        details: { error: error?.message, planCode, seats },
+      });
+    } catch (_) {
+      // swallow audit failure on error path
+    }
     logger.logEvent("error", "Checkout session error", {
       action: "CreateCheckoutSession",
       customerId,
       userId,
       error: error.message,
     });
-    next(error);
+    return next(error);
   }
 }
 
@@ -70,6 +99,16 @@ async function verifySession(req, res, next) {
       sessionId: session_id,
     });
     res.json({ status: "success", data: summary });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getEntitlements(req, res, next) {
+  try {
+    const { customerId } = req.auth;
+    const data = await billingService.getEntitlements({ customerId });
+    return res.json({ status: "success", data });
   } catch (error) {
     next(error);
   }
@@ -90,11 +129,29 @@ async function createPortalSession(req, res, next) {
 
 async function stripeWebhook(req, res, next) {
   try {
-    await billingService.handleWebhook({
+    const result = await billingService.handleWebhook({
       rawBody: req.body,
       sig: req.headers["stripe-signature"],
     });
-    res.status(200).send("ok");
+
+    // Audit in the controller (pattern consistency)
+    try {
+      await auditService.logEvent({
+        action: result?.processed
+          ? "StripeWebhookHandled"
+          : "StripeWebhookDuplicate",
+        entity: "stripe.webhook",
+        entityId: String(result?.eventId || "").slice(0, 10),
+        details: { type: result?.type, reason: result?.reason },
+      });
+    } catch (e) {
+      logger.logEvent("error", "Failed to create audit event", {
+        action: "StripeWebhookAudit",
+        error: e?.message,
+      });
+    }
+
+    return res.status(200).send("ok");
   } catch (error) {
     // must return 400 to stop Stripe retry storm on signature failures
     return res

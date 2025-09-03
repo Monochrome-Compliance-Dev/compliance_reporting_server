@@ -15,6 +15,7 @@ module.exports = {
   verifySession,
   createPortalSession,
   handleWebhook,
+  getEntitlements,
 };
 
 async function createCheckoutSession({
@@ -24,11 +25,52 @@ async function createCheckoutSession({
   planCode = "launch",
   req,
 }) {
-  // upsert Stripe customer (one per tenant is typical; we’re storing it on stripe_user)
-  // you might already have a stripeCustomerId for this tenant; re-use if so
-  const stripeCustomer = await stripe.customers.create({
-    metadata: { customerId, userId, planCode, seats: String(seats) },
-  });
+  // Prefill address/name/email/phone from our app Customer record if available
+  let appCustomer = null;
+  try {
+    appCustomer = await db.Customer.findOne({ where: { id: customerId } });
+  } catch (_) {
+    // Non-fatal: continue without prefill
+  }
+  const addressPayload = appCustomer
+    ? {
+        name:
+          appCustomer.customerName ||
+          appCustomer.businessName ||
+          appCustomer.company ||
+          undefined,
+        email: appCustomer.email || undefined,
+        phone: appCustomer.phone || undefined,
+        address: {
+          line1: appCustomer.addressline1 || undefined,
+          line2: appCustomer.addressline2 || undefined,
+          city: appCustomer.city || undefined,
+          state: appCustomer.state || undefined,
+          postal_code: appCustomer.postcode || undefined,
+          country:
+            appCustomer.country === "Australia"
+              ? "AU"
+              : appCustomer.country || undefined,
+        },
+      }
+    : {};
+
+  // Reuse existing Stripe customer if linked; otherwise create with prefilled address
+  let stripeCustomerId;
+  const existingLink = await db.StripeUser.findOne({
+    where: { customerId, userId },
+    order: [["createdAt", "DESC"]],
+  }).catch(() => null);
+
+  if (existingLink?.stripeCustomerId) {
+    stripeCustomerId = existingLink.stripeCustomerId;
+  } else {
+    const createdCustomer = await stripe.customers.create({
+      ...addressPayload,
+      metadata: { customerId, userId, planCode, seats: String(seats) },
+    });
+    stripeCustomerId = createdCustomer.id;
+  }
 
   const params = {
     mode: "subscription",
@@ -36,10 +78,14 @@ async function createCheckoutSession({
     cancel_url: cancelUrl,
     allow_promotion_codes: true,
     automatic_tax: { enabled: true },
-    line_items: [{ price: process.env.PRICE_STANDARD_ID, quantity: 1 }], // per-tenant subscription; enforce "20 users included" in app
+    customer: stripeCustomerId,
     client_reference_id: customerId,
-    customer: stripeCustomer.id,
-    // optional: subscription_data: { trial_period_days: 0 }
+    line_items: [{ price: process.env.PRICE_STANDARD_ID, quantity: seats }],
+    // Let Checkout collect and save the address to the Customer (satisfies automatic tax)
+    customer_update: { address: "auto", shipping: "auto" },
+    // AU GST: restrict address collection to AU. Add more if you sell in other regions.
+    shipping_address_collection: { allowed_countries: ["AU"] },
+    // optional: subscription_data: { trial_period_days: 0 },
   };
 
   // If you want to pre-attach a promo code (instead of user entering it), you can add discount here.
@@ -52,12 +98,13 @@ async function createCheckoutSession({
     idempotencyKey: `chk_${customerId}_${userId}_${Date.now()}`, // improve with a stable hash of inputs
   });
 
-  // create a stripe_user row now if you want, with customerId/userId/createdBy; the webhook will fill Stripe IDs
-  await db.StripeUser.create({ customerId, userId, createdBy: userId }).catch(
-    () => null
-  );
+  // Ensure stripe_user linkage exists (no-op if already there)
+  await db.StripeUser.findOrCreate({
+    where: { customerId, userId },
+    defaults: { createdBy: userId, stripeCustomerId },
+  }).catch(() => null);
 
-  return session;
+  return { id: session.id, url: session.url };
 }
 
 async function verifySession({ sessionId }) {
@@ -94,6 +141,22 @@ async function createPortalSession({ customerId, returnUrl }) {
   }
 }
 
+async function getEntitlements({ customerId }) {
+  // seats come from tbl_customer; used is count of active users
+  const customer = await db.Customer.findOne({
+    where: { id: customerId },
+    attributes: ["seats"],
+  });
+  const seats = customer?.seats ?? 1;
+
+  const used = await db.User.count({
+    where: { customerId, active: true },
+  });
+
+  const remaining = Math.max(0, seats - used);
+  return { seats, used, remaining };
+}
+
 async function handleWebhook({ rawBody, sig }) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   let event;
@@ -104,46 +167,72 @@ async function handleWebhook({ rawBody, sig }) {
     throw err;
   }
 
+  // Idempotency guard: prevent double-processing on Stripe retries
+  try {
+    if (db.WebhookEvent && typeof db.WebhookEvent.findOrCreate === "function") {
+      const [rec, created] = await db.WebhookEvent.findOrCreate({
+        where: { eventId: event.id },
+        defaults: {
+          eventId: event.id,
+          type: event.type,
+          processedAt: new Date(),
+        },
+      });
+      if (!created) {
+        // Already processed this event; report duplicate to controller
+        return {
+          processed: false,
+          reason: "duplicate",
+          eventId: event.id,
+          type: event.type,
+        };
+      }
+    }
+  } catch (_) {
+    // If the table doesn't exist or fails, proceed without idempotency rather than breaking billing.
+  }
+
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object;
       const stripeCustomerId = session.customer;
       const subscriptionId = session.subscription;
-      const priceId =
-        session.mode === "subscription"
-          ? (await stripe.subscriptions.retrieve(subscriptionId)).items.data[0]
-              .price.id
-          : null;
 
-      // customerId was set in metadata when we created the customer
+      // Pull full subscription for price, quantity (seats), status and item id
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const item = sub.items.data[0];
+      const priceId = item?.price?.id || null;
+      const subscriptionItemId = item?.id || null;
+      const quantity = item?.quantity ?? 1;
+      const status = sub.status; // trialing | active | past_due | canceled | incomplete | ...
+
+      // customerId/userId were placed in Stripe customer metadata during session creation
       const stripeCustomer = await stripe.customers.retrieve(stripeCustomerId);
       const customerId = stripeCustomer.metadata?.customerId;
       const userId = stripeCustomer.metadata?.userId;
 
-      // update tbl_stripe_user + activate tenant
+      // update tbl_stripe_user + tenant state + seats (within RLS-aware txn)
       const t = await beginTransactionWithCustomerContext(customerId);
       try {
-        const su = await db.StripeUser.findOne({
-          where: { customerId, userId },
-          transaction: t,
-        });
-        if (su) {
-          await su.update(
-            {
-              stripeCustomerId,
-              stripeSubscriptionId: subscriptionId,
-              stripePriceId: priceId,
-              status: "active",
-              isActive: true,
-              updatedBy: userId,
-            },
-            { transaction: t }
-          );
-        }
-        // flip your tenant/customer row to active (whatever your field is)
+        await db.StripeUser.update(
+          {
+            stripeCustomerId,
+            stripeSubscriptionId: subscriptionId,
+            stripeSubscriptionItemId: subscriptionItemId,
+            stripePriceId: priceId,
+            status,
+            isActive: status === "active" || status === "trialing",
+            updatedBy: userId,
+          },
+          { where: { customerId, userId }, transaction: t }
+        );
+
         if (db.Customer) {
           await db.Customer.update(
-            { status: "active" },
+            {
+              status: status === "canceled" ? "canceled" : "active",
+              seats: quantity,
+            },
             { where: { id: customerId }, transaction: t }
           );
         }
@@ -160,7 +249,10 @@ async function handleWebhook({ rawBody, sig }) {
       const sub = event.data.object;
       const stripeCustomerId = sub.customer;
       const status = sub.status; // trialing | active | past_due | canceled | incomplete | ...
-      const priceId = sub.items?.data?.[0]?.price?.id;
+      const item = sub.items?.data?.[0];
+      const priceId = item?.price?.id || null;
+      const subscriptionItemId = item?.id || null;
+      const quantity = item?.quantity ?? null;
 
       const stripeCustomer = await stripe.customers.retrieve(stripeCustomerId);
       const customerId = stripeCustomer.metadata?.customerId;
@@ -171,10 +263,22 @@ async function handleWebhook({ rawBody, sig }) {
           {
             status,
             stripePriceId: priceId,
+            stripeSubscriptionItemId: subscriptionItemId,
             isActive: status === "active" || status === "trialing",
           },
           { where: { stripeSubscriptionId: sub.id }, transaction: t }
         );
+
+        if (db.Customer && quantity != null) {
+          await db.Customer.update(
+            {
+              seats: quantity,
+              status: status === "canceled" ? "canceled" : undefined,
+            },
+            { where: { id: customerId }, transaction: t }
+          );
+        }
+
         await t.commit();
       } catch (e) {
         await t.rollback();
@@ -191,4 +295,5 @@ async function handleWebhook({ rawBody, sig }) {
       // ignore the rest
       break;
   }
+  return { processed: true, eventId: event.id, type: event.type };
 }

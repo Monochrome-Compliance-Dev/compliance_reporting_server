@@ -30,6 +30,7 @@ const customerSchema = Joi.object({
   headEntityAbn: Joi.string().allow(null, ""),
   headEntityAcn: Joi.string().allow(null, ""),
   active: Joi.boolean().default(true),
+  seats: Joi.number().integer().min(1).default(1),
   createdBy: Joi.string()
     .alphanum()
     .length(10)
@@ -73,6 +74,7 @@ const customerUpdateSchema = Joi.object({
   headEntityAbn: Joi.string().allow(null, ""),
   headEntityAcn: Joi.string().allow(null, ""),
   active: Joi.boolean().default(true),
+  seats: Joi.number().integer().min(1),
   updatedBy: Joi.string()
     .alphanum()
     .length(10)
