@@ -129,6 +129,11 @@ async function createPortalSession(req, res, next) {
 
 async function stripeWebhook(req, res, next) {
   try {
+    logger.logEvent("info", "Stripe webhook received", {
+      action: "StripeWebhookReceived",
+      hasSignature: Boolean(req.headers["stripe-signature"]),
+      contentType: req.headers["content-type"],
+    });
     const result = await billingService.handleWebhook({
       rawBody: req.body,
       sig: req.headers["stripe-signature"],

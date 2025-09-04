@@ -5,9 +5,15 @@
 process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
 // Load .env.development only in development; other envs use AWS-injected vars
+const path = require("path");
 const dotenv = require("dotenv");
 if (process.env.NODE_ENV === "development") {
-  dotenv.config({ path: ".env.development" });
+  // Load env relative to this file so cwd doesn't matter
+  const envPath = path.join(__dirname, ".env.development");
+  const loaded = dotenv.config({ path: envPath });
+  if (loaded.error) {
+    console.warn("⚠️ Could not load .env.development at", envPath);
+  }
 }
 
 const { logger } = require("./helpers/logger");
@@ -22,6 +28,12 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
 console.log("🧾 Final allowed origins:", allowedOrigins);
 
 console.log("Running in environment:", process.env.NODE_ENV);
+
+const mask = (v) => (v ? String(v).slice(0, 10) + "…" : "<missing>");
+console.log("🔑 Stripe keys:", {
+  STRIPE_SECRET_KEY: mask(process.env.STRIPE_SECRET_KEY),
+  STRIPE_WEBHOOK_SECRET: mask(process.env.STRIPE_WEBHOOK_SECRET),
+});
 
 if (!process.env.JWT_SECRET) {
   console.warn("⚠️ JWT_SECRET is missing. Authentication may fail.");

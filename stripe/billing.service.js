@@ -25,6 +25,12 @@ async function createCheckoutSession({
   planCode = "launch",
   req,
 }) {
+  console.log("🔵 createCheckoutSession called", {
+    customerId,
+    userId,
+    seats,
+    planCode,
+  });
   // Prefill address/name/email/phone from our app Customer record if available
   let appCustomer = null;
   try {
@@ -32,6 +38,10 @@ async function createCheckoutSession({
   } catch (_) {
     // Non-fatal: continue without prefill
   }
+  console.log(
+    "🔵 appCustomer lookup result",
+    appCustomer ? appCustomer.id : null
+  );
   const addressPayload = appCustomer
     ? {
         name:
@@ -61,6 +71,11 @@ async function createCheckoutSession({
     where: { customerId, userId },
     order: [["createdAt", "DESC"]],
   }).catch(() => null);
+  console.log(
+    "🔵 existing StripeUser link",
+    existingLink ? existingLink.id : null,
+    existingLink?.stripeCustomerId
+  );
 
   if (existingLink?.stripeCustomerId) {
     stripeCustomerId = existingLink.stripeCustomerId;
@@ -70,6 +85,7 @@ async function createCheckoutSession({
       metadata: { customerId, userId, planCode, seats: String(seats) },
     });
     stripeCustomerId = createdCustomer.id;
+    console.log("🟢 created Stripe customer", stripeCustomerId);
   }
 
   const params = {
@@ -80,13 +96,15 @@ async function createCheckoutSession({
     automatic_tax: { enabled: true },
     customer: stripeCustomerId,
     client_reference_id: customerId,
-    line_items: [{ price: process.env.PRICE_STANDARD_ID, quantity: seats }],
+    // Flat pricing MVP: $200 total per month (20 seats included)
+    line_items: [{ price: process.env.PRICE_STANDARD_ID, quantity: 1 }],
     // Let Checkout collect and save the address to the Customer (satisfies automatic tax)
     customer_update: { address: "auto", shipping: "auto" },
     // AU GST: restrict address collection to AU. Add more if you sell in other regions.
     shipping_address_collection: { allowed_countries: ["AU"] },
     // optional: subscription_data: { trial_period_days: 0 },
   };
+  console.log("🔵 creating checkout session with params", params);
 
   // If you want to pre-attach a promo code (instead of user entering it), you can add discount here.
   if (process.env.LAUNCH_PROMO_CODE && planCode === "launch") {
@@ -97,13 +115,48 @@ async function createCheckoutSession({
   const session = await stripe.checkout.sessions.create(params, {
     idempotencyKey: `chk_${customerId}_${userId}_${Date.now()}`, // improve with a stable hash of inputs
   });
+  console.log("🟢 created checkout session", session.id, session.url);
 
-  // Ensure stripe_user linkage exists (no-op if already there)
-  await db.StripeUser.findOrCreate({
-    where: { customerId, userId },
-    defaults: { createdBy: userId, stripeCustomerId },
-  }).catch(() => null);
+  // Ensure stripe_user linkage exists (RLS-aware) and persist stripeCustomerId if newly created
+  const linkTxn = await beginTransactionWithCustomerContext(customerId);
+  try {
+    console.log("🔵 linking StripeUser", {
+      customerId,
+      userId,
+      stripeCustomerId,
+    });
+    const [link, created] = await db.StripeUser.findOrCreate({
+      where: { customerId, userId },
+      defaults: { createdBy: userId, stripeCustomerId },
+      transaction: linkTxn,
+    });
+    console.log("🟢 StripeUser link result", {
+      created,
+      linkId: link?.id,
+      stripeCustomerId: link?.stripeCustomerId,
+    });
+    // If an existing link lacked the stripeCustomerId, backfill it
+    if (!created && !link?.stripeCustomerId && stripeCustomerId) {
+      console.log("🟡 backfilling stripeCustomerId for existing link");
+      await db.StripeUser.update(
+        { stripeCustomerId },
+        {
+          where: { customerId, userId, stripeCustomerId: null },
+          transaction: linkTxn,
+        }
+      );
+    }
+    await linkTxn.commit();
+  } catch (e) {
+    console.error("🔴 error linking StripeUser", e);
+    await linkTxn.rollback();
+    throw e;
+  }
 
+  console.log("✅ createCheckoutSession complete", {
+    id: session.id,
+    url: session.url,
+  });
   return { id: session.id, url: session.url };
 }
 
@@ -127,8 +180,11 @@ async function createPortalSession({ customerId, returnUrl }) {
       order: [["createdAt", "DESC"]],
       transaction: t,
     });
-    if (!su || !su.stripeCustomerId)
-      throw new Error("No Stripe customer on record.");
+    if (!su || !su.stripeCustomerId) {
+      const err = new Error("Billing not provisioned yet. Try again shortly.");
+      err.status = 409; // Conflict / not ready
+      throw err;
+    }
     const session = await stripe.billingPortal.sessions.create({
       customer: su.stripeCustomerId,
       return_url: returnUrl,
@@ -203,7 +259,6 @@ async function handleWebhook({ rawBody, sig }) {
       const item = sub.items.data[0];
       const priceId = item?.price?.id || null;
       const subscriptionItemId = item?.id || null;
-      const quantity = item?.quantity ?? 1;
       const status = sub.status; // trialing | active | past_due | canceled | incomplete | ...
 
       // customerId/userId were placed in Stripe customer metadata during session creation
@@ -229,10 +284,7 @@ async function handleWebhook({ rawBody, sig }) {
 
         if (db.Customer) {
           await db.Customer.update(
-            {
-              status: status === "canceled" ? "canceled" : "active",
-              seats: quantity,
-            },
+            { status: status === "canceled" ? "canceled" : "active" },
             { where: { id: customerId }, transaction: t }
           );
         }
@@ -252,7 +304,6 @@ async function handleWebhook({ rawBody, sig }) {
       const item = sub.items?.data?.[0];
       const priceId = item?.price?.id || null;
       const subscriptionItemId = item?.id || null;
-      const quantity = item?.quantity ?? null;
 
       const stripeCustomer = await stripe.customers.retrieve(stripeCustomerId);
       const customerId = stripeCustomer.metadata?.customerId;
@@ -269,12 +320,9 @@ async function handleWebhook({ rawBody, sig }) {
           { where: { stripeSubscriptionId: sub.id }, transaction: t }
         );
 
-        if (db.Customer && quantity != null) {
+        if (db.Customer) {
           await db.Customer.update(
-            {
-              seats: quantity,
-              status: status === "canceled" ? "canceled" : undefined,
-            },
+            { status: status === "canceled" ? "canceled" : undefined },
             { where: { id: customerId }, transaction: t }
           );
         }
