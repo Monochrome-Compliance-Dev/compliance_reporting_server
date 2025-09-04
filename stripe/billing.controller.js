@@ -117,9 +117,23 @@ async function getEntitlements(req, res, next) {
 async function createPortalSession(req, res, next) {
   try {
     const { customerId } = req.auth; // tenant of current user
+
+    // Resolve a safe, non-empty return URL
+    const fallbackBase =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL ||
+      "http://localhost:3000";
+
+    const bodyReturnUrl = req.body && req.body.returnUrl;
+    const returnUrl =
+      bodyReturnUrl && String(bodyReturnUrl).trim()
+        ? String(bodyReturnUrl).trim()
+        : `${fallbackBase}/welcome`;
+
     const url = await billingService.createPortalSession({
       customerId,
-      returnUrl: process.env.BILLING_PORTAL_RETURN_URL,
+      returnUrl,
     });
     res.json({ status: "success", data: { url } });
   } catch (error) {

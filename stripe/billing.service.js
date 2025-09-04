@@ -185,9 +185,21 @@ async function createPortalSession({ customerId, returnUrl }) {
       err.status = 409; // Conflict / not ready
       throw err;
     }
+
+    // Ensure a non-empty, valid return URL is sent to Stripe
+    const fallbackBase =
+      process.env.APP_PUBLIC_URL ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL ||
+      "http://localhost:3000";
+    const finalReturnUrl =
+      returnUrl && String(returnUrl).trim()
+        ? String(returnUrl).trim()
+        : `${fallbackBase}/welcome`;
+
     const session = await stripe.billingPortal.sessions.create({
       customer: su.stripeCustomerId,
-      return_url: returnUrl,
+      return_url: finalReturnUrl,
     });
     await t.commit();
     return session.url;
