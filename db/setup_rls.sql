@@ -253,3 +253,72 @@ CREATE POLICY tbl_stripe_user_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_stripe_user FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- Pulse Views: conditional GRANTS (to avoid "permission denied" on views)
+-- These DO blocks only run GRANTs if the view exists.
+-- In production, replace PUBLIC with a specific role (e.g., app_user).
+-- =============================
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_overruns') THEN
+    EXECUTE 'GRANT SELECT ON public.v_overruns TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_weekly_burn') THEN
+    EXECUTE 'GRANT SELECT ON public.v_weekly_burn TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_resource_utilisation') THEN
+    EXECUTE 'GRANT SELECT ON public.v_resource_utilisation TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_pulse_team_map') THEN
+    EXECUTE 'GRANT SELECT ON public.v_pulse_team_map TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_pulse_team_hours') THEN
+    EXECUTE 'GRANT SELECT ON public.v_pulse_team_hours TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_pulse_estimation_by_category') THEN
+    EXECUTE 'GRANT SELECT ON public.v_pulse_estimation_by_category TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_pulse_context_switching') THEN
+    EXECUTE 'GRANT SELECT ON public.v_pulse_context_switching TO PUBLIC';
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE c.relkind='v' AND n.nspname='public' AND c.relname='v_pulse_long_day_streaks') THEN
+    EXECUTE 'GRANT SELECT ON public.v_pulse_long_day_streaks TO PUBLIC';
+  END IF;
+END$$;

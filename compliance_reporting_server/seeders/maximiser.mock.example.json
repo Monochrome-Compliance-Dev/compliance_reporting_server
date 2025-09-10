@@ -1,0 +1,53 @@
+{
+  "customerId": "REPLACE_ME",
+  "teams": [{ "teamId": "1234567890", "teamName": "Tony Stark" }],
+  "resources": [{ "resourceId": "1234567890", "name": "Tony Stark" }],
+  "budgets": [
+    {
+      "id": "9WoDDc2fzW",
+      "engagementId": "FS_QFU2t0Y",
+      "sectionName": "Control testing",
+      "hours": 40,
+      "billable": true
+    }
+  ],
+  "timesheets": [
+    { "id": "Onp9QSXq07", "resourceId": "1234567890", "weekKey": "2025-09-01" }
+  ],
+  "rows": [
+    {
+      "timesheetId": "Onp9QSXq07",
+      "date": "2025-09-01",
+      "engagementId": "FS_QFU2t0Y",
+      "budgetItemId": "9w0M_95MAQ",
+      "hours": 10,
+      "billable": true
+    }
+  ]
+}
+
+{
+  "customerId": "sqBxGzP123",
+  "teams": [
+    { "teamId": "Assurance", "teamName": "Assurance" },
+    { "teamId": "Advisory",  "teamName": "Advisory" }
+  ],
+  "resources": [
+    { "resourceId": "1234567890", "name": "Tony Stark",   "team": "Assurance" },
+    { "resourceId": "NAUZmkM_qQ", "name": "Pepper Potts",  "team": "Advisory" }
+  ],
+  "budgets": [
+    { "id": "9w0M_95MAQ", "engagementId": "FS_QFU2t0Y", "sectionName": "Control testing", "hours": 40, "billable": true },
+    { "id": "BI_DELIV_01", "engagementId": "FS_QFU2t0Y", "sectionName": "Delivery",         "hours": 120, "billable": true }
+  ],
+  "timesheets": [
+    { "id": "Onp9QSXq07", "resourceId": "1234567890", "weekKey": "2025-09-01" },
+    { "id": "TS_PEP_0901", "resourceId": "NAUZmkM_qQ", "weekKey": "2025-09-01" }
+  ],
+  "rows": [
+    { "timesheetId": "Onp9QSXq07", "date": "2025-09-01", "engagementId": "FS_QFU2t0Y", "budgetItemId": "9w0M_95MAQ", "hours": 10, "billable": true },
+    { "timesheetId": "Onp9QSXq07", "date": "2025-09-02", "engagementId": "FS_QFU2t0Y", "budgetItemId": "BI_DELIV_01", "hours": 4,  "billable": true },
+    { "timesheetId": "TS_PEP_0901", "date": "2025-09-01", "engagementId": "FS_QFU2t0Y", "budgetItemId": "BI_DELIV_01", "hours": 7,  "billable": true },
+    { "timesheetId": "TS_PEP_0901", "date": "2025-09-02", "engagementId": "FS_QFU2t0Y", "budgetItemId": null,        "hours": 2,  "billable": false }
+  ]
+}
