@@ -612,9 +612,139 @@ async function compareTeams({
   }
 }
 
+/**
+ * Analyse FE-provided aggregates (no DB). Returns grouped findings:
+ * { positive: string[], risks: string[], critical: string[], nextSteps: string }
+ */
+function analyseAggregates(payload = {}) {
+  const {
+    throughputByWeek = [],
+    positiveScores = [],
+    estVarianceByTeam = [],
+    estimationLabels = [],
+    estimationPlanned = [],
+    estimationActual = [],
+  } = payload || {};
+
+  // --- Helper: derive throughput growth over recent window ---
+  const growthPct = (() => {
+    if (!Array.isArray(throughputByWeek) || throughputByWeek.length < 6)
+      return 0;
+    const first = throughputByWeek.slice(0, 3);
+    const last = throughputByWeek.slice(-3);
+    const avg = (a) =>
+      a.reduce((s, n) => s + Number(n || 0), 0) / Math.max(1, a.length);
+    const base = avg(first);
+    if (!Number.isFinite(base) || base === 0) return 0;
+    return Math.round(((avg(last) - base) / Math.max(1, base)) * 100);
+  })();
+
+  // --- Helper: find labeled score by fuzzy name ---
+  const getScore = (needle) => {
+    const n = String(needle).toLowerCase();
+    const found = (positiveScores || []).find((p) =>
+      String(p?.label || "")
+        .toLowerCase()
+        .includes(n)
+    );
+    return Number(found?.score) || 0;
+  };
+
+  const onTime = getScore("on-time");
+  const qa = getScore("qa");
+
+  // --- Map estimation arrays (labels + planned/actual) to objects for MAPE ---
+  const estimation = Array.isArray(estimationLabels)
+    ? estimationLabels.map((label, i) => ({
+        category: String(label || "Uncategorised"),
+        planned: Number(estimationPlanned?.[i] || 0),
+        actual: Number(estimationActual?.[i] || 0),
+      }))
+    : [];
+
+  // Compute MAPE by category using existing helpers
+  const mapeByCat = computeMAPEByCategory(estimation);
+  const highVarTeams = (
+    Array.isArray(estVarianceByTeam) ? estVarianceByTeam : []
+  )
+    .filter((t) => Number.isFinite(t?.variance) && t.variance >= 15)
+    .sort((a, b) => b.variance - a.variance)
+    .slice(0, 3)
+    .map((t) => `${t.team} (~${t.variance}%)`);
+
+  // --- Findings buckets ---
+  const positive = [];
+  const risks = [];
+  const critical = [];
+
+  // Positives
+  if (growthPct > 0)
+    positive.push(`Delivery velocity trending up ~${growthPct}%.`);
+  const topPos = (positiveScores || [])
+    .slice()
+    .sort((a, b) => b.score - a.score)[0];
+  if (topPos && Number.isFinite(topPos.score)) {
+    positive.push(`${topPos.label} strong (~${Math.round(topPos.score)}%).`);
+  }
+
+  // Risks from low scores
+  const lowScores = (positiveScores || [])
+    .slice()
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 2);
+  for (const s of lowScores) {
+    if (Number.isFinite(s?.score))
+      risks.push(`${s.label} below target (~${Math.round(s.score)}%).`);
+  }
+  if (highVarTeams.length) {
+    risks.push(
+      `High estimation variance observed in ${highVarTeams.join(", ")}.`
+    );
+  }
+
+  // Critical signals (stricter thresholds)
+  if (onTime && onTime < 60)
+    critical.push(`On-time start very low (~${Math.round(onTime)}%).`);
+  if (qa && qa < 65)
+    critical.push(`QA pass rate very low (~${Math.round(qa)}%).`);
+  const mDiscovery = mapeByCat.find((x) =>
+    String(x.category).toLowerCase().includes("discovery")
+  );
+  if (mDiscovery && mDiscovery.mape > 35) {
+    critical.push(
+      `Discovery work overshoots plan by ${Math.round(mDiscovery.mape)}%.`
+    );
+  }
+  const extremeVar = (
+    Array.isArray(estVarianceByTeam) ? estVarianceByTeam : []
+  ).find((t) => Number.isFinite(t?.variance) && t.variance >= 35);
+  if (extremeVar) {
+    critical.push(
+      `Extreme variance in ${extremeVar.team} (~${Math.round(extremeVar.variance)}%).`
+    );
+  }
+
+  // Next steps heuristic
+  let nextSteps = "No immediate actions.";
+  if (critical.length)
+    nextSteps = `Address top critical item first: ${critical[0]}`;
+  else if (risks.length) nextSteps = `Tackle leading risk: ${risks[0]}`;
+  else if (positive.length) nextSteps = `Share practice: ${positive[0]}`;
+
+  // Deduplicate and compact
+  const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+  return {
+    positive: uniq(positive),
+    risks: uniq(risks),
+    critical: uniq(critical),
+    nextSteps,
+  };
+}
+
 module.exports = {
   listTeams,
   compareTeams,
+  analyseAggregates,
   // exported for unit tests
   _internals: {
     fetchBaseSignals,

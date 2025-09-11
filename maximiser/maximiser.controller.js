@@ -3,7 +3,11 @@ const express = require("express");
 const router = express.Router();
 const authorise = require("../middleware/authorise");
 const { logger } = require("../helpers/logger");
-const { listTeams, compareTeams } = require("./maximiser.service");
+const {
+  listTeams,
+  compareTeams,
+  analyseAggregates,
+} = require("./maximiser.service");
 
 // GET /pulse/maximiser/teams
 router.get("/teams", authorise(), async (req, res, next) => {
@@ -52,11 +56,9 @@ router.get("/compare", authorise(), async (req, res, next) => {
     });
 
     if (ids.length < 2) {
-      return res
-        .status(400)
-        .json({
-          error: "Select at least two teams to compare (teamIds=A,B,...)",
-        });
+      return res.status(400).json({
+        error: "Select at least two teams to compare (teamIds=A,B,...)",
+      });
     }
 
     const payload = await compareTeams({
@@ -80,6 +82,39 @@ router.get("/compare", authorise(), async (req, res, next) => {
   } catch (err) {
     logger.logEvent("error", "Pulse: maximiser compare failed", {
       action: "PulseMaximiserCompare",
+      customerId,
+      error: err?.message,
+    });
+    next(err);
+  }
+});
+
+// POST /pulse/maximiser/analyse
+// Accepts frontend aggregates and returns AI-style findings without DB reads
+router.post("/analyse", authorise(), async (req, res, next) => {
+  const customerId = req.auth?.customerId;
+  try {
+    const payload = req.body || {};
+    logger.logEvent("info", "Pulse: maximiser analyse invoked", {
+      action: "PulseMaximiserAnalyse",
+      customerId,
+      hasThroughput: Array.isArray(payload?.throughputByWeek),
+      hasPositiveScores: Array.isArray(payload?.positiveScores),
+      hasEstVarianceByTeam: Array.isArray(payload?.estVarianceByTeam),
+      path: req.originalUrl,
+    });
+    const result = await analyseAggregates(payload);
+    logger.logEvent("info", "Pulse: maximiser analyse success", {
+      action: "PulseMaximiserAnalyse",
+      customerId,
+      positive: Array.isArray(result?.positive) ? result.positive.length : 0,
+      risks: Array.isArray(result?.risks) ? result.risks.length : 0,
+      critical: Array.isArray(result?.critical) ? result.critical.length : 0,
+    });
+    return res.json(result);
+  } catch (err) {
+    logger.logEvent("error", "Pulse: maximiser analyse failed", {
+      action: "PulseMaximiserAnalyse",
       customerId,
       error: err?.message,
     });
