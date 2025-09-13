@@ -12,104 +12,105 @@ const {
   esgTemplateSchema,
 } = require("./esg.validator");
 
+const requireEsg = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "esg",
+});
+
 // routes
 router.post(
   "/indicators",
-  authorise(),
+  requireEsg,
   validateRequest(esgIndicatorSchema),
   createIndicator
 );
 router.post(
   "/metrics",
-  authorise(),
+  requireEsg,
   validateRequest(esgMetricSchema),
   createMetric
 );
-router.post("/reporting-periods", authorise(), createReportingPeriod);
-router.get("/reporting-periods", authorise(), getReportingPeriodsByCustomer);
-router.get("/reporting-periods/:id", authorise(), getReportingPeriodById);
-router.get("/metrics", authorise(), getMetricsByCustomer);
+router.post("/reporting-periods", requireEsg, createReportingPeriod);
+router.get("/reporting-periods", requireEsg, getReportingPeriodsByCustomer);
+router.get("/reporting-periods/:id", requireEsg, getReportingPeriodById);
+router.get("/metrics", requireEsg, getMetricsByCustomer);
 router.get(
   "/indicators/:reportingPeriodId",
-  authorise(),
+  requireEsg,
   getIndicatorsByReportingPeriodId
 );
 router.get(
   "/metrics/by-reporting-period/:reportingPeriodId",
-  authorise(),
+  requireEsg,
   getMetricsByReportingPeriodId
 );
 
 // Dashboard analytics routes
 router.get(
   "/dashboard/category-totals/:reportingPeriodId",
-  authorise(),
+  requireEsg,
   getCategoryTotals
 );
 
 router.get(
   "/dashboard/indicators-with-metrics/:reportingPeriodId",
-  authorise(),
+  requireEsg,
   getAllIndicatorsWithLatestMetrics
 );
 
 // New route for dashboard totals by indicator
 router.get(
   "/dashboard/totals-by-indicator/:reportingPeriodId",
-  authorise(),
+  requireEsg,
   getTotalsByIndicator
 );
 
 // Get a single metric by ID
-router.get("/metrics/:metricId", authorise(), getMetricById);
-router.delete("/indicators/:indicatorId", authorise(), deleteIndicator);
-router.delete("/metrics/:metricId", authorise(), deleteMetric);
+router.get("/metrics/:metricId", requireEsg, getMetricById);
+router.delete("/indicators/:indicatorId", requireEsg, deleteIndicator);
+router.delete("/metrics/:metricId", requireEsg, deleteMetric);
 
 // Approval workflow endpoints
-router.post(
-  "/reporting-periods/:id/submit",
-  authorise(),
-  submitReportingPeriod
-);
+router.post("/reporting-periods/:id/submit", requireEsg, submitReportingPeriod);
 router.post(
   "/reporting-periods/:id/approve",
-  authorise(),
+  requireEsg,
   approveReportingPeriod
 );
 router.post(
   "/reporting-periods/:id/rollback",
-  authorise(),
+  requireEsg,
   rollbackReportingPeriod
 );
 
 // Clone templates for reporting period
 router.post(
   "/reporting-periods/:id/clone-templates",
-  authorise(),
+  requireEsg,
   cloneTemplatesForReportingPeriod
 );
 // Template routes
 router.post(
   "/templates",
-  authorise(),
+  requireEsg,
   validateRequest(esgTemplateSchema),
   createTemplate
 );
-router.get("/templates", authorise(), getTemplatesByCustomer);
-router.get("/templates/:id", authorise(), getTemplateById);
-router.delete("/templates/:id", authorise(), deleteTemplate);
+router.get("/templates", requireEsg, getTemplatesByCustomer);
+router.get("/templates/:id", requireEsg, getTemplateById);
+router.delete("/templates/:id", requireEsg, deleteTemplate);
 
 // Unit routes
-router.post("/units", authorise(), validateRequest(esgUnitSchema), createUnit);
-router.get("/units", authorise(), getUnitsByCustomer);
-router.get("/units/:id", authorise(), getUnitById);
+router.post("/units", requireEsg, validateRequest(esgUnitSchema), createUnit);
+router.get("/units", requireEsg, getUnitsByCustomer);
+router.get("/units/:id", requireEsg, getUnitById);
 router.put(
   "/units/:id",
-  authorise(),
+  requireEsg,
   validateRequest(esgUnitSchema),
   updateUnit
 );
-router.delete("/units/:id", authorise(), deleteUnit);
+router.delete("/units/:id", requireEsg, deleteUnit);
 
 async function getReportingPeriodsByCustomer(req, res, next) {
   try {

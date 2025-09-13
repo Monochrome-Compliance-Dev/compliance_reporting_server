@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { Op } = require("sequelize");
+const ACTIVE_ENT_STATES = ["active", "trial", "grace"];
 const { sendEmail } = require("../helpers/send-email");
 const db = require("../db/database");
 const Role = require("../helpers/role");
@@ -32,8 +33,29 @@ module.exports = {
   inviteWithResource,
 };
 
-async function authenticate({ email, password, ipAddress, customerId }) {
-  const t = await beginTransactionWithCustomerContext(customerId);
+async function authenticate({ email, password, ipAddress }) {
+  const t = await db.sequelize.transaction();
+  // Determine tenant from email, then scope RLS
+  const cidRows = await db.sequelize.query(
+    'SELECT fn_get_customer_id_by_email(:email) AS "customerId"',
+    { transaction: t, replacements: { email } }
+  );
+  const cid = Array.isArray(cidRows?.[0])
+    ? cidRows[0][0]?.customerId
+    : cidRows?.[0]?.customerId;
+  if (!cid) {
+    logger.logEvent("warn", "Tenant lookup failed for email", {
+      action: "Authenticate",
+      email,
+    });
+    throw { status: 401, message: "Email or password is incorrect" };
+  }
+
+  await db.sequelize.query("SET LOCAL app.current_customer_id = :cid", {
+    transaction: t,
+    replacements: { cid },
+  });
+
   try {
     const user = await db.User.scope("withHash").findOne({
       where: { email },
@@ -60,12 +82,25 @@ async function authenticate({ email, password, ipAddress, customerId }) {
     // save refresh token
     await refreshToken.save({ transaction: t });
 
+    // fetch entitlements
+    const entRows = await db.FeatureEntitlement.findAll({
+      where: {
+        customerId: user.customerId,
+        status: { [Op.in]: ACTIVE_ENT_STATES },
+        [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: new Date() } }],
+      },
+      attributes: ["feature"],
+      transaction: t,
+    });
+    const entitlements = entRows.map((r) => r.feature);
+
     // return basic details and tokens
     await t.commit();
     return {
       ...basicDetails(user),
       jwtToken,
       refreshToken: refreshToken.token,
+      entitlements,
     };
   } catch (err) {
     if (!t.finished) await t.rollback();
@@ -91,12 +126,31 @@ async function refreshToken({ token, ipAddress }) {
     // generate new jwt
     const jwtToken = generateJwtToken(user);
 
+    // Ensure RLS is scoped to this tenant for subsequent queries
+    await db.sequelize.query("SET LOCAL app.current_customer_id = :cid", {
+      transaction: t,
+      replacements: { cid: user.customerId },
+    });
+
+    // fetch entitlements
+    const entRows = await db.FeatureEntitlement.findAll({
+      where: {
+        customerId: user.customerId,
+        status: { [Op.in]: ACTIVE_ENT_STATES },
+        [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: new Date() } }],
+      },
+      attributes: ["feature"],
+      transaction: t,
+    });
+    const entitlements = entRows.map((r) => r.feature);
+
     // return basic details and tokens
     await t.commit();
     return {
       ...basicDetails(user),
       jwtToken,
       refreshToken: newRefreshToken.token,
+      entitlements,
     };
   } catch (err) {
     if (t && !t.finished) await t.rollback();

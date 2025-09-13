@@ -4,8 +4,7 @@ const Role = require("../helpers/role");
 const authSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().required(),
-  customerId: Joi.string().required(),
-});
+}).meta({ requireCustomer: false });
 
 const registerSchema = Joi.object({
   firstName: Joi.string().required(),

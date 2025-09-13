@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const authorise = require("../middleware/authorise");
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
 const pulseDashboardService = require("./pulse_dashboard.service");
 const { logger } = require("../helpers/logger");
 
@@ -9,18 +13,18 @@ const { logger } = require("../helpers/logger");
 // so the final paths are '/pulse/dashboard/:id', etc.
 
 // Main dashboard route
-router.get("/dashboard/:id", authorise(), getDashboard);
+router.get("/dashboard/:id", requirePulse, getDashboard);
 
 // Granular routes for each metric (mirrors example style)
-router.get("/dashboard/:id/totals", authorise(), getTotals);
-router.get("/dashboard/:id/status", authorise(), getStatus);
-router.get("/dashboard/:id/weekly-burn", authorise(), getWeeklyBurn);
-router.get("/dashboard/:id/overruns", authorise(), getOverruns);
-router.get("/dashboard/:id/utilisation", authorise(), getUtilisation);
-router.get("/dashboard/:id/billable", authorise(), getBillable);
-router.get("/dashboard/:id/revenue", authorise(), getRevenue);
-router.get("/dashboard/:id/timeliness", authorise(), getTimeliness);
-router.get("/dashboard/:id/turnaround", authorise(), getTurnaround);
+router.get("/dashboard/:id/totals", requirePulse, getTotals);
+router.get("/dashboard/:id/status", requirePulse, getStatus);
+router.get("/dashboard/:id/weekly-burn", requirePulse, getWeeklyBurn);
+router.get("/dashboard/:id/overruns", requirePulse, getOverruns);
+router.get("/dashboard/:id/utilisation", requirePulse, getUtilisation);
+router.get("/dashboard/:id/billable", requirePulse, getBillable);
+router.get("/dashboard/:id/revenue", requirePulse, getRevenue);
+router.get("/dashboard/:id/timeliness", requirePulse, getTimeliness);
+router.get("/dashboard/:id/turnaround", requirePulse, getTurnaround);
 
 module.exports = router;
 

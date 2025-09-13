@@ -3,13 +3,18 @@ const router = express.Router();
 const authorise = require("../middleware/authorise");
 const dashboardService = require("./dashboard.service");
 
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
+
 // Dashboard analytics routes only
-router.get("/:id/metrics", authorise(), getDashboardMetrics);
-router.get("/:id/metrics/previous", authorise(), getDashboardPreviousMetrics);
-router.get("/:id/flags", authorise(), getDashboardFlags);
-router.get("/:id/snapshot", authorise(), getDashboardSnapshot);
-router.get("/:id/signals", authorise(), getDashboardSignals);
-router.get("/:id/extended-metrics", authorise(), getDashboardExtendedMetrics);
+router.get("/:id/metrics", requirePulse, getDashboardMetrics);
+router.get("/:id/metrics/previous", requirePulse, getDashboardPreviousMetrics);
+router.get("/:id/flags", requirePulse, getDashboardFlags);
+router.get("/:id/snapshot", requirePulse, getDashboardSnapshot);
+router.get("/:id/signals", requirePulse, getDashboardSignals);
+router.get("/:id/extended-metrics", requirePulse, getDashboardExtendedMetrics);
 
 module.exports = router;
 

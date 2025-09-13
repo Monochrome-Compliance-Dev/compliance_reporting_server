@@ -5,18 +5,22 @@ const router = express.Router();
 const xeroService = require("./xero.service");
 const { extractScopeFromTokenData } = require("./xero.service");
 const authorise = require("../middleware/authorise");
+const requirePtrs = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "ptrs",
+});
 
 router.get(
   "/connect/:ptrsId/:createdBy/:startDate/:endDate",
-  authorise(),
+  requirePtrs,
   generateAuthUrl
 );
 router.get("/callback", handleOAuthCallback);
-router.post("/extract", authorise(), startXeroExtractionHandler);
-router.post("/contacts/dump", authorise(), dumpAllContactsHandler);
+router.post("/extract", requirePtrs, startXeroExtractionHandler);
+router.post("/contacts/dump", requirePtrs, dumpAllContactsHandler);
 
 // Route to remove a tenant
-router.delete("/tenants/:tenantId", authorise(), async (req, res, next) => {
+router.delete("/tenants/:tenantId", requirePtrs, async (req, res, next) => {
   try {
     const { tenantId } = req.params;
     await xeroService.removeTenant(tenantId);
@@ -320,7 +324,7 @@ async function startXeroExtractionHandler(req, res, next) {
 }
 
 // apply Xero contact patch (demo/testing -> live via service)
-router.post("/apply", authorise(), async (req, res, next) => {
+router.post("/apply", requirePtrs, async (req, res, next) => {
   try {
     const { tenantId, dryRun = true, payload } = req.body || {};
 

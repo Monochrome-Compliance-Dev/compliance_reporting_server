@@ -4,6 +4,10 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
 const timesheetService = require("./timesheet.service");
 const {
   timesheetCreateSchema,
@@ -14,34 +18,44 @@ const {
   timesheetRowPatchSchema,
 } = require("./timesheet.validator");
 
-router.get("/", authorise(), getAll);
-router.get("/utilisation", authorise(), getUtilisation);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(timesheetCreateSchema), create);
-router.put("/:id", authorise(), validateRequest(timesheetUpdateSchema), update);
-router.patch("/:id", authorise(), validateRequest(timesheetPatchSchema), patch);
-router.delete("/:id", authorise(), _delete);
+router.get("/", requirePulse, getAll);
+router.get("/utilisation", requirePulse, getUtilisation);
+router.get("/:id", requirePulse, getById);
+router.post("/", requirePulse, validateRequest(timesheetCreateSchema), create);
+router.put(
+  "/:id",
+  requirePulse,
+  validateRequest(timesheetUpdateSchema),
+  update
+);
+router.patch(
+  "/:id",
+  requirePulse,
+  validateRequest(timesheetPatchSchema),
+  patch
+);
+router.delete("/:id", requirePulse, _delete);
 // Timesheet rows
-router.get("/:id/rows", authorise(), getRows);
+router.get("/:id/rows", requirePulse, getRows);
 router.post(
   "/:id/rows",
-  authorise(),
+  requirePulse,
   validateRequest(timesheetRowCreateSchema),
   createRow
 );
 router.put(
   "/rows/:rowId",
-  authorise(),
+  requirePulse,
   validateRequest(timesheetRowUpdateSchema),
   updateRow
 );
 router.patch(
   "/rows/:rowId",
-  authorise(),
+  requirePulse,
   validateRequest(timesheetRowPatchSchema),
   patchRow
 );
-router.delete("/rows/:rowId", authorise(), deleteRow);
+router.delete("/rows/:rowId", requirePulse, deleteRow);
 
 module.exports = router;
 

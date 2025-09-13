@@ -4,6 +4,11 @@ const express = require("express");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
 
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
+
 // Services & validators for BOTH entities
 const budgetService = require("./budget.service"); // unified service (items + budgets)
 const {
@@ -31,32 +36,32 @@ router.use("/budget-sections", sections);
 module.exports = router;
 
 // -------- Budget Items routes (/budget-items) --------
-items.get("/", authorise(), getAllItems);
-items.get("/:id", authorise(), getItemById);
+items.get("/", requirePulse, getAllItems);
+items.get("/:id", requirePulse, getItemById);
 items.post(
   "/",
-  authorise(),
+  requirePulse,
   validateRequest(budgetItemCreateSchema),
   createItem
 );
 items.put(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(budgetItemUpdateSchema),
   updateItem
 );
 items.patch(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(budgetItemPatchSchema),
   patchItem
 );
-items.delete("/:id", authorise(), deleteItem);
+items.delete("/:id", requirePulse, deleteItem);
 
 // -------- Budget Sections routes (/budget-sections) --------
 sections.patch(
   "/:sectionId",
-  authorise(),
+  requirePulse,
   // Inject auth context for validation/update
   (req, _res, next) => {
     req.body = {
@@ -71,7 +76,7 @@ sections.patch(
 );
 sections.put(
   "/:sectionId",
-  authorise(),
+  requirePulse,
   // Inject auth context for validation/update
   (req, _res, next) => {
     req.body = {
@@ -84,13 +89,13 @@ sections.put(
   validateRequest(sectionUpdateSchema),
   putSection
 );
-sections.delete("/:sectionId", authorise(), deleteSection);
+sections.delete("/:sectionId", requirePulse, deleteSection);
 
 // -------- Budget Sections via /budgets/:id/sections --------
-budgets.get("/:id/sections", authorise(), listSectionsByBudget);
+budgets.get("/:id/sections", requirePulse, listSectionsByBudget);
 budgets.post(
   "/:id/sections",
-  authorise(),
+  requirePulse,
   // Inject route/auth context so validation sees required fields
   (req, _res, next) => {
     req.body = {
@@ -108,7 +113,7 @@ budgets.post(
 // Link an existing budget to an engagement (used by BudgetBuilder "Link" UI)
 router.post(
   "/engagements/:engagementId/link-budget/:budgetId",
-  authorise(),
+  requirePulse,
   async (req, res, next) => {
     const { engagementId, budgetId } = req.params;
     const customerId = req.auth?.customerId;
@@ -176,27 +181,27 @@ router.post(
 );
 
 // -------- Budgets routes (/budgets) --------
-budgets.get("/", authorise(), getAllBudgets);
-budgets.get("/:id", authorise(), getBudgetById);
+budgets.get("/", requirePulse, getAllBudgets);
+budgets.get("/:id", requirePulse, getBudgetById);
 budgets.post(
   "/",
-  authorise(),
+  requirePulse,
   validateRequest(budgetCreateSchema),
   createBudget
 );
 budgets.put(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(budgetUpdateSchema),
   updateBudget
 );
 budgets.patch(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(budgetPatchSchema),
   patchBudget
 );
-budgets.delete("/:id", authorise(), deleteBudget);
+budgets.delete("/:id", requirePulse, deleteBudget);
 
 async function getAllItems(req, res, next) {
   try {

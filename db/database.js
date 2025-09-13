@@ -422,6 +422,14 @@ async function initialise() {
     });
     db.StripeUser.belongsTo(db.User, { foreignKey: "userId" });
   }
+  // Customer ↔ FeatureEntitlement (tenant-scoped feature flags)
+  if (db.Customer && db.FeatureEntitlement) {
+    db.Customer.hasMany(db.FeatureEntitlement, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.FeatureEntitlement.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
 
   // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
   await sequelize.sync();

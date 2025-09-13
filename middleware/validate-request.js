@@ -34,7 +34,7 @@ module.exports = function validateRequest(schema) {
       const fullRecord = requireCustomer
         ? { ...record, customerId }
         : { ...record };
-      console.log("fullRecord: ", fullRecord);
+      // console.log("fullRecord: ", fullRecord);
       const { error, value } = schema.validate(fullRecord, options);
       if (error) {
         const details = error.details.map((x) => {

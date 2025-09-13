@@ -85,4 +85,21 @@ const customerUpdateSchema = Joi.object({
   partnerId: Joi.string().alphanum().length(10).allow(null, ""),
 });
 
-module.exports = { customerSchema, customerUpdateSchema };
+const featureEntitlementSchema = Joi.object({
+  customerId: Joi.string().required(),
+  feature: Joi.string().required(),
+  status: Joi.string()
+    .valid("active", "trial", "grace", "expired")
+    .default("active"),
+  source: Joi.string().valid("stripe", "manual", "promo").default("stripe"),
+  validFrom: Joi.date().required(),
+  validTo: Joi.date().optional(),
+  createdBy: Joi.string().required(),
+  updatedBy: Joi.string().optional(),
+});
+
+module.exports = {
+  customerSchema,
+  customerUpdateSchema,
+  featureEntitlementSchema,
+};

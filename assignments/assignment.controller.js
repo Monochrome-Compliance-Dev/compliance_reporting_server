@@ -4,6 +4,10 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
 const assignmentService = require("./assignment.service");
 const {
   assignmentCreateSchema,
@@ -11,22 +15,22 @@ const {
   assignmentPatchSchema,
 } = require("./assignment.validator");
 
-router.get("/", authorise(), getAll);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(assignmentCreateSchema), create);
+router.get("/", requirePulse, getAll);
+router.get("/:id", requirePulse, getById);
+router.post("/", requirePulse, validateRequest(assignmentCreateSchema), create);
 router.put(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(assignmentUpdateSchema),
   update
 );
 router.patch(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(assignmentPatchSchema),
   patch
 );
-router.delete("/:id", authorise(), _delete);
+router.delete("/:id", requirePulse, _delete);
 
 module.exports = router;
 

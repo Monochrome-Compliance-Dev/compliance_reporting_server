@@ -11,22 +11,27 @@ const {
   engagementPatchSchema,
 } = require("./engagement.validator");
 
-router.get("/", authorise(), getAll);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(engagementCreateSchema), create);
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
+
+router.get("/", requirePulse, getAll);
+router.get("/:id", requirePulse, getById);
+router.post("/", requirePulse, validateRequest(engagementCreateSchema), create);
 router.put(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(engagementUpdateSchema),
   update
 );
 router.patch(
   "/:id",
-  authorise(),
+  requirePulse,
   validateRequest(engagementPatchSchema),
   patch
 );
-router.delete("/:id", authorise(), _delete);
+router.delete("/:id", requirePulse, _delete);
 
 module.exports = router;
 

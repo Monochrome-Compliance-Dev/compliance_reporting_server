@@ -4,6 +4,10 @@ const express = require("express");
 const router = express.Router();
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
 const resourceService = require("./resource.service");
 const {
   resourceCreateSchema,
@@ -12,12 +16,12 @@ const {
 } = require("./resource.validator");
 
 // routes
-router.get("/", authorise(), getAll);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(resourceCreateSchema), create);
-router.put("/:id", authorise(), validateRequest(resourceUpdateSchema), update);
-router.patch("/:id", authorise(), validateRequest(resourcePatchSchema), patch);
-router.delete("/:id", authorise(), _delete);
+router.get("/", requirePulse, getAll);
+router.get("/:id", requirePulse, getById);
+router.post("/", requirePulse, validateRequest(resourceCreateSchema), create);
+router.put("/:id", requirePulse, validateRequest(resourceUpdateSchema), update);
+router.patch("/:id", requirePulse, validateRequest(resourcePatchSchema), patch);
+router.delete("/:id", requirePulse, _delete);
 
 module.exports = router;
 

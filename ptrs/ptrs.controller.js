@@ -7,13 +7,18 @@ const authorise = require("../middleware/authorise");
 const ptrsService = require("./ptrs.service");
 const { ptrsSchema } = require("./ptrs.validator");
 
+const requirePtrs = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "ptrs",
+});
+
 // routes
-router.get("/", authorise(), getAll);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(ptrsSchema), create);
-router.put("/:id", authorise(), validateRequest(ptrsSchema), update);
-router.patch("/:id", authorise(), patch);
-router.delete("/:id", authorise(), _delete);
+router.get("/", requirePtrs, getAll);
+router.get("/:id", requirePtrs, getById);
+router.post("/", requirePtrs, validateRequest(ptrsSchema), create);
+router.put("/:id", requirePtrs, validateRequest(ptrsSchema), update);
+router.patch("/:id", requirePtrs, patch);
+router.delete("/:id", requirePtrs, _delete);
 
 module.exports = router;
 

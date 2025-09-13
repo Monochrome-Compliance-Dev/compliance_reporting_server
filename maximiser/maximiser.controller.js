@@ -2,6 +2,10 @@
 const express = require("express");
 const router = express.Router();
 const authorise = require("../middleware/authorise");
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
 const { logger } = require("../helpers/logger");
 const {
   listTeams,
@@ -10,7 +14,7 @@ const {
 } = require("./maximiser.service");
 
 // GET /pulse/maximiser/teams
-router.get("/teams", authorise(), async (req, res, next) => {
+router.get("/teams", requirePulse, async (req, res, next) => {
   const customerId = req.auth?.customerId;
   try {
     logger.logEvent("info", "Pulse: maximiser listTeams invoked", {
@@ -36,7 +40,7 @@ router.get("/teams", authorise(), async (req, res, next) => {
 });
 
 // GET /pulse/maximiser/compare?teamIds=A,B&from=YYYY-MM-DD&to=YYYY-MM-DD&includeNonBillable=true
-router.get("/compare", authorise(), async (req, res, next) => {
+router.get("/compare", requirePulse, async (req, res, next) => {
   const customerId = req.auth?.customerId;
   try {
     const { teamIds = "", from, to, includeNonBillable } = req.query || {};
@@ -91,7 +95,7 @@ router.get("/compare", authorise(), async (req, res, next) => {
 
 // POST /pulse/maximiser/analyse
 // Accepts frontend aggregates and returns AI-style findings without DB reads
-router.post("/analyse", authorise(), async (req, res, next) => {
+router.post("/analyse", requirePulse, async (req, res, next) => {
   const customerId = req.auth?.customerId;
   try {
     const payload = req.body || {};

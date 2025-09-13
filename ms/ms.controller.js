@@ -10,6 +10,10 @@ const msService = require("./ms.service");
 const msAnalytics = require("./ms_analytics.service");
 const validateRequest = require("../middleware/validate-request");
 const authorise = require("../middleware/authorise");
+const requireMs = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "ms",
+});
 const {
   msSupplierRiskSchema,
   msTrainingSchema,
@@ -17,66 +21,66 @@ const {
 } = require("./ms.validator");
 
 // Reporting Period Routes
-router.get("/reporting-periods", authorise(), getReportingPeriods);
-router.get("/reporting-periods/:id", authorise(), getReportingPeriodById);
-router.post("/reporting-periods", authorise(), createReportingPeriod);
+router.get("/reporting-periods", requireMs, getReportingPeriods);
+router.get("/reporting-periods/:id", requireMs, getReportingPeriodById);
+router.post("/reporting-periods", requireMs, createReportingPeriod);
 
 // General Service Routes
 router.post(
   "/supplier-risks",
-  authorise(),
+  requireMs,
   validateRequest(msSupplierRiskSchema),
   createSupplierRisk
 );
-router.put("/supplier-risks/:id", authorise(), updateSupplierRisk);
-router.delete("/supplier-risks/:id", authorise(), deleteSupplierRisk);
+router.put("/supplier-risks/:id", requireMs, updateSupplierRisk);
+router.delete("/supplier-risks/:id", requireMs, deleteSupplierRisk);
 
 router.post(
   "/training",
-  authorise(),
+  requireMs,
   validateRequest(msTrainingSchema),
   createTraining
 );
-router.put("/training/:id", authorise(), updateTraining);
-router.delete("/training/:id", authorise(), deleteTraining);
+router.put("/training/:id", requireMs, updateTraining);
+router.delete("/training/:id", requireMs, deleteTraining);
 
 router.post(
   "/grievances",
-  authorise(),
+  requireMs,
   validateRequest(msGrievanceSchema),
   createGrievance
 );
-router.put("/grievances/:id", authorise(), updateGrievance);
-router.delete("/grievances/:id", authorise(), deleteGrievance);
+router.put("/grievances/:id", requireMs, updateGrievance);
+router.delete("/grievances/:id", requireMs, deleteGrievance);
 
 // General GET routes for records
-router.get("/training", authorise(), getTraining);
-router.get("/grievances", authorise(), getGrievances);
-router.get("/supplier-risks", authorise(), getSupplierRisks);
+router.get("/training", requireMs, getTraining);
+router.get("/grievances", requireMs, getGrievances);
+router.get("/supplier-risks", requireMs, getSupplierRisks);
 
 // Analytics Routes
 router.get(
   "/dashboard/supplier-risk-summary",
-  authorise(),
+  requireMs,
   getSupplierRiskSummary
 );
-router.get("/dashboard/training-stats", authorise(), getTrainingStats);
-router.get("/dashboard/grievance-summary", authorise(), getGrievanceSummary);
+router.get("/dashboard/training-stats", requireMs, getTrainingStats);
+router.get("/dashboard/grievance-summary", requireMs, getGrievanceSummary);
 
 // --- Interview and Statement Routes ---
 router.get(
   "/reporting-periods/:reportingPeriodId/interview",
-  authorise(),
+  requireMs,
   getInterviewResponses
 );
 router.post(
   "/reporting-periods/:reportingPeriodId/interview",
-  authorise(),
+  requireMs,
   submitInterviewResponses
 );
 router.post(
   "/reporting-periods/:reportingPeriodId/statement",
-  authorise(),
+  requireMs,
   generateStatement
 );
 

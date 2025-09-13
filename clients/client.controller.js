@@ -11,13 +11,19 @@ const {
   clientPatchSchema,
 } = require("./client.validator");
 
+// middleware for pulse feature
+const requirePulse = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "pulse",
+});
+
 // routes
-router.get("/", authorise(), getAll);
-router.get("/:id", authorise(), getById);
-router.post("/", authorise(), validateRequest(clientCreateSchema), create);
-router.put("/:id", authorise(), validateRequest(clientUpdateSchema), update);
-router.patch("/:id", authorise(), validateRequest(clientPatchSchema), patch);
-router.delete("/:id", authorise(), _delete);
+router.get("/", requirePulse, getAll);
+router.get("/:id", requirePulse, getById);
+router.post("/", requirePulse, validateRequest(clientCreateSchema), create);
+router.put("/:id", requirePulse, validateRequest(clientUpdateSchema), update);
+router.patch("/:id", requirePulse, validateRequest(clientPatchSchema), patch);
+router.delete("/:id", requirePulse, _delete);
 
 module.exports = router;
 

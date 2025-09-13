@@ -16,29 +16,66 @@ const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
 const Joi = require("joi");
 
 // routes
-router.get("/", authorise(), getAll);
-router.get("/ptrs/:ptrsId", authorise(), getAllByPtrsId);
-router.get("/tcp/:id", authorise(), getTcpByPtrsId);
-router.get("/:id", authorise(), getById);
-router.patch("/bulk-patch", authorise(), bulkPatchUpdate);
-router.patch("/:id", authorise(), patchRecord);
-router.put("/", authorise(), bulkUpdate);
-router.put("/partial", authorise(), partialUpdate);
-router.post("/", authorise(), bulkCreate);
-router.put("/sbi/:id", authorise(), sbiUpdate);
-router.delete("/:id", authorise(), _delete);
-router.get("/missing-isSb", authorise(), checkMissingIsSb);
-router.put("/submit-final", authorise(), submitFinalPtrs);
-router.get("/download-summary", authorise(), downloadSummaryPtrs);
-router.post("/upload", authorise(), upload.single("file"), uploadFile);
+router.get("/", authorise(["Admin", "Boss", "User"], "ptrs"), getAll);
+router.get(
+  "/ptrs/:ptrsId",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  getAllByPtrsId
+);
+router.get(
+  "/tcp/:id",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  getTcpByPtrsId
+);
+router.get("/:id", authorise(["Admin", "Boss", "User"], "ptrs"), getById);
+router.patch(
+  "/bulk-patch",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  bulkPatchUpdate
+);
+router.patch("/:id", authorise(["Admin", "Boss", "User"], "ptrs"), patchRecord);
+router.put("/", authorise(["Admin", "Boss", "User"], "ptrs"), bulkUpdate);
+router.put(
+  "/partial",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  partialUpdate
+);
+router.post("/", authorise(["Admin", "Boss", "User"], "ptrs"), bulkCreate);
+router.put("/sbi/:id", authorise(["Admin", "Boss", "User"], "ptrs"), sbiUpdate);
+router.delete("/:id", authorise(["Admin", "Boss", "User"], "ptrs"), _delete);
+router.get(
+  "/missing-isSb",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  checkMissingIsSb
+);
+router.put(
+  "/submit-final",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  submitFinalPtrs
+);
+router.get(
+  "/download-summary",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  downloadSummaryPtrs
+);
+router.post(
+  "/upload",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  upload.single("file"),
+  uploadFile
+);
 router.get("/errors/:id", authorise(), getErrorsByPtrsId);
 router.post(
   "/errors/resolve",
   express.json({ limit: "10mb" }), // allow larger bulk payloads
-  authorise(),
+  authorise(["Admin", "Boss", "User"], "ptrs"),
   resolveErrors
 );
-router.put("/recalculate/:id", authorise(), recalculateMetrics);
+router.put(
+  "/recalculate/:id",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  recalculateMetrics
+);
 
 module.exports = router;
 

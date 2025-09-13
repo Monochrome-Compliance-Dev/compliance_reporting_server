@@ -9,13 +9,13 @@ const { saveBlogSchema, saveFaqSchema } = require("./admin.validator");
 // routes
 router.post(
   "/save-blog",
-  authorise(["Admin", "Boss"]),
+  authorise({ roles: ["Admin", "Boss", "User"] }),
   validateRequest(saveBlogSchema),
   saveBlog
 );
 router.post(
   "/save-faq",
-  authorise(["Admin", "Boss"]),
+  authorise({ roles: ["Admin", "Boss", "User"] }),
   validateRequest(saveFaqSchema),
   saveFaq
 );

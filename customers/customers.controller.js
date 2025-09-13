@@ -12,6 +12,7 @@ const {
 // routes
 router.get("/", getAll);
 router.get("/:id", authorise(), getById);
+router.get("/:id/entitlements", authorise(), getEntitlements);
 router.post("/", authorise(), validateRequest(customerSchema), create);
 router.put(
   "/:id",
@@ -46,6 +47,36 @@ function getById(req, res, next) {
   customerService
     .getById({ id: req.params.id })
     .then((customer) => (customer ? res.json(customer) : res.sendStatus(404)))
+    .catch(next);
+}
+
+function getEntitlements(req, res, next) {
+  const requestedCustomerId = req.params.id;
+
+  // Basic tenant check; service layer still enforces RLS by customerId
+  if (requestedCustomerId !== req.auth?.customerId) {
+    logger.logEvent("warn", "Forbidden entitlements request", {
+      action: "GetCustomerEntitlements",
+      requestedCustomerId,
+      authCustomerId: req.auth?.customerId,
+      userId: req.auth?.id,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+    });
+    return res.status(403).json({ message: "Forbidden: Tenant access denied" });
+  }
+
+  logger.logEvent("info", "Retrieving feature entitlements for customer", {
+    action: "GetCustomerEntitlements",
+    customerId: requestedCustomerId,
+    userId: req.auth?.id,
+    ip: req.ip,
+    device: req.headers["user-agent"],
+  });
+
+  customerService
+    .getEntitlements({ customerId: requestedCustomerId })
+    .then((result) => res.json({ status: "success", data: result }))
     .catch(next);
 }
 

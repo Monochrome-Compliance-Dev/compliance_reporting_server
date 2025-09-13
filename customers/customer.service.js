@@ -6,6 +6,7 @@ module.exports = {
   create,
   update,
   delete: _delete,
+  getEntitlements,
 };
 
 async function getAll() {
@@ -45,4 +46,17 @@ async function _delete({ id }) {
   if (!customer) throw { status: 404, message: "Customer not found" };
   await customer.destroy();
   return { success: true };
+}
+
+async function getEntitlements({ customerId }) {
+  const entitlements = await db.FeatureEntitlement.findAll({
+    where: { customerId },
+    attributes: ["feature", "status", "source", "validFrom", "validTo"],
+  });
+  if (!entitlements || entitlements.length === 0) {
+    return [];
+  }
+  return entitlements.map((e) =>
+    typeof e.get === "function" ? e.get({ plain: true }) : e
+  );
 }

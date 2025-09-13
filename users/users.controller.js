@@ -76,7 +76,7 @@ router.delete("/:id", authorise(["Admin", "Boss"]), _delete);
 module.exports = router;
 
 function authenticate(req, res, next) {
-  const { email, password, customerId } = req.body;
+  const { email, password } = req.body;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   userService
@@ -84,11 +84,10 @@ function authenticate(req, res, next) {
       email,
       password,
       ipAddress: ip,
-      customerId: customerId,
     })
-    .then(({ refreshToken, jwtToken, ...user }) => {
+    .then(({ refreshToken, jwtToken, entitlements, ...user }) => {
       setTokenCookie(res, refreshToken);
-      res.json({ ...user, jwtToken });
+      res.json({ ...user, jwtToken, entitlements });
       logger.logEvent("info", "User login successful", {
         action: "Authenticate",
         userId: user.id,
@@ -112,9 +111,9 @@ function refreshToken(req, res, next) {
       token,
       ipAddress: ip,
     })
-    .then(({ refreshToken, jwtToken, ...user }) => {
+    .then(({ refreshToken, jwtToken, entitlements, ...user }) => {
       setTokenCookie(res, refreshToken);
-      res.json({ ...user, jwtToken });
+      res.json({ ...user, jwtToken, entitlements });
       logger.logEvent("info", "Refresh token issued", {
         action: "RefreshToken",
         userId: user.id,
@@ -124,8 +123,8 @@ function refreshToken(req, res, next) {
         when: new Date(),
       });
     })
-    .catch((next) => {
-      if (next.status === 400) {
+    .catch((err) => {
+      if (err && err.status === 400) {
         return unauthorised(res);
       }
       return res.status(500).json({ message: "Internal Server Error" });

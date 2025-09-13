@@ -1,13 +1,18 @@
 const express = require("express");
 const router = express.Router();
-const Joi = require("joi");
 const validateRequest = require("../middleware/validate-request");
 const entityService = require("./entity.service");
+const authorise = require("../middleware/authorise");
 const { logger } = require("../helpers/logger");
 const { entitySchema } = require("./entity.validator");
 
+const requirePtrs = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "ptrs",
+});
+
 // Routes
-router.post("/", validateRequest(entitySchema), create);
+router.post("/", requirePtrs, validateRequest(entitySchema), create);
 
 function create(req, res, next) {
   logger.logEvent("info", "Creating entity", {

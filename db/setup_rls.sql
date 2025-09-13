@@ -254,6 +254,43 @@ CREATE POLICY tbl_stripe_user_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_stripe_user FORCE ROW LEVEL SECURITY;
 
+-- Feature Entitlements (tenant-scoped)
+ALTER TABLE tbl_feature_entitlements ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_feature_entitlements_rls_policy ON tbl_feature_entitlements;
+CREATE POLICY tbl_feature_entitlements_rls_policy
+  ON tbl_feature_entitlements
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+
+ALTER TABLE tbl_feature_entitlements FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- Tenant resolution helper
+-- =============================
+-- Function to resolve customerId from email before RLS is set.
+-- SECURITY DEFINER lets this run without an existing tenant context.
+-- NOTE: Grant is PUBLIC here for dev; restrict to an app role in prod.
+CREATE OR REPLACE FUNCTION fn_get_customer_id_by_email(p_email text)
+RETURNS text
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT "customerId"
+  FROM users
+  WHERE lower(email) = lower(p_email)
+  LIMIT 1;
+$$;
+
+-- Minimal hardening: avoid broad access in production.
+REVOKE ALL ON FUNCTION fn_get_customer_id_by_email(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_get_customer_id_by_email(text) TO PUBLIC; -- TODO: replace PUBLIC with app role in prod
+
+-- Lookup performance for case-insensitive email matches
+CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users ((lower(email)));
+
 -- =============================
 -- Pulse Views: conditional GRANTS (to avoid "permission denied" on views)
 -- These DO blocks only run GRANTs if the view exists.
