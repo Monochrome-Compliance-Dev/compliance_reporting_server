@@ -33,7 +33,7 @@ function model(sequelize) {
   };
 
   const FeatureEntitlement = sequelize.define(
-    "featureEntitlement",
+    "FeatureEntitlement",
     attributes,
     {
       tableName: "tbl_feature_entitlements",

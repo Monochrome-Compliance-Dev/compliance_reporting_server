@@ -39,6 +39,28 @@ const db = {
   Sequelize,
 };
 
+// Recursively collect all *.model.js files under a directory (skips node_modules/.git/coverage)
+function walkModelFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const results = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (
+        entry.name === "node_modules" ||
+        entry.name === ".git" ||
+        entry.name === "coverage"
+      )
+        continue;
+      results.push(...walkModelFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".model.js")) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
 async function initialise() {
   let retries = 5;
   while (retries) {
@@ -89,10 +111,39 @@ async function initialise() {
 
   modelDirs.forEach((dir) => {
     const modelPath = path.join(__dirname, dir);
-    const files = fs.readdirSync(modelPath);
-    files.forEach((file) => {
-      if (file.endsWith(".model.js")) {
-        const model = require(path.join(modelPath, file))(sequelize);
+
+    // Skip gracefully if the directory does not exist
+    if (!fs.existsSync(modelPath)) {
+      logger.logEvent("warn", "Model directory missing – skipping", {
+        action: "DatabaseInit",
+        dir: modelPath,
+      });
+      return;
+    }
+
+    const files = walkModelFiles(modelPath);
+    if (files.length === 0) {
+      logger.logEvent("warn", "No model files found in directory", {
+        action: "DatabaseInit",
+        dir: modelPath,
+      });
+    }
+
+    files.forEach((fullPath) => {
+      try {
+        const factory = require(fullPath);
+        if (typeof factory !== "function") {
+          logger.logEvent(
+            "warn",
+            "Model file does not export a factory – skipping",
+            {
+              action: "DatabaseInit",
+              file: fullPath,
+            }
+          );
+          return;
+        }
+        const model = factory(sequelize);
         const toPascal = (s) =>
           s
             .split("_")
@@ -100,6 +151,12 @@ async function initialise() {
             .join("");
         const name = toPascal(model.name);
         db[name] = model;
+      } catch (err) {
+        logger.logEvent("error", "Failed to load model file", {
+          action: "DatabaseInit",
+          file: fullPath,
+          error: err.message,
+        });
       }
     });
   });

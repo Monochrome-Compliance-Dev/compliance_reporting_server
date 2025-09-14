@@ -3,6 +3,9 @@ const { Op } = require("sequelize");
 const secret = process.env.JWT_SECRET;
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
+const {
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = authorise;
 
@@ -76,18 +79,29 @@ function authorise(input = {}) {
       try {
         const ACTIVE_STATES = ["active", "trial", "grace"]; // usable states
         const now = new Date();
-        const rows = await db.FeatureEntitlement.findAll({
-          where: {
-            customerId: user.customerId,
-            status: { [Op.in]: ACTIVE_STATES },
-            [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: now } }],
-          },
-          attributes: ["feature"],
-        });
 
-        const featuresSet = new Set(rows.map((r) => r.feature));
-        req.entitlements = featuresSet; // Set<string>
-        req.hasFeature = (f) => featuresSet.has(f);
+        // Ensure RLS tenant context is set on the same connection
+        const t = await beginTransactionWithCustomerContext(user.customerId);
+        try {
+          const rows = await db.FeatureEntitlement.findAll({
+            where: {
+              customerId: user.customerId,
+              status: { [Op.in]: ACTIVE_STATES },
+              [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: now } }],
+            },
+            attributes: ["feature"],
+            transaction: t,
+          });
+
+          await t.commit();
+
+          const featuresSet = new Set(rows.map((r) => r.feature));
+          req.entitlements = featuresSet; // Set<string>
+          req.hasFeature = (f) => featuresSet.has(f);
+        } catch (innerErr) {
+          await t.rollback();
+          throw innerErr;
+        }
       } catch (e) {
         logger.logEvent("error", "Entitlements load failed", {
           action: "EntitlementsLoad",
