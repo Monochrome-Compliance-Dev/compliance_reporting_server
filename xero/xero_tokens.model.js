@@ -63,6 +63,7 @@ function defineXeroTokenModel(sequelize) {
     {
       tableName: "xero_tokens",
       timestamps: false,
+      paranoid: true, // enable soft-deletes via deletedAt
       getterMethods: {
         isExpired() {
           return Date.now() >= new Date(this.expires).getTime();

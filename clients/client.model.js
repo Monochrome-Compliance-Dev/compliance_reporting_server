@@ -38,6 +38,7 @@ function model(sequelize) {
   const Client = sequelize.define("client", attributes, {
     tableName: "tbl_pulse_client",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
 
   return Client;

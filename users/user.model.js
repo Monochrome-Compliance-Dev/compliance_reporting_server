@@ -44,6 +44,7 @@ function model(sequelize) {
 
   const options = {
     timestamps: false,
+    paranoid: true, // enable soft-deletes via deletedAt
     defaultScope: {
       attributes: { exclude: ["passwordHash"] },
     },

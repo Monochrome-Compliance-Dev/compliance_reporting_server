@@ -48,6 +48,7 @@ function model(sequelize) {
   const TcpError = sequelize.define("TcpError", attributes, {
     tableName: "tbl_tcp_error",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
 
   TcpError.associate = (models) => {

@@ -28,5 +28,6 @@ function model(sequelize) {
   return sequelize.define("booking", attributes, {
     tableName: "tbl_booking",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
 }

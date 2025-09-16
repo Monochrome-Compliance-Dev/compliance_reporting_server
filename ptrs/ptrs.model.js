@@ -44,21 +44,8 @@ function model(sequelize) {
   const Ptrs = sequelize.define("ptrs", attributes, {
     tableName: "tbl_ptrs",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
-
-  Ptrs.associate = (models) => {
-    Ptrs.belongsTo(models.Customer, { foreignKey: "customerId" });
-    models.Customer.hasMany(Ptrs, {
-      foreignKey: "customerId",
-      onDelete: "CASCADE",
-    });
-
-    Ptrs.hasMany(models.Tcp, { foreignKey: "reportId", onDelete: "CASCADE" });
-    models.Tcp.belongsTo(Ptrs, {
-      foreignKey: "reportId",
-      onDelete: "CASCADE",
-    });
-  };
 
   return Ptrs;
 }

@@ -16,7 +16,7 @@ function model(sequelize) {
     },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
     customerId: { type: DataTypes.STRING(10), allowNull: false },
-    reportId: { type: DataTypes.STRING(10), allowNull: false },
+    ptrsId: { type: DataTypes.STRING(10), allowNull: false },
     filename: { type: DataTypes.STRING, allowNull: false },
     filepath: { type: DataTypes.STRING, allowNull: false },
     recordCount: { type: DataTypes.INTEGER, allowNull: false },
@@ -27,15 +27,15 @@ function model(sequelize) {
     },
   };
 
-  const ReportUploads = sequelize.define("reportUpload", attributes, {
-    tableName: "tbl_report_upload",
+  const ReportUploads = sequelize.define("PtrsUpload", attributes, {
+    tableName: "tbl_ptrs_upload",
     timestamps: false,
   });
 
   ReportUploads.associate = (models) => {
-    ReportUploads.belongsTo(models.report, {
-      foreignKey: "reportId",
-      as: "report",
+    ReportUploads.belongsTo(models.ptrs, {
+      foreignKey: "ptrsId",
+      as: "ptrs",
     });
     ReportUploads.belongsTo(models.customer, {
       foreignKey: "customerId",

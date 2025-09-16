@@ -85,6 +85,7 @@ module.exports = (sequelize) => {
     {
       tableName: "xero_payments",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
     }
   );
 

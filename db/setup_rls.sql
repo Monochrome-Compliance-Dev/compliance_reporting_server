@@ -359,3 +359,43 @@ BEGIN
     EXECUTE 'GRANT SELECT ON public.v_pulse_long_day_streaks TO PUBLIC';
   END IF;
 END$$;
+
+--- =============================
+-- PTRS Reference Data: RLS policies
+-- =============================
+-- Customer-scoped references: enforce customerId RLS
+
+-- Employees
+ALTER TABLE tbl_employee_ref ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_employee_ref_rls_policy ON tbl_employee_ref;
+CREATE POLICY tbl_employee_ref_rls_policy
+  ON tbl_employee_ref
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_employee_ref FORCE ROW LEVEL SECURITY;
+
+-- Intra-company
+ALTER TABLE tbl_intra_company_ref ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_intra_company_ref_rls_policy ON tbl_intra_company_ref;
+CREATE POLICY tbl_intra_company_ref_rls_policy
+  ON tbl_intra_company_ref
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_intra_company_ref FORCE ROW LEVEL SECURITY;
+
+-- Customer keywords
+ALTER TABLE tbl_exclusion_keyword_customer_ref ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_exclusion_keyword_customer_ref_rls_policy ON tbl_exclusion_keyword_customer_ref;
+CREATE POLICY tbl_exclusion_keyword_customer_ref_rls_policy
+  ON tbl_exclusion_keyword_customer_ref
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_exclusion_keyword_customer_ref FORCE ROW LEVEL SECURITY;
+
+-- Global/common reference (no RLS): Government Entities
+-- Intentionally no RLS here because this table is shared across tenants.
+-- If you created it as tbl_gov_entity_ref, do NOT enable RLS.
+-- (If RLS was previously enabled, consider: ALTER TABLE tbl_gov_entity_ref DISABLE ROW LEVEL SECURITY;)

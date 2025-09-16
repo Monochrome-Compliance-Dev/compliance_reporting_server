@@ -26,4 +26,6 @@ const ptrsSchema = Joi.object({
   customerId: Joi.string().length(10).required(),
 });
 
-module.exports = { ptrsSchema };
+module.exports = {
+  ptrsSchema,
+};

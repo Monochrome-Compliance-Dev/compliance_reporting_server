@@ -50,6 +50,7 @@ function model(sequelize) {
   const StripeUser = sequelize.define("stripe_user", attributes, {
     tableName: "tbl_stripe_user",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       // Only one stripe linkage per (tenant, user)
       {

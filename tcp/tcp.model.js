@@ -74,6 +74,7 @@ function model(sequelize) {
     source: { type: DataTypes.STRING(20), allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
+    deletedAt: { type: DataTypes.DATE, allowNull: true },
     // Foreign keys
     customerId: { type: DataTypes.STRING(10), allowNull: false },
     ptrsId: { type: DataTypes.STRING(10), allowNull: false },
@@ -82,6 +83,8 @@ function model(sequelize) {
   const Tcp = sequelize.define("tcp", attributes, {
     tableName: "tbl_tcp",
     timestamps: true,
+    paranoid: true,
+    deletedAt: "deletedAt",
   });
 
   Tcp.associate = (models) => {

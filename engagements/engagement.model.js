@@ -44,6 +44,7 @@ function model(sequelize) {
   const Engagement = sequelize.define("engagement", attributes, {
     tableName: "tbl_pulse_engagement",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       { fields: ["customerId"] },
       { fields: ["status"] },

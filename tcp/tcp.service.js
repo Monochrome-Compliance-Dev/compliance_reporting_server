@@ -5,6 +5,9 @@ const { sequelize } = require("../db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("../helpers/setCustomerIdRLS");
+const dateNormaliser = require("../helpers/dateNormaliser");
+const parseDateLike =
+  (dateNormaliser && dateNormaliser.parseDateLike) || dateNormaliser;
 
 module.exports = {
   /**
@@ -103,6 +106,8 @@ module.exports = {
    */
   patchRecord,
   bulkPatchUpdate,
+  bulkDelete,
+  bulkDeleteErrors,
 
   /**
    * Get current value of a specific field for a TCP record.
@@ -139,11 +144,15 @@ module.exports = {
 };
 
 async function getAll(customerId, options = {}) {
-  console.log("options: ", options);
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
+    const baseWhere = { excludedTcp: false };
+    const mergedWhere =
+      options && options.where ? { ...baseWhere, ...options.where } : baseWhere;
+    const { where: _omitWhere, ...rest } = options || {};
     const rows = await db.Tcp.findAll({
-      ...options,
+      where: mergedWhere,
+      ...rest,
       transaction: t,
     });
     await t.commit();
@@ -160,10 +169,14 @@ async function getByPtrsId(params, options = {}) {
   const { customerId, ptrsId } = params;
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
+    const baseWhere = { ptrsId, excludedTcp: false };
+    const mergedWhere =
+      options && options.where ? { ...baseWhere, ...options.where } : baseWhere;
+    const { where: _omitWhere, ...rest } = options || {};
     const rows = await db.Tcp.findAll({
-      where: { ptrsId },
+      where: mergedWhere,
+      ...rest,
       transaction: t,
-      ...options,
     });
     await t.commit();
     return rows.map((row) => row.get({ plain: true }));
@@ -204,7 +217,14 @@ async function getById(params, options = {}) {
   const { customerId, id } = params;
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const row = await db.Tcp.findByPk(id, { transaction: t, ...options });
+    const baseWhere = { id };
+    const mergedWhere =
+      options && options.where ? { ...baseWhere, ...options.where } : baseWhere;
+    const row = await db.Tcp.findOne({
+      where: { ...mergedWhere, excludedTcp: false },
+      transaction: t,
+      ...options,
+    });
     await t.commit();
     return row ? row.get({ plain: true }) : null;
   } catch (error) {
@@ -262,7 +282,58 @@ async function _delete(params, options = {}) {
   try {
     await db.Tcp.destroy({ where: { id }, transaction: t, ...options });
     await t.commit();
-    // Do not return anything
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function bulkDelete(params = {}, options = {}) {
+  const { customerId, ids, ptrsId } = params;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error("ids must be a non-empty array");
+  }
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const where = { id: ids };
+    if (ptrsId) where.ptrsId = ptrsId;
+
+    const affected = await db.Tcp.destroy({
+      where,
+      transaction: t,
+      ...(options || {}),
+    });
+
+    await t.commit();
+    return affected; // number of rows soft-deleted
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function bulkDeleteErrors(params = {}, options = {}) {
+  const { customerId, ids, ptrsId } = params;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error("ids must be a non-empty array");
+  }
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const where = { id: ids };
+    if (ptrsId) where.ptrsId = ptrsId;
+
+    const affected = await db.TcpError.destroy({
+      where,
+      transaction: t,
+      ...(options || {}),
+    });
+
+    await t.commit();
+    return affected; // number of error rows deleted (soft if model is paranoid)
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
@@ -461,16 +532,15 @@ async function saveTransformedDataToTcp(params, options = {}) {
       }
     }
 
-    // Date coercions
-    if (
-      record.invoiceIssueDate &&
-      typeof record.invoiceIssueDate === "string"
-    ) {
-      record.invoiceIssueDate = new Date(record.invoiceIssueDate);
-    }
-    if (record.invoiceDueDate && typeof record.invoiceDueDate === "string") {
-      record.invoiceDueDate = new Date(record.invoiceDueDate);
-    }
+    // Date coercions using normaliser
+    record.supplyDate = parseDateLike(record.supplyDate);
+    record.paymentDate = parseDateLike(record.paymentDate);
+    record.invoiceIssueDate = parseDateLike(record.invoiceIssueDate);
+    record.invoiceReceiptDate = parseDateLike(record.invoiceReceiptDate);
+    record.invoiceDueDate = parseDateLike(record.invoiceDueDate);
+    record.noticeForPaymentIssueDate = parseDateLike(
+      record.noticeForPaymentIssueDate
+    );
   });
 
   for (let i = 0; i < transformedRecords.length; i++) {
@@ -570,10 +640,7 @@ async function saveErrorsToTcpError(params, options = {}) {
     return Number.isNaN(n) ? null : n;
   }
   function coerceDate(v) {
-    if (v == null || v === "") return null;
-    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null : d;
+    return parseDateLike(v);
   }
   function coerceBool(v) {
     if (v == null || v === "") return null;
@@ -686,13 +753,15 @@ async function resolveErrors(params, options = {}) {
           else clean.invoiceAmount = invNum;
         }
       }
-      // Coerce dates
-      if (clean.paymentDate && typeof clean.paymentDate === "string")
-        clean.paymentDate = new Date(clean.paymentDate);
-      if (clean.invoiceIssueDate && typeof clean.invoiceIssueDate === "string")
-        clean.invoiceIssueDate = new Date(clean.invoiceIssueDate);
-      if (clean.invoiceDueDate && typeof clean.invoiceDueDate === "string")
-        clean.invoiceDueDate = new Date(clean.invoiceDueDate);
+      // Coerce dates using normaliser
+      clean.supplyDate = parseDateLike(clean.supplyDate);
+      clean.paymentDate = parseDateLike(clean.paymentDate);
+      clean.invoiceIssueDate = parseDateLike(clean.invoiceIssueDate);
+      clean.invoiceReceiptDate = parseDateLike(clean.invoiceReceiptDate);
+      clean.invoiceDueDate = parseDateLike(clean.invoiceDueDate);
+      clean.noticeForPaymentIssueDate = parseDateLike(
+        clean.noticeForPaymentIssueDate
+      );
 
       // Coerce isReconciled to boolean if present (string/number → boolean, drop invalid)
       if (Object.prototype.hasOwnProperty.call(clean, "isReconciled")) {

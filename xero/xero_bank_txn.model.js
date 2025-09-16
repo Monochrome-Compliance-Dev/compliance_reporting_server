@@ -116,6 +116,7 @@ const XeroBankTxn = (sequelize) => {
     {
       tableName: "xero_bank_txn",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
       updatedAt: "updatedAt",
       createdAt: "createdAt",
     }

@@ -2,60 +2,188 @@ const express = require("express");
 const router = express.Router();
 const authorise = require("../middleware/authorise");
 const dashboardService = require("./dashboard.service");
+const { logger } = require("../helpers/logger");
 
-const requirePulse = authorise({
+const requirePtrs = authorise({
   roles: ["Admin", "Boss", "User"],
-  features: "pulse",
+  features: "ptrs",
 });
 
 // Dashboard analytics routes only
-router.get("/:id/metrics", requirePulse, getDashboardMetrics);
-router.get("/:id/metrics/previous", requirePulse, getDashboardPreviousMetrics);
-router.get("/:id/flags", requirePulse, getDashboardFlags);
-router.get("/:id/snapshot", requirePulse, getDashboardSnapshot);
-router.get("/:id/signals", requirePulse, getDashboardSignals);
-router.get("/:id/extended-metrics", requirePulse, getDashboardExtendedMetrics);
+router.get("/:id/metrics", requirePtrs, getDashboardMetrics);
+router.get("/:id/metrics/previous", requirePtrs, getDashboardPreviousMetrics);
+router.get("/:id/flags", requirePtrs, getDashboardFlags);
+router.get("/:id/snapshot", requirePtrs, getDashboardSnapshot);
+router.get("/:id/signals", requirePtrs, getDashboardSignals);
+router.get("/:id/extended-metrics", requirePtrs, getDashboardExtendedMetrics);
 
 module.exports = router;
 
-function getDashboardMetrics(req, res, next) {
-  dashboardService
-    .getDashboardMetrics(req.params.id, req.auth.customerId)
-    .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardMetrics(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const metrics = await dashboardService.getDashboardMetrics(
+      ptrsId,
+      customerId
+    );
+    if (!metrics) return res.sendStatus(404);
+    return res.json(metrics);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardMetrics failed", {
+      action: "PtrsGetDashboardMetrics",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }
 
-function getDashboardPreviousMetrics(req, res, next) {
-  dashboardService
-    .getPreviousDashboardMetrics(req.params.id, req.auth.customerId)
-    .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardPreviousMetrics(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const metrics = await dashboardService.getPreviousDashboardMetrics(
+      ptrsId,
+      customerId
+    );
+    if (!metrics) return res.sendStatus(404);
+    return res.json(metrics);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardPreviousMetrics failed", {
+      action: "PtrsGetDashboardPreviousMetrics",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }
 
-function getDashboardFlags(req, res, next) {
-  dashboardService
-    .getDashboardFlags(req.params.id, req.auth.customerId)
-    .then((flags) => (flags ? res.json(flags) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardFlags(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const flags = await dashboardService.getDashboardFlags(ptrsId, customerId);
+    if (!flags) return res.sendStatus(404);
+    return res.json(flags);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardFlags failed", {
+      action: "PtrsGetDashboardFlags",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }
 
-function getDashboardSnapshot(req, res, next) {
-  dashboardService
-    .getDashboardSnapshot(req.params.id, req.auth.customerId)
-    .then((snapshot) => (snapshot ? res.json(snapshot) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardSnapshot(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const snapshot = await dashboardService.getDashboardSnapshot(
+      ptrsId,
+      customerId
+    );
+    if (!snapshot) return res.sendStatus(404);
+    return res.json(snapshot);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardSnapshot failed", {
+      action: "PtrsGetDashboardSnapshot",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }
 
-function getDashboardSignals(req, res, next) {
-  dashboardService
-    .getDashboardSignals(req.params.id, req.auth.customerId)
-    .then((signals) => (signals ? res.json(signals) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardSignals(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const { start, end } = req.query || {};
+  try {
+    const signals = await dashboardService.getDashboardSignals(
+      ptrsId,
+      customerId,
+      { start, end }
+    );
+    if (!signals) return res.sendStatus(404);
+    return res.json(signals);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardSignals failed", {
+      action: "PtrsGetDashboardSignals",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }
 
-function getDashboardExtendedMetrics(req, res, next) {
-  dashboardService
-    .getDashboardExtendedMetrics(req.params.id, req.auth.customerId)
-    .then((metrics) => (metrics ? res.json(metrics) : res.sendStatus(404)))
-    .catch(next);
+async function getDashboardExtendedMetrics(req, res, next) {
+  const ptrsId = req.params.id;
+  const customerId = req.auth.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const { start, end } = req.query || {};
+  try {
+    const metrics = await dashboardService.getDashboardExtendedMetrics(
+      ptrsId,
+      customerId,
+      { start, end }
+    );
+    if (!metrics) return res.sendStatus(404);
+    return res.json(metrics);
+  } catch (error) {
+    logger.logEvent("error", "PtrsGetDashboardExtendedMetrics failed", {
+      action: "PtrsGetDashboardExtendedMetrics",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
 }

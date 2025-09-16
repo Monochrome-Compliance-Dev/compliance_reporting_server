@@ -41,5 +41,6 @@ function model(sequelize) {
   return sequelize.define("entity", attributes, {
     tableName: "tbl_entity",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
 }

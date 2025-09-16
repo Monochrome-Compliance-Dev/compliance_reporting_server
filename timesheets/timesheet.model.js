@@ -33,6 +33,7 @@ function model(sequelize) {
   const Timesheet = sequelize.define("timesheet", attributes, {
     tableName: "tbl_pulse_timesheet",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       { fields: ["customerId"] },
       { fields: ["resourceId"] },

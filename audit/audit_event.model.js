@@ -57,6 +57,7 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_audit_events",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
     }
   );
 

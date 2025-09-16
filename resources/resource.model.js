@@ -29,6 +29,7 @@ function model(sequelize) {
   const Resource = sequelize.define("resource", attributes, {
     tableName: "tbl_pulse_resource",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       {
         unique: true,

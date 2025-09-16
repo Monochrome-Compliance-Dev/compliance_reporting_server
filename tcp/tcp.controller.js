@@ -5,15 +5,28 @@ const multer = require("multer");
 const upload = multer({ dest: "tmpUploads/" });
 const authorise = require("../middleware/authorise");
 const tcpService = require("./tcp.service");
-const { tcpBulkImportSchema, tcpSchema } = require("./tcp.validator");
+const refDataService = require("./reference-data.service");
+const ptrsService = require("../ptrs/ptrs.service");
+const {
+  tcpBulkImportSchema,
+  tcpSchema,
+  govEntityRefSchema,
+  employeeRefSchema,
+  intraCompanyRefSchema,
+  exclusionKeywordCustomerRefSchema,
+} = require("./tcp.validator");
 const { logger } = require("../helpers/logger");
 const fs = require("fs");
 const path = require("path");
 const { scanFile } = require("../middleware/virus-scan");
-const ptrsService = require("../ptrs/ptrs.service");
 const csv = require("csv-parser");
 const { processTcpMetrics } = require("../utils/calcs/processTcpMetrics");
-const Joi = require("joi");
+const validateRequest = require("../middleware/validate-request");
+
+const requirePtrs = authorise({
+  roles: ["Admin", "Boss", "User"],
+  features: "ptrs",
+});
 
 // routes
 router.get("/", authorise(["Admin", "Boss", "User"], "ptrs"), getAll);
@@ -32,6 +45,12 @@ router.patch(
   "/bulk-patch",
   authorise(["Admin", "Boss", "User"], "ptrs"),
   bulkPatchUpdate
+);
+router.post(
+  "/bulk-delete",
+  express.json({ limit: "5mb" }),
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  bulkDelete
 );
 router.patch("/:id", authorise(["Admin", "Boss", "User"], "ptrs"), patchRecord);
 router.put("/", authorise(["Admin", "Boss", "User"], "ptrs"), bulkUpdate);
@@ -71,11 +90,105 @@ router.post(
   authorise(["Admin", "Boss", "User"], "ptrs"),
   resolveErrors
 );
+router.post(
+  "/errors/bulk-delete",
+  express.json({ limit: "10mb" }),
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  bulkDeleteErrors
+);
 router.put(
   "/recalculate/:id",
   authorise(["Admin", "Boss", "User"], "ptrs"),
   recalculateMetrics
 );
+
+// Gov Entities
+router.get("/references/gov-entities", requirePtrs, listGovEntities);
+router.post(
+  "/references/gov-entities",
+  requirePtrs,
+  validateRequest(govEntityRefSchema),
+  createGovEntity
+);
+router.put(
+  "/references/gov-entities/:id",
+  requirePtrs,
+  validateRequest(govEntityRefSchema),
+  updateGovEntity
+);
+router.patch(
+  "/references/gov-entities/:id",
+  requirePtrs,
+  validateRequest(govEntityRefSchema),
+  patchGovEntity
+);
+router.delete("/references/gov-entities/:id", requirePtrs, deleteGovEntity);
+
+// Employees
+router.get("/references/employees", requirePtrs, listEmployees);
+router.post(
+  "/references/employees",
+  requirePtrs,
+  validateRequest(employeeRefSchema),
+  createEmployee
+);
+router.put(
+  "/references/employees/:id",
+  requirePtrs,
+  validateRequest(employeeRefSchema),
+  updateEmployee
+);
+router.patch(
+  "/references/employees/:id",
+  requirePtrs,
+  validateRequest(employeeRefSchema),
+  patchEmployee
+);
+router.delete("/references/employees/:id", requirePtrs, deleteEmployee);
+
+// Intra-company
+router.get("/references/intra-company", requirePtrs, listIntraCompanies);
+router.post(
+  "/references/intra-company",
+  requirePtrs,
+  validateRequest(intraCompanyRefSchema),
+  createIntraCompany
+);
+router.put(
+  "/references/intra-company/:id",
+  requirePtrs,
+  validateRequest(intraCompanyRefSchema),
+  updateIntraCompany
+);
+router.patch(
+  "/references/intra-company/:id",
+  requirePtrs,
+  validateRequest(intraCompanyRefSchema),
+  patchIntraCompany
+);
+router.delete("/references/intra-company/:id", requirePtrs, deleteIntraCompany);
+
+// Customer keywords
+router.get("/references/keywords", requirePtrs, listCustomerKeywords);
+router.post(
+  "/references/keywords",
+  requirePtrs,
+  validateRequest(exclusionKeywordCustomerRefSchema),
+  createCustomerKeyword
+);
+router.put(
+  "/references/keywords/:id",
+  requirePtrs,
+  validateRequest(exclusionKeywordCustomerRefSchema),
+  updateCustomerKeyword
+);
+router.patch(
+  "/references/keywords/:id",
+  requirePtrs,
+  validateRequest(exclusionKeywordCustomerRefSchema),
+  patchCustomerKeyword
+);
+router.delete("/references/keywords/:id", requirePtrs, deleteCustomerKeyword);
 
 module.exports = router;
 
@@ -118,8 +231,14 @@ async function getAllByPtrsId(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.ptrsId;
+  const { start, end } = req.query || {};
   try {
-    const data = await tcpService.getByPtrsId({ ptrsId, customerId });
+    const data = await tcpService.getByPtrsId({
+      ptrsId,
+      customerId,
+      start,
+      end,
+    });
     await auditService.logEvent({
       customerId,
       userId,
@@ -191,8 +310,14 @@ async function getTcpByPtrsId(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id; // legacy param name for ptrsId
+  const { start, end } = req.query || {};
   try {
-    const data = await tcpService.getByPtrsId({ ptrsId: id, customerId });
+    const data = await tcpService.getByPtrsId({
+      ptrsId: id,
+      customerId,
+      start,
+      end,
+    });
     if (!data || (Array.isArray(data) && data.length === 0)) {
       return res.status(404).json({ status: "error", message: "Not found" });
     }
@@ -870,8 +995,14 @@ async function getErrorsByPtrsId(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
+  const { start, end } = req.query || {};
   try {
-    const data = await tcpService.getErrorsByPtrsId({ ptrsId, customerId });
+    const data = await tcpService.getErrorsByPtrsId({
+      ptrsId,
+      customerId,
+      start,
+      end,
+    });
     await auditService.logEvent({
       customerId,
       userId,
@@ -974,5 +1105,813 @@ async function recalculateMetrics(req, res, next) {
       timestamp: new Date().toISOString(),
     });
     next(error);
+  }
+}
+
+// Bulk DELETE TCPs by ids (optionally constrained by ptrsId)
+async function bulkDelete(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const { ids, ptrsId } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Validation error" });
+    }
+
+    const deleted = await tcpService.bulkDelete({
+      ids,
+      ptrsId,
+      customerId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "BulkDeleteTCP",
+      entity: "Tcp",
+      details: { ptrsId, count: Array.isArray(ids) ? ids.length : undefined },
+    });
+
+    res.status(200).json({ status: "success", data: { deleted } });
+  } catch (error) {
+    logger.logEvent("error", "Error in bulk delete TCP", {
+      action: "BulkDeleteTCP",
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// Bulk DELETE TCP Error rows by ids (optionally constrained by ptrsId)
+async function bulkDeleteErrors(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const { ids, ptrsId } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Validation error" });
+    }
+
+    const deleted = await tcpService.bulkDeleteErrors({
+      ids,
+      ptrsId,
+      customerId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "BulkDeleteTcpErrors",
+      entity: "TcpError",
+      details: { ptrsId, count: Array.isArray(ids) ? ids.length : undefined },
+    });
+
+    res.status(200).json({ status: "success", data: { deleted } });
+  } catch (error) {
+    logger.logEvent("error", "Error in bulk delete TCP errors", {
+      action: "BulkDeleteTcpErrors",
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
+  }
+}
+
+// --- Reference Data Handlers ---
+
+// GOV ENTITIES (global)
+async function listGovEntities(req, res, next) {
+  const customerId = req.auth?.customerId; // not used for global list
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const items = await refDataService.gov.list();
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "ListGovEntities",
+      entity: "GovEntityRef",
+      details: { count: Array.isArray(items) ? items.length : undefined },
+    });
+    res.json({ status: "success", data: items });
+  } catch (error) {
+    logger.logEvent("error", "Error listing gov entities", {
+      action: "ListGovEntities",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function createGovEntity(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const created = await refDataService.gov.create({ data: req.body, userId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "CreateGovEntity",
+      entity: "GovEntityRef",
+      entityId: created.id,
+    });
+    res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    logger.logEvent("error", "Error creating gov entity", {
+      action: "CreateGovEntity",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function updateGovEntity(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const updated = await refDataService.gov.update({
+      id,
+      data: req.body,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "UpdateGovEntity",
+      entity: "GovEntityRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error updating gov entity", {
+      action: "UpdateGovEntity",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function patchGovEntity(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    const updated = await refDataService.gov.patch({
+      id,
+      data: req.body,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PatchGovEntity",
+      entity: "GovEntityRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error patching gov entity", {
+      action: "PatchGovEntity",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function deleteGovEntity(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    await refDataService.gov.delete({ id, userId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DeleteGovEntity",
+      entity: "GovEntityRef",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting gov entity", {
+      action: "DeleteGovEntity",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+// EMPLOYEES (customer-scoped)
+async function listEmployees(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const items = await refDataService.employee.list({ customerId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "ListEmployees",
+      entity: "EmployeeRef",
+      details: { count: Array.isArray(items) ? items.length : undefined },
+    });
+    res.json({ status: "success", data: items });
+  } catch (error) {
+    logger.logEvent("error", "Error listing employees", {
+      action: "ListEmployees",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function createEmployee(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const created = await refDataService.employee.create({
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "CreateEmployee",
+      entity: "EmployeeRef",
+      entityId: created.id,
+    });
+    res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    logger.logEvent("error", "Error creating employee", {
+      action: "CreateEmployee",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function updateEmployee(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.employee.update({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "UpdateEmployee",
+      entity: "EmployeeRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error updating employee", {
+      action: "UpdateEmployee",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function patchEmployee(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.employee.patch({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PatchEmployee",
+      entity: "EmployeeRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error patching employee", {
+      action: "PatchEmployee",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function deleteEmployee(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    await refDataService.employee.delete({ id, customerId, userId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DeleteEmployee",
+      entity: "EmployeeRef",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting employee", {
+      action: "DeleteEmployee",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+// INTRA-COMPANY (customer-scoped)
+async function listIntraCompanies(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const items = await refDataService.intraCompany.list({ customerId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "ListIntraCompanies",
+      entity: "IntraCompanyRef",
+      details: { count: Array.isArray(items) ? items.length : undefined },
+    });
+    res.json({ status: "success", data: items });
+  } catch (error) {
+    logger.logEvent("error", "Error listing intra companies", {
+      action: "ListIntraCompanies",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function createIntraCompany(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const created = await refDataService.intraCompany.create({
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "CreateIntraCompany",
+      entity: "IntraCompanyRef",
+      entityId: created.id,
+    });
+    res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    logger.logEvent("error", "Error creating intra company ref", {
+      action: "CreateIntraCompany",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function updateIntraCompany(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.intraCompany.update({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "UpdateIntraCompany",
+      entity: "IntraCompanyRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error updating intra company ref", {
+      action: "UpdateIntraCompany",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function patchIntraCompany(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.intraCompany.patch({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PatchIntraCompany",
+      entity: "IntraCompanyRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error patching intra company ref", {
+      action: "PatchIntraCompany",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function deleteIntraCompany(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    await refDataService.intraCompany.delete({ id, customerId, userId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DeleteIntraCompany",
+      entity: "IntraCompanyRef",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting intra company ref", {
+      action: "DeleteIntraCompany",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+// CUSTOMER KEYWORDS (customer-scoped)
+async function listCustomerKeywords(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const items = await refDataService.keywords.list({ customerId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "ListCustomerKeywords",
+      entity: "ExclusionKeywordCustomerRef",
+      details: { count: Array.isArray(items) ? items.length : undefined },
+    });
+    res.json({ status: "success", data: items });
+  } catch (error) {
+    logger.logEvent("error", "Error listing customer keywords", {
+      action: "ListCustomerKeywords",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function createCustomerKeyword(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const created = await refDataService.keywords.create({
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "CreateCustomerKeyword",
+      entity: "ExclusionKeywordCustomerRef",
+      entityId: created.id,
+    });
+    res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    logger.logEvent("error", "Error creating customer keyword", {
+      action: "CreateCustomerKeyword",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function updateCustomerKeyword(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.keywords.update({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "UpdateCustomerKeyword",
+      entity: "ExclusionKeywordCustomerRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error updating customer keyword", {
+      action: "UpdateCustomerKeyword",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function patchCustomerKeyword(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  if (!customerId) {
+    return res.status(400).json({ message: "Customer ID missing" });
+  }
+  try {
+    const updated = await refDataService.keywords.patch({
+      id,
+      data: { ...req.body, customerId },
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PatchCustomerKeyword",
+      entity: "ExclusionKeywordCustomerRef",
+      entityId: id,
+    });
+    res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error patching customer keyword", {
+      action: "PatchCustomerKeyword",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function deleteCustomerKeyword(req, res, next) {
+  const id = req.params.id;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!customerId) {
+      return res.status(400).json({ message: "Customer ID missing" });
+    }
+    await refDataService.keywords.delete({ id, customerId, userId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DeleteCustomerKeyword",
+      entity: "ExclusionKeywordCustomerRef",
+      entityId: id,
+    });
+    res.status(204).send();
+  } catch (error) {
+    logger.logEvent("error", "Error deleting customer keyword", {
+      action: "DeleteCustomerKeyword",
+      id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
   }
 }

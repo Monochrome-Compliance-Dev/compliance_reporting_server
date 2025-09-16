@@ -63,6 +63,7 @@ function model(sequelize) {
   const AdminContent = sequelize.define("adminContent", attributes, {
     tableName: "tbl_admin_content",
     timestamps: true,
+    paranoid: true, // enable soft-deletes via deletedAt
   });
 
   return AdminContent;

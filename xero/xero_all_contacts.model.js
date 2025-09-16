@@ -77,6 +77,7 @@ const XeroAllContacts = (sequelize) => {
     {
       tableName: "xero_all_contacts",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
       updatedAt: "updatedAt",
       createdAt: "createdAt",
       indexes: [

@@ -77,6 +77,7 @@ const XeroOrganisation = (sequelize) => {
       tableName: "xero_organisations",
       schema: "public",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
     }
   );
 };

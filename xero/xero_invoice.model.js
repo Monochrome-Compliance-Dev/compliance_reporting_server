@@ -111,6 +111,7 @@ const XeroInvoice = (sequelize) => {
     {
       tableName: "xero_invoices",
       timestamps: true,
+      paranoid: true, // enable soft-deletes via deletedAt
     }
   );
 };
