@@ -297,7 +297,10 @@ app.use("/api/pulse", require("./budgets/budget.controller"));
 app.use("/api/pulse", require("./pulse-dashboard/pulse_dashboard.controller"));
 app.use("/api/stripe", require("./stripe/stripe.controller"));
 app.use("/api/billing", require("./stripe/billing.controller"));
+
 app.use("/api/pulse/maximiser", require("./maximiser/maximiser.controller"));
+
+app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

@@ -2,6 +2,7 @@ const db = require("../db/database");
 const ptrsService = require("../ptrs/ptrs.service");
 const { tcpBulkImportSchema } = require("./tcp.validator");
 const { sequelize } = require("../db/database");
+const { Op } = require("sequelize");
 const {
   beginTransactionWithCustomerContext,
 } = require("../helpers/setCustomerIdRLS");
@@ -695,18 +696,60 @@ async function saveErrorsToTcpError(params, options = {}) {
 }
 
 async function getErrorsByPtrsId(params, options = {}) {
-  const { ptrsId, customerId } = params;
+  const {
+    ptrsId,
+    customerId,
+    start,
+    end,
+    page: pageParam,
+    pageSize: pageSizeParam,
+    order = "ASC",
+  } = params || {};
+
+  const page = Math.max(1, Number(pageParam) || 1);
+  const pageSizeCap = 500;
+  const pageSize = Math.min(
+    pageSizeCap,
+    Math.max(1, Number(pageSizeParam) || 100)
+  );
+  const offset = (page - 1) * pageSize;
+
   const t = customerId
     ? await beginTransactionWithCustomerContext(customerId)
     : null;
+
   try {
-    const rows = await db.TcpError.findAll({
-      where: { ptrsId },
+    const where = { ptrsId };
+
+    // optional createdAt range: [start, end)
+    if (start || end) {
+      where.createdAt = {};
+      if (start) where.createdAt[Op.gte] = start;
+      if (end) where.createdAt[Op.lt] = end;
+    }
+
+    const { rows, count } = await db.TcpError.findAndCountAll({
+      where,
+      limit: pageSize,
+      offset,
+      order: [
+        ["createdAt", String(order).toUpperCase() === "DESC" ? "DESC" : "ASC"],
+      ],
       ...(t ? { transaction: t } : {}),
       ...options,
     });
+
     if (t) await t.commit();
-    return rows.map((row) => row.get({ plain: true }));
+
+    const data = rows.map((r) => r.get({ plain: true }));
+    const total =
+      typeof count === "number"
+        ? count
+        : Array.isArray(count)
+          ? count.length
+          : 0;
+
+    return { data, total, page, pageSize };
   } catch (error) {
     if (t && !t.finished) await t.rollback();
     throw error;

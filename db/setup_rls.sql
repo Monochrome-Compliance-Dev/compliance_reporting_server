@@ -27,6 +27,26 @@ ALTER TABLE tbl_tcp_audit FORCE ROW LEVEL SECURITY;
 ALTER TABLE tbl_ptrs FORCE ROW LEVEL SECURITY;
 ALTER TABLE tbl_tcp FORCE ROW LEVEL SECURITY;
 
+-- TCP error rows (per-tenant)
+ALTER TABLE tbl_tcp_error ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_tcp_error_rls_policy ON tbl_tcp_error;
+CREATE POLICY tbl_tcp_error_rls_policy
+  ON tbl_tcp_error
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_tcp_error FORCE ROW LEVEL SECURITY;
+
+-- Big Bertha staging table (raw import rows) per-tenant
+ALTER TABLE tbl_tcp_import_raw ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_tcp_import_raw_rls_policy ON tbl_tcp_import_raw;
+CREATE POLICY tbl_tcp_import_raw_rls_policy
+  ON tbl_tcp_import_raw
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_tcp_import_raw FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE tbl_esg_reporting_periods ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS tbl_esg_reporting_periods_rls_policy ON tbl_esg_reporting_periods;

@@ -995,14 +995,53 @@ async function getErrorsByPtrsId(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
+
+  // Parse optional filters + pagination
   const { start, end } = req.query || {};
+  const rawPage = parseInt(req.query?.page, 10);
+  const rawPageSize = parseInt(req.query?.pageSize, 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const MAX_PAGE_SIZE = 500;
+  const pageSize =
+    Number.isFinite(rawPageSize) && rawPageSize > 0
+      ? Math.min(rawPageSize, MAX_PAGE_SIZE)
+      : 100;
+
   try {
-    const data = await tcpService.getErrorsByPtrsId({
+    // Ask the service for a paged slice; service should apply LIMIT/OFFSET.
+    const result = await tcpService.getErrorsByPtrsId({
       ptrsId,
       customerId,
       start,
       end,
+      page,
+      pageSize,
     });
+
+    // Normalise service responses: support either { data,total } or plain array
+    let data, total;
+    if (Array.isArray(result)) {
+      data = result;
+      total = result.length;
+    } else if (result && Array.isArray(result.data)) {
+      data = result.data;
+      total = Number.isFinite(result.total)
+        ? result.total
+        : Number.isFinite(result.count)
+          ? result.count
+          : result.data.length;
+    } else if (result && Array.isArray(result.rows)) {
+      data = result.rows;
+      total = Number.isFinite(result.total)
+        ? result.total
+        : Number.isFinite(result.count)
+          ? result.count
+          : result.rows.length;
+    } else {
+      data = [];
+      total = 0;
+    }
+
     await auditService.logEvent({
       customerId,
       userId,
@@ -1010,11 +1049,22 @@ async function getErrorsByPtrsId(req, res, next) {
       device,
       action: "GetErrorsByPtrsId",
       entity: "Tcp",
-      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
+      details: {
+        ptrsId,
+        count: Array.isArray(data) ? data.length : undefined,
+        page,
+        pageSize,
+        total,
+      },
     });
-    res
-      .status(200)
-      .json({ status: "success", data: Array.isArray(data) ? data : [] });
+
+    return res.status(200).json({
+      status: "success",
+      data,
+      page,
+      pageSize,
+      total,
+    });
   } catch (error) {
     logger.logEvent("error", "Error fetching TCP errors by ptrsId", {
       action: "GetErrorsByPtrsId",
@@ -1026,7 +1076,7 @@ async function getErrorsByPtrsId(req, res, next) {
       error: error.message,
       timestamp: new Date().toISOString(),
     });
-    next(error);
+    return next(error);
   }
 }
 

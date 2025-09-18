@@ -49,6 +49,12 @@ function model(sequelize) {
     tableName: "tbl_tcp_error",
     timestamps: true,
     paranoid: true, // enable soft-deletes via deletedAt
+    indexes: [
+      {
+        unique: false,
+        fields: ["customerId", "ptrsId"],
+      },
+    ],
   });
 
   TcpError.associate = (models) => {

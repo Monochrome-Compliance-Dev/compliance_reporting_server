@@ -2,6 +2,7 @@ const { Sequelize } = require("sequelize");
 const { logger } = require("../helpers/logger");
 const fs = require("fs");
 const path = require("path");
+const { Pool } = require("pg");
 
 const DB_HOST = process.env.DB_HOST;
 const DB_PORT = process.env.DB_PORT || 5432;
@@ -38,6 +39,27 @@ const db = {
   sequelize,
   Sequelize,
 };
+
+// --- Raw pg Pool (for streaming/COPY use cases like Big Bertha) ---
+let _pgPool = null;
+function getPgPool() {
+  if (_pgPool) return _pgPool;
+  const ssl =
+    process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false;
+  _pgPool = new Pool({
+    host: process.env.DB_HOST || process.env.PGHOST || "localhost",
+    user: process.env.DB_USER || process.env.PGUSER || "postgres",
+    password: process.env.DB_PASSWORD || process.env.PGPASSWORD || "",
+    database: process.env.DB_NAME || process.env.PGDATABASE || "postgres",
+    port: Number(process.env.DB_PORT || process.env.PGPORT || 5432),
+    ssl,
+    max: 10,
+  });
+  return _pgPool;
+}
+
+// expose getter on db export
+db.getPgPool = getPgPool;
 
 // Recursively collect all *.model.js files under a directory (skips node_modules/.git/coverage)
 function walkModelFiles(dir) {
@@ -88,6 +110,7 @@ async function initialise() {
     "../customers",
     "../ptrs",
     "../tcp",
+    "../bigBertha",
     "../entities",
     "../booking",
     "../tracking",
@@ -254,6 +277,25 @@ async function initialise() {
   if (db.Ptrs && db.TcpError) {
     db.Ptrs.hasMany(db.TcpError, { foreignKey: "ptrsId", onDelete: "CASCADE" });
     db.TcpError.belongsTo(db.Ptrs, { foreignKey: "ptrsId" });
+  }
+
+  // Big Bertha staging (raw import rows)
+  if (db.Customer && db.ImportRaw) {
+    db.Customer.hasMany(db.ImportRaw, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.ImportRaw.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
+  if (db.Ptrs && db.ImportRaw) {
+    db.Ptrs.hasMany(db.ImportRaw, {
+      foreignKey: "ptrsId",
+      onDelete: "CASCADE",
+    });
+    db.ImportRaw.belongsTo(db.Ptrs, {
+      foreignKey: "ptrsId",
+      onDelete: "CASCADE",
+    });
   }
 
   // ESG Indicator and Metric relationships
@@ -536,5 +578,9 @@ process.on("SIGTERM", async () => {
     action: "DatabaseShutdown",
   });
   await sequelize.close();
+  try {
+    const pool = db.getPgPool && db.getPgPool();
+    if (pool) await pool.end();
+  } catch (e) {}
   process.exit(0);
 });
