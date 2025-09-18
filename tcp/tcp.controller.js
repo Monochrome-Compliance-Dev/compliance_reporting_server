@@ -231,14 +231,28 @@ async function getAllByPtrsId(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.ptrsId;
-  const { start, end } = req.query || {};
   try {
-    const data = await tcpService.getByPtrsId({
+    const {
+      start,
+      end,
+      page: pageQ,
+      pageSize: pageSizeQ,
+      order: orderQ,
+    } = req.query || {};
+    const page = Math.max(1, Number(pageQ) || 1);
+    const pageSize = Math.max(1, Number(pageSizeQ) || 50);
+    const order = typeof orderQ === "string" ? orderQ : "ASC";
+
+    const result = await tcpService.getByPtrsId({
       ptrsId,
       customerId,
       start,
       end,
+      page,
+      pageSize,
+      order,
     });
+
     await auditService.logEvent({
       customerId,
       userId,
@@ -246,11 +260,21 @@ async function getAllByPtrsId(req, res, next) {
       device,
       action: "GetTcpByPtrsId",
       entity: "Tcp",
-      details: { ptrsId, count: Array.isArray(data) ? data.length : undefined },
+      details: {
+        ptrsId,
+        count: result?.total ?? undefined,
+        page: result?.page,
+        pageSize: result?.pageSize,
+      },
     });
-    res
-      .status(200)
-      .json({ status: "success", data: Array.isArray(data) ? data : [] });
+
+    res.status(200).json({
+      status: "success",
+      data: Array.isArray(result?.data) ? result.data : [],
+      count: typeof result?.total === "number" ? result.total : 0,
+      page: result?.page ?? page,
+      pageSize: result?.pageSize ?? pageSize,
+    });
   } catch (error) {
     logger.logEvent("error", "Error fetching TCPs by ptrsId", {
       action: "GetTcpByPtrsId",
@@ -310,17 +334,35 @@ async function getTcpByPtrsId(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const id = req.params.id; // legacy param name for ptrsId
-  const { start, end } = req.query || {};
   try {
-    const data = await tcpService.getByPtrsId({
+    const {
+      start,
+      end,
+      page: pageQ,
+      pageSize: pageSizeQ,
+      order: orderQ,
+    } = req.query || {};
+    const page = Math.max(1, Number(pageQ) || 1);
+    const pageSize = Math.max(1, Number(pageSizeQ) || 50);
+    const order = typeof orderQ === "string" ? orderQ : "ASC";
+
+    const result = await tcpService.getByPtrsId({
       ptrsId: id,
       customerId,
       start,
       end,
+      page,
+      pageSize,
+      order,
     });
-    if (!data || (Array.isArray(data) && data.length === 0)) {
+
+    const rows = Array.isArray(result?.data) ? result.data : [];
+    const total = typeof result?.total === "number" ? result.total : 0;
+
+    if (rows.length === 0 && total === 0) {
       return res.status(404).json({ status: "error", message: "Not found" });
     }
+
     await auditService.logEvent({
       customerId,
       userId,
@@ -330,12 +372,19 @@ async function getTcpByPtrsId(req, res, next) {
       entity: "Tcp",
       details: {
         ptrsId: id,
-        count: Array.isArray(data) ? data.length : undefined,
+        count: total,
+        page: result?.page,
+        pageSize: result?.pageSize,
       },
     });
-    res
-      .status(200)
-      .json({ status: "success", data: Array.isArray(data) ? data : [] });
+
+    res.status(200).json({
+      status: "success",
+      data: rows,
+      count: total,
+      page: result?.page ?? page,
+      pageSize: result?.pageSize ?? pageSize,
+    });
   } catch (error) {
     logger.logEvent("error", "Error fetching TCPs by legacy ptrsId route", {
       action: "GetTcpByPtrsIdLegacy",
@@ -1042,6 +1091,10 @@ async function getErrorsByPtrsId(req, res, next) {
       total = 0;
     }
 
+    const validTotal = Number.isFinite(result.validTotal)
+      ? result.validTotal
+      : undefined;
+
     await auditService.logEvent({
       customerId,
       userId,
@@ -1055,6 +1108,7 @@ async function getErrorsByPtrsId(req, res, next) {
         page,
         pageSize,
         total,
+        validTotal,
       },
     });
 
@@ -1064,6 +1118,7 @@ async function getErrorsByPtrsId(req, res, next) {
       page,
       pageSize,
       total,
+      validTotal,
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching TCP errors by ptrsId", {

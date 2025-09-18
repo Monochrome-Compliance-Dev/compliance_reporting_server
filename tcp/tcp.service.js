@@ -167,20 +167,52 @@ async function getAll(customerId, options = {}) {
 }
 
 async function getByPtrsId(params, options = {}) {
-  const { customerId, ptrsId } = params;
+  const {
+    customerId,
+    ptrsId,
+    page: pageParam,
+    pageSize: pageSizeParam,
+    order: orderParam,
+    ...restParams
+  } = params || {};
+  // Pagination defaults
+  const page = Math.max(1, Number(pageParam) || 1);
+  const pageSizeCap = 500;
+  const pageSize = Math.min(
+    pageSizeCap,
+    Math.max(1, Number(pageSizeParam) || 100)
+  );
+  const offset = (page - 1) * pageSize;
+  const order =
+    typeof orderParam === "string" && orderParam.toUpperCase() === "DESC"
+      ? "DESC"
+      : "ASC";
+
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const baseWhere = { ptrsId, excludedTcp: false };
     const mergedWhere =
       options && options.where ? { ...baseWhere, ...options.where } : baseWhere;
     const { where: _omitWhere, ...rest } = options || {};
-    const rows = await db.Tcp.findAll({
+    const result = await db.Tcp.findAndCountAll({
       where: mergedWhere,
+      limit: pageSize,
+      offset,
+      order: [["createdAt", order]],
       ...rest,
       transaction: t,
     });
     await t.commit();
-    return rows.map((row) => row.get({ plain: true }));
+    const data = Array.isArray(result.rows)
+      ? result.rows.map((row) => row.get({ plain: true }))
+      : [];
+    const total =
+      typeof result.count === "number"
+        ? result.count
+        : Array.isArray(result.count)
+          ? result.count.length
+          : 0;
+    return { data, total, page, pageSize };
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
@@ -739,6 +771,12 @@ async function getErrorsByPtrsId(params, options = {}) {
       ...options,
     });
 
+    // Also compute total valid TCP rows for this PTRS (excludes errors)
+    const validTotal = await db.Tcp.count({
+      where: { ptrsId },
+      ...(t ? { transaction: t } : {}),
+    });
+
     if (t) await t.commit();
 
     const data = rows.map((r) => r.get({ plain: true }));
@@ -749,7 +787,7 @@ async function getErrorsByPtrsId(params, options = {}) {
           ? count.length
           : 0;
 
-    return { data, total, page, pageSize };
+    return { data, total, page, pageSize, validTotal };
   } catch (error) {
     if (t && !t.finished) await t.rollback();
     throw error;

@@ -41,11 +41,17 @@ const path = require("node:path");
 const { logger } = require("../helpers/logger");
 const db = require("../db/database");
 const { parseDateLike } = require("../helpers/dateNormaliser");
+const { normalizeAmountLike } = require("../helpers/amountNormaliser");
 const pool = db.getPgPool();
 const { from: copyFrom } = require("pg-copy-streams");
 const fastCsv = require("fast-csv");
 const SCHEMA = process.env.DB_SCHEMA || "public";
 const { pipeline } = require("node:stream/promises");
+
+const ABS_PAYMENT_FOR_CUSTOMERS = (process.env.ABS_PAYMENT_FOR_CUSTOMERS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 async function uploadsLocalRoute(req, res) {
   const uploadDir = process.env.LOCAL_UPLOAD_DIR || "/tmp/uploads";
@@ -98,6 +104,7 @@ async function ingest(filePath) {
 async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
   const client = await pool.connect();
   let processed = 0;
+  const absForThisCustomer = ABS_PAYMENT_FOR_CUSTOMERS.includes(customerId);
   try {
     await client.query("BEGIN");
     // Ensure RLS tenant context is set for this transaction/connection
@@ -294,6 +301,18 @@ async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
             row[h] = parsed ? parsed : raw;
           }
         }
+        // Normalize payment amount (strip thousands separators, currency, spaces; keep sign)
+        if (
+          resolvedReq.paymentAmount &&
+          Object.prototype.hasOwnProperty.call(row, resolvedReq.paymentAmount)
+        ) {
+          const rawAmt = row[resolvedReq.paymentAmount];
+          const cleaned = normalizeAmountLike(rawAmt);
+          // Use cleaned when available; otherwise keep original so validation can flag it
+          if (cleaned != null) {
+            row[resolvedReq.paymentAmount] = cleaned;
+          }
+        }
         return row;
       });
 
@@ -452,7 +471,7 @@ async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
          payeeEntityName,
          CASE WHEN payeeEntityAbn ~ '^[0-9]{11}$' THEN payeeEntityAbn::bigint ELSE NULL END,
          CASE WHEN payeeEntityAcnArbn ~ '^[0-9]+$' THEN payeeEntityAcnArbn::bigint ELSE NULL END,
-         NULLIF(amount_txt,'')::numeric,
+         CASE WHEN $3 THEN abs(NULLIF(amount_txt,'')::numeric) ELSE NULLIF(amount_txt,'')::numeric END,
          CASE WHEN date_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN date_txt::timestamp ELSE NULL END,
          'csv_upload','system','system',$1,$2,now(),now()
        FROM _norm
@@ -464,6 +483,7 @@ async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
     const { rowCount: rowsValid } = await client.query(insertValidSql, [
       customerId,
       ptrsId,
+      absForThisCustomer,
     ]);
 
     // Errors: everything else goes to error table
@@ -483,7 +503,7 @@ async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
          payeeEntityName,
          CASE WHEN payeeEntityAbn ~ '^[0-9]{11}$' THEN payeeEntityAbn::bigint ELSE NULL END,
          CASE WHEN payeeEntityAcnArbn ~ '^[0-9]+$' THEN payeeEntityAcnArbn::bigint ELSE NULL END,
-         CASE WHEN amount_txt ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN amount_txt::numeric ELSE NULL END,
+         CASE WHEN amount_txt ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (CASE WHEN $3 THEN abs(amount_txt::numeric) ELSE amount_txt::numeric END) ELSE NULL END,
          CASE WHEN date_txt ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN date_txt::timestamp ELSE NULL END,
          jsonb_build_object(
            'type', CASE
@@ -525,6 +545,7 @@ async function processCsvJob({ jobId, filePath, customerId, ptrsId }) {
     const { rowCount: rowsErrored } = await client.query(insertErrorSql, [
       customerId,
       ptrsId,
+      absForThisCustomer,
     ]);
 
     await client.query(
