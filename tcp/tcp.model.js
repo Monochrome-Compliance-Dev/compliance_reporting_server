@@ -46,7 +46,7 @@ function model(sequelize) {
     peppolEnabled: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
-      defaultValue: true,
+      defaultValue: false,
     },
     rcti: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     creditCardPayment: {
@@ -67,7 +67,7 @@ function model(sequelize) {
       defaultValue: false,
     },
     explanatoryComments1: { type: DataTypes.TEXT, allowNull: true },
-    isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
+    isSb: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
     paymentTime: { type: DataTypes.INTEGER, allowNull: true },
     explanatoryComments2: { type: DataTypes.TEXT, allowNull: true },
     // Additional fields

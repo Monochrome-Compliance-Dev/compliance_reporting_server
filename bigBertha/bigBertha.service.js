@@ -140,8 +140,12 @@ async function listPtrsErrors({ ptrsId, customerId, limit = 100, cursor }) {
     const hasCursor = cursor != null && cursor !== "";
     const sql = `
       SELECT
-        "id","payerEntityName","payeeEntityName","payeeEntityAbn",
-        "paymentAmount","paymentDate","errorReason",
+        "id",
+        "payerEntityName","payerEntityAbn",
+        "payeeEntityName","payeeEntityAbn",
+        "paymentAmount","paymentDate",
+        "invoiceAmount","invoiceDueDate",
+        "errorReason",
         "createdBy","updatedBy","customerId","ptrsId","createdAt","updatedAt"
       FROM ${SCHEMA}."tbl_tcp_error"
       WHERE "customerId" = :customerId AND "ptrsId" = :ptrsId

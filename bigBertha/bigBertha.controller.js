@@ -69,8 +69,16 @@ router.post(
 
 async function ingest(req, res) {
   try {
-    let { filePath, customerId, ptrsId, originalName, sizeBytes, format } =
-      req.body;
+    let {
+      filePath,
+      customerId,
+      ptrsId,
+      originalName,
+      sizeBytes,
+      format,
+      selectedHeaders,
+      columnMap,
+    } = req.body;
     filePath = decodeHtmlEntities(filePath);
     const userId = req.auth?.id;
     const ip = req.ip;
@@ -83,6 +91,8 @@ async function ingest(req, res) {
       sizeBytes,
       format,
       userId,
+      selectedHeaders,
+      columnMap,
     });
 
     const exists = fs.existsSync(filePath);
@@ -97,9 +107,14 @@ async function ingest(req, res) {
     }
 
     // Fire-and-forget the worker (errors are logged by the worker path)
-    processCsvJob({ jobId: job.id, filePath, customerId, ptrsId }).catch(
-      () => {}
-    );
+    processCsvJob({
+      jobId: job.id,
+      filePath,
+      customerId,
+      ptrsId,
+      selectedHeaders,
+      columnMap,
+    }).catch(() => {});
 
     await auditService.logEvent({
       customerId,

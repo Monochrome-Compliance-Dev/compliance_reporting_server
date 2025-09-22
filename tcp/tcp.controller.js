@@ -36,6 +36,18 @@ router.get(
   getAllByPtrsId
 );
 router.get(
+  "/ptrs/:ptrsId/sbi/export",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  exportSbiAbns
+);
+// SBI import route
+router.post(
+  "/ptrs/:ptrsId/sbi/import",
+  authorise(["Admin", "Boss", "User"], "ptrs"),
+  upload.single("file"),
+  importSbiResults
+);
+router.get(
   "/tcp/:id",
   authorise(["Admin", "Boss", "User"], "ptrs"),
   getTcpByPtrsId
@@ -784,6 +796,90 @@ async function downloadSummaryPtrs(req, res, next) {
       timestamp: new Date().toISOString(),
     });
     next(error);
+  }
+}
+
+// SBI import controller
+async function importSbiResults(req, res, next) {
+  const ptrsId = req.params.ptrsId;
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+
+  try {
+    if (!req.file || !req.file.path) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "CSV file required" });
+    }
+
+    const filePath = req.file.path;
+    const ext = path.extname(req.file.originalname || filePath).toLowerCase();
+    try {
+      await scanFile(filePath, ext, req.file.originalname || "upload.csv");
+    } catch (scanErr) {
+      logger.logEvent("error", "SBI import failed virus scan", {
+        action: "SbiImport",
+        error: scanErr.message,
+      });
+      return next(scanErr);
+    }
+
+    let totalRows = 0;
+    const sbiAbns = new Set();
+
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(filePath)
+        .pipe(csv())
+        .on("data", (row) => {
+          totalRows++;
+          // tolerant header handling
+          const abnRaw =
+            row.ABN ?? row.abn ?? row.Abn ?? row["Abn"] ?? row["abn"];
+          const outcomeRaw = row.Outcome ?? row.outcome ?? row["OUTCOME"];
+          const abn = abnRaw ? String(abnRaw).replace(/\D/g, "").trim() : "";
+          const outcome = outcomeRaw ? String(outcomeRaw).toLowerCase() : "";
+          if (abn && abn.length >= 9 && outcome.includes("small business")) {
+            sbiAbns.add(abn);
+          }
+        })
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const updated = await tcpService.importSbiResults({
+      ptrsId,
+      customerId,
+      abns: Array.from(sbiAbns),
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "SbiImport",
+      entity: "Tcp",
+      details: { ptrsId, totalRows, smallBusinessRows: sbiAbns.size, updated },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { totalRows, smallBusinessRows: sbiAbns.size, updated },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error importing SBI results", {
+      action: "SbiImport",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
   }
 }
 
@@ -2018,5 +2114,49 @@ async function deleteCustomerKeyword(req, res, next) {
       timestamp: new Date().toISOString(),
     });
     return next(error);
+  }
+}
+
+// Export SBI ABNs as CSV stream
+async function exportSbiAbns(req, res, next) {
+  const customerId = req.auth?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.ptrsId;
+
+  try {
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="sbi_export_${ptrsId}.csv"`
+    );
+
+    // Delegate to service layer to stream or build CSV
+    const csvData = await tcpService.exportSbiAbns({ ptrsId, customerId });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "ExportSbiAbns",
+      entity: "Tcp",
+      details: { ptrsId, size: csvData?.length },
+    });
+
+    res.status(200).send(csvData);
+  } catch (error) {
+    logger.logEvent("error", "Error exporting SBI ABNs", {
+      action: "ExportSbiAbns",
+      ptrsId,
+      customerId,
+      userId,
+      ip,
+      device,
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    });
+    next(error);
   }
 }

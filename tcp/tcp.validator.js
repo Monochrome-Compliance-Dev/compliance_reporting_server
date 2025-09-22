@@ -43,7 +43,7 @@ const tcpSchema = Joi.array().items(
     invoiceDueDate: Joi.date().optional().allow(null),
     isTcp: Joi.boolean().required(),
     tcpExclusionComment: Joi.string().sanitize().allow("", null),
-    peppolEnabled: Joi.boolean().required(),
+    peppolEnabled: Joi.boolean().optional(),
     rcti: Joi.boolean().required(),
     creditCardPayment: Joi.boolean().required(),
     creditCardNumber: Joi.string().sanitize().allow("", null),

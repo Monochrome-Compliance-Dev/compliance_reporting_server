@@ -45,161 +45,109 @@ async function processTcpMetrics(ptrsId, customerId) {
       throw new Error(`Ptrs ${ptrsId} not found for customer ${customerId}`);
     }
 
-    const tcpRecords = await db.Tcp.findAll({
-      where: { ptrsId, customerId, isTcp: true },
-      transaction: t,
-      raw: true,
-    });
+    // Set-based update for derived fields: paymentTime, paymentTerm, partialPayment, explanatoryComments1
+    await db.sequelize.query(
+      `
+      WITH cte AS (
+        SELECT 
+          t.id,
+          /* paymentTime per PTRS rules */
+          (
+            CASE
+              WHEN t.rcti IS TRUE THEN /* RCTI: inclusive + clamp to 0 */
+                CASE
+                  WHEN t."invoiceIssueDate" IS NULL OR t."paymentDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
+                END
 
-    let rctiCount = 0;
-    let nonRctiCount = 0;
-    let noticeCount = 0;
-    let supplyCount = 0;
-    let noneMatched = 0;
+              WHEN t."invoiceIssueDate" IS NOT NULL OR t."invoiceReceiptDate" IS NOT NULL THEN
+                /* Non-RCTI: choose the shortest valid path (no +1; clamp to 0) */
+                (
+                  LEAST(
+                    /* issue path (or NULL if unavailable) */
+                    CASE
+                      WHEN t."paymentDate" IS NULL OR t."invoiceIssueDate" IS NULL THEN NULL
+                      WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
+                      ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date)
+                    END,
+                    /* receipt path */
+                    CASE
+                      WHEN t."paymentDate" IS NULL OR t."invoiceReceiptDate" IS NULL THEN NULL
+                      WHEN (t."paymentDate"::date - t."invoiceReceiptDate"::date) <= 0 THEN 0
+                      ELSE (t."paymentDate"::date - t."invoiceReceiptDate"::date)
+                    END
+                  )
+                )
 
-    for (const record of tcpRecords) {
-      const updates = {};
+              WHEN t."noticeForPaymentIssueDate" IS NOT NULL THEN
+                CASE
+                  WHEN t."paymentDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date)
+                END
 
-      // Calculate paymentTime according to PTRS rules
-      if (
-        record.rcti === true &&
-        record.invoiceIssueDate &&
-        record.paymentDate
-      ) {
-        // RCTI: inclusive days between invoiceIssueDate and paymentDate
-        const days = dayDiff(record.paymentDate, record.invoiceIssueDate, {
-          inclusive: true,
-          clampZero: true,
-        });
-        if (Number.isFinite(days)) {
-          updates.paymentTime = days;
-          rctiCount++;
-        }
-      } else {
-        // Non-RCTI: choose the shortest valid path to payment
-        // Rule: same-day or pre-issue/receipt payments -> 0 days.
-        const candidates = [];
-        const issueDays = dayDiff(record.paymentDate, record.invoiceIssueDate, {
-          clampZero: true,
-        });
-        if (Number.isFinite(issueDays)) candidates.push(issueDays);
-        const receiptDays = dayDiff(
-          record.paymentDate,
-          record.invoiceReceiptDate,
-          { clampZero: true }
-        );
-        if (Number.isFinite(receiptDays)) candidates.push(receiptDays);
+              ELSE
+                CASE
+                  WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."supplyDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."supplyDate"::date)
+                END
+            END
+          ) AS payment_time,
 
-        if (candidates.length > 0) {
-          const minDays = Math.min(...candidates);
-          updates.paymentTime = minDays;
-          nonRctiCount++;
-        } else {
-          // Fallback paths
-          const noticeDays = dayDiff(
-            record.paymentDate,
-            record.noticeForPaymentIssueDate,
-            { clampZero: true }
-          );
-          if (Number.isFinite(noticeDays)) {
-            updates.paymentTime = noticeDays;
-            noticeCount++;
-          } else {
-            const supplyDays = dayDiff(record.paymentDate, record.supplyDate, {
-              clampZero: true,
-            });
-            if (Number.isFinite(supplyDays)) {
-              updates.paymentTime = supplyDays;
-              supplyCount++;
-            }
-          }
-        }
-      }
+          /* primary paymentTerm: inclusive days between invoiceIssueDate and invoiceDueDate when valid */
+          (
+            CASE
+              WHEN t."invoiceIssueDate" IS NOT NULL AND t."invoiceDueDate" IS NOT NULL 
+                   AND (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) >= 0 THEN
+                (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) + 1
+              ELSE NULL
+            END
+          ) AS primary_term,
 
-      // Calculate paymentTerm
-      let paymentTerm = null;
-      const invoiceIssueDate = record.invoiceIssueDate;
-      const invoiceDueDate = record.invoiceDueDate;
+          /* fallback term fields (as text) */
+          COALESCE(
+            NULLIF(t."invoicePaymentTerms"::text, ''),
+            NULLIF(t."noticeForPaymentTerms"::text, ''),
+            NULLIF(t."contractPoPaymentTerms"::text, '')
+          ) AS fallback_term_text,
 
-      if (
-        invoiceIssueDate &&
-        invoiceDueDate &&
-        !isNaN(Date.parse(invoiceIssueDate)) &&
-        !isNaN(Date.parse(invoiceDueDate))
-      ) {
-        const issue = new Date(invoiceIssueDate);
-        const due = new Date(invoiceDueDate);
-
-        if (due >= issue) {
-          paymentTerm = Math.round((due - issue) / (1000 * 60 * 60 * 24)) + 1; // Inclusive of both dates
-        } else {
-          logger.warn("Invalid Payment Term: Due date before issue date", {
-            id: record.id,
-            invoiceIssueDate,
-            invoiceDueDate,
-          });
-          paymentTerm = null;
-          record.explanatoryComments1 = appendComment(
-            record.explanatoryComments1,
-            "Invalid term: due date before issue date"
-          );
-          updates.explanatoryComments1 = record.explanatoryComments1;
-        }
-      }
-
-      if (paymentTerm !== null) {
-        updates.paymentTerm = paymentTerm;
-      }
-
-      // Fallback for paymentTerm if still null
-      if (updates.paymentTerm == null) {
-        const altTerm =
-          Number(record.invoicePaymentTerms) ||
-          Number(record.noticeForPaymentTerms) ||
-          Number(record.contractPoPaymentTerms);
-
-        if (!isNaN(altTerm) && altTerm > 0) {
-          updates.paymentTerm = altTerm;
-          updates.explanatoryComments1 = appendComment(
-            record.explanatoryComments1,
-            "Used fallback term field"
-          );
-        } else {
-          updates.paymentTerm = 31;
-          updates.explanatoryComments1 = appendComment(
-            record.explanatoryComments1,
-            "Fallback to default 31 day term"
-          );
-        }
-      }
-
-      // Calculate partialPayment
-      if (
-        record.paymentAmount != null &&
-        record.invoiceAmount != null &&
-        Number(record.paymentAmount) < Number(record.invoiceAmount)
-      ) {
-        updates.partialPayment = true;
-      } else if (record.paymentAmount != null && record.invoiceAmount != null) {
-        updates.partialPayment = false;
-      }
-
-      // console.debug("processTcpMetrics updates", updates);
-
-      if (Object.keys(updates).length > 0) {
-        await db.Tcp.update(updates, {
-          where: { id: record.id },
-          transaction: t,
-        });
-        const refreshed = await db.Tcp.findByPk(record.id, { transaction: t });
-      }
-      if (Object.keys(updates).length === 0) {
-        // console.log("No updates applied for record", record.id);
-      }
-    }
-    const total = tcpRecords.length;
-    const matched = rctiCount + nonRctiCount + noticeCount + supplyCount;
-    noneMatched = total - matched;
+          t."paymentAmount", t."invoiceAmount",
+          t."explanatoryComments1"
+        FROM public."tbl_tcp" t
+        WHERE t."ptrsId" = :ptrsId
+          AND t."customerId" = :customerId
+          AND t."isTcp" = TRUE
+          AND t."excludedTcp" = FALSE
+      )
+      UPDATE public."tbl_tcp" u
+      SET 
+        "paymentTime" = c.payment_time,
+        "paymentTerm" = COALESCE(
+          c.primary_term,
+          NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '')::int,
+          31
+        ),
+        "partialPayment" = COALESCE(
+          CASE 
+            WHEN c."paymentAmount" IS NOT NULL AND c."invoiceAmount" IS NOT NULL THEN (c."paymentAmount" < c."invoiceAmount")
+            ELSE NULL
+          END,
+          FALSE
+        ),
+        "explanatoryComments1" = CASE
+          WHEN c.primary_term IS NULL AND NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '') IS NOT NULL THEN 
+            COALESCE(NULLIF(c."explanatoryComments1", '' ) || ' | ', '') || 'Used fallback term field'
+          WHEN c.primary_term IS NULL AND NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '') IS NULL THEN 
+            COALESCE(NULLIF(c."explanatoryComments1", '' ) || ' | ', '') || 'Fallback to default 31 day term'
+          ELSE c."explanatoryComments1"
+        END
+      FROM cte c
+      WHERE u.id = c.id;
+      `,
+      { replacements: { ptrsId, customerId }, transaction: t }
+    );
 
     await t.commit();
   } catch (error) {

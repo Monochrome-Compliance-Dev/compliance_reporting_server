@@ -142,6 +142,8 @@ module.exports = {
    */
   getErrorsByPtrsId,
   resolveErrors,
+  exportSbiAbns,
+  importSbiResults,
 };
 
 async function getAll(customerId, options = {}) {
@@ -534,6 +536,8 @@ async function saveTransformedDataToTcp(params, options = {}) {
   if (!Array.isArray(transformedRecords)) {
     throw new Error("Transformed TCP records must be an array");
   }
+  const validRecords = [];
+  const errorRecords = [];
 
   transformedRecords.forEach((record) => {
     // Coerce paymentAmount if provided as a string
@@ -581,26 +585,80 @@ async function saveTransformedDataToTcp(params, options = {}) {
     transformedRecords[i].ptrsId = ptrsId;
     transformedRecords[i].customerId = customerId;
     transformedRecords[i].source = source;
-    const { error } = tcpBulkImportSchema.validate(transformedRecords[i]);
+    const rec = transformedRecords[i];
+    const { error } = tcpBulkImportSchema.validate(rec);
     if (error) {
-      throw new Error(
-        `Validation error in record at index ${i}: ${error.message}`
-      );
+      // Build a compact issues array for TcpError
+      const issues =
+        Array.isArray(error.details) && error.details.length
+          ? error.details.map((d) =>
+              d && d.message ? String(d.message) : String(error.message)
+            )
+          : [String(error.message)];
+
+      // Keep a subset of fields that helps with review; include meta used by saveErrorsToTcpError
+      errorRecords.push({
+        payerEntityName: rec.payerEntityName,
+        payerEntityAbn: rec.payerEntityAbn,
+        payerEntityAcnArbn: rec.payerEntityAcnArbn,
+        payeeEntityName: rec.payeeEntityName,
+        payeeEntityAbn: rec.payeeEntityAbn,
+        payeeEntityAcnArbn: rec.payeeEntityAcnArbn,
+        paymentAmount: rec.paymentAmount,
+        description: rec.description,
+        transactionType: rec.transactionType,
+        supplyDate: rec.supplyDate,
+        paymentDate: rec.paymentDate,
+        invoiceReferenceNumber: rec.invoiceReferenceNumber,
+        invoiceIssueDate: rec.invoiceIssueDate,
+        invoiceReceiptDate: rec.invoiceReceiptDate,
+        invoiceAmount: rec.invoiceAmount,
+        invoiceDueDate: rec.invoiceDueDate,
+        accountCode: rec.accountCode,
+        isTcp: rec.isTcp,
+        excludedTcp: rec.excludedTcp,
+        explanatoryComments1: rec.explanatoryComments1,
+        isSb: rec.isSb,
+        paymentTime: rec.paymentTime,
+        explanatoryComments2: rec.explanatoryComments2,
+        // meta required by saveErrorsToTcpError
+        ptrsId,
+        customerId,
+        source,
+        createdBy,
+        issues,
+      });
+    } else {
+      validRecords.push(rec);
     }
   }
 
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const { validate = true } = options || {};
-    await db.Tcp.bulkCreate(transformedRecords, {
-      validate,
-      transaction: t,
-    });
-    const insertedRecords = await db.Tcp.findAll({
-      where: { ptrsId },
-      transaction: t,
-    });
+
+    if (validRecords.length) {
+      await db.Tcp.bulkCreate(validRecords, { validate, transaction: t });
+    }
+
+    // Limit fetch to this ptrsId (same behaviour as before)
+    const insertedRecords = validRecords.length
+      ? await db.Tcp.findAll({ where: { ptrsId }, transaction: t })
+      : [];
+
     await t.commit();
+
+    // Persist invalid records to TcpError outside the Txp insert transaction
+    if (errorRecords.length) {
+      await saveErrorsToTcpError({
+        customerId,
+        errorRecords,
+        ptrsId,
+        createdBy,
+        source,
+      });
+    }
+
     return insertedRecords.map((r) => r.get({ plain: true }));
   } catch (error) {
     if (!t.finished) await t.rollback();
@@ -1067,6 +1125,100 @@ async function bulkPatchUpdate(params, options = {}) {
 
     await t.commit();
     return updatedRows.map((r) => r.get({ plain: true }));
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+// Export distinct normalised ABNs for a PTRS as CSV
+async function exportSbiAbns(params = {}, options = {}) {
+  const { customerId, ptrsId } = params;
+  if (!ptrsId) throw new Error("ptrsId is required");
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const tbl = db.Tcp.getTableName();
+    const fullName =
+      typeof tbl === "object" && tbl !== null
+        ? `"${tbl.schema}"."${tbl.tableName}"`
+        : `"${tbl}"`;
+
+    const sql = `
+      SELECT DISTINCT
+        regexp_replace(coalesce(("payeeEntityAbn")::text, ''), '\\D', '', 'g') AS abn
+      FROM ${fullName}
+      WHERE "ptrsId" = :ptrsId
+        AND "excludedTcp" = false
+        AND regexp_replace(coalesce(("payeeEntityAbn")::text, ''), '\\D', '', 'g') ~ '^[0-9]{11}$'
+      ORDER BY 1
+    `;
+
+    const [rows] = await sequelize.query(sql, {
+      replacements: { ptrsId },
+      transaction: t,
+      raw: true,
+      ...(options || {}),
+    });
+
+    await t.commit();
+
+    const header = "abn";
+    const lines = Array.isArray(rows)
+      ? rows.map((r) => String(r.abn || "").trim()).filter(Boolean)
+      : [];
+    return [header, ...lines].join("\n");
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+// Import SBI results and update TCPs for a PTRS
+async function importSbiResults(params = {}, options = {}) {
+  const { ptrsId, customerId, abns } = params || {};
+  if (!ptrsId) throw new Error("ptrsId is required");
+  const cleaned = Array.from(
+    new Set(
+      (Array.isArray(abns) ? abns : [])
+        .map((a) =>
+          String(a || "")
+            .replace(/\D/g, "")
+            .trim()
+        )
+        .filter((a) => a.length === 11)
+    )
+  );
+  if (cleaned.length === 0) return 0;
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Pass ABNs as a single JSON param to avoid Postgres arg explosion
+    const bind = { ptrsId, abns: JSON.stringify(cleaned) };
+
+    // Only mark matches as small business (true)
+    const [resTrue] = await sequelize.query(
+      `
+      WITH sbi(abn) AS (
+        SELECT jsonb_array_elements_text(:abns::jsonb)
+      )
+      UPDATE public."tbl_tcp" t
+      SET "isSb" = TRUE
+      WHERE t."ptrsId" = :ptrsId
+        AND t."excludedTcp" = FALSE
+        AND regexp_replace(coalesce((t."payeeEntityAbn")::text, ''), '\\D', '', 'g') IN (SELECT abn FROM sbi);
+      `,
+      { replacements: bind, transaction: t }
+    );
+
+    await t.commit();
+
+    // Return number marked true
+    const affectedTrue = (resTrue && resTrue.rowCount) || 0;
+    return affectedTrue;
   } catch (error) {
     if (!t.finished) await t.rollback();
     throw error;
