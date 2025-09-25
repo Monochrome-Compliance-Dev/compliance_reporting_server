@@ -828,6 +828,8 @@ async function importSbiResults(req, res, next) {
 
     let totalRows = 0;
     const sbiAbns = new Set();
+    let acceptedCount = 0;
+    let rejectedCount = 0;
 
     await new Promise((resolve, reject) => {
       fs.createReadStream(filePath)
@@ -838,14 +840,46 @@ async function importSbiResults(req, res, next) {
           const abnRaw =
             row.ABN ?? row.abn ?? row.Abn ?? row["Abn"] ?? row["abn"];
           const outcomeRaw = row.Outcome ?? row.outcome ?? row["OUTCOME"];
+          const ACCEPT_OUTCOME = "Small business for payment times reporting";
+          const outcomeNorm = outcomeRaw
+            ? String(outcomeRaw).trim().toLowerCase()
+            : "";
+          const isSmallBiz = outcomeNorm === ACCEPT_OUTCOME.toLowerCase();
+          // Normalise ABN to 11 digits only
           const abn = abnRaw ? String(abnRaw).replace(/\D/g, "").trim() : "";
-          const outcome = outcomeRaw ? String(outcomeRaw).toLowerCase() : "";
-          if (abn && abn.length >= 9 && outcome.includes("small business")) {
+          if (abn && abn.length === 11 && isSmallBiz) {
             sbiAbns.add(abn);
+            // mark counters (create if not present)
+            if (typeof acceptedCount === "number") acceptedCount++;
+            else acceptedCount = 1;
+          } else {
+            if (typeof rejectedCount === "number") rejectedCount++;
+            else rejectedCount = 1;
           }
         })
         .on("end", resolve)
         .on("error", reject);
+    });
+
+    // --- DEBUG LOG: parsed CSV rows and sbiAbns ---
+    logger.logEvent("info", "SBI import: parsed CSV rows for import", {
+      action: "SbiImportDebug",
+      ptrsId,
+      totalRows,
+      sbiAbnsRawSize: sbiAbns.size,
+      acceptedCount,
+      rejectedCount,
+      sbiAbnsSample: Array.from(sbiAbns).slice(0, 10),
+    });
+
+    // --- DEBUG LOG: what gets passed to tcpService.importSbiResults ---
+    logger.logEvent("info", "SBI import: calling tcpService.importSbiResults", {
+      action: "SbiImportDebug",
+      ptrsId,
+      paramsPreview: {
+        abnsCount: sbiAbns.size,
+        abnsSample: Array.from(sbiAbns).slice(0, 10),
+      },
     });
 
     const updated = await tcpService.importSbiResults({
@@ -1280,7 +1314,8 @@ async function recalculateMetrics(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    await processTcpMetrics(ptrsId, customerId);
+    // Run recalculation and capture aggregate metrics returned by the service
+    const metrics = await processTcpMetrics(ptrsId, customerId);
     await auditService.logEvent({
       customerId,
       userId,
@@ -1288,11 +1323,11 @@ async function recalculateMetrics(req, res, next) {
       device,
       action: "RecalculateTcpMetrics",
       entity: "Tcp",
-      details: { ptrsId },
+      details: { ptrsId, hasMetrics: !!metrics },
     });
-    res.status(200).json({
+    return res.status(200).json({
       status: "success",
-      data: { message: "TCP metrics recalculated." },
+      data: { message: "TCP metrics recalculated.", metrics },
     });
   } catch (error) {
     logger.logEvent("error", "Error recalculating TCP metrics", {

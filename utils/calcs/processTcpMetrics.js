@@ -57,25 +57,38 @@ async function processTcpMetrics(ptrsId, customerId) {
               WHEN t.rcti IS TRUE THEN /* RCTI: inclusive + clamp to 0 */
                 CASE
                   WHEN t."invoiceIssueDate" IS NULL OR t."paymentDate" IS NULL THEN NULL
-                  WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
-                  ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
+                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
                 END
 
               WHEN t."invoiceIssueDate" IS NOT NULL OR t."invoiceReceiptDate" IS NOT NULL THEN
-                /* Non-RCTI: choose the shortest valid path (no +1; clamp to 0) */
+                /* Non-RCTI: choose the shortest valid path (num +1; clamp to 0) */
                 (
-                  LEAST(
-                    /* issue path (or NULL if unavailable) */
+                  COALESCE(
+                    LEAST(
+                      /* issue path (or NULL if unavailable) */
+                      CASE
+                        WHEN t."paymentDate" IS NULL OR t."invoiceIssueDate" IS NULL THEN NULL
+                        WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                        ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                      END,
+                      /* receipt path */
+                      CASE
+                        WHEN t."paymentDate" IS NULL OR t."invoiceReceiptDate" IS NULL THEN NULL
+                        WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                        ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                      END
+                    ),
+                    /* if one side was NULL, pick the other */
                     CASE
                       WHEN t."paymentDate" IS NULL OR t."invoiceIssueDate" IS NULL THEN NULL
-                      WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
-                      ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date)
+                      WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                      ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
                     END,
-                    /* receipt path */
                     CASE
                       WHEN t."paymentDate" IS NULL OR t."invoiceReceiptDate" IS NULL THEN NULL
-                      WHEN (t."paymentDate"::date - t."invoiceReceiptDate"::date) <= 0 THEN 0
-                      ELSE (t."paymentDate"::date - t."invoiceReceiptDate"::date)
+                      WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                      ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
                     END
                   )
                 )
@@ -83,15 +96,15 @@ async function processTcpMetrics(ptrsId, customerId) {
               WHEN t."noticeForPaymentIssueDate" IS NOT NULL THEN
                 CASE
                   WHEN t."paymentDate" IS NULL THEN NULL
-                  WHEN (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) <= 0 THEN 0
-                  ELSE (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date)
+                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."noticeForPaymentIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."noticeForPaymentIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
                 END
 
               ELSE
                 CASE
                   WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
-                  WHEN (t."paymentDate"::date - t."supplyDate"::date) <= 0 THEN 0
-                  ELSE (t."paymentDate"::date - t."supplyDate"::date)
+                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."supplyDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
+                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."supplyDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
                 END
             END
           ) AS payment_time,
@@ -149,7 +162,73 @@ async function processTcpMetrics(ptrsId, customerId) {
       { replacements: { ptrsId, customerId }, transaction: t }
     );
 
+    // After row-level updates, compute aggregates for reporting in the same transaction
+    const [aggRows] = await db.sequelize.query(
+      `
+WITH sb AS (
+  SELECT
+    t.id,
+    t."paymentTime"::int AS pt,
+    t."paymentTerm"::int AS term
+  FROM public."tbl_tcp" t
+  WHERE t."ptrsId" = :ptrsId
+    AND t."customerId" = :customerId
+    AND t."isSb" = TRUE
+    AND t."isTcp" = TRUE
+    AND t."excludedTcp" = FALSE
+    AND t."paymentTime" IS NOT NULL
+),
+-- Base set for payment-term calculations (does not depend on paymentTime)
+term_base AS (
+  SELECT 
+    t."payerEntityName" AS payer,
+    t."paymentTerm"::int AS term
+  FROM public."tbl_tcp" t
+  WHERE t."ptrsId" = :ptrsId
+    AND t."customerId" = :customerId
+    AND t."isSb" = TRUE
+    AND t."isTcp" = TRUE
+    AND t."excludedTcp" = FALSE
+    AND t."paymentTerm" IS NOT NULL
+),
+-- Per-entity modes of paymentTerm
+per_entity_mode AS (
+  SELECT 
+    payer,
+    MODE() WITHIN GROUP (ORDER BY term) AS mode_term
+  FROM term_base
+  GROUP BY payer
+),
+-- Global mode of paymentTerm
+global_mode AS (
+  SELECT MODE() WITHIN GROUP (ORDER BY term) AS mode_term
+  FROM term_base
+)
+SELECT
+  COUNT(*)                                                  AS sb_total_payments,
+  COUNT(*) FILTER (WHERE sb.pt <= 30)                      AS count_leq_30,
+  COUNT(*) FILTER (WHERE sb.pt BETWEEN 31 AND 60)          AS count_31_60,
+  COUNT(*) FILTER (WHERE sb.pt > 60)                       AS count_gt_60,
+  COUNT(*) FILTER (WHERE sb.term IS NOT NULL AND sb.pt <= sb.term)   AS count_within_terms,
+  ROUND(
+    100.0 * COUNT(*) FILTER (WHERE sb.term IS NOT NULL AND sb.pt <= sb.term)
+    / NULLIF(COUNT(*),0), 2
+  )                                                         AS pct_within_terms,
+  ROUND(AVG(sb.pt)::numeric, 2)                             AS avg_days,
+  PERCENTILE_DISC(0.5)  WITHIN GROUP (ORDER BY sb.pt)       AS median_days,
+  PERCENTILE_DISC(0.8)  WITHIN GROUP (ORDER BY sb.pt)       AS p80_days,
+  PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY sb.pt)       AS p95_days,
+  -- Payment term outputs aligned to regulator worked example
+  (SELECT mode_term FROM global_mode)::int                  AS mode_term,
+  (SELECT MIN(mode_term) FROM per_entity_mode)::int         AS term_min,
+  (SELECT MAX(mode_term) FROM per_entity_mode)::int         AS term_max
+FROM sb;
+      `,
+      { replacements: { ptrsId, customerId }, transaction: t }
+    );
+
     await t.commit();
+    return aggRows && aggRows[0] ? aggRows[0] : {};
   } catch (error) {
     await t.rollback();
     logger.logEvent("error", "Error processing TCP metrics", {

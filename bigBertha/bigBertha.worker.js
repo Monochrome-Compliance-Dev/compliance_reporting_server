@@ -120,7 +120,8 @@ async function processCsvJob({
 }) {
   const client = await pool.connect();
   let processed = 0;
-  const absForThisCustomer = ABS_PAYMENT_FOR_CUSTOMERS.includes(customerId);
+  // Temporarily apply absolute() to paymentAmount for ALL customers (no env list needed)
+  const absForThisCustomer = true;
   try {
     await client.query("BEGIN");
     // Ensure RLS tenant context is set for this transaction/connection

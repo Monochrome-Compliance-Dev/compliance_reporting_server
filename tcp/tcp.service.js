@@ -1179,27 +1179,112 @@ async function exportSbiAbns(params = {}, options = {}) {
 
 // Import SBI results and update TCPs for a PTRS
 async function importSbiResults(params = {}, options = {}) {
-  const { ptrsId, customerId, abns } = params || {};
+  const { ptrsId, customerId } = params || {};
   if (!ptrsId) throw new Error("ptrsId is required");
-  const cleaned = Array.from(
-    new Set(
-      (Array.isArray(abns) ? abns : [])
-        .map((a) =>
-          String(a || "")
-            .replace(/\D/g, "")
-            .trim()
-        )
-        .filter((a) => a.length === 11)
-    )
-  );
-  if (cleaned.length === 0) return 0;
+
+  const ACCEPT_OUTCOME = "Small business for payment times reporting";
+
+  // Helper: normalise ABN to 11-digit string
+  const normAbn = (v) =>
+    String(v == null ? "" : v)
+      .replace(/\D/g, "")
+      .trim();
+
+  // Build the *approved* ABN list from whichever payload we received
+  let approvedAbns = [];
+
+  // --- DEBUG LOG: before deduplication ---
+  if (typeof logger !== "undefined" && logger.logEvent) {
+    logger.logEvent("info", "SBI import: raw params and interim approvedAbns", {
+      action: "SbiImportDebug",
+      ptrsId,
+      paramsPreview: {
+        hasRows: Array.isArray(params.rows),
+        hasRowsCsv:
+          typeof params.rowsCsv === "string" && params.rowsCsv.length > 0,
+        abnsLength: Array.isArray(params.abns) ? params.abns.length : undefined,
+      },
+      interimApprovedAbns: Array.isArray(params.rows)
+        ? (params.rows || []).slice(0, 10)
+        : Array.isArray(params.abns)
+          ? (params.abns || []).slice(0, 10)
+          : undefined,
+    });
+  }
+
+  // Case 1: Structured rows (preferred): [{ ABN, Outcome }] or header variants
+  if (Array.isArray(params.rows)) {
+    approvedAbns = params.rows
+      .map((r) => {
+        const abn = normAbn(r.ABN ?? r.abn ?? r.Abn);
+        const outcome = (r.Outcome ?? r.outcome ?? r.OUTCOME ?? "")
+          .toString()
+          .trim();
+        return { abn, outcome };
+      })
+      .filter((x) => x.abn.length === 11 && x.outcome === ACCEPT_OUTCOME)
+      .map((x) => x.abn);
+  }
+
+  // Case 2: Raw CSV string with headers containing at least ABN and Outcome
+  else if (typeof params.rowsCsv === "string" && params.rowsCsv.trim() !== "") {
+    const text = params.rowsCsv.replace(/\r\n?/g, "\n");
+    const lines = text.split("\n").filter((ln) => ln.trim() !== "");
+    if (lines.length > 0) {
+      const header = lines[0]
+        .split(",")
+        .map((h) => h.replace(/^\"|\"$/g, "").trim());
+      const abnIdx = header.findIndex((h) => /^(abn)$/i.test(h));
+      const outcomeIdx = header.findIndex((h) => /^(outcome)$/i.test(h));
+      if (abnIdx >= 0 && outcomeIdx >= 0) {
+        for (let i = 1; i < lines.length; i++) {
+          const cols = lines[i]
+            .split(",")
+            .map((c) => c.replace(/^\"|\"$/g, "").trim());
+          const abn = normAbn(cols[abnIdx]);
+          const outcome = (cols[outcomeIdx] || "").trim();
+          if (abn.length === 11 && outcome === ACCEPT_OUTCOME)
+            approvedAbns.push(abn);
+        }
+      }
+    }
+  }
+
+  // Case 3: Legacy param: abns (assumed already filtered by caller)
+  else if (Array.isArray(params.abns)) {
+    approvedAbns = params.abns.map(normAbn).filter((a) => a.length === 11);
+  }
+
+  // --- DEBUG LOG: after initial parse, before deduplication ---
+  if (typeof logger !== "undefined" && logger.logEvent) {
+    logger.logEvent("info", "SBI import: approvedAbns before deduplication", {
+      action: "SbiImportDebug",
+      ptrsId,
+      approvedAbnsPreview: approvedAbns.slice(0, 10),
+      totalApprovedAbns: approvedAbns.length,
+    });
+  }
+
+  // Deduplicate
+  approvedAbns = Array.from(new Set(approvedAbns));
+
+  // --- DEBUG LOG: after deduplication, before update ---
+  if (typeof logger !== "undefined" && logger.logEvent) {
+    logger.logEvent("info", "SBI import: final deduplicated approvedAbns", {
+      action: "SbiImportDebug",
+      ptrsId,
+      finalApprovedAbnsPreview: approvedAbns.slice(0, 10),
+      finalApprovedAbnsCount: approvedAbns.length,
+    });
+  }
+
+  if (approvedAbns.length === 0) return 0; // nothing to flip true
 
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    // Pass ABNs as a single JSON param to avoid Postgres arg explosion
-    const bind = { ptrsId, abns: JSON.stringify(cleaned) };
+    // Send approved list as jsonb to Postgres to avoid arg explosion
+    const bind = { ptrsId, abns: JSON.stringify(approvedAbns) };
 
-    // Only mark matches as small business (true)
     const [resTrue] = await sequelize.query(
       `
       WITH sbi(abn) AS (
@@ -1216,7 +1301,6 @@ async function importSbiResults(params = {}, options = {}) {
 
     await t.commit();
 
-    // Return number marked true
     const affectedTrue = (resTrue && resTrue.rowCount) || 0;
     return affectedTrue;
   } catch (error) {

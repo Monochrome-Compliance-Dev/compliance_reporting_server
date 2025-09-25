@@ -120,10 +120,32 @@ async function listPtrsRows({ ptrsId, customerId, limit = 100, cursor }) {
       replacements: { customerId, ptrsId, cursor, limit: lim },
       transaction: t,
     });
+
+    // Totals for FE chips/progress
+    const [errCntRows] = await db.sequelize.query(
+      `
+      SELECT COUNT(*)::bigint AS errors_total
+      FROM ${SCHEMA}."tbl_tcp_error"
+      WHERE "customerId" = :customerId AND "ptrsId" = :ptrsId
+      `,
+      { replacements: { customerId, ptrsId }, transaction: t }
+    );
+
+    const [validCntRows] = await db.sequelize.query(
+      `
+      SELECT COUNT(*)::bigint AS valid_total
+      FROM ${SCHEMA}."tbl_tcp"
+      WHERE "customerId" = :customerId AND "ptrsId" = :ptrsId
+      `,
+      { replacements: { customerId, ptrsId }, transaction: t }
+    );
+
     await t.commit();
     const nextCursor =
       rows && rows.length === lim ? rows[rows.length - 1].id : null;
-    return { items: rows || [], nextCursor };
+    const errorsTotal = Number(errCntRows?.[0]?.errors_total ?? 0);
+    const validTotal = Number(validCntRows?.[0]?.valid_total ?? 0);
+    return { items: rows || [], nextCursor, errorsTotal, validTotal };
   } catch (error) {
     await t.rollback();
     throw { status: error.status || 500, message: error.message || error };
