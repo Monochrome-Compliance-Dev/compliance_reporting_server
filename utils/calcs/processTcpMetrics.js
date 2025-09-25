@@ -57,55 +57,62 @@ async function processTcpMetrics(ptrsId, customerId) {
               WHEN t.rcti IS TRUE THEN /* RCTI: inclusive + clamp to 0 */
                 CASE
                   WHEN t."invoiceIssueDate" IS NULL OR t."paymentDate" IS NULL THEN NULL
-                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                  WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
                 END
 
-              WHEN t."invoiceIssueDate" IS NOT NULL OR t."invoiceReceiptDate" IS NOT NULL THEN
-                /* Non-RCTI: choose the shortest valid path (num +1; clamp to 0) */
+              /* Non-RCTI: follow regulator worked example order */
+              WHEN t.rcti IS NOT TRUE
+                   AND t."invoiceIssueDate" IS NULL
+                   AND t."noticeForPaymentIssueDate" IS NULL THEN
+                /* Both Issue and Notice are blank → use Supply date */
+                CASE
+                  WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."supplyDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."supplyDate"::date) + 1
+                END
+
+              WHEN t.rcti IS NOT TRUE
+                   AND t."invoiceIssueDate" IS NULL
+                   AND t."noticeForPaymentIssueDate" IS NOT NULL THEN
+                /* Issue is blank, Notice present → use Notice date */
+                CASE
+                  WHEN t."paymentDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) + 1
+                END
+
+              ELSE
+                /* Issue present → MIN(Issue, Receipt), with fallbacks */
                 (
                   COALESCE(
                     LEAST(
                       /* issue path (or NULL if unavailable) */
                       CASE
                         WHEN t."paymentDate" IS NULL OR t."invoiceIssueDate" IS NULL THEN NULL
-                        WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                        ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                        WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
+                        ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
                       END,
                       /* receipt path */
                       CASE
                         WHEN t."paymentDate" IS NULL OR t."invoiceReceiptDate" IS NULL THEN NULL
-                        WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                        ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                        WHEN (t."paymentDate"::date - t."invoiceReceiptDate"::date) <= 0 THEN 0
+                        ELSE (t."paymentDate"::date - t."invoiceReceiptDate"::date) + 1
                       END
                     ),
                     /* if one side was NULL, pick the other */
                     CASE
                       WHEN t."paymentDate" IS NULL OR t."invoiceIssueDate" IS NULL THEN NULL
-                      WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                      ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                      WHEN (t."paymentDate"::date - t."invoiceIssueDate"::date) <= 0 THEN 0
+                      ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
                     END,
                     CASE
                       WHEN t."paymentDate" IS NULL OR t."invoiceReceiptDate" IS NULL THEN NULL
-                      WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                      ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."invoiceReceiptDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
+                      WHEN (t."paymentDate"::date - t."invoiceReceiptDate"::date) <= 0 THEN 0
+                      ELSE (t."paymentDate"::date - t."invoiceReceiptDate"::date) + 1
                     END
                   )
                 )
-
-              WHEN t."noticeForPaymentIssueDate" IS NOT NULL THEN
-                CASE
-                  WHEN t."paymentDate" IS NULL THEN NULL
-                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."noticeForPaymentIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."noticeForPaymentIssueDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
-                END
-
-              ELSE
-                CASE
-                  WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
-                  WHEN ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."supplyDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) <= 0 THEN 0
-                  ELSE ((t."paymentDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date - (t."supplyDate"::timestamptz AT TIME ZONE 'Australia/Brisbane')::date) + 1
-                END
             END
           ) AS payment_time,
 
@@ -169,7 +176,9 @@ WITH sb AS (
   SELECT
     t.id,
     t."paymentTime"::int AS pt,
-    t."paymentTerm"::int AS term
+    t."paymentTerm"::int AS term,
+    t."paymentAmount"::numeric AS amount,
+    COALESCE(t."peppolEnabled", false) AS peppol
   FROM public."tbl_tcp" t
   WHERE t."ptrsId" = :ptrsId
     AND t."customerId" = :customerId
@@ -203,25 +212,41 @@ per_entity_mode AS (
 global_mode AS (
   SELECT MODE() WITHIN GROUP (ORDER BY term) AS mode_term
   FROM term_base
+),
+-- All TCP (SB + non-SB) value for denominator
+all_tcp_tot AS (
+  SELECT COALESCE(SUM(t."paymentAmount"::numeric),0) AS total_value
+  FROM public."tbl_tcp" t
+  WHERE t."ptrsId" = :ptrsId
+    AND t."customerId" = :customerId
+    AND t."isTcp" = TRUE
+    AND t."excludedTcp" = FALSE
+    AND t."paymentTime" IS NOT NULL
 )
 SELECT
   COUNT(*)                                                  AS sb_total_payments,
-  COUNT(*) FILTER (WHERE sb.pt <= 30)                      AS count_leq_30,
-  COUNT(*) FILTER (WHERE sb.pt BETWEEN 31 AND 60)          AS count_31_60,
-  COUNT(*) FILTER (WHERE sb.pt > 60)                       AS count_gt_60,
+  COUNT(*) FILTER (WHERE sb.pt <= 30)                       AS count_leq_30,
+  COUNT(*) FILTER (WHERE sb.pt BETWEEN 31 AND 60)           AS count_31_60,
+  COUNT(*) FILTER (WHERE sb.pt > 60)                        AS count_gt_60,
   COUNT(*) FILTER (WHERE sb.term IS NOT NULL AND sb.pt <= sb.term)   AS count_within_terms,
   ROUND(
     100.0 * COUNT(*) FILTER (WHERE sb.term IS NOT NULL AND sb.pt <= sb.term)
     / NULLIF(COUNT(*),0), 2
-  )                                                         AS pct_within_terms,
-  ROUND(AVG(sb.pt)::numeric, 2)                             AS avg_days,
-  PERCENTILE_DISC(0.5)  WITHIN GROUP (ORDER BY sb.pt)       AS median_days,
-  PERCENTILE_DISC(0.8)  WITHIN GROUP (ORDER BY sb.pt)       AS p80_days,
-  PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY sb.pt)       AS p95_days,
+  )                                                          AS pct_within_terms,
+  ROUND(AVG(sb.pt)::numeric, 2)                              AS avg_days,
+  PERCENTILE_DISC(0.5)  WITHIN GROUP (ORDER BY sb.pt)        AS median_days,
+  PERCENTILE_DISC(0.8)  WITHIN GROUP (ORDER BY sb.pt)        AS p80_days,
+  PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY sb.pt)        AS p95_days,
   -- Payment term outputs aligned to regulator worked example
-  (SELECT mode_term FROM global_mode)::int                  AS mode_term,
-  (SELECT MIN(mode_term) FROM per_entity_mode)::int         AS term_min,
-  (SELECT MAX(mode_term) FROM per_entity_mode)::int         AS term_max
+  (SELECT mode_term FROM global_mode)::int                   AS mode_term,
+  (SELECT MIN(mode_term) FROM per_entity_mode)::int          AS term_min,
+  (SELECT MAX(mode_term) FROM per_entity_mode)::int          AS term_max,
+  -- New SB value and Peppol metrics
+  COALESCE(SUM(sb.amount),0)                                 AS sb_value_payments,
+  COALESCE(SUM(sb.amount) FILTER (WHERE sb.peppol),0)        AS sb_peppol_value,
+  COUNT(*) FILTER (WHERE sb.peppol)                          AS sb_peppol_num,
+  ROUND(100.0 * COUNT(*) FILTER (WHERE sb.peppol) / NULLIF(COUNT(*),0), 2) AS sb_peppol_pct,
+  ROUND(100.0 * COALESCE(SUM(sb.amount),0) / NULLIF((SELECT total_value FROM all_tcp_tot),0), 2) AS sb_value_pct_of_total
 FROM sb;
       `,
       { replacements: { ptrsId, customerId }, transaction: t }

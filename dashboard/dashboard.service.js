@@ -15,51 +15,51 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
   try {
     // Base aggregates (paid <=30, stats, small business, late rate)
     const [scalar] = await db.sequelize.query(
-      `WITH base AS (
-         SELECT
-           t."paymentAmount"::numeric               AS amount,
-           -- days_to_pay: payment minus best-available invoice/receipt/supply date
-           EXTRACT(DAY FROM (
-             COALESCE(t."paymentDate", NOW()) - COALESCE(
-               t."invoiceReceiptDate"::timestamptz,
-               t."invoiceIssueDate"::timestamptz,
-               t."supplyDate"::timestamptz
-             )
-           ))::int                                   AS days_to_pay,
-           COALESCE(t."isSb", false)                AS is_small_business,
-           COALESCE(t."peppolEnabled", false)       AS is_peppol,
-           t."payeeEntityAbn"                        AS payee_entity_abn
-         FROM public.tbl_tcp t
-         WHERE t."ptrsId" = :ptrsId
-           AND t."customerId" = :customerId
-           AND t."isTcp" = true
-           AND t."deletedAt" IS NULL
-           AND COALESCE(t."excludedTcp", false) = false
-           AND (:start::timestamptz IS NULL OR t."paymentDate" >= :start::timestamptz)
-           AND (:end::timestamptz IS NULL OR t."paymentDate" < (:end::timestamptz + INTERVAL '1 day'))
-       ),
-       paid_30 AS (
-         SELECT COUNT(*)::int AS invoices_paid_within_30,
-                COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS value_paid_within_30
-         FROM base WHERE days_to_pay <= 30
-       ),
-       stats AS (
-         SELECT
-           AVG(days_to_pay)::numeric                                                      AS avg_days,
-           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY days_to_pay)::numeric             AS median_days,
-           PERCENTILE_CONT(0.8) WITHIN GROUP (ORDER BY days_to_pay)::numeric             AS p80,
-           PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY days_to_pay)::numeric            AS p95
-         FROM base
-       ),
-       sb AS (
-         SELECT
-           COUNT(*) FILTER (WHERE is_small_business)                                      AS sb_num,
-           COALESCE(SUM(CASE WHEN is_small_business AND amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_val,
-           COUNT(*) FILTER (WHERE is_small_business AND is_peppol)                        AS sb_peppol_num,
-           COALESCE(SUM(CASE WHEN is_small_business AND is_peppol AND amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_peppol_val,
-           COUNT(*) FILTER (WHERE is_small_business AND days_to_pay > 30)                 AS sb_late
-         FROM base
-       )
+      `WITH all_base AS (
+  SELECT
+    t."paymentAmount"::numeric         AS amount,
+    t."paymentTime"::int               AS pt,
+    COALESCE(t."isSb", false)          AS is_small_business,
+    COALESCE(t."peppolEnabled", false) AS is_peppol
+  FROM public.tbl_tcp t
+  WHERE t."ptrsId" = :ptrsId
+    AND t."customerId" = :customerId
+    AND t."isTcp" = true
+    AND t."deletedAt" IS NULL
+    AND COALESCE(t."excludedTcp", false) = false
+    AND t."paymentTime" IS NOT NULL
+    AND (:start::date IS NULL OR t."paymentDate" >= :start::date)
+    AND (:end::date IS NULL OR t."paymentDate" < (:end::date + INTERVAL '1 day'))
+),
+base AS (
+  SELECT * FROM all_base WHERE is_small_business = true
+),
+paid_30 AS (
+  SELECT COUNT(*)::int AS invoices_paid_within_30,
+         COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS value_paid_within_30
+  FROM base WHERE pt <= 30
+),
+stats AS (
+  SELECT
+    AVG(pt)::numeric                                                      AS avg_days,
+    PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY pt)::numeric             AS median_days,
+    PERCENTILE_DISC(0.8) WITHIN GROUP (ORDER BY pt)::numeric             AS p80,
+    PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY pt)::numeric            AS p95
+  FROM base
+),
+sb AS (
+  SELECT
+    COUNT(*)                                         AS sb_num,
+    COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_val,
+    COUNT(*) FILTER (WHERE is_peppol)               AS sb_peppol_num,
+    COALESCE(SUM(CASE WHEN is_peppol AND amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_peppol_val,
+    COUNT(*) FILTER (WHERE pt > 30)                 AS sb_late
+  FROM base
+),
+tot AS (
+  SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS total_val
+  FROM all_base
+)
        SELECT
          (SELECT invoices_paid_within_30 FROM paid_30)                        AS invoices_paid_within_30,
          (SELECT value_paid_within_30 FROM paid_30)                           AS value_paid_within_30,
@@ -71,7 +71,9 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
          (SELECT sb_val FROM sb)                                              AS sb_val,
          (SELECT sb_peppol_num FROM sb)                                       AS sb_peppol_num,
          (SELECT sb_peppol_val FROM sb)                                       AS sb_peppol_val,
-         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_num,0), 0) FROM sb)    AS late_sb_rate;`,
+         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_num,0), 0) FROM sb)    AS late_sb_rate
+       , (SELECT COALESCE(100.0 * sb_val / NULLIF(total_val,0), 0) FROM sb, tot) AS sb_value_pct_of_total
+       , (SELECT COALESCE(100.0 * sb_peppol_num::numeric / NULLIF(sb_num,0), 0) FROM sb) AS sb_peppol_pct;`,
       {
         replacements: { ptrsId, customerId, start, end },
         type: db.sequelize.QueryTypes.SELECT,
@@ -82,27 +84,23 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
     // Invoice age bands as proportions
     const bands = await db.sequelize.query(
       `WITH base AS (
-         SELECT EXTRACT(DAY FROM (
-                  COALESCE(t."paymentDate", NOW()) - COALESCE(
-                    t."invoiceReceiptDate"::timestamptz,
-                    t."invoiceIssueDate"::timestamptz,
-                    t."supplyDate"::timestamptz
-                  )
-                ))::int AS days_to_pay
+         SELECT t."paymentTime"::int AS pt
          FROM public.tbl_tcp t
          WHERE t."ptrsId" = :ptrsId
            AND t."customerId" = :customerId
            AND t."isTcp" = true
+           AND t."isSb" = true
            AND t."deletedAt" IS NULL
            AND COALESCE(t."excludedTcp", false) = false
-           AND (:start::timestamptz IS NULL OR t."paymentDate" >= :start::timestamptz)
-           AND (:end::timestamptz IS NULL OR t."paymentDate" < (:end::timestamptz + INTERVAL '1 day'))
+           AND t."paymentTime" IS NOT NULL
+           AND (:start::date IS NULL OR t."paymentDate" >= :start::date)
+           AND (:end::date IS NULL OR t."paymentDate" < (:end::date + INTERVAL '1 day'))
        ), counts AS (
          SELECT
            CASE
-             WHEN days_to_pay <= 30 THEN '0–30'
-             WHEN days_to_pay <= 60 THEN '31–60'
-             WHEN days_to_pay <= 90 THEN '61–90'
+             WHEN pt <= 30 THEN '0–30'
+             WHEN pt <= 60 THEN '31–60'
+             WHEN pt <= 90 THEN '61–90'
              ELSE '90+'
            END AS band,
            COUNT(*)::int AS n
@@ -124,29 +122,76 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
     const slowest = await db.sequelize.query(
       `WITH base AS (
          SELECT t."payeeEntityAbn" AS abn,
-                EXTRACT(DAY FROM (
-                  COALESCE(t."paymentDate", NOW()) - COALESCE(
-                    t."invoiceReceiptDate"::timestamptz,
-                    t."invoiceIssueDate"::timestamptz,
-                    t."supplyDate"::timestamptz
-                  )
-                ))::int AS days_to_pay
+                t."paymentTime"::int AS pt
          FROM public.tbl_tcp t
          WHERE t."ptrsId" = :ptrsId
            AND t."customerId" = :customerId
            AND t."isTcp" = true
+           AND t."isSb" = true
            AND t."deletedAt" IS NULL
            AND COALESCE(t."excludedTcp", false) = false
-           AND (:start::timestamptz IS NULL OR t."paymentDate" >= :start::timestamptz)
-           AND (:end::timestamptz IS NULL OR t."paymentDate" < (:end::timestamptz + INTERVAL '1 day'))
+           AND t."paymentTime" IS NOT NULL
+           AND (:start::date IS NULL OR t."paymentDate" >= :start::date)
+           AND (:end::date IS NULL OR t."paymentDate" < (:end::date + INTERVAL '1 day'))
            AND t."payeeEntityAbn" IS NOT NULL
        )
        SELECT abn AS "payeeEntityAbn",
-              AVG(days_to_pay)::numeric AS "avgDays"
+              AVG(pt)::numeric AS "avgDays"
        FROM base
        GROUP BY abn
-       ORDER BY AVG(days_to_pay) DESC
+       ORDER BY AVG(pt) DESC
        LIMIT 5;`,
+      {
+        replacements: { ptrsId, customerId, start, end },
+        type: db.sequelize.QueryTypes.SELECT,
+        transaction: t,
+      }
+    );
+
+    const [terms] = await db.sequelize.query(
+      `WITH s AS (
+         -- rows for within-terms calculation (need both pt and term)
+         SELECT t."paymentTime"::int AS pt, t."paymentTerm"::int AS term
+         FROM public."tbl_tcp" t
+         WHERE t."ptrsId" = :ptrsId
+           AND t."customerId" = :customerId
+           AND t."isTcp" = true
+           AND t."isSb" = true
+           AND COALESCE(t."excludedTcp", false) = false
+           AND t."deletedAt" IS NULL
+           AND t."paymentTime" IS NOT NULL
+           AND t."paymentTerm" IS NOT NULL
+           AND (:start::date IS NULL OR t."paymentDate" >= :start::date)
+           AND (:end::date IS NULL OR t."paymentDate" < (:end::date + INTERVAL '1 day'))
+       ),
+       term_base AS (
+         -- base for per-entity mode of terms; do not require paymentTime
+         SELECT 
+           t."payerEntityName" AS payer,
+           t."paymentTerm"::int AS term
+         FROM public."tbl_tcp" t
+         WHERE t."ptrsId" = :ptrsId
+           AND t."customerId" = :customerId
+           AND t."isTcp" = true
+           AND t."isSb" = true
+           AND COALESCE(t."excludedTcp", false) = false
+           AND t."deletedAt" IS NULL
+           AND t."paymentTerm" IS NOT NULL
+       ),
+       per_entity_mode AS (
+         SELECT payer, MODE() WITHIN GROUP (ORDER BY term) AS mode_term
+         FROM term_base
+         GROUP BY payer
+       ),
+       global_mode AS (
+         SELECT MODE() WITHIN GROUP (ORDER BY term) AS mode_term FROM term_base
+       )
+       SELECT
+         (SELECT COUNT(*) FILTER (WHERE pt <= term)::int FROM s)                           AS count_within_terms,
+         (SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE pt <= term) / NULLIF(COUNT(*),0), 2) FROM s) AS pct_within_terms,
+         (SELECT mode_term FROM global_mode)::int                                          AS mode_term,
+         (SELECT MIN(mode_term) FROM per_entity_mode)::int                                 AS term_min,
+         (SELECT MAX(mode_term) FROM per_entity_mode)::int                                 AS term_max;`,
       {
         replacements: { ptrsId, customerId, start, end },
         type: db.sequelize.QueryTypes.SELECT,
@@ -170,6 +215,13 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
       invoiceBands: bands,
       slowestPaidSuppliers: slowest,
       lateSbRate: Number(scalar?.late_sb_rate ?? 0),
+      withinTermsCount: Number(terms?.count_within_terms || 0),
+      withinTermsPct: Number(terms?.pct_within_terms ?? 0),
+      modeTerm: terms?.mode_term != null ? Number(terms.mode_term) : null,
+      termMin: terms?.term_min != null ? Number(terms.term_min) : null,
+      termMax: terms?.term_max != null ? Number(terms.term_max) : null,
+      sbValuePctOfTotal: Number(scalar?.sb_value_pct_of_total ?? 0),
+      sbPeppolPct: Number(scalar?.sb_peppol_pct ?? 0),
     };
   } catch (e) {
     await t.rollback();
