@@ -10,7 +10,7 @@ module.exports = {
 };
 
 async function getDashboardSignals(ptrsId, customerId, period = {}) {
-  const { start = null, end = null } = period || {};
+  const { start = null, end = null, daysEarlier = 6 } = period || {};
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     // Base aggregates (paid <=30, stats, small business, late rate)
@@ -19,6 +19,7 @@ async function getDashboardSignals(ptrsId, customerId, period = {}) {
   SELECT
     t."paymentAmount"::numeric         AS amount,
     t."paymentTime"::int               AS pt,
+    t."paymentTerm"::int               AS term,
     COALESCE(t."isSb", false)          AS is_small_business,
     COALESCE(t."peppolEnabled", false) AS is_peppol
   FROM public.tbl_tcp t
@@ -53,12 +54,35 @@ sb AS (
     COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_val,
     COUNT(*) FILTER (WHERE is_peppol)               AS sb_peppol_num,
     COALESCE(SUM(CASE WHEN is_peppol AND amount > 0 THEN amount ELSE 0 END),0)::numeric AS sb_peppol_val,
-    COUNT(*) FILTER (WHERE pt > 30)                 AS sb_late
+    COUNT(*) FILTER (WHERE term IS NOT NULL AND pt > term)                AS sb_late,
+    COUNT(*) FILTER (WHERE term IS NOT NULL)                               AS sb_with_term
   FROM base
 ),
 tot AS (
   SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),0)::numeric AS total_val
   FROM all_base
+)
+, late_stats AS (
+  SELECT
+    AVG((pt - term))::numeric AS avg_days_late
+  FROM base
+  WHERE term IS NOT NULL AND pt > term
+)
+, late_stats_ceil AS (
+  SELECT CEIL(COALESCE(avg_days_late, 0))::int AS avg_days_late_ceil FROM late_stats
+)
+, what_if AS (
+  SELECT
+    COUNT(*) FILTER (WHERE term IS NOT NULL AND pt <= term + :daysEarlier)::int AS within_shifted,
+    COUNT(*) FILTER (WHERE term IS NOT NULL)::int                                AS with_term
+  FROM base
+)
+, what_if_avg AS (
+  SELECT
+    (SELECT avg_days_late_ceil FROM late_stats_ceil)                               AS days,
+    COUNT(*) FILTER (WHERE term IS NOT NULL AND pt <= term + (SELECT avg_days_late_ceil FROM late_stats_ceil))::int AS within_shifted,
+    COUNT(*) FILTER (WHERE term IS NOT NULL)::int                                   AS with_term
+  FROM base
 )
        SELECT
          (SELECT invoices_paid_within_30 FROM paid_30)                        AS invoices_paid_within_30,
@@ -71,11 +95,34 @@ tot AS (
          (SELECT sb_val FROM sb)                                              AS sb_val,
          (SELECT sb_peppol_num FROM sb)                                       AS sb_peppol_num,
          (SELECT sb_peppol_val FROM sb)                                       AS sb_peppol_val,
-         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_num,0), 0) FROM sb)    AS late_sb_rate
+         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_with_term,0), 0) FROM sb)    AS late_sb_rate
+       , (SELECT COALESCE(avg_days_late, 0) FROM late_stats) AS avg_days_late
        , (SELECT COALESCE(100.0 * sb_val / NULLIF(total_val,0), 0) FROM sb, tot) AS sb_value_pct_of_total
-       , (SELECT COALESCE(100.0 * sb_peppol_num::numeric / NULLIF(sb_num,0), 0) FROM sb) AS sb_peppol_pct;`,
+       , (SELECT COALESCE(100.0 * sb_peppol_num::numeric / NULLIF(sb_num,0), 0) FROM sb) AS sb_peppol_pct
+, (SELECT ROUND(100.0 * within_shifted::numeric / NULLIF(with_term,0), 2) FROM what_if) AS what_if_on_time_pct
+, (SELECT within_shifted FROM what_if) AS what_if_on_time_count
+, :daysEarlier::int AS what_if_days_earlier
+, (
+    SELECT ROUND(
+      (100.0 * within_shifted::numeric / NULLIF(with_term,0))
+      - (100.0 * (1 - late_sb_rate))
+    , 2)
+    FROM what_if,
+         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_with_term,0),0) AS late_sb_rate FROM sb) x
+  ) AS what_if_delta_pp
+, (SELECT avg_days_late_ceil FROM late_stats_ceil) AS what_if_avg_days
+, (SELECT ROUND(100.0 * within_shifted::numeric / NULLIF(with_term,0), 2) FROM what_if_avg) AS what_if_avg_on_time_pct
+, (SELECT within_shifted FROM what_if_avg) AS what_if_avg_on_time_count
+, (
+    SELECT ROUND(
+      (100.0 * within_shifted::numeric / NULLIF(with_term,0))
+      - (100.0 * (1 - late_sb_rate))
+    , 2)
+    FROM what_if_avg,
+         (SELECT COALESCE(sb_late::numeric / NULLIF(sb_with_term,0),0) AS late_sb_rate FROM sb) x
+  ) AS what_if_avg_delta_pp;`,
       {
-        replacements: { ptrsId, customerId, start, end },
+        replacements: { ptrsId, customerId, start, end, daysEarlier },
         type: db.sequelize.QueryTypes.SELECT,
         transaction: t,
       }
@@ -107,10 +154,13 @@ tot AS (
          FROM base
          GROUP BY 1
        )
-       SELECT band AS label,
-              COALESCE(n::numeric / NULLIF(SUM(n) OVER (), 0), 0) AS pct
-       FROM counts
-       ORDER BY CASE band WHEN '0–30' THEN 1 WHEN '31–60' THEN 2 WHEN '61–90' THEN 3 ELSE 4 END;`,
+       SELECT 
+          band AS label,
+          n::int AS count,
+          COALESCE(n::numeric / NULLIF(SUM(n) OVER (), 0), 0) AS pct
+        FROM counts
+        ORDER BY CASE band WHEN '0–30' THEN 1 WHEN '31–60' THEN 2 WHEN '61–90' THEN 3 ELSE 4 END;
+  `,
       {
         replacements: { ptrsId, customerId, start, end },
         type: db.sequelize.QueryTypes.SELECT,
@@ -121,8 +171,11 @@ tot AS (
     // Slowest paid suppliers (top 5 by avg days)
     const slowest = await db.sequelize.query(
       `WITH base AS (
-         SELECT t."payeeEntityAbn" AS abn,
-                t."paymentTime"::int AS pt
+         SELECT
+           t."payeeEntityAbn" AS abn,
+           t."payeeEntityName" AS name,
+           t."paymentTime"::int AS pt,
+           COALESCE(t."paymentTerm"::int, NULL) AS term
          FROM public.tbl_tcp t
          WHERE t."ptrsId" = :ptrsId
            AND t."customerId" = :customerId
@@ -135,10 +188,14 @@ tot AS (
            AND (:end::date IS NULL OR t."paymentDate" < (:end::date + INTERVAL '1 day'))
            AND t."payeeEntityAbn" IS NOT NULL
        )
-       SELECT abn AS "payeeEntityAbn",
-              AVG(pt)::numeric AS "avgDays"
+       SELECT
+         abn AS "payeeEntityAbn",
+         name AS "payeeEntityName",
+         AVG(pt)::numeric AS "avgDays",
+         COUNT(*)::int AS "invoiceCount",
+         MODE() WITHIN GROUP (ORDER BY COALESCE(term, NULL))::int AS "modeTerm"
        FROM base
-       GROUP BY abn
+       GROUP BY abn, name
        ORDER BY AVG(pt) DESC
        LIMIT 5;`,
       {
@@ -213,8 +270,18 @@ tot AS (
       sbPeppolNum: Number(scalar?.sb_peppol_num || 0),
       sbPeppolValue: Number(scalar?.sb_peppol_val || 0),
       invoiceBands: bands,
-      slowestPaidSuppliers: slowest,
+      slowestPaidSuppliers: Array.isArray(slowest)
+        ? slowest.map((row) => ({
+            payeeEntityAbn: row.payeeEntityAbn,
+            payeeEntityName: row.payeeEntityName ?? null,
+            avgDays: row.avgDays != null ? Number(row.avgDays) : null,
+            invoiceCount:
+              row.invoiceCount != null ? Number(row.invoiceCount) : null,
+            modeTerm: row.modeTerm != null ? Number(row.modeTerm) : null,
+          }))
+        : [],
       lateSbRate: Number(scalar?.late_sb_rate ?? 0),
+      avgDaysLate: Number(scalar?.avg_days_late ?? 0),
       withinTermsCount: Number(terms?.count_within_terms || 0),
       withinTermsPct: Number(terms?.pct_within_terms ?? 0),
       modeTerm: terms?.mode_term != null ? Number(terms.mode_term) : null,
@@ -222,6 +289,14 @@ tot AS (
       termMax: terms?.term_max != null ? Number(terms.term_max) : null,
       sbValuePctOfTotal: Number(scalar?.sb_value_pct_of_total ?? 0),
       sbPeppolPct: Number(scalar?.sb_peppol_pct ?? 0),
+      whatIfOnTimePct: Number(scalar?.what_if_on_time_pct ?? 0),
+      whatIfOnTimeCount: Number(scalar?.what_if_on_time_count ?? 0),
+      whatIfDaysEarlier: Number(scalar?.what_if_days_earlier ?? daysEarlier),
+      whatIfDeltaPp: Number(scalar?.what_if_delta_pp ?? 0),
+      avgDaysLateCeil: Number(scalar?.what_if_avg_days ?? 0),
+      whatIfAvgOnTimePct: Number(scalar?.what_if_avg_on_time_pct ?? 0),
+      whatIfAvgOnTimeCount: Number(scalar?.what_if_avg_on_time_count ?? 0),
+      whatIfAvgDeltaPp: Number(scalar?.what_if_avg_delta_pp ?? 0),
     };
   } catch (e) {
     await t.rollback();

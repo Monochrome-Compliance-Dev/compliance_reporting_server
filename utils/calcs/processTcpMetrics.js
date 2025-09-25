@@ -61,29 +61,8 @@ async function processTcpMetrics(ptrsId, customerId) {
                   ELSE (t."paymentDate"::date - t."invoiceIssueDate"::date) + 1
                 END
 
-              /* Non-RCTI: follow regulator worked example order */
-              WHEN t.rcti IS NOT TRUE
-                   AND t."invoiceIssueDate" IS NULL
-                   AND t."noticeForPaymentIssueDate" IS NULL THEN
-                /* Both Issue and Notice are blank → use Supply date */
-                CASE
-                  WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
-                  WHEN (t."paymentDate"::date - t."supplyDate"::date) <= 0 THEN 0
-                  ELSE (t."paymentDate"::date - t."supplyDate"::date) + 1
-                END
-
-              WHEN t.rcti IS NOT TRUE
-                   AND t."invoiceIssueDate" IS NULL
-                   AND t."noticeForPaymentIssueDate" IS NOT NULL THEN
-                /* Issue is blank, Notice present → use Notice date */
-                CASE
-                  WHEN t."paymentDate" IS NULL THEN NULL
-                  WHEN (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) <= 0 THEN 0
-                  ELSE (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) + 1
-                END
-
-              ELSE
-                /* Issue present → MIN(Issue, Receipt), with fallbacks */
+              WHEN t."invoiceIssueDate" IS NOT NULL OR t."invoiceReceiptDate" IS NOT NULL THEN
+                /* Non-RCTI: choose the shortest valid path (num +1; clamp to 0) */
                 (
                   COALESCE(
                     LEAST(
@@ -113,16 +92,36 @@ async function processTcpMetrics(ptrsId, customerId) {
                     END
                   )
                 )
+
+              WHEN t."noticeForPaymentIssueDate" IS NOT NULL THEN
+                CASE
+                  WHEN t."paymentDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."noticeForPaymentIssueDate"::date) + 1
+                END
+
+              ELSE
+                CASE
+                  WHEN t."paymentDate" IS NULL OR t."supplyDate" IS NULL THEN NULL
+                  WHEN (t."paymentDate"::date - t."supplyDate"::date) <= 0 THEN 0
+                  ELSE (t."paymentDate"::date - t."supplyDate"::date) + 1
+                END
             END
           ) AS payment_time,
 
-          /* primary paymentTerm: inclusive days between invoiceIssueDate and invoiceDueDate when valid */
+          /* primary paymentTerm: Contract/PO term converted if present */
           (
             CASE
-              WHEN t."invoiceIssueDate" IS NOT NULL AND t."invoiceDueDate" IS NOT NULL 
-                   AND (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) >= 0 THEN
-                (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) + 1
-              ELSE NULL
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%end of next month%' THEN 62
+              WHEN lower(t."contractPoPaymentTerms"::text) ~ 'eom\\s*\\+\\s*([0-9]+)' THEN 31 + COALESCE((regexp_match(lower(t."contractPoPaymentTerms"::text), 'eom\\s*\\+\\s*([0-9]+)'))[1]::int, 0)
+              WHEN lower(t."contractPoPaymentTerms"::text) ~ '([0-9]+)\\s*eom' THEN 31 + COALESCE((regexp_match(lower(t."contractPoPaymentTerms"::text), '([0-9]+)\\s*eom'))[1]::int, 0)
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%end of month%' THEN 31
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%end of current month%' THEN 31
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%cod%' THEN 0
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%eom%' THEN 31
+              WHEN lower(t."contractPoPaymentTerms"::text) ~ '(net|n|nt)[\\s\\-]*([0-9]+)' THEN COALESCE((regexp_match(lower(t."contractPoPaymentTerms"::text), '(net|n|nt)[\\s\\-]*([0-9]+)'))[2]::int, NULL)
+              WHEN lower(t."contractPoPaymentTerms"::text) LIKE '%immediate%' THEN 0
+              ELSE NULLIF(regexp_replace(t."contractPoPaymentTerms"::text, '[^0-9]', '', 'g'), '')::int
             END
           ) AS primary_term,
 
@@ -132,6 +131,16 @@ async function processTcpMetrics(ptrsId, customerId) {
             NULLIF(t."noticeForPaymentTerms"::text, ''),
             NULLIF(t."contractPoPaymentTerms"::text, '')
           ) AS fallback_term_text,
+
+          /* fallback from dates: inclusive days Issue -> Due when valid */
+          (
+            CASE
+              WHEN t."invoiceIssueDate" IS NOT NULL AND t."invoiceDueDate" IS NOT NULL
+                   AND (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) >= 0 THEN
+                (t."invoiceDueDate"::date - t."invoiceIssueDate"::date) + 1
+              ELSE NULL
+            END
+          ) AS term_from_dates,
 
           t."paymentAmount", t."invoiceAmount",
           t."explanatoryComments1"
@@ -146,8 +155,21 @@ async function processTcpMetrics(ptrsId, customerId) {
         "paymentTime" = c.payment_time,
         "paymentTerm" = COALESCE(
           c.primary_term,
-          NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '')::int,
-          31
+          (
+            CASE
+              WHEN lower(c.fallback_term_text) LIKE '%end of next month%' THEN 62
+              WHEN lower(c.fallback_term_text) ~ 'eom\\s*\\+\\s*([0-9]+)' THEN 31 + COALESCE((regexp_match(lower(c.fallback_term_text), 'eom\\s*\\+\\s*([0-9]+)'))[1]::int, 0)
+              WHEN lower(c.fallback_term_text) ~ '([0-9]+)\\s*eom' THEN 31 + COALESCE((regexp_match(lower(c.fallback_term_text), '([0-9]+)\\s*eom'))[1]::int, 0)
+              WHEN lower(c.fallback_term_text) LIKE '%end of month%' THEN 31
+              WHEN lower(c.fallback_term_text) LIKE '%end of current month%' THEN 31
+              WHEN lower(c.fallback_term_text) LIKE '%cod%' THEN 0
+              WHEN lower(c.fallback_term_text) LIKE '%eom%' THEN 31
+              WHEN lower(c.fallback_term_text) ~ '(net|n|nt)[\\s\\-]*([0-9]+)' THEN COALESCE((regexp_match(lower(c.fallback_term_text), '(net|n|nt)[\\s\\-]*([0-9]+)'))[2]::int, NULL)
+              WHEN lower(c.fallback_term_text) LIKE '%immediate%' THEN 0
+              ELSE NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '')::int
+            END
+          ),
+          c.term_from_dates
         ),
         "partialPayment" = COALESCE(
           CASE 
@@ -159,8 +181,8 @@ async function processTcpMetrics(ptrsId, customerId) {
         "explanatoryComments1" = CASE
           WHEN c.primary_term IS NULL AND NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '') IS NOT NULL THEN 
             COALESCE(NULLIF(c."explanatoryComments1", '' ) || ' | ', '') || 'Used fallback term field'
-          WHEN c.primary_term IS NULL AND NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '') IS NULL THEN 
-            COALESCE(NULLIF(c."explanatoryComments1", '' ) || ' | ', '') || 'Fallback to default 31 day term'
+          WHEN c.primary_term IS NULL AND NULLIF(regexp_replace(c.fallback_term_text, '[^0-9]', '', 'g'), '') IS NULL AND c.term_from_dates IS NOT NULL THEN 
+            COALESCE(NULLIF(c."explanatoryComments1", '' ) || ' | ', '') || 'Derived from invoice issue/due dates'
           ELSE c."explanatoryComments1"
         END
       FROM cte c
