@@ -8,11 +8,29 @@ const {
   customerSchema,
   customerUpdateSchema,
 } = require("./customer.validator");
+const { tenantContext } = require("../middleware/tenantContext");
 
 // routes
 router.get("/", getAll);
 router.get("/:id", authorise(), getById);
-router.get("/:id/entitlements", authorise(), getEntitlements);
+router.get(
+  "/:id/entitlements",
+  authorise(),
+  tenantContext({ loadEntitlements: true, enforceMapping: true }),
+  getEntitlements
+);
+router.get(
+  "/customers-by-access/:id",
+  authorise(),
+  tenantContext({ loadEntitlements: true, enforceMapping: true }),
+  getCustomersByAccess
+);
+router.get(
+  "/:id/customer-entitlements",
+  authorise(),
+  tenantContext({ loadEntitlements: true, enforceMapping: true }),
+  getCustomerEntitlements
+);
 router.post("/", authorise(), validateRequest(customerSchema), create);
 router.put(
   "/:id",
@@ -53,21 +71,26 @@ function getById(req, res, next) {
 function getEntitlements(req, res, next) {
   const requestedCustomerId = req.params.id;
 
-  // Basic tenant check; service layer still enforces RLS by customerId
-  if (requestedCustomerId !== req.auth?.customerId) {
-    logger.logEvent("warn", "Forbidden entitlements request", {
-      action: "GetCustomerEntitlements",
+  // Use effective tenant resolved by tenantContext. If it doesn't match the path, deny.
+  const effectiveId = req.tenantCustomerId || req.auth?.customerId;
+  if (requestedCustomerId !== effectiveId) {
+    logger.logEvent("warn", "Forbidden entitlements request (mismatch)", {
+      action: "GetEntitlements",
       requestedCustomerId,
-      authCustomerId: req.auth?.customerId,
+      effectiveCustomerId: effectiveId,
       userId: req.auth?.id,
       ip: req.ip,
       device: req.headers["user-agent"],
     });
-    return res.status(403).json({ message: "Forbidden: Tenant access denied" });
+    return res.status(403).json({
+      status: "forbidden",
+      reason: "no_customer_access",
+      message: "You don’t have access to the requested customer.",
+    });
   }
 
   logger.logEvent("info", "Retrieving feature entitlements for customer", {
-    action: "GetCustomerEntitlements",
+    action: "GetEntitlements",
     customerId: requestedCustomerId,
     userId: req.auth?.id,
     ip: req.ip,
@@ -77,6 +100,59 @@ function getEntitlements(req, res, next) {
   customerService
     .getEntitlements({ customerId: requestedCustomerId })
     .then((result) => res.json({ status: "success", data: result }))
+    .catch(next);
+}
+
+async function getCustomerEntitlements(req, res, next) {
+  try {
+    const effectiveId = req.tenantCustomerId;
+    const entitlements = customerService.getEntitlements({
+      customerId: effectiveId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "getCustomerEntitlements",
+      entity: "CustomerEntitlements",
+      details: {
+        count: Array.isArray(entitlements) ? entitlements.length : undefined,
+      },
+    });
+    res.json({ status: "success", data: entitlements });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching all customer entitlements", {
+      action: "getCustomerEntitlements",
+      userId: req.auth?.id,
+      customerId: effectiveId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+function getCustomersByAccess(req, res, next) {
+  const userId = req.params.id;
+  const effectiveId = req.tenantCustomerId || req.auth?.customerId;
+  logger.logEvent("info", "Retrieving customers by user access", {
+    action: "GetCustomersByAccess",
+    requestedUserId: userId,
+    userId: req.auth?.id,
+    ip: req.ip,
+    device: req.headers["user-agent"],
+  });
+  customerService
+    .getCustomersByAccess(
+      {
+        customerId: effectiveId,
+      },
+      userId
+    )
+    .then((customers) => res.json(customers))
     .catch(next);
 }
 

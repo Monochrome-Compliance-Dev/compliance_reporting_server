@@ -1,11 +1,8 @@
 const { expressjwt: expressJwt } = require("express-jwt");
-const { Op } = require("sequelize");
 const secret = process.env.JWT_SECRET;
 const db = require("../db/database");
 const { logger } = require("../helpers/logger");
-const {
-  beginTransactionWithCustomerContext,
-} = require("../helpers/setCustomerIdRLS");
+const { tenantContext } = require("./tenantContext");
 
 module.exports = authorise;
 
@@ -75,72 +72,41 @@ function authorise(input = {}) {
       req.auth.ownsToken = (token) =>
         !!refreshTokens.find((x) => x.token === token);
 
-      // Load feature entitlements for this tenant so downstream routes can gate access
-      try {
-        const ACTIVE_STATES = ["active", "trial", "grace"]; // usable states
-        const now = new Date();
-
-        // Ensure RLS tenant context is set on the same connection
-        const t = await beginTransactionWithCustomerContext(user.customerId);
-        try {
-          const rows = await db.FeatureEntitlement.findAll({
-            where: {
-              customerId: user.customerId,
-              status: { [Op.in]: ACTIVE_STATES },
-              [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: now } }],
-            },
-            attributes: ["feature"],
-            transaction: t,
-          });
-
-          await t.commit();
-
-          const featuresSet = new Set(rows.map((r) => r.feature));
-          req.entitlements = featuresSet; // Set<string>
-          req.hasFeature = (f) => featuresSet.has(f);
-        } catch (innerErr) {
-          await t.rollback();
-          throw innerErr;
-        }
-      } catch (e) {
-        logger.logEvent("error", "Entitlements load failed", {
-          action: "EntitlementsLoad",
-          error: e?.message,
-          customerId: user.customerId,
-        });
-        req.entitlements = new Set();
-        req.hasFeature = () => false;
-      }
-
-      // Enforce feature requirements if features option was passed
-      if (features) {
-        let hasRequiredFeatures;
-        if (mode === "all") {
-          hasRequiredFeatures = features.every((f) => req.entitlements.has(f));
-        } else {
-          // mode 'any'
-          hasRequiredFeatures = features.some((f) => req.entitlements.has(f));
-        }
-
-        if (!hasRequiredFeatures) {
-          logger.logEvent(
-            "warn",
-            "Forbidden access: missing required feature(s)",
-            {
-              action: "FeatureAccessCheck",
-              userId: req.auth.id,
-              customerId: user.customerId,
-              requiredFeatures: features,
-              mode: mode,
-            }
-          );
-          return res
-            .status(403)
-            .json({ message: "Forbidden: Required feature(s) not enabled" });
-        }
-      }
-
       next();
+    },
+
+    // tenantContext({ loadEntitlements: true, enforceMapping: true }),
+
+    (req, res, next) => {
+      if (!features) return next();
+
+      const ent = req.entitlements;
+      const hasRequiredFeatures =
+        ent && typeof ent.has === "function"
+          ? mode === "all"
+            ? features.every((f) => ent.has(f))
+            : features.some((f) => ent.has(f))
+          : false;
+
+      if (!hasRequiredFeatures) {
+        logger.logEvent(
+          "warn",
+          "Forbidden access: missing required feature(s)",
+          {
+            action: "FeatureAccessCheck",
+            userId: req.auth.id,
+            customerId:
+              req.tenantCustomerId || (req.user && req.user.customerId),
+            requiredFeatures: features,
+            mode,
+          }
+        );
+        return res
+          .status(403)
+          .json({ message: "Forbidden: Required feature(s) not enabled" });
+      }
+
+      return next();
     },
   ];
 }

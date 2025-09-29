@@ -196,6 +196,22 @@ async function initialise() {
     db.User.belongsTo(db.Customer, { foreignKey: "customerId" });
     db.Customer.hasMany(db.User, { foreignKey: "customerId" });
   }
+
+  // Customer Access (which users can act for which customers)
+  if (db.User && db.CustomerAccess) {
+    db.User.hasMany(db.CustomerAccess, {
+      foreignKey: "userId",
+      onDelete: "CASCADE",
+    });
+    db.CustomerAccess.belongsTo(db.User, { foreignKey: "userId" });
+  }
+  if (db.Customer && db.CustomerAccess) {
+    db.Customer.hasMany(db.CustomerAccess, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.CustomerAccess.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
   if (db.Customer && db.Ptrs) {
     db.Customer.hasMany(db.Ptrs, {
       foreignKey: "customerId",

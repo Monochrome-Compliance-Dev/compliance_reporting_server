@@ -1,4 +1,9 @@
+const { Op } = require("sequelize");
 const db = require("../db/database");
+
+const {
+  beginTransactionWithCustomerContext,
+} = require("../helpers/setCustomerIdRLS");
 
 module.exports = {
   getAll,
@@ -7,6 +12,7 @@ module.exports = {
   update,
   delete: _delete,
   getEntitlements,
+  getCustomersByAccess,
 };
 
 async function getAll() {
@@ -49,14 +55,85 @@ async function _delete({ id }) {
 }
 
 async function getEntitlements({ customerId }) {
-  const entitlements = await db.FeatureEntitlement.findAll({
-    where: { customerId },
-    attributes: ["feature", "status", "source", "validFrom", "validTo"],
-  });
-  if (!entitlements || entitlements.length === 0) {
-    return [];
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const entitlements = await db.FeatureEntitlement.findAll({
+      where: { customerId },
+      attributes: ["feature", "status", "source", "validFrom", "validTo"],
+      transaction: t,
+    });
+
+    await t.commit();
+
+    if (!entitlements || entitlements.length === 0) {
+      return [];
+    }
+    return entitlements.map((e) => e.get({ plain: true }));
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
   }
-  return entitlements.map((e) =>
-    typeof e.get === "function" ? e.get({ plain: true }) : e
-  );
+}
+
+async function getCustomersByAccess({ customerId }, userId) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Fetch access rows for this user
+    const accessRows = await db.CustomerAccess.findAll({
+      where: { userId },
+      transaction: t,
+    });
+
+    if (!accessRows || accessRows.length === 0) {
+      await t.commit();
+      return [];
+    }
+
+    // Collect customerIds to look up their business names
+    const customerIds = Array.from(
+      new Set(
+        accessRows
+          .map((r) =>
+            typeof r.get === "function"
+              ? r.get({ plain: true }).customerId
+              : r.customerId
+          )
+          .filter(Boolean)
+      )
+    );
+
+    const customerRows = await db.Customer.findAll({
+      where: { id: { [Op.in]: customerIds } },
+      attributes: ["id", "businessName"],
+      transaction: t,
+    });
+
+    // Build a map id -> businessName
+    const nameById = new Map(
+      customerRows.map((row) => {
+        const plain =
+          typeof row.get === "function" ? row.get({ plain: true }) : row;
+        return [plain.id, plain.businessName];
+      })
+    );
+
+    await t.commit();
+
+    // Return access rows enriched with businessName for FE convenience
+    return accessRows.map((row) => {
+      const plain =
+        typeof row.get === "function" ? row.get({ plain: true }) : row;
+      return {
+        ...plain,
+        businessName: nameById.get(plain.customerId) || null,
+      };
+    });
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
 }
