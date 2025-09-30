@@ -44,18 +44,6 @@ function authorise(input = {}) {
         return res.status(401).json({ message: "Unauthorised" });
       }
 
-      if (user.customerId !== req.auth.customerId) {
-        logger.logEvent("warn", "Forbidden access: customer mismatch", {
-          action: "AuthoriseAccessCheck",
-          userId: req.auth.id,
-          role: user?.role,
-          customerId: user?.customerId,
-        });
-        return res
-          .status(403)
-          .json({ message: "Forbidden: Tenant access denied" });
-      }
-
       // Prevent write access for Audit role
       const writeMethods = ["POST", "PUT", "PATCH", "DELETE"];
       if (user.role === "Audit" && writeMethods.includes(req.method)) {
@@ -75,7 +63,7 @@ function authorise(input = {}) {
       next();
     },
 
-    // tenantContext({ loadEntitlements: true, enforceMapping: true }),
+    tenantContext({ loadEntitlements: true, enforceMapping: true }),
 
     (req, res, next) => {
       if (!features) return next();

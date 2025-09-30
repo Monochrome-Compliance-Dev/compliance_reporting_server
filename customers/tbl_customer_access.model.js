@@ -16,7 +16,6 @@ function model(sequelize) {
     },
     userId: { type: DataTypes.STRING(10), allowNull: false },
     customerId: { type: DataTypes.STRING(10), allowNull: false },
-    role: { type: DataTypes.STRING, allowNull: true }, // optional acting-as role override
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };

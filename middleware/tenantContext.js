@@ -8,6 +8,9 @@
 
 const db = require("../db/database");
 const { Op } = require("sequelize");
+const {
+  getEntitlements: getCustomerEntitlements,
+} = require("../customers/customer.service");
 
 const DEFAULT_ELEVATED = ["Boss"];
 const ACTIVE_ENT_STATES = ["active", "trial", "grace"];
@@ -43,9 +46,29 @@ function tenantContext(opts = {}) {
         req.user = user; // cache for downstream handlers
       }
 
-      // Default to the user's home tenant
-      const headerId = String(req.get("x-customer-id") || "").trim();
-      const hasHeader = !!headerId && headerId !== user.customerId;
+      // Determine requested tenant from header or route param (customers/:id/...)
+      const headerIdRaw = req.get("x-customer-id");
+      //   console.log("headerIdRaw: ", headerIdRaw);
+      const headerId = headerIdRaw ? String(headerIdRaw).trim() : "";
+      //   console.log("headerId: ", headerId);
+      const paramIdRaw = req.params && req.params.id ? req.params.id : "";
+      //   console.log("paramIdRaw: ", paramIdRaw);
+      const paramId = paramIdRaw ? String(paramIdRaw).trim() : "";
+      //   console.log("paramId: ", paramId);
+
+      // If both paramId and headerId exist and differ, respond with 400 error
+      if (paramId && headerId && paramId !== headerId) {
+        return res.status(400).json({
+          message:
+            "Conflicting tenant IDs provided in URL parameter and header.",
+        });
+      }
+
+      // Prefer paramId when present; otherwise consider headerId
+      const requestedId = paramId || headerId || "";
+      //   console.log("requestedId: ", requestedId);
+      const wantsActingAs = !!requestedId && requestedId !== user.customerId;
+      //   console.log("wantsActingAs: ", wantsActingAs);
 
       // Determine if user has an elevated role
       const baseRole = (
@@ -55,9 +78,9 @@ function tenantContext(opts = {}) {
         .map((r) => r.toLowerCase())
         .includes(baseRole.toLowerCase());
 
-      // Validate acting-as via mapping if header present
+      // Validate acting-as via mapping if a non-home tenant is requested
       let actingAccess = null;
-      if (hasHeader) {
+      if (wantsActingAs) {
         if (!isElevated) {
           return res.status(403).json({
             status: "forbidden",
@@ -68,7 +91,7 @@ function tenantContext(opts = {}) {
         }
         if (enforceMapping) {
           actingAccess = await db.CustomerAccess.findOne({
-            where: { userId: user.id, customerId: headerId },
+            where: { userId: user.id, customerId: requestedId },
           });
           if (!actingAccess) {
             return res.status(403).json({
@@ -81,26 +104,29 @@ function tenantContext(opts = {}) {
         }
       }
 
-      const effectiveCustomerId = hasHeader ? headerId : user.customerId;
+      const effectiveCustomerId = wantsActingAs ? requestedId : user.customerId;
 
       // Attach effective tenant context
       req.tenantCustomerId = effectiveCustomerId;
       req.effectiveCustomerId = effectiveCustomerId; // alias
-      req.actingAs = hasHeader ? effectiveCustomerId : null;
-      req.actingRole = hasHeader ? actingAccess?.role || baseRole : baseRole;
+      req.actingAs = wantsActingAs ? effectiveCustomerId : null;
+      req.actingRole = wantsActingAs
+        ? actingAccess?.role || baseRole
+        : baseRole;
 
       // (Optional) Load entitlements for effective tenant
       if (loadEntitlements) {
-        const now = new Date();
-        const entRows = await db.FeatureEntitlement.findAll({
-          where: {
-            customerId: effectiveCustomerId,
-            status: { [Op.in]: ACTIVE_ENT_STATES },
-            [Op.or]: [{ validTo: null }, { validTo: { [Op.gte]: now } }],
-          },
-          attributes: ["feature"],
+        // Delegate to customer.service which sets RLS context and returns entitlements
+        const ents = await getCustomerEntitlements({
+          customerId: effectiveCustomerId,
         });
-        const entSet = new Set(entRows.map((r) => r.feature));
+        // Normalize to array of feature slugs (service may return rows or strings)
+        const features = Array.isArray(ents)
+          ? ents
+              .map((e) => (e && typeof e === "object" ? e.feature : e))
+              .filter(Boolean)
+          : [];
+        const entSet = new Set(features);
         req.entitlements = entSet;
         req.hasFeature = (f) => entSet.has(f);
       }

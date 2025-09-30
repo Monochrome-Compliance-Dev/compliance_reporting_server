@@ -9,6 +9,7 @@ const {
   customerUpdateSchema,
 } = require("./customer.validator");
 const { tenantContext } = require("../middleware/tenantContext");
+const auditService = require("../audit/audit.service");
 
 // routes
 router.get("/", getAll);
@@ -25,12 +26,7 @@ router.get(
   tenantContext({ loadEntitlements: true, enforceMapping: true }),
   getCustomersByAccess
 );
-router.get(
-  "/:id/customer-entitlements",
-  authorise(),
-  tenantContext({ loadEntitlements: true, enforceMapping: true }),
-  getCustomerEntitlements
-);
+router.get("/:id/customer-entitlements", authorise(), getCustomerEntitlements);
 router.post("/", authorise(), validateRequest(customerSchema), create);
 router.put(
   "/:id",
@@ -104,17 +100,17 @@ function getEntitlements(req, res, next) {
 }
 
 async function getCustomerEntitlements(req, res, next) {
+  const effectiveId = req.tenantCustomerId;
   try {
-    const effectiveId = req.tenantCustomerId;
-    const entitlements = customerService.getEntitlements({
+    const entitlements = await customerService.getEntitlements({
       customerId: effectiveId,
     });
 
     await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
+      customerId: effectiveId,
+      userId: req.auth?.id,
+      ip: req.ip,
+      device: req.headers["user-agent"],
       action: "getCustomerEntitlements",
       entity: "CustomerEntitlements",
       details: {
