@@ -61,7 +61,7 @@ module.exports = router;
 
 async function getAll(req, res, next) {
   try {
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -85,7 +85,7 @@ async function getAll(req, res, next) {
     logger.logEvent("error", "Error fetching all timesheets", {
       action: "GetAllTimesheets",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -96,7 +96,7 @@ async function getAll(req, res, next) {
 
 async function getById(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -131,7 +131,7 @@ async function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -166,7 +166,7 @@ async function create(req, res, next) {
 
 async function update(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -204,7 +204,7 @@ async function update(req, res, next) {
 
 async function patch(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -244,7 +244,7 @@ async function patch(req, res, next) {
 
 async function _delete(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -279,7 +279,7 @@ async function _delete(req, res, next) {
 // --- Timesheet rows handlers ---
 async function getRows(req, res, next) {
   const timesheetId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -317,7 +317,7 @@ async function getRows(req, res, next) {
 
 async function createRow(req, res, next) {
   const timesheetId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -354,7 +354,7 @@ async function createRow(req, res, next) {
 
 async function updateRow(req, res, next) {
   const rowId = req.params.rowId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -392,7 +392,7 @@ async function updateRow(req, res, next) {
 
 async function patchRow(req, res, next) {
   const rowId = req.params.rowId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -430,7 +430,7 @@ async function patchRow(req, res, next) {
 
 async function deleteRow(req, res, next) {
   const rowId = req.params.rowId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -461,7 +461,7 @@ async function deleteRow(req, res, next) {
 }
 
 async function getUtilisation(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];

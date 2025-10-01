@@ -106,7 +106,7 @@ async function verifySession(req, res, next) {
 
 async function getEntitlements(req, res, next) {
   try {
-    const { customerId } = req.auth;
+    const customerId = req.effectiveCustomerId;
     const data = await billingService.getEntitlements({ customerId });
     return res.json({ status: "success", data });
   } catch (error) {
@@ -116,7 +116,7 @@ async function getEntitlements(req, res, next) {
 
 async function createPortalSession(req, res, next) {
   try {
-    const { customerId } = req.auth; // tenant of current user
+    const customerId = req.effectiveCustomerId; // tenant of current user
 
     // Resolve a safe, non-empty return URL
     const fallbackBase =

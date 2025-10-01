@@ -46,12 +46,13 @@ function tenantContext(opts = {}) {
         req.user = user; // cache for downstream handlers
       }
 
-      // Determine requested tenant from header or route param (customers/:id/...)
+      // Determine requested tenant from header or route param (customers/:customerId/...)
       const headerIdRaw = req.get("x-customer-id");
       //   console.log("headerIdRaw: ", headerIdRaw);
       const headerId = headerIdRaw ? String(headerIdRaw).trim() : "";
       //   console.log("headerId: ", headerId);
-      const paramIdRaw = req.params && req.params.id ? req.params.id : "";
+      const paramIdRaw =
+        req.params && req.params.customerId ? req.params.customerId : "";
       //   console.log("paramIdRaw: ", paramIdRaw);
       const paramId = paramIdRaw ? String(paramIdRaw).trim() : "";
       //   console.log("paramId: ", paramId);
@@ -59,6 +60,8 @@ function tenantContext(opts = {}) {
       // If both paramId and headerId exist and differ, respond with 400 error
       if (paramId && headerId && paramId !== headerId) {
         return res.status(400).json({
+          status: "bad_request",
+          reason: "conflicting_tenant_ids",
           message:
             "Conflicting tenant IDs provided in URL parameter and header.",
         });
@@ -105,6 +108,15 @@ function tenantContext(opts = {}) {
       }
 
       const effectiveCustomerId = wantsActingAs ? requestedId : user.customerId;
+      // Fail fast if we could not determine an effective tenant
+      if (!effectiveCustomerId) {
+        return res.status(400).json({
+          status: "bad_request",
+          reason: "missing_customer_context",
+          message:
+            "Tenant context could not be determined. Please re-select a customer or contact support.",
+        });
+      }
 
       // Attach effective tenant context
       req.tenantCustomerId = effectiveCustomerId;
@@ -136,6 +148,15 @@ function tenantContext(opts = {}) {
       //   SELECT set_config('app.current_customer_id', :effectiveCustomerId, true)
       // early in the transaction so all queries in the request are RLS-scoped.
 
+      // Always hydrate payloads so validators/controllers that still expect customerId
+      // see the effective tenant derived by tenantContext.
+      if (req.effectiveCustomerId) {
+        req.body = { ...(req.body || {}), customerId: req.effectiveCustomerId };
+        req.query = {
+          ...(req.query || {}),
+          customerId: req.effectiveCustomerId,
+        };
+      }
       return next();
     } catch (err) {
       return next(err);
@@ -167,7 +188,56 @@ function requireFeature(feature) {
   };
 }
 
+/**
+ * Rejects any client-provided tenant in body/query to enforce the contract:
+ * tenant must come from :customerId path param or X-Customer-Id header.
+ * Options:
+ *  - allowMatch: if true, allow a body/query customerId that EXACTLY matches req.effectiveCustomerId.
+ */
+function rejectClientTenantParam({ allowMatch = false } = {}) {
+  return function (req, res, next) {
+    const candidate =
+      (req.body && req.body.customerId) || (req.query && req.query.customerId);
+    if (!candidate) return next();
+
+    const provided = String(candidate).trim();
+    if (allowMatch && provided === req.effectiveCustomerId) return next();
+
+    return res.status(400).json({
+      status: "bad_request",
+      reason: "no_client_tenant",
+      message:
+        "Do not pass customerId in body or query. Use :customerId in the URL or the X-Customer-Id header.",
+      details: {
+        provided,
+        expected: allowMatch ? req.effectiveCustomerId : undefined,
+      },
+    });
+  };
+}
+
+/**
+ * Hydrate request body with customerId from tenant context for validators that still expect it.
+ * Use per-route BEFORE validateRequest(...).
+ */
+function withTenantInBody(req, _res, next) {
+  req.body = { ...(req.body || {}), customerId: req.effectiveCustomerId };
+  next();
+}
+
+/**
+ * Hydrate request query with customerId from tenant context for validators that still expect it.
+ * Use per-route BEFORE validateRequest(..., "query").
+ */
+function withTenantInQuery(req, _res, next) {
+  req.query = { ...(req.query || {}), customerId: req.effectiveCustomerId };
+  next();
+}
+
 module.exports = {
   tenantContext,
   requireFeature,
+  rejectClientTenantParam,
+  withTenantInBody,
+  withTenantInQuery,
 };

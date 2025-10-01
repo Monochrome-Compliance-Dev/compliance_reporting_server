@@ -87,7 +87,7 @@ router.post(
 // --- Handlers ---
 async function getReportingPeriods(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -120,7 +120,7 @@ async function getReportingPeriods(req, res, next) {
 
 async function getReportingPeriodById(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -160,7 +160,7 @@ async function getReportingPeriodById(req, res, next) {
 
 async function createReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -204,7 +204,7 @@ async function createReportingPeriod(req, res, next) {
 
 async function createSupplierRisk(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -244,7 +244,7 @@ async function createSupplierRisk(req, res, next) {
 
 async function updateSupplierRisk(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -298,7 +298,7 @@ async function updateSupplierRisk(req, res, next) {
 
 async function deleteSupplierRisk(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -341,7 +341,7 @@ async function deleteSupplierRisk(req, res, next) {
 async function createTraining(req, res, next) {
   console.log("Creating training record", req.body, req.auth);
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -381,7 +381,7 @@ async function updateTraining(req, res, next) {
   console.log("updateTraining: ", req.body, req.auth);
   try {
     const id = req.params.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -427,7 +427,7 @@ async function updateTraining(req, res, next) {
 async function deleteTraining(req, res, next) {
   try {
     const id = req.params.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -468,7 +468,7 @@ async function deleteTraining(req, res, next) {
 
 async function createGrievance(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -515,7 +515,7 @@ async function createGrievance(req, res, next) {
 async function updateGrievance(req, res, next) {
   try {
     const id = req.params.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -569,7 +569,7 @@ async function updateGrievance(req, res, next) {
 async function deleteGrievance(req, res, next) {
   try {
     const id = req.params.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -610,7 +610,7 @@ async function deleteGrievance(req, res, next) {
 
 async function getTraining(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -647,7 +647,7 @@ async function getTraining(req, res, next) {
 // New handler: getGrievances
 async function getGrievances(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -681,7 +681,7 @@ async function getGrievances(req, res, next) {
 // New handler: getSupplierRisks
 async function getSupplierRisks(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -715,7 +715,7 @@ async function getSupplierRisks(req, res, next) {
 // --- Analytics Handlers ---
 async function getSupplierRiskSummary(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -756,7 +756,7 @@ async function getSupplierRiskSummary(req, res, next) {
 
 async function getTrainingStats(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -795,7 +795,7 @@ async function getTrainingStats(req, res, next) {
 
 async function getGrievanceSummary(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -835,7 +835,7 @@ async function getGrievanceSummary(req, res, next) {
 // --- Interview and Statement Handlers ---
 async function getInterviewResponses(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -875,7 +875,7 @@ async function getInterviewResponses(req, res, next) {
 
 async function submitInterviewResponses(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -917,7 +917,7 @@ async function submitInterviewResponses(req, res, next) {
 
 async function generateStatement(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];

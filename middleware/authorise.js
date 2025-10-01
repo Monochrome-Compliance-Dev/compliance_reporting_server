@@ -41,7 +41,13 @@ function authorise(input = {}) {
           action: "AuthoriseAccessCheck",
           userId: req.auth.id,
         });
-        return res.status(401).json({ message: "Unauthorised" });
+        return res
+          .status(401)
+          .json({
+            status: "unauthorised",
+            reason: "role_denied",
+            message: "Unauthorised",
+          });
       }
 
       // Prevent write access for Audit role
@@ -53,7 +59,13 @@ function authorise(input = {}) {
           method: req.method,
           path: req.originalUrl,
         });
-        return res.status(403).json({ message: "Forbidden: Read-only access" });
+        return res
+          .status(403)
+          .json({
+            status: "forbidden",
+            reason: "read_only_role",
+            message: "Read-only access",
+          });
       }
 
       const refreshTokens = await user.getRefreshTokens();
@@ -91,7 +103,11 @@ function authorise(input = {}) {
         );
         return res
           .status(403)
-          .json({ message: "Forbidden: Required feature(s) not enabled" });
+          .json({
+            status: "forbidden",
+            reason: "missing_feature",
+            message: "Forbidden: Required feature(s) not enabled",
+          });
       }
 
       return next();

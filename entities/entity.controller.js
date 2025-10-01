@@ -18,9 +18,10 @@ function create(req, res, next) {
   logger.logEvent("info", "Creating entity", {
     action: "CreateEntity",
     payload: req.body,
+    customerId: req.effectiveCustomerId,
   });
   entityService
-    .create(req.body)
+    .create({ ...req.body, customerId: req.effectiveCustomerId })
     .then((entity) =>
       res.status(201).json({ id: entity.id, message: "Entity created" })
     )

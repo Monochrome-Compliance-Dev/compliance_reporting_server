@@ -31,7 +31,7 @@ router.delete("/:id", authorise(), deleteInvoice);
 async function getInvoicesByScope(req, res, next) {
   try {
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const partnerId = req.query.partnerId || null;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -64,7 +64,7 @@ async function generateInvoicesForPeriod(req, res, next) {
   try {
     const reportingPeriodId = req.body.reportingPeriodId;
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
@@ -100,7 +100,7 @@ async function generatePartnerInvoicesForPeriod(req, res, next) {
   try {
     const reportingPeriodId = req.body.reportingPeriodId;
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
@@ -134,7 +134,7 @@ async function getInvoiceById(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 
@@ -165,7 +165,7 @@ async function updateInvoice(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const data = req.body;
@@ -208,7 +208,7 @@ async function deleteInvoice(req, res, next) {
   try {
     const id = req.params.id;
     const userId = req.auth.id;
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const ip = req.ip;
     const device = req.headers["user-agent"];
 

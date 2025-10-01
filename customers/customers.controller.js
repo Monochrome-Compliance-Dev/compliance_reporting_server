@@ -26,7 +26,12 @@ router.get(
   tenantContext({ loadEntitlements: true, enforceMapping: true }),
   getCustomersByAccess
 );
-router.get("/:id/customer-entitlements", authorise(), getCustomerEntitlements);
+router.get(
+  "/:id/customer-entitlements",
+  authorise(),
+  tenantContext({ loadEntitlements: true, enforceMapping: true }),
+  getCustomerEntitlements
+);
 router.post("/", authorise(), validateRequest(customerSchema), create);
 router.put(
   "/:id",
@@ -53,7 +58,7 @@ function getAll(req, res, next) {
 function getById(req, res, next) {
   logger.logEvent("info", "Retrieved customer by ID", {
     action: "GetCustomer",
-    customerId: req.auth?.customerId,
+    customerId: req.effectiveCustomerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
@@ -65,42 +70,24 @@ function getById(req, res, next) {
 }
 
 function getEntitlements(req, res, next) {
-  const requestedCustomerId = req.params.id;
-
-  // Use effective tenant resolved by tenantContext. If it doesn't match the path, deny.
-  const effectiveId = req.tenantCustomerId || req.auth?.customerId;
-  if (requestedCustomerId !== effectiveId) {
-    logger.logEvent("warn", "Forbidden entitlements request (mismatch)", {
-      action: "GetEntitlements",
-      requestedCustomerId,
-      effectiveCustomerId: effectiveId,
-      userId: req.auth?.id,
-      ip: req.ip,
-      device: req.headers["user-agent"],
-    });
-    return res.status(403).json({
-      status: "forbidden",
-      reason: "no_customer_access",
-      message: "You don’t have access to the requested customer.",
-    });
-  }
+  const effectiveId = req.effectiveCustomerId; // set by tenantContext
 
   logger.logEvent("info", "Retrieving feature entitlements for customer", {
     action: "GetEntitlements",
-    customerId: requestedCustomerId,
+    customerId: effectiveId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
   });
 
   customerService
-    .getEntitlements({ customerId: requestedCustomerId })
+    .getEntitlements({ customerId: effectiveId })
     .then((result) => res.json({ status: "success", data: result }))
     .catch(next);
 }
 
 async function getCustomerEntitlements(req, res, next) {
-  const effectiveId = req.tenantCustomerId;
+  const effectiveId = req.effectiveCustomerId;
   try {
     const entitlements = await customerService.getEntitlements({
       customerId: effectiveId,
@@ -133,7 +120,7 @@ async function getCustomerEntitlements(req, res, next) {
 
 function getCustomersByAccess(req, res, next) {
   const userId = req.params.id;
-  const effectiveId = req.tenantCustomerId || req.auth?.customerId;
+  const effectiveId = req.effectiveCustomerId;
   logger.logEvent("info", "Retrieving customers by user access", {
     action: "GetCustomersByAccess",
     requestedUserId: userId,
@@ -155,7 +142,7 @@ function getCustomersByAccess(req, res, next) {
 function create(req, res, next) {
   logger.logEvent("info", "Creating customer", {
     action: "CreateCustomer",
-    customerId: req.auth?.customerId,
+    customerId: req.effectiveCustomerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
@@ -185,7 +172,7 @@ function create(req, res, next) {
 function update(req, res, next) {
   logger.logEvent("info", "Updating customer", {
     action: "UpdateCustomer",
-    customerId: req.auth?.customerId,
+    customerId: req.effectiveCustomerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],
@@ -211,7 +198,7 @@ function update(req, res, next) {
 function _delete(req, res, next) {
   logger.logEvent("info", "Deleting customer", {
     action: "DeleteCustomer",
-    customerId: req.auth?.customerId,
+    customerId: req.effectiveCustomerId,
     userId: req.auth?.id,
     ip: req.ip,
     device: req.headers["user-agent"],

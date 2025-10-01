@@ -64,11 +64,7 @@ sections.patch(
   requirePulse,
   // Inject auth context for validation/update
   (req, _res, next) => {
-    req.body = {
-      ...req.body,
-      customerId: req.auth?.customerId,
-      updatedBy: req.auth?.id,
-    };
+    req.body = { ...req.body, updatedBy: req.auth?.id };
     next();
   },
   validateRequest(sectionPatchSchema),
@@ -79,11 +75,7 @@ sections.put(
   requirePulse,
   // Inject auth context for validation/update
   (req, _res, next) => {
-    req.body = {
-      ...req.body,
-      customerId: req.auth?.customerId,
-      updatedBy: req.auth?.id,
-    };
+    req.body = { ...req.body, updatedBy: req.auth?.id };
     next();
   },
   validateRequest(sectionUpdateSchema),
@@ -101,7 +93,6 @@ budgets.post(
     req.body = {
       ...req.body,
       budgetId: req.params.id,
-      customerId: req.auth?.customerId,
       createdBy: req.auth?.id,
     };
     next();
@@ -116,7 +107,7 @@ router.post(
   requirePulse,
   async (req, res, next) => {
     const { engagementId, budgetId } = req.params;
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -205,7 +196,7 @@ budgets.delete("/:id", requirePulse, deleteBudget);
 
 async function getAllItems(req, res, next) {
   try {
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -250,7 +241,7 @@ async function getAllItems(req, res, next) {
     logger.logEvent("error", "Error fetching budget items", {
       action: "GetBudgetItems",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -261,7 +252,7 @@ async function getAllItems(req, res, next) {
 
 async function getItemById(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -298,7 +289,7 @@ async function getItemById(req, res, next) {
 }
 
 async function createItem(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -332,7 +323,7 @@ async function createItem(req, res, next) {
 
 async function updateItem(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -370,13 +361,11 @@ async function updateItem(req, res, next) {
 
 async function patchItem(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!customerId)
-      return res.status(400).json({ message: "Customer ID missing" });
     const item = await budgetService.budgetItems.patch({
       id,
       data: req.body,
@@ -410,13 +399,11 @@ async function patchItem(req, res, next) {
 
 async function deleteItem(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!customerId)
-      return res.status(400).json({ message: "Customer ID missing" });
     await budgetService.budgetItems.delete({ id, customerId, userId });
 
     await auditService.logEvent({
@@ -446,7 +433,7 @@ async function deleteItem(req, res, next) {
 // ===== Sections Handlers =====
 async function listSectionsByBudget(req, res, next) {
   const budgetId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -488,7 +475,7 @@ async function listSectionsByBudget(req, res, next) {
 
 async function createSectionUnderBudget(req, res, next) {
   const budgetId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -530,7 +517,7 @@ async function createSectionUnderBudget(req, res, next) {
 
 async function updateSection(req, res, next) {
   const sectionId = req.params.sectionId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -568,7 +555,7 @@ async function updateSection(req, res, next) {
 
 async function putSection(req, res, next) {
   const sectionId = req.params.sectionId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -606,7 +593,7 @@ async function putSection(req, res, next) {
 
 async function deleteSection(req, res, next) {
   const sectionId = req.params.sectionId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -642,7 +629,7 @@ async function deleteSection(req, res, next) {
 
 async function getAllBudgets(req, res, next) {
   try {
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -680,7 +667,7 @@ async function getAllBudgets(req, res, next) {
 
 async function getBudgetById(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -711,7 +698,7 @@ async function getBudgetById(req, res, next) {
 }
 
 async function createBudget(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -745,7 +732,7 @@ async function createBudget(req, res, next) {
 
 async function updateBudget(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -783,7 +770,7 @@ async function updateBudget(req, res, next) {
 
 async function patchBudget(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -821,7 +808,7 @@ async function patchBudget(req, res, next) {
 
 async function deleteBudget(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];

@@ -27,11 +27,11 @@ module.exports = router;
 function saveBlog(req, res, next) {
   logger.logEvent("info", "Saving blog post", {
     action: "SaveBlog",
-    userId: req?.user?.id || "unknown",
+    userId: req?.auth?.id || "unknown",
     ip: req.ip,
   });
   adminService
-    .saveBlog({ ...req.body, userId: req?.user?.id })
+    .saveBlog({ ...req.body, userId: req?.auth?.id })
     .then(() => {
       logger.logEvent("info", "Blog post saved", { action: "SaveBlog" });
       res.json({ message: "Blog post saved successfully." });
@@ -48,11 +48,11 @@ function saveBlog(req, res, next) {
 function saveFaq(req, res, next) {
   logger.logEvent("info", "Saving FAQ", {
     action: "SaveFaq",
-    userId: req?.user?.id || "unknown",
+    userId: req?.auth?.id || "unknown",
     ip: req.ip,
   });
   adminService
-    .saveFaq({ ...req.body, userId: req?.user?.id })
+    .saveFaq({ ...req.body, userId: req?.auth?.id })
     .then(() => {
       logger.logEvent("info", "FAQ saved", { action: "SaveFaq" });
       res.json({ message: "FAQ saved successfully." });

@@ -68,7 +68,7 @@ function generateAuthUrl(req, res) {
     }
 
     const state = JSON.stringify({
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       ptrsId: req.params?.ptrsId,
       createdBy: req.params?.createdBy,
       startDate: req.params?.startDate,
@@ -342,7 +342,7 @@ router.post("/apply", requirePtrs, async (req, res, next) => {
     });
 
     const result = await xeroService.applyContactUpdate({
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       tenantId,
       payload,
       dryRun,
@@ -356,7 +356,7 @@ router.post("/apply", requirePtrs, async (req, res, next) => {
 
 async function dumpAllContactsHandler(req, res, next) {
   const { tenantIds } = req.body || {};
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const createdBy = req.auth?.userId || "system";
 
   if (!customerId) {

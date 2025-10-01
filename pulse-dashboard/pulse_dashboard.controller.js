@@ -29,7 +29,7 @@ router.get("/dashboard/:id/turnaround", requirePulse, getTurnaround);
 module.exports = router;
 
 function getDashboard(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getDashboard invoked", {
     action: "PulseGetDashboard",
@@ -59,7 +59,7 @@ function getDashboard(req, res, next) {
 }
 
 function getTotals(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getTotals invoked", {
     action: "PulseGetTotals",
@@ -81,7 +81,7 @@ function getTotals(req, res, next) {
 }
 
 function getStatus(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getStatus invoked", {
     action: "PulseGetStatus",
@@ -103,7 +103,7 @@ function getStatus(req, res, next) {
 }
 
 function getWeeklyBurn(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getWeeklyBurn invoked", {
     action: "PulseGetWeeklyBurn",
@@ -125,7 +125,7 @@ function getWeeklyBurn(req, res, next) {
 }
 
 function getOverruns(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getOverruns invoked", {
     action: "PulseGetOverruns",
@@ -147,7 +147,7 @@ function getOverruns(req, res, next) {
 }
 
 function getUtilisation(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getUtilisation invoked", {
     action: "PulseGetUtilisation",
@@ -171,7 +171,7 @@ function getUtilisation(req, res, next) {
 }
 
 function getBillable(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getBillable invoked", {
     action: "PulseGetBillable",
@@ -193,7 +193,7 @@ function getBillable(req, res, next) {
 }
 
 function getRevenue(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getRevenue invoked", {
     action: "PulseGetRevenue",
@@ -215,7 +215,7 @@ function getRevenue(req, res, next) {
 }
 
 function getTimeliness(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getTimeliness invoked", {
     action: "PulseGetTimeliness",
@@ -239,7 +239,7 @@ function getTimeliness(req, res, next) {
 }
 
 function getTurnaround(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const orgId = req.params.id;
   logger.logEvent("info", "Pulse: controller getTurnaround invoked", {
     action: "PulseGetTurnaround",

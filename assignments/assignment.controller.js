@@ -36,7 +36,7 @@ module.exports = router;
 
 async function getAll(req, res, next) {
   try {
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -70,7 +70,7 @@ async function getAll(req, res, next) {
     logger.logEvent("error", "Error fetching assignments", {
       action: "GetAssignments",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -81,7 +81,7 @@ async function getAll(req, res, next) {
 
 async function getById(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -99,9 +99,11 @@ async function getById(req, res, next) {
       });
       res.json({ status: "success", data: assignment });
     } else {
-      res
-        .status(404)
-        .json({ status: "error", message: "Assignment not found" });
+      res.status(404).json({
+        status: "not_found",
+        reason: "assignment_not_found",
+        message: "Assignment not found",
+      });
     }
   } catch (error) {
     logger.logEvent("error", "Error fetching assignment by ID", {
@@ -118,8 +120,7 @@ async function getById(req, res, next) {
 }
 
 async function create(req, res, next) {
-  console.log("Creating assignment with body:", req.body);
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -153,7 +154,7 @@ async function create(req, res, next) {
 
 async function update(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -191,13 +192,11 @@ async function update(req, res, next) {
 
 async function patch(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!customerId)
-      return res.status(400).json({ message: "Customer ID missing" });
     const assignment = await assignmentService.patch({
       id,
       data: req.body,
@@ -231,13 +230,11 @@ async function patch(req, res, next) {
 
 async function _delete(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    if (!customerId)
-      return res.status(400).json({ message: "Customer ID missing" });
     await assignmentService.delete({ id, customerId, userId });
     await auditService.logEvent({
       customerId,

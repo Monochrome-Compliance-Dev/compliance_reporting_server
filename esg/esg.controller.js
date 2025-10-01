@@ -114,7 +114,7 @@ router.delete("/units/:id", requireEsg, deleteUnit);
 
 async function getReportingPeriodsByCustomer(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -142,7 +142,7 @@ async function getReportingPeriodsByCustomer(req, res, next) {
 
 async function getIndicatorsByReportingPeriodId(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -172,7 +172,7 @@ async function getIndicatorsByReportingPeriodId(req, res, next) {
 
 async function getMetricsByReportingPeriodId(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -204,7 +204,7 @@ module.exports = router;
 
 async function createIndicator(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -243,7 +243,7 @@ async function createIndicator(req, res, next) {
 
 async function createMetric(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -281,7 +281,7 @@ async function createMetric(req, res, next) {
 
 async function getMetricsByCustomer(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -307,7 +307,7 @@ async function getMetricsByCustomer(req, res, next) {
 // Handler for creating ESG reporting periods
 async function createReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -343,7 +343,7 @@ async function createReportingPeriod(req, res, next) {
 // Handler for deleting an ESG indicator
 async function deleteIndicator(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -370,7 +370,7 @@ async function deleteIndicator(req, res, next) {
 // Handler for deleting an ESG metric
 async function deleteMetric(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -397,7 +397,7 @@ async function deleteMetric(req, res, next) {
 // Approval workflow handlers
 async function submitReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -444,7 +444,7 @@ async function submitReportingPeriod(req, res, next) {
 
 async function approveReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -492,7 +492,7 @@ async function approveReportingPeriod(req, res, next) {
 
 async function rollbackReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -538,7 +538,7 @@ async function rollbackReportingPeriod(req, res, next) {
 
 async function getReportingPeriodById(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -571,7 +571,7 @@ async function getReportingPeriodById(req, res, next) {
 
 async function getMetricById(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -601,7 +601,7 @@ async function getMetricById(req, res, next) {
 // Unit controller handlers
 async function createUnit(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -636,7 +636,7 @@ async function createUnit(req, res, next) {
 
 async function getUnitsByCustomer(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -661,7 +661,7 @@ async function getUnitsByCustomer(req, res, next) {
 
 async function getUnitById(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -689,7 +689,7 @@ async function getUnitById(req, res, next) {
 
 async function updateUnit(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -723,7 +723,7 @@ async function updateUnit(req, res, next) {
 
 async function deleteUnit(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -750,7 +750,7 @@ async function deleteUnit(req, res, next) {
 // Handler to clone templates for a reporting period
 async function cloneTemplatesForReportingPeriod(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -781,7 +781,7 @@ async function cloneTemplatesForReportingPeriod(req, res, next) {
 // Handler to get category totals for dashboard
 async function getCategoryTotals(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
@@ -812,7 +812,7 @@ async function getCategoryTotals(req, res, next) {
 // Handler to get all indicators with latest metrics for dashboard
 async function getAllIndicatorsWithLatestMetrics(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
@@ -843,7 +843,7 @@ async function getAllIndicatorsWithLatestMetrics(req, res, next) {
 // Handler to get totals by indicator for dashboard
 async function getTotalsByIndicator(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const reportingPeriodId = req.params.reportingPeriodId;
     const userId = req.auth.id;
     const ip = req.ip;
@@ -874,7 +874,7 @@ async function getTotalsByIndicator(req, res, next) {
 // Handlers for template system
 async function createTemplate(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -912,7 +912,7 @@ async function createTemplate(req, res, next) {
 
 async function getTemplatesByCustomer(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -940,7 +940,7 @@ async function getTemplatesByCustomer(req, res, next) {
 
 async function getTemplateById(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const id = req.params.id;
     const userId = req.auth.id;
     const ip = req.ip;
@@ -968,7 +968,7 @@ async function getTemplateById(req, res, next) {
 
 async function deleteTemplate(req, res, next) {
   try {
-    const customerId = req.auth.customerId;
+    const customerId = req.effectiveCustomerId;
     const id = req.params.id;
     const userId = req.auth.id;
     const ip = req.ip;

@@ -21,7 +21,7 @@ module.exports = router;
 
 async function getDashboardMetrics(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -49,7 +49,7 @@ async function getDashboardMetrics(req, res, next) {
 
 async function getDashboardPreviousMetrics(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -77,7 +77,7 @@ async function getDashboardPreviousMetrics(req, res, next) {
 
 async function getDashboardFlags(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -102,7 +102,7 @@ async function getDashboardFlags(req, res, next) {
 
 async function getDashboardSnapshot(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -130,7 +130,7 @@ async function getDashboardSnapshot(req, res, next) {
 
 async function getDashboardSignals(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -160,7 +160,7 @@ async function getDashboardSignals(req, res, next) {
 
 async function getDashboardExtendedMetrics(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];

@@ -7,7 +7,10 @@ const authorise = require("../middleware/authorise");
 const bigBerthaService = require("./bigBertha.service");
 const { processCsvJob } = require("./bigBertha.worker");
 const multer = require("multer");
-const upload = multer({ dest: process.env.TMP_UPLOAD_DIR || "tmpUploads" });
+const upload = multer({
+  dest: process.env.TMP_UPLOAD_DIR || "tmpUploads",
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB limit
+});
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -71,7 +74,6 @@ async function ingest(req, res) {
   try {
     let {
       filePath,
-      customerId,
       ptrsId,
       originalName,
       sizeBytes,
@@ -79,7 +81,17 @@ async function ingest(req, res) {
       selectedHeaders,
       columnMap,
     } = req.body;
+    const customerId = req.effectiveCustomerId;
     filePath = decodeHtmlEntities(filePath);
+    // Validate that filePath resolves inside the configured upload root
+    const root = path.resolve(
+      process.env.LOCAL_UPLOAD_DIR ||
+        path.join("uploads", "ptrs_big_bertha_uploads")
+    );
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(root + path.sep)) {
+      return res.status(400).json({ ok: false, error: "Invalid file path" });
+    }
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -130,7 +142,7 @@ async function ingest(req, res) {
     logger.logEvent("error", "Error starting ingest job", {
       action: "StartIngestJob",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -144,7 +156,7 @@ async function ingest(req, res) {
 async function getJob(req, res) {
   try {
     const jobId = req.params.jobId;
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -164,7 +176,7 @@ async function getJob(req, res) {
     logger.logEvent("error", "Error fetching ingest job", {
       action: "GetIngestJob",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -178,7 +190,7 @@ async function getJob(req, res) {
 async function getPtrsRows(req, res) {
   try {
     const ptrsId = req.params.ptrsId;
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
     const cursor = req.query.cursor || undefined;
     const userId = req.auth?.id;
@@ -205,7 +217,7 @@ async function getPtrsRows(req, res) {
     logger.logEvent("error", "Error fetching PTRS rows", {
       action: "GetPtrsRows",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -219,7 +231,7 @@ async function getPtrsRows(req, res) {
 async function getPtrsErrors(req, res) {
   try {
     const ptrsId = req.params.ptrsId;
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
     const cursor = req.query.cursor || undefined;
     const userId = req.auth?.id;
@@ -246,7 +258,7 @@ async function getPtrsErrors(req, res) {
     logger.logEvent("error", "Error fetching PTRS errors", {
       action: "GetPtrsErrors",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
@@ -266,7 +278,7 @@ async function uploadsLocalRoute(req, res) {
     if (!req.file) {
       return res.status(400).json({ ok: false, error: "No file uploaded" });
     }
-    const customerId = req.auth?.customerId;
+    const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -331,7 +343,7 @@ async function uploadsLocalRoute(req, res) {
     logger.logEvent("error", "Error uploading local file", {
       action: "UploadsLocal",
       userId: req.auth?.id,
-      customerId: req.auth?.customerId,
+      customerId: req.effectiveCustomerId,
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),

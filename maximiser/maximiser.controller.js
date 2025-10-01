@@ -15,7 +15,7 @@ const {
 
 // GET /pulse/maximiser/teams
 router.get("/teams", requirePulse, async (req, res, next) => {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   try {
     logger.logEvent("info", "Pulse: maximiser listTeams invoked", {
       action: "PulseMaximiserListTeams",
@@ -41,7 +41,7 @@ router.get("/teams", requirePulse, async (req, res, next) => {
 
 // GET /pulse/maximiser/compare?teamIds=A,B&from=YYYY-MM-DD&to=YYYY-MM-DD&includeNonBillable=true
 router.get("/compare", requirePulse, async (req, res, next) => {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   try {
     const { teamIds = "", from, to, includeNonBillable } = req.query || {};
     const ids = String(teamIds || "")
@@ -96,7 +96,7 @@ router.get("/compare", requirePulse, async (req, res, next) => {
 // POST /pulse/maximiser/analyse
 // Accepts frontend aggregates and returns AI-style findings without DB reads
 router.post("/analyse", requirePulse, async (req, res, next) => {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   try {
     const payload = req.body || {};
     logger.logEvent("info", "Pulse: maximiser analyse invoked", {

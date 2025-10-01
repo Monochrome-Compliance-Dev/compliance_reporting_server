@@ -32,7 +32,8 @@ router.delete("/:id", authorise(), deleteFile);
 async function createFile(req, res, next) {
   try {
     const io = req.app.get("socketio");
-    const { customerId, id: userId } = req.auth;
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { indicatorId, metricId } = req.body;
@@ -109,7 +110,8 @@ async function createFile(req, res, next) {
     res.status(201).json(file);
   } catch (err) {
     const io = req.app.get("socketio");
-    const { customerId, id: userId } = req.auth || {};
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
     if (customerId && userId) {
       console.log("Emitting scanFailed:", {
         userId,
@@ -130,7 +132,8 @@ async function createFile(req, res, next) {
 
 async function getFileById(req, res, next) {
   try {
-    const { customerId, id: userId } = req.auth;
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { id } = req.params;
@@ -155,7 +158,8 @@ async function getFileById(req, res, next) {
 
 async function getFiles(req, res, next) {
   try {
-    const { customerId, id: userId } = req.auth;
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { indicatorId, metricId } = req.query;
@@ -183,7 +187,8 @@ async function getFiles(req, res, next) {
 
 async function deleteFile(req, res, next) {
   try {
-    const { customerId, id: userId } = req.auth;
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const { id } = req.params;

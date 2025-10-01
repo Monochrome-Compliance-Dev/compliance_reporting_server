@@ -206,7 +206,7 @@ module.exports = router;
 
 // Fetch all TCPs
 async function getAll(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -238,7 +238,7 @@ async function getAll(req, res, next) {
 
 // Fetch all TCPs by ptrsId
 async function getAllByPtrsId(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -304,7 +304,7 @@ async function getAllByPtrsId(req, res, next) {
 
 // Fetch a single TCP by id
 async function getById(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -341,7 +341,7 @@ async function getById(req, res, next) {
 
 // Fetch TCP by ptrsId (legacy)
 async function getTcpByPtrsId(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -414,7 +414,7 @@ async function getTcpByPtrsId(req, res, next) {
 
 // PATCH a single TCP record
 async function patchRecord(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -450,7 +450,7 @@ async function patchRecord(req, res, next) {
 
 // Bulk PATCH update
 async function bulkPatchUpdate(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -490,7 +490,7 @@ async function bulkPatchUpdate(req, res, next) {
 
 // Bulk CREATE TCPs
 async function bulkCreate(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -537,7 +537,7 @@ async function bulkCreate(req, res, next) {
 
 // Bulk UPDATE TCPs
 async function bulkUpdate(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -584,7 +584,7 @@ async function bulkUpdate(req, res, next) {
 
 // PATCH partial update (custom)
 async function partialUpdate(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -617,7 +617,7 @@ async function partialUpdate(req, res, next) {
 
 // PUT: SBI update (custom)
 async function sbiUpdate(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -662,7 +662,7 @@ async function sbiUpdate(req, res, next) {
 
 // DELETE a TCP
 async function _delete(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -701,7 +701,7 @@ async function _delete(req, res, next) {
 
 // Check for missing isSb flag
 async function checkMissingIsSb(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -733,7 +733,7 @@ async function checkMissingIsSb(req, res, next) {
 
 // Submit final PTRS
 async function submitFinalPtrs(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -764,7 +764,7 @@ async function submitFinalPtrs(req, res, next) {
 
 // Download summary PTRS
 async function downloadSummaryPtrs(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -802,7 +802,7 @@ async function downloadSummaryPtrs(req, res, next) {
 // SBI import controller
 async function importSbiResults(req, res, next) {
   const ptrsId = req.params.ptrsId;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1007,7 +1007,7 @@ async function uploadFile(req, res, next) {
         const now = new Date();
         row.createdBy = req.auth.id;
         row.updatedBy = req.auth.id;
-        row.customerId = req.auth.customerId;
+        row.customerId = req.effectiveCustomerId;
         row.ptrsId = req.body.ptrsId;
         const reasons = [];
 
@@ -1053,7 +1053,7 @@ async function uploadFile(req, res, next) {
             {
               transformedRecords: results,
               ptrsId: req.body.ptrsId,
-              customerId: req.auth.customerId,
+              customerId: req.effectiveCustomerId,
               createdBy: req.auth.id,
               source: "csv_upload",
             },
@@ -1066,7 +1066,7 @@ async function uploadFile(req, res, next) {
                 {
                   errorRecords: invalidRows,
                   ptrsId: req.body.ptrsId,
-                  customerId: req.auth.customerId,
+                  customerId: req.effectiveCustomerId,
                   createdBy: req.auth.id,
                   source: "csv_upload",
                 },
@@ -1076,7 +1076,7 @@ async function uploadFile(req, res, next) {
               logger.logEvent("error", "Failed to save TCP error rows", {
                 action: "uploadFile-saveErrors",
                 ptrsId: req.body.ptrsId,
-                customerId: req.auth.customerId,
+                customerId: req.effectiveCustomerId,
                 count: invalidRows.length,
                 error: err.message,
                 stack: err.stack,
@@ -1088,7 +1088,7 @@ async function uploadFile(req, res, next) {
           try {
             await ptrsService.saveUploadMetadata(
               {
-                customerId: req.auth.customerId,
+                customerId: req.effectiveCustomerId,
                 userId: req.auth.id,
                 ptrsId: req.body.ptrsId,
                 filename: req.file.originalname,
@@ -1109,14 +1109,14 @@ async function uploadFile(req, res, next) {
 
           logger.logEvent("info", "File uploaded and processed successfully", {
             action: "uploadFile",
-            customerId: req.auth.customerId,
+            customerId: req.effectiveCustomerId,
             userId: req.auth.id,
             ptrsId: req.body.ptrsId,
             validRows: results.length,
             invalidRows: invalidRows.length,
           });
           await auditService.logEvent({
-            customerId: req.auth.customerId,
+            customerId: req.effectiveCustomerId,
             userId: req.auth.id,
             ip: req.ip,
             device: req.headers["user-agent"],
@@ -1170,7 +1170,7 @@ async function uploadFile(req, res, next) {
 // Get errors by PTRS ID
 async function getErrorsByPtrsId(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1267,7 +1267,7 @@ async function getErrorsByPtrsId(req, res, next) {
 
 // Promote error rows to Tcp and remove from TcpError
 async function resolveErrors(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1309,7 +1309,7 @@ async function resolveErrors(req, res, next) {
 // Recalculate TCP metrics
 async function recalculateMetrics(req, res, next) {
   const ptrsId = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1346,7 +1346,7 @@ async function recalculateMetrics(req, res, next) {
 
 // Bulk DELETE TCPs by ids (optionally constrained by ptrsId)
 async function bulkDelete(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1392,7 +1392,7 @@ async function bulkDelete(req, res, next) {
 
 // Bulk DELETE TCP Error rows by ids (optionally constrained by ptrsId)
 async function bulkDeleteErrors(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1440,7 +1440,7 @@ async function bulkDeleteErrors(req, res, next) {
 
 // GOV ENTITIES (global)
 async function listGovEntities(req, res, next) {
-  const customerId = req.auth?.customerId; // not used for global list
+  const customerId = req.effectiveCustomerId; // not used for global list
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1470,7 +1470,7 @@ async function listGovEntities(req, res, next) {
 }
 
 async function createGovEntity(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1501,7 +1501,7 @@ async function createGovEntity(req, res, next) {
 
 async function updateGovEntity(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1537,7 +1537,7 @@ async function updateGovEntity(req, res, next) {
 
 async function patchGovEntity(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1573,7 +1573,7 @@ async function patchGovEntity(req, res, next) {
 
 async function deleteGovEntity(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1605,7 +1605,7 @@ async function deleteGovEntity(req, res, next) {
 
 // EMPLOYEES (customer-scoped)
 async function listEmployees(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1638,7 +1638,7 @@ async function listEmployees(req, res, next) {
 }
 
 async function createEmployee(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1675,7 +1675,7 @@ async function createEmployee(req, res, next) {
 
 async function updateEmployee(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1714,7 +1714,7 @@ async function updateEmployee(req, res, next) {
 
 async function patchEmployee(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1753,7 +1753,7 @@ async function patchEmployee(req, res, next) {
 
 async function deleteEmployee(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1788,7 +1788,7 @@ async function deleteEmployee(req, res, next) {
 
 // INTRA-COMPANY (customer-scoped)
 async function listIntraCompanies(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1821,7 +1821,7 @@ async function listIntraCompanies(req, res, next) {
 }
 
 async function createIntraCompany(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1858,7 +1858,7 @@ async function createIntraCompany(req, res, next) {
 
 async function updateIntraCompany(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1897,7 +1897,7 @@ async function updateIntraCompany(req, res, next) {
 
 async function patchIntraCompany(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1936,7 +1936,7 @@ async function patchIntraCompany(req, res, next) {
 
 async function deleteIntraCompany(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -1971,7 +1971,7 @@ async function deleteIntraCompany(req, res, next) {
 
 // CUSTOMER KEYWORDS (customer-scoped)
 async function listCustomerKeywords(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -2004,7 +2004,7 @@ async function listCustomerKeywords(req, res, next) {
 }
 
 async function createCustomerKeyword(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -2041,7 +2041,7 @@ async function createCustomerKeyword(req, res, next) {
 
 async function updateCustomerKeyword(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -2080,7 +2080,7 @@ async function updateCustomerKeyword(req, res, next) {
 
 async function patchCustomerKeyword(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -2119,7 +2119,7 @@ async function patchCustomerKeyword(req, res, next) {
 
 async function deleteCustomerKeyword(req, res, next) {
   const id = req.params.id;
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
@@ -2154,7 +2154,7 @@ async function deleteCustomerKeyword(req, res, next) {
 
 // Export SBI ABNs as CSV stream
 async function exportSbiAbns(req, res, next) {
-  const customerId = req.auth?.customerId;
+  const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];

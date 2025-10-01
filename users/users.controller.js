@@ -343,7 +343,7 @@ function getAll(req, res, next) {
 }
 
 function getAllByCustomerId(req, res, next) {
-  const customerId = req.auth.customerId;
+  const customerId = req.effectiveCustomerId;
   const ip = req.ip;
   const device = req.headers["user-agent"];
 
@@ -371,7 +371,7 @@ function getAllByCustomerId(req, res, next) {
 function getById(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
+  if (req.params.id !== req.auth?.id && req.auth?.role !== Role.Admin) {
     return res.status(401).json({ error: "Unauthorised", code: 401 });
   }
 
@@ -382,7 +382,7 @@ function getById(req, res, next) {
         logger.logEvent("info", "Fetched user by ID", {
           action: "GetUser",
           userId: req.params.id,
-          requestedBy: req.user.id,
+          requestedBy: req.auth.id,
           ip,
           device,
         });
@@ -410,7 +410,7 @@ function updateSchema(req, res, next) {
     confirmPassword: Joi.string().valid(Joi.ref("password")).empty(""),
   };
 
-  if (req.user.role === "Admin") {
+  if (req.auth?.role === "Admin") {
     schemaRules.role = Joi.string().valid(Role.Admin, Role.User).empty("");
   }
 
@@ -419,7 +419,7 @@ function updateSchema(req, res, next) {
 }
 
 function update(req, res, next) {
-  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
+  if (req.params.id !== req.auth?.id && req.auth?.role !== Role.Admin) {
     return res.status(401).json({ message: "Unauthorised" });
   }
 
@@ -432,7 +432,7 @@ function update(req, res, next) {
 function _delete(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  if (Number(req.params.id) !== req.user.id && req.user.role !== "Admin") {
+  if (req.params.id !== req.auth?.id && req.auth?.role !== Role.Admin) {
     return res.status(401).json({ message: "Unauthorised" });
   }
 
@@ -443,7 +443,7 @@ function _delete(req, res, next) {
       logger.logEvent("warn", "User deleted via controller", {
         action: "DeleteUser",
         userId: req.params.id,
-        requestedBy: req.user.id,
+        requestedBy: req.auth.id,
         ip,
         device,
       });
@@ -457,10 +457,12 @@ function inviteWithResource(req, res, next) {
   const device = req.headers["user-agent"];
   const { user, resource, createdBy } = req.body;
   const createdById = createdBy || req.auth?.id;
+  const actingCustomerId = req.effectiveCustomerId;
+  const safeUser = { ...user, customerId: actingCustomerId };
 
   userService
     .inviteWithResource({
-      user,
+      user: safeUser,
       resource,
       createdBy: createdById,
       origin: req.get("origin"),
@@ -468,9 +470,9 @@ function inviteWithResource(req, res, next) {
     .then((result) => {
       logger.logEvent("info", "Invited user and created linked resource", {
         action: "InviteWithResource",
-        invitedEmail: user.email,
+        invitedEmail: safeUser.email,
         resourceName: resource.name,
-        customerId: user.customerId,
+        customerId: actingCustomerId,
         createdBy: createdById,
         ip,
         device,
