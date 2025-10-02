@@ -13,18 +13,13 @@ const auditService = require("../audit/audit.service");
 
 // routes
 router.get("/", getAll);
+router.get("/access", authorise(), getCustomersByAccess);
 router.get("/:id", authorise(), getById);
 router.get(
   "/:id/entitlements",
   authorise(),
   tenantContext({ loadEntitlements: true, enforceMapping: true }),
   getEntitlements
-);
-router.get(
-  "/customers-by-access/:id",
-  authorise(),
-  tenantContext({ loadEntitlements: true, enforceMapping: true }),
-  getCustomersByAccess
 );
 router.get(
   "/:id/customer-entitlements",
@@ -119,23 +114,16 @@ async function getCustomerEntitlements(req, res, next) {
 }
 
 function getCustomersByAccess(req, res, next) {
-  const userId = req.params.id;
-  const effectiveId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
   logger.logEvent("info", "Retrieving customers by user access", {
     action: "GetCustomersByAccess",
-    requestedUserId: userId,
-    userId: req.auth?.id,
+    userId,
     ip: req.ip,
     device: req.headers["user-agent"],
   });
   customerService
-    .getCustomersByAccess(
-      {
-        customerId: effectiveId,
-      },
-      userId
-    )
-    .then((customers) => res.json(customers))
+    .getCustomersByAccess(userId)
+    .then((list) => res.json(list))
     .catch(next);
 }
 

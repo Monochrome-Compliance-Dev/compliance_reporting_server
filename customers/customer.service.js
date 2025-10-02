@@ -77,63 +77,42 @@ async function getEntitlements({ customerId }) {
   }
 }
 
-async function getCustomersByAccess({ customerId }, userId) {
-  const t = await beginTransactionWithCustomerContext(customerId);
-  try {
-    // Fetch access rows for this user
-    const accessRows = await db.CustomerAccess.findAll({
-      where: { userId },
-      transaction: t,
-    });
+async function getCustomersByAccess(userId) {
+  // Fetch access rows for this user
+  const accessRows = await db.CustomerAccess.findAll({
+    where: { userId },
+  });
 
-    if (!accessRows || accessRows.length === 0) {
-      await t.commit();
-      return [];
-    }
-
-    // Collect customerIds to look up their business names
-    const customerIds = Array.from(
-      new Set(
-        accessRows
-          .map((r) =>
-            typeof r.get === "function"
-              ? r.get({ plain: true }).customerId
-              : r.customerId
-          )
-          .filter(Boolean)
-      )
-    );
-
-    const customerRows = await db.Customer.findAll({
-      where: { id: { [Op.in]: customerIds } },
-      attributes: ["id", "businessName"],
-      transaction: t,
-    });
-
-    // Build a map id -> businessName
-    const nameById = new Map(
-      customerRows.map((row) => {
-        const plain =
-          typeof row.get === "function" ? row.get({ plain: true }) : row;
-        return [plain.id, plain.businessName];
-      })
-    );
-
-    await t.commit();
-
-    // Return access rows enriched with businessName for FE convenience
-    return accessRows.map((row) => {
-      const plain =
-        typeof row.get === "function" ? row.get({ plain: true }) : row;
-      return {
-        ...plain,
-        businessName: nameById.get(plain.customerId) || null,
-      };
-    });
-  } catch (error) {
-    await t.rollback();
-    throw { status: error.status || 500, message: error.message || error };
-  } finally {
-    if (!t.finished) await t.rollback();
+  if (!accessRows || accessRows.length === 0) {
+    return [];
   }
+
+  // Collect customerIds to look up their business names
+  const customerIds = Array.from(
+    new Set(
+      accessRows
+        .map((r) =>
+          typeof r.get === "function"
+            ? r.get({ plain: true }).customerId
+            : r.customerId
+        )
+        .filter(Boolean)
+    )
+  );
+
+  if (customerIds.length === 0) {
+    return [];
+  }
+
+  const customerRows = await db.Customer.findAll({
+    where: { id: { [Op.in]: customerIds } },
+    attributes: ["id", "businessName"],
+  });
+
+  // Normalize to [{ id, businessName }]
+  return customerRows.map((row) => {
+    const plain =
+      typeof row.get === "function" ? row.get({ plain: true }) : row;
+    return { id: plain.id, businessName: plain.businessName };
+  });
 }
