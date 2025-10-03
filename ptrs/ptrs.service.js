@@ -63,6 +63,20 @@ async function getAllByPtrsId({ ptrsId, ...options } = {}) {
 async function create({ data, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
+    const found = await db.Ptrs.findOne({
+      where: {
+        customerId,
+        periodKey: data.periodKey,
+        runName: data.runName,
+      },
+      transaction: t,
+    });
+    if (found) {
+      throw {
+        status: 400,
+        message: `PTRS run with name "${data.runName}" for the selected reporting period already exists`,
+      };
+    }
     const result = await db.Ptrs.create(
       {
         ...data,

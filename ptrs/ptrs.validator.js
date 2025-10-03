@@ -1,8 +1,16 @@
 const Joi = require("../middleware/joiSanitizer");
 
 const ptrsSchema = Joi.object({
-  reportingPeriodStartDate: Joi.date().required(),
-  reportingPeriodEndDate: Joi.date().required(),
+  runName: Joi.string().max(100).required(),
+  periodKey: Joi.string()
+    .pattern(/^\d{4}-(01|07)$/)
+    .required(),
+  reportingPeriodStartDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required(),
+  reportingPeriodEndDate: Joi.string()
+    .pattern(/^\d{4}-\d{2}-\d{2}$/)
+    .required(),
   currentStep: Joi.number().integer().min(0).max(100).required(),
   status: Joi.string()
     .valid(
