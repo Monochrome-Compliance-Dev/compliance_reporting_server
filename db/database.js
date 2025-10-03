@@ -1,5 +1,5 @@
 const { Sequelize } = require("sequelize");
-const { logger } = require("../helpers/logger");
+const { logger } = require("@/helpers/logger");
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
@@ -123,13 +123,8 @@ async function initialise() {
     "../partners",
     "../invoices",
     "../products",
-    "../clients",
-    "../engagements",
-    "../resources",
-    "../assignments",
-    "../budgets",
-    "../timesheets",
     "../stripe",
+    "../pulse",
   ];
 
   modelDirs.forEach((dir) => {
@@ -435,90 +430,84 @@ async function initialise() {
   }
 
   // --- Pulse (Monochrome Compliance) relationships ---
-  // Engagement ↔ Client
-  if (db.Engagement && db.Client) {
-    db.Client.hasMany(db.Engagement, {
-      foreignKey: "clientId",
-      onDelete: "CASCADE",
-    });
-    db.Engagement.belongsTo(db.Client, {
-      foreignKey: "clientId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  // Engagement ↔ BudgetItem
-  if (db.Engagement && db.BudgetItem) {
-    db.Engagement.hasMany(db.BudgetItem, {
-      foreignKey: "engagementId",
-      onDelete: "CASCADE",
-    });
-    db.BudgetItem.belongsTo(db.Engagement, {
-      foreignKey: "engagementId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  // Engagement ↔ Assignment ↔ Resource
-  if (db.Engagement && db.Assignment) {
-    db.Engagement.hasMany(db.Assignment, {
-      foreignKey: "engagementId",
-      onDelete: "CASCADE",
-    });
-    db.Assignment.belongsTo(db.Engagement, {
-      foreignKey: "engagementId",
-      onDelete: "CASCADE",
-    });
-  }
-  if (db.Resource && db.Assignment) {
-    db.Resource.hasMany(db.Assignment, {
-      foreignKey: "resourceId",
-      onDelete: "CASCADE",
-    });
-    db.Assignment.belongsTo(db.Resource, {
-      foreignKey: "resourceId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  // Resource ↔ Timesheet
-  if (db.Resource && db.Timesheet) {
-    db.Resource.hasMany(db.Timesheet, {
-      foreignKey: "resourceId",
-      onDelete: "CASCADE",
-    });
-    db.Timesheet.belongsTo(db.Resource, {
-      foreignKey: "resourceId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  // Timesheet ↔ TimesheetRow
-  if (db.Timesheet && db.TimesheetRow) {
-    db.Timesheet.hasMany(db.TimesheetRow, {
-      foreignKey: "timesheetId",
-      onDelete: "CASCADE",
-    });
-    db.TimesheetRow.belongsTo(db.Timesheet, {
-      foreignKey: "timesheetId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  // Optional links from TimesheetRow to Engagement and BudgetItem for reporting
-  if (db.TimesheetRow && db.Engagement) {
-    db.Engagement.hasMany(db.TimesheetRow, {
-      foreignKey: "engagementId",
+  // If/when Trackable model exists, also wire it (no-op if missing)
+  if (db.Trackable && db.Budget) {
+    db.Trackable.hasMany(db.Budget, {
+      foreignKey: "trackableId",
       onDelete: "SET NULL",
     });
-    db.TimesheetRow.belongsTo(db.Engagement, { foreignKey: "engagementId" });
+    db.Budget.belongsTo(db.Trackable, { foreignKey: "trackableId" });
   }
-  if (db.TimesheetRow && db.BudgetItem) {
-    db.BudgetItem.hasMany(db.TimesheetRow, {
-      foreignKey: "budgetItemId",
+
+  // Budget ↔ Sections
+  if (db.Budget && db.BudgetSection) {
+    db.Budget.hasMany(db.BudgetSection, {
+      foreignKey: "budgetId",
+      onDelete: "CASCADE",
+    });
+    db.BudgetSection.belongsTo(db.Budget, { foreignKey: "budgetId" });
+  }
+
+  // Budget ↔ Items (root-level items)
+  if (db.Budget && db.BudgetItem) {
+    db.Budget.hasMany(db.BudgetItem, {
+      foreignKey: "budgetId",
+      onDelete: "CASCADE",
+    });
+    db.BudgetItem.belongsTo(db.Budget, { foreignKey: "budgetId" });
+  }
+
+  // Section ↔ Items
+  if (db.BudgetSection && db.BudgetItem) {
+    db.BudgetSection.hasMany(db.BudgetItem, {
+      foreignKey: "sectionId",
+      onDelete: "CASCADE",
+    });
+    db.BudgetItem.belongsTo(db.BudgetSection, { foreignKey: "sectionId" });
+  }
+
+  // BudgetItem ↔ Allocation (canonical link)
+  if (db.BudgetItem && db.Allocation) {
+    db.BudgetItem.hasMany(db.Allocation, {
+      foreignKey: "budgetLineId",
+      onDelete: "CASCADE",
+    });
+    db.Allocation.belongsTo(db.BudgetItem, {
+      foreignKey: "budgetLineId",
+      as: "line",
+    });
+  }
+
+  // Resource ↔ Allocation
+  if (db.Resource && db.Allocation) {
+    db.Resource.hasMany(db.Allocation, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+    db.Allocation.belongsTo(db.Resource, { foreignKey: "resourceId" });
+  }
+
+  // Contribution relationships (New World)
+  if (db.BudgetItem && db.Contribution) {
+    db.BudgetItem.hasMany(db.Contribution, {
+      foreignKey: "budgetLineId",
+      onDelete: "CASCADE",
+    });
+    db.Contribution.belongsTo(db.BudgetItem, { foreignKey: "budgetLineId" });
+  }
+  if (db.Resource && db.Contribution) {
+    db.Resource.hasMany(db.Contribution, {
+      foreignKey: "resourceId",
+      onDelete: "CASCADE",
+    });
+    db.Contribution.belongsTo(db.Resource, { foreignKey: "resourceId" });
+  }
+  if (db.Allocation && db.Contribution) {
+    db.Allocation.hasMany(db.Contribution, {
+      foreignKey: "allocationId",
       onDelete: "SET NULL",
     });
-    db.TimesheetRow.belongsTo(db.BudgetItem, { foreignKey: "budgetItemId" });
+    db.Contribution.belongsTo(db.Allocation, { foreignKey: "allocationId" });
   }
 
   // --- Stripe / Billing relationships ---

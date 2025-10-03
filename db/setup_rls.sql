@@ -1,13 +1,5 @@
-ALTER TABLE tbl_tcp_audit ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tbl_ptrs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tbl_tcp ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS tbl_tcp_audit_rls_policy ON tbl_tcp_audit;
-CREATE POLICY tbl_tcp_audit_rls_policy
-  ON tbl_tcp_audit
-  FOR ALL
-  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
-  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 
 DROP POLICY IF EXISTS tbl_ptrs_rls_policy ON tbl_ptrs;
 CREATE POLICY tbl_ptrs_rls_policy
@@ -23,7 +15,6 @@ CREATE POLICY tbl_tcp_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 
-ALTER TABLE tbl_tcp_audit FORCE ROW LEVEL SECURITY;
 ALTER TABLE tbl_ptrs FORCE ROW LEVEL SECURITY;
 ALTER TABLE tbl_tcp FORCE ROW LEVEL SECURITY;
 
@@ -172,7 +163,6 @@ ALTER TABLE tbl_product FORCE ROW LEVEL SECURITY;
 -- Monochrome Pulse: RLS policies (tbl_pulse_*)
 -- =============================
 
--- Client
 ALTER TABLE tbl_pulse_client ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_pulse_client_rls_policy ON tbl_pulse_client;
 CREATE POLICY tbl_pulse_client_rls_policy
@@ -182,15 +172,16 @@ CREATE POLICY tbl_pulse_client_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_pulse_client FORCE ROW LEVEL SECURITY;
 
--- Engagement
-ALTER TABLE tbl_pulse_engagement ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_pulse_engagement_rls_policy ON tbl_pulse_engagement;
-CREATE POLICY tbl_pulse_engagement_rls_policy
-  ON tbl_pulse_engagement
+
+-- Trackable (replaces Engagement)
+ALTER TABLE tbl_pulse_trackable ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_pulse_trackable_rls_policy ON tbl_pulse_trackable;
+CREATE POLICY tbl_pulse_trackable_rls_policy
+  ON tbl_pulse_trackable
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_pulse_engagement FORCE ROW LEVEL SECURITY;
+ALTER TABLE tbl_pulse_trackable FORCE ROW LEVEL SECURITY;
 
 -- Resource
 ALTER TABLE tbl_pulse_resource ENABLE ROW LEVEL SECURITY;
@@ -202,15 +193,16 @@ CREATE POLICY tbl_pulse_resource_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_pulse_resource FORCE ROW LEVEL SECURITY;
 
--- Assignment
-ALTER TABLE tbl_pulse_assignment ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_pulse_assignment_rls_policy ON tbl_pulse_assignment;
-CREATE POLICY tbl_pulse_assignment_rls_policy
-  ON tbl_pulse_assignment
+
+-- Allocation (replaces Assignment)
+ALTER TABLE tbl_pulse_allocations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_pulse_allocations_rls_policy ON tbl_pulse_allocations;
+CREATE POLICY tbl_pulse_allocations_rls_policy
+  ON tbl_pulse_allocations
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_pulse_assignment FORCE ROW LEVEL SECURITY;
+ALTER TABLE tbl_pulse_allocations FORCE ROW LEVEL SECURITY;
 
 -- Budget (header)
 ALTER TABLE tbl_pulse_budget ENABLE ROW LEVEL SECURITY;
@@ -242,25 +234,16 @@ CREATE POLICY tbl_pulse_budget_item_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_pulse_budget_item FORCE ROW LEVEL SECURITY;
 
--- Timesheet (header)
-ALTER TABLE tbl_pulse_timesheet ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_pulse_timesheet_rls_policy ON tbl_pulse_timesheet;
-CREATE POLICY tbl_pulse_timesheet_rls_policy
-  ON tbl_pulse_timesheet
-  FOR ALL
-  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
-  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_pulse_timesheet FORCE ROW LEVEL SECURITY;
 
--- Timesheet rows (lines)
-ALTER TABLE tbl_pulse_timesheet_row ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_pulse_timesheet_row_rls_policy ON tbl_pulse_timesheet_row;
-CREATE POLICY tbl_pulse_timesheet_row_rls_policy
-  ON tbl_pulse_timesheet_row
+-- Contribution (replaces Timesheet/Timesheet rows)
+ALTER TABLE tbl_pulse_contribution ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_pulse_contribution_rls_policy ON tbl_pulse_contribution;
+CREATE POLICY tbl_pulse_contribution_rls_policy
+  ON tbl_pulse_contribution
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_pulse_timesheet_row FORCE ROW LEVEL SECURITY;
+ALTER TABLE tbl_pulse_contribution FORCE ROW LEVEL SECURITY;
 
 -- =============================
 -- Stripe / Billing: RLS policies

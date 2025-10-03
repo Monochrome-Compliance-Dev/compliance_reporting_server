@@ -5,6 +5,7 @@
 process.env.NODE_ENV = process.env.NODE_ENV || "development";
 
 // Load .env.development only in development; other envs use AWS-injected vars
+require("module-alias/register");
 const path = require("path");
 const dotenv = require("dotenv");
 if (process.env.NODE_ENV === "development") {
@@ -281,24 +282,36 @@ app.use("/api/invoices", require("./invoices/invoice.controller"));
 app.use("/api/products", require("./products/product.controller"));
 
 // --- Pulse (Monochrome Compliance) routes ---
-app.use("/api/pulse/clients", require("./clients/client.controller"));
+// app.use("/api/pulse/clients", require("./pulse/clients/client.controller"));
+// app.use(
+//   "/api/pulse/engagements",
+//   require("./pulse/engagements/engagement.controller")
+// );
+// app.use(
+//   "/api/pulse/resources",
+//   require("./pulse/resources/resource.controller")
+// );
 app.use(
-  "/api/pulse/engagements",
-  require("./engagements/engagement.controller")
+  "/api/pulse/allocations",
+  require("./pulse/allocations/allocation.controller")
 );
-app.use("/api/pulse/resources", require("./resources/resource.controller"));
-app.use(
-  "/api/pulse/assignments",
-  require("./assignments/assignment.controller")
-);
-app.use("/api/pulse/timesheets", require("./timesheets/timesheet.controller"));
-// Combined controller handles /budget-items and /budgets under /api/pulse
-app.use("/api/pulse", require("./budgets/budget.controller"));
-app.use("/api/pulse", require("./pulse-dashboard/pulse_dashboard.controller"));
+// app.use(
+//   "/api/pulse/contributions",
+//   require("./pulse/contributions/contribution.controller")
+// );
+// // Combined controller handles /budget-items and /budgets under /api/pulse
+// app.use("/api/pulse", require("./pulse/budgets/budget.controller"));
+// app.use(
+//   "/api/pulse/maximiser",
+//   require("./pulse/maximiser/maximiser.controller")
+// );
+// app.use(
+//   "/api/pulse",
+//   require("./pulse/pulse-dashboard/pulse_dashboard.controller")
+// );
+
 app.use("/api/stripe", require("./stripe/stripe.controller"));
 app.use("/api/billing", require("./stripe/billing.controller"));
-
-app.use("/api/pulse/maximiser", require("./maximiser/maximiser.controller"));
 
 app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 

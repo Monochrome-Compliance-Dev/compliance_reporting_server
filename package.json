@@ -13,6 +13,9 @@
     "type": "git",
     "url": "git+https://github.com/DarryllRobinson/compliance_reporting_server.git"
   },
+  "_moduleAliases": {
+    "@": "./"
+  },
   "keywords": [
     "node",
     "express",
@@ -45,6 +48,7 @@
     "helmet": "^8.1.0",
     "joi": "^17.12.1",
     "jsonwebtoken": "^9.0.2",
+    "module-alias": "^2.2.3",
     "multer": "^2.0.1",
     "nanoid": "^5.1.5",
     "nodemailer": "^6.9.9",
