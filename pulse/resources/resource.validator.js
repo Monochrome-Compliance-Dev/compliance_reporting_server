@@ -1,12 +1,10 @@
-const Joi = require("../middleware/joiSanitizer");
+const Joi = require("@/middleware/joiSanitizer");
 
 const base = Joi.object({
   name: Joi.string().max(255).required().sanitize(),
   position: Joi.string().max(120).required().sanitize(),
-  team: Joi.string().max(120).optional().allow(null).sanitize(),
   hourlyRate: Joi.number().min(0).optional(),
   capacityHoursPerWeek: Joi.number().integer().min(0).optional(),
-  email: Joi.string().email().optional().sanitize(),
   userId: Joi.string().length(10).allow(null).optional().sanitize(),
 
   createdBy: Joi.string().length(10),

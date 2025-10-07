@@ -1,11 +1,11 @@
 ﻿const express = require("express");
 const router = express.Router();
 const Joi = require("joi");
-const validateRequest = require("../middleware/validate-request");
-const authorise = require("../middleware/authorise");
-const Role = require("../helpers/role");
+const validateRequest = require("@/middleware/validate-request");
+const authorise = require("@/middleware/authorise");
+const Role = require("@/helpers/role");
 const userService = require("./user.service");
-const { logger } = require("../helpers/logger");
+const { logger } = require("@/helpers/logger");
 const {
   authSchema,
   registerSchema,
@@ -459,6 +459,7 @@ function inviteWithResource(req, res, next) {
   const createdById = createdBy || req.auth?.id;
   const actingCustomerId = req.effectiveCustomerId;
   const safeUser = { ...user, customerId: actingCustomerId };
+  console.log("safeUser", safeUser);
 
   userService
     .inviteWithResource({

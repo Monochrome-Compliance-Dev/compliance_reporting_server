@@ -1,9 +1,9 @@
-const auditService = require("@audit/audit.service");
-const { logger } = require("@helpers/logger");
+const auditService = require("@/audit/audit.service");
+const { logger } = require("@/helpers/logger");
 const express = require("express");
 const router = express.Router();
-const validateRequest = require("@middleware/validate-request");
-const authorise = require("@middleware/authorise");
+const validateRequest = require("@/middleware/validate-request");
+const authorise = require("@/middleware/authorise");
 const requirePulse = authorise({
   roles: ["Admin", "Boss", "User"],
   features: "pulse",

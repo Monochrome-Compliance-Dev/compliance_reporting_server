@@ -1,7 +1,7 @@
 const { expressjwt: expressJwt } = require("express-jwt");
 const secret = process.env.JWT_SECRET;
-const db = require("../db/database");
-const { logger } = require("../helpers/logger");
+const db = require("@/db/database");
+const { logger } = require("@/helpers/logger");
 const { tenantContext } = require("./tenantContext");
 
 module.exports = authorise;
@@ -41,13 +41,11 @@ function authorise(input = {}) {
           action: "AuthoriseAccessCheck",
           userId: req.auth.id,
         });
-        return res
-          .status(401)
-          .json({
-            status: "unauthorised",
-            reason: "role_denied",
-            message: "Unauthorised",
-          });
+        return res.status(401).json({
+          status: "unauthorised",
+          reason: "role_denied",
+          message: "Unauthorised",
+        });
       }
 
       // Prevent write access for Audit role
@@ -59,13 +57,11 @@ function authorise(input = {}) {
           method: req.method,
           path: req.originalUrl,
         });
-        return res
-          .status(403)
-          .json({
-            status: "forbidden",
-            reason: "read_only_role",
-            message: "Read-only access",
-          });
+        return res.status(403).json({
+          status: "forbidden",
+          reason: "read_only_role",
+          message: "Read-only access",
+        });
       }
 
       const refreshTokens = await user.getRefreshTokens();
@@ -101,13 +97,11 @@ function authorise(input = {}) {
             mode,
           }
         );
-        return res
-          .status(403)
-          .json({
-            status: "forbidden",
-            reason: "missing_feature",
-            message: "Forbidden: Required feature(s) not enabled",
-          });
+        return res.status(403).json({
+          status: "forbidden",
+          reason: "missing_feature",
+          message: "Forbidden: Required feature(s) not enabled",
+        });
       }
 
       return next();

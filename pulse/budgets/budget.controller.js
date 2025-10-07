@@ -1,8 +1,8 @@
-const auditService = require("../../audit/audit.service");
-const { logger } = require("../../helpers/logger");
+const auditService = require("@/audit/audit.service");
+const { logger } = require("@/helpers/logger");
 const express = require("express");
-const validateRequest = require("../../middleware/validate-request");
-const authorise = require("../../middleware/authorise");
+const validateRequest = require("@/middleware/validate-request");
+const authorise = require("@/middleware/authorise");
 
 const requirePulse = authorise({
   roles: ["Admin", "Boss", "User"],
@@ -32,6 +32,74 @@ const sections = express.Router();
 router.use("/budget-items", items);
 router.use("/budgets", budgets);
 router.use("/budget-sections", sections);
+
+// New World: link budget to trackable via POST body
+budgets.post("/link", requirePulse, async (req, res, next) => {
+  const { trackableId, budgetId } = req.body || {};
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!customerId)
+      return res.status(400).json({ message: "Customer ID missing" });
+    if (!trackableId || !budgetId) {
+      return res
+        .status(400)
+        .json({
+          status: "error",
+          message: "trackableId and budgetId are required",
+        });
+    }
+
+    const budget = await budgetService.budgets.getById({
+      id: budgetId,
+      customerId,
+    });
+    if (!budget)
+      return res
+        .status(404)
+        .json({ status: "error", message: "Budget not found" });
+    if (budget.engagementId) {
+      return res
+        .status(409)
+        .json({ status: "error", message: "Budget already linked" });
+    }
+
+    // Reuse legacy service for now: engagementId === trackableId
+    const updated = await budgetService.budgets.linkToEngagement({
+      id: budgetId,
+      engagementId: trackableId,
+      customerId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "LinkBudgetToTrackable",
+      entity: "Budget",
+      entityId: budgetId,
+      details: { trackableId },
+    });
+
+    return res.json({ status: "success", data: updated });
+  } catch (error) {
+    logger.logEvent("error", "Error linking budget to trackable", {
+      action: "LinkBudgetToTrackable",
+      trackableId,
+      budgetId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+});
 
 module.exports = router;
 

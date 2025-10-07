@@ -544,13 +544,11 @@ async function inviteWithResource({ user, resource, createdBy, origin }) {
     invited.verificationToken = randomTokenString();
     await invited.save({ transaction: t });
 
-    await sendVerificationEmail(invited, origin);
-
     // Create linked resource with the invited user's id
     const savedResource = await db.Resource.create(
       {
         name: resource.name,
-        role: resource.role || null,
+        position: resource.position,
         hourlyRate: resource.hourlyRate ?? null,
         capacityHoursPerWeek: resource.capacityHoursPerWeek ?? null,
         userId: invited.id,
@@ -561,6 +559,10 @@ async function inviteWithResource({ user, resource, createdBy, origin }) {
     );
 
     await t.commit();
+
+    // Send verification email after user has been successfully created
+    await sendVerificationEmail(invited, origin);
+
     return {
       user: basicDetails(invited),
       resource: {

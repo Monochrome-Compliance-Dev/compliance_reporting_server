@@ -287,10 +287,10 @@ app.use("/api/products", require("./products/product.controller"));
 //   "/api/pulse/engagements",
 //   require("./pulse/engagements/engagement.controller")
 // );
-// app.use(
-//   "/api/pulse/resources",
-//   require("./pulse/resources/resource.controller")
-// );
+app.use(
+  "/api/pulse/resources",
+  require("./pulse/resources/resource.controller")
+);
 app.use(
   "/api/pulse/allocations",
   require("./pulse/allocations/allocation.controller")
@@ -299,8 +299,8 @@ app.use(
 //   "/api/pulse/contributions",
 //   require("./pulse/contributions/contribution.controller")
 // );
-// // Combined controller handles /budget-items and /budgets under /api/pulse
-// app.use("/api/pulse", require("./pulse/budgets/budget.controller"));
+// Combined controller handles /budget-items and /budgets under /api/pulse
+app.use("/api/pulse", require("./pulse/budgets/budget.controller"));
 // app.use(
 //   "/api/pulse/maximiser",
 //   require("./pulse/maximiser/maximiser.controller")
