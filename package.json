@@ -58,7 +58,7 @@
   },
   "devDependencies": {
     "csv-writer": "^1.6.0",
-    "jest": "^29.7.0",
+    "jest": "^30.2.0",
     "nodemon": "^3.0.3",
     "supertest": "^7.1.1"
   }
