@@ -48,7 +48,7 @@
     "multer": "^2.0.1",
     "nanoid": "^5.1.6",
     "nodemailer": "^6.9.9",
-    "p-queue": "^8.1.0",
+    "p-queue": "^9.0.0",
     "pg": "^8.16.3",
     "pg-copy-streams": "^7.0.0",
     "pg-pool": "^3.10.1",
