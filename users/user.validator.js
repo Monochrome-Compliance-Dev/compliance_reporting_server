@@ -1,5 +1,5 @@
-const Joi = require("../middleware/joiSanitizer");
-const Role = require("../helpers/role");
+const Joi = require("@/middleware/joiSanitizer");
+const Role = require("@/helpers/role");
 
 const authSchema = Joi.object({
   email: Joi.string().email().required(),

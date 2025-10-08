@@ -452,14 +452,12 @@ function _delete(req, res, next) {
 }
 
 function inviteWithResource(req, res, next) {
-  console.log("got here");
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const { user, resource, createdBy } = req.body;
   const createdById = createdBy || req.auth?.id;
   const actingCustomerId = req.effectiveCustomerId;
   const safeUser = { ...user, customerId: actingCustomerId };
-  console.log("safeUser", safeUser);
 
   userService
     .inviteWithResource({

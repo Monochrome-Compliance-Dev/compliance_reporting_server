@@ -2,36 +2,40 @@ const Joi = require("@/middleware/joiSanitizer");
 
 const base = Joi.object({
   name: Joi.string().max(255).required().sanitize(),
-  startDate: Joi.date().optional(),
-  endDate: Joi.date().optional(),
+
+  // optional tenant link
+  clientId: Joi.string().length(10).optional().sanitize(),
+
+  // required in create, optional in update (via forks below)
+  startDate: Joi.date(),
+  endDate: Joi.date().min(Joi.ref("startDate")),
+
   status: Joi.string()
     .valid("draft", "budgeted", "ready", "active", "cancelled")
     .default("draft")
     .sanitize(),
   statusChangedAt: Joi.date().optional(),
-  budgetHours: Joi.forbidden(),
-  budgetAmount: Joi.forbidden(),
 
+  // tenant + actor
+  customerId: Joi.string().length(10).required().sanitize(),
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),
 
-  id: Joi.string().max(10),
-  createdAt: Joi.date().optional(),
-  updatedAt: Joi.date().optional(),
-  customerId: Joi.string().length(10).required().sanitize(),
+  // server-managed (never from FE)
+  id: Joi.forbidden(),
+  createdAt: Joi.forbidden(),
+  updatedAt: Joi.forbidden(),
 });
 
-// POST: require createdBy; forbid updatedBy & server-managed fields
+// POST: require createdBy and the planning fields
 const trackableCreateSchema = base
-  .fork(["createdBy"], (s) => s.required())
-  .fork(["updatedBy", "id", "createdAt", "updatedAt"], (s) => s.forbidden());
+  .fork(["createdBy", "startDate", "endDate"], (s) => s.required())
+  .fork(["updatedBy"], (s) => s.forbidden());
 
-// PUT: require updatedBy; forbid server-managed fields
-const trackableUpdateSchema = base
-  .fork(["updatedBy"], (s) => s.required())
-  .fork(["id", "createdAt", "updatedAt"], (s) => s.forbidden());
+// PUT: require updatedBy; allow partial edits to planning fields
+const trackableUpdateSchema = base.fork(["updatedBy"], (s) => s.required());
 
-// PATCH: partial updates; require updatedBy
+// PATCH: partials; still require updatedBy
 const trackablePatchSchema = Joi.object({
   updatedBy: Joi.string().length(10).required(),
 }).unknown(true);

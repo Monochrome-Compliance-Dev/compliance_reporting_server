@@ -15,9 +15,10 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
+    clientId: { type: DataTypes.STRING(10), allowNull: true },
     name: { type: DataTypes.STRING, allowNull: false },
-    startDate: { type: DataTypes.DATEONLY, allowNull: true },
-    endDate: { type: DataTypes.DATEONLY, allowNull: true },
+    startDate: { type: DataTypes.DATEONLY, allowNull: false },
+    endDate: { type: DataTypes.DATEONLY, allowNull: false },
     status: {
       type: DataTypes.STRING(20),
       allowNull: false,
@@ -27,16 +28,6 @@ function model(sequelize) {
       },
     },
     statusChangedAt: { type: DataTypes.DATE, allowNull: true },
-    budgetHours: {
-      type: DataTypes.DECIMAL(8, 2),
-      allowNull: false,
-      defaultValue: 0,
-    },
-    budgetAmount: {
-      type: DataTypes.DECIMAL(12, 2),
-      allowNull: false,
-      defaultValue: 0,
-    },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
@@ -47,9 +38,16 @@ function model(sequelize) {
     paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       { fields: ["customerId"] },
+      { fields: ["clientId"] },
       { fields: ["status"] },
       { fields: ["startDate", "endDate"] },
     ],
+  });
+
+  Trackable.addHook("beforeUpdate", (inst) => {
+    if (inst.changed("status")) {
+      inst.set("statusChangedAt", new Date());
+    }
   });
 
   return Trackable;

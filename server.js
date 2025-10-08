@@ -282,11 +282,11 @@ app.use("/api/invoices", require("./invoices/invoice.controller"));
 app.use("/api/products", require("./products/product.controller"));
 
 // --- Pulse (Monochrome Compliance) routes ---
-// app.use("/api/pulse/clients", require("./pulse/clients/client.controller"));
-// app.use(
-//   "/api/pulse/engagements",
-//   require("./pulse/engagements/engagement.controller")
-// );
+app.use("/api/pulse/clients", require("./pulse/clients/client.controller"));
+app.use(
+  "/api/pulse/trackables",
+  require("./pulse/trackables/trackable.controller")
+);
 app.use(
   "/api/pulse/resources",
   require("./pulse/resources/resource.controller")
