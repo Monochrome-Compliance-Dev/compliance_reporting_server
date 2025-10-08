@@ -46,7 +46,7 @@
     "nanoid": "^5.1.5",
     "nodemailer": "^6.9.9",
     "p-queue": "^8.1.0",
-    "pg": "^8.16.0",
+    "pg": "^8.16.3",
     "rootpath": "^0.1.2",
     "sequelize": "^6.36.0",
     "swagger-ui-express": "^5.0.0",
