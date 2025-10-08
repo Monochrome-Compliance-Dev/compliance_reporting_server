@@ -10,6 +10,7 @@ module.exports = {
   update,
   patch,
   delete: _delete,
+  getUtilisation,
 };
 
 async function getAll({ customerId, ...options } = {}) {
@@ -138,6 +139,53 @@ async function _delete({ id, customerId, userId, ...options }) {
         message: "Resource not found or delete blocked by RLS.",
       };
     await t.commit();
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
+async function getUtilisation({ customerId, from, to, includeNonBillable }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Example: aggregate total hours or contributions per resource
+    const rows = await db.Resource.findAll({
+      attributes: [
+        "id",
+        "name",
+        "position",
+        [
+          db.sequelize.fn("COUNT", db.sequelize.col("Contributions.id")),
+          "entries",
+        ],
+        [
+          db.sequelize.fn("SUM", db.sequelize.col("Contributions.hours")),
+          "totalHours",
+        ],
+      ],
+      include: [
+        {
+          model: db.Contribution,
+          attributes: [],
+          where: {
+            ...(from && {
+              createdAt: { [db.Sequelize.Op.gte]: new Date(from) },
+            }),
+            ...(to && { createdAt: { [db.Sequelize.Op.lte]: new Date(to) } }),
+            ...(includeNonBillable ? {} : { isBillable: true }),
+          },
+          required: false,
+        },
+      ],
+      group: ["Resource.id"],
+      order: [["name", "ASC"]],
+      transaction: t,
+    });
+
+    await t.commit();
+    return rows.map((r) => r.get({ plain: true }));
   } catch (error) {
     await t.rollback();
     throw { status: error.status || 500, message: error.message || error };

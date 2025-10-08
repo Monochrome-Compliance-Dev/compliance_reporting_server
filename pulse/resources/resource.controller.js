@@ -22,6 +22,8 @@ router.post("/", requirePulse, validateRequest(resourceCreateSchema), create);
 router.put("/:id", requirePulse, validateRequest(resourceUpdateSchema), update);
 router.patch("/:id", requirePulse, validateRequest(resourcePatchSchema), patch);
 router.delete("/:id", requirePulse, _delete);
+// Resource Allocation (utilisation) route
+router.get("/resource-utilisation", requirePulse, getUtilisation);
 
 module.exports = router;
 
@@ -227,6 +229,45 @@ async function _delete(req, res, next) {
     logger.logEvent("error", "Error deleting resource", {
       action: "DeleteResource",
       id,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+async function getUtilisation(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const { from, to, includeNonBillable } = req.query;
+
+  try {
+    const data = await resourceService.getUtilisation({
+      customerId,
+      from,
+      to,
+      includeNonBillable: includeNonBillable === "true",
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "GetResourceUtilisation",
+      entity: "ResourceUtilisation",
+      details: { count: Array.isArray(data) ? data.length : undefined },
+    });
+
+    res.json({ status: "success", data });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching resource utilisation", {
+      action: "GetResourceUtilisation",
       customerId,
       userId,
       error: error.message,
