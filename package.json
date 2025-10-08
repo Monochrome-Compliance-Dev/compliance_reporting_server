@@ -45,7 +45,7 @@
     "multer": "^2.0.2",
     "nanoid": "^5.1.6",
     "nodemailer": "^7.0.9",
-    "p-queue": "^8.1.0",
+    "p-queue": "^9.0.0",
     "pg": "^8.16.0",
     "rootpath": "^0.1.2",
     "sequelize": "^6.36.0",
