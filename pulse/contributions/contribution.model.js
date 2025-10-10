@@ -17,7 +17,7 @@ function model(sequelize) {
     customerId: { type: DataTypes.STRING(10), allowNull: false },
     resourceId: { type: DataTypes.STRING(10), allowNull: false },
     budgetLineId: { type: DataTypes.STRING(10), allowNull: false },
-    allocationId: { type: DataTypes.STRING(10), allowNull: true },
+    assignmentId: { type: DataTypes.STRING(10), allowNull: true },
     effortHours: { type: DataTypes.DECIMAL(5, 2), allowNull: false }, // 0.25 increments
     notes: { type: DataTypes.STRING(500), allowNull: true },
     createdBy: { type: DataTypes.STRING(10), allowNull: false },

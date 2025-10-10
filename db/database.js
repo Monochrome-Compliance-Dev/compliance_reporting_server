@@ -466,25 +466,25 @@ async function initialise() {
     db.BudgetItem.belongsTo(db.BudgetSection, { foreignKey: "sectionId" });
   }
 
-  // BudgetItem ↔ Allocation (canonical link)
-  if (db.BudgetItem && db.Allocation) {
-    db.BudgetItem.hasMany(db.Allocation, {
+  // BudgetItem ↔ Assignment (canonical link)
+  if (db.BudgetItem && db.Assignment) {
+    db.BudgetItem.hasMany(db.Assignment, {
       foreignKey: "budgetLineId",
       onDelete: "CASCADE",
     });
-    db.Allocation.belongsTo(db.BudgetItem, {
+    db.Assignment.belongsTo(db.BudgetItem, {
       foreignKey: "budgetLineId",
       as: "line",
     });
   }
 
-  // Resource ↔ Allocation
-  if (db.Resource && db.Allocation) {
-    db.Resource.hasMany(db.Allocation, {
+  // Resource ↔ Assignment
+  if (db.Resource && db.Assignment) {
+    db.Resource.hasMany(db.Assignment, {
       foreignKey: "resourceId",
       onDelete: "CASCADE",
     });
-    db.Allocation.belongsTo(db.Resource, { foreignKey: "resourceId" });
+    db.Assignment.belongsTo(db.Resource, { foreignKey: "resourceId" });
   }
 
   // Contribution relationships (New World)
@@ -502,12 +502,12 @@ async function initialise() {
     });
     db.Contribution.belongsTo(db.Resource, { foreignKey: "resourceId" });
   }
-  if (db.Allocation && db.Contribution) {
-    db.Allocation.hasMany(db.Contribution, {
-      foreignKey: "allocationId",
+  if (db.Assignment && db.Contribution) {
+    db.Assignment.hasMany(db.Contribution, {
+      foreignKey: "assignmentId",
       onDelete: "SET NULL",
     });
-    db.Contribution.belongsTo(db.Allocation, { foreignKey: "allocationId" });
+    db.Contribution.belongsTo(db.Assignment, { foreignKey: "assignmentId" });
   }
 
   // --- Stripe / Billing relationships ---

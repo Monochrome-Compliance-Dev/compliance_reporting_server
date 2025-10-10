@@ -1,12 +1,12 @@
 // maximiser.controller.js
 const express = require("express");
 const router = express.Router();
-const authorise = require("../middleware/authorise");
+const authorise = require("@/middleware/authorise");
 const requirePulse = authorise({
   roles: ["Admin", "Boss", "User"],
   features: "pulse",
 });
-const { logger } = require("../helpers/logger");
+const { logger } = require("@/helpers/logger");
 const {
   listTeams,
   compareTeams,

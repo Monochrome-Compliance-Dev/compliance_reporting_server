@@ -8,26 +8,26 @@ const requirePulse = authorise({
   roles: ["Admin", "Boss", "User"],
   features: "pulse",
 });
-const allocationService = require("./allocation.service");
+const assignmentService = require("./assignment.service");
 const {
-  allocationCreateSchema,
-  allocationUpdateSchema,
-  allocationPatchSchema,
-} = require("./allocation.validator");
+  assignmentCreateSchema,
+  assignmentUpdateSchema,
+  assignmentPatchSchema,
+} = require("./assignment.validator");
 
 router.get("/", requirePulse, getAll);
 router.get("/:id", requirePulse, getById);
-router.post("/", requirePulse, validateRequest(allocationCreateSchema), create);
+router.post("/", requirePulse, validateRequest(assignmentCreateSchema), create);
 router.put(
   "/:id",
   requirePulse,
-  validateRequest(allocationUpdateSchema),
+  validateRequest(assignmentUpdateSchema),
   update
 );
 router.patch(
   "/:id",
   requirePulse,
-  validateRequest(allocationPatchSchema),
+  validateRequest(assignmentPatchSchema),
   patch
 );
 router.delete("/:id", requirePulse, _delete);
@@ -41,7 +41,7 @@ async function getAll(req, res, next) {
   const device = req.headers["user-agent"];
   const { budgetLineId } = req.query;
   try {
-    const allocations = await allocationService.getAll({
+    const assignments = await assignmentService.getAll({
       customerId,
       budgetLineId,
       order: [["createdAt", "DESC"]],
@@ -52,17 +52,17 @@ async function getAll(req, res, next) {
       userId,
       ip,
       device,
-      action: budgetLineId ? "GetAllocationsByBudgetLine" : "GetAllAllocations",
-      entity: "Allocation",
+      action: budgetLineId ? "GetAssignmentsByBudgetLine" : "GetAllAssignments",
+      entity: "Assignment",
       details: {
         budgetLineId: budgetLineId || undefined,
-        count: Array.isArray(allocations) ? allocations.length : undefined,
+        count: Array.isArray(assignments) ? assignments.length : undefined,
       },
     });
-    res.json({ status: "success", data: allocations });
+    res.json({ status: "success", data: assignments });
   } catch (error) {
-    logger.logEvent("error", "Error fetching allocations", {
-      action: "GetAllocations",
+    logger.logEvent("error", "Error fetching assignments", {
+      action: "GetAssignments",
       userId: req.auth?.id,
       customerId,
       error: error.message,
@@ -80,28 +80,28 @@ async function getById(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const allocation = await allocationService.getById({ id, customerId });
-    if (allocation) {
+    const assignment = await assignmentService.getById({ id, customerId });
+    if (assignment) {
       await auditService.logEvent({
         customerId,
         userId,
         ip,
         device,
-        action: "GetAllocationById",
-        entity: "Allocation",
+        action: "GetAssignmentById",
+        entity: "Assignment",
         entityId: id,
       });
-      res.json({ status: "success", data: allocation });
+      res.json({ status: "success", data: assignment });
     } else {
       res.status(404).json({
         status: "not_found",
-        reason: "allocation_not_found",
-        message: "Allocation not found",
+        reason: "assignment_not_found",
+        message: "Assignment not found",
       });
     }
   } catch (error) {
-    logger.logEvent("error", "Error fetching allocation by ID", {
-      action: "GetAllocationById",
+    logger.logEvent("error", "Error fetching assignment by ID", {
+      action: "GetAssignmentById",
       id,
       customerId,
       userId,
@@ -119,7 +119,7 @@ async function create(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const allocation = await allocationService.create({
+    const assignment = await assignmentService.create({
       data: req.body,
       customerId,
     });
@@ -128,14 +128,14 @@ async function create(req, res, next) {
       userId,
       ip,
       device,
-      action: "CreateAllocation",
-      entity: "Allocation",
-      entityId: allocation.id,
+      action: "CreateAssignment",
+      entity: "Assignment",
+      entityId: assignment.id,
     });
-    res.status(201).json({ status: "success", data: allocation });
+    res.status(201).json({ status: "success", data: assignment });
   } catch (error) {
-    logger.logEvent("error", "Error creating allocation", {
-      action: "CreateAllocation",
+    logger.logEvent("error", "Error creating assignment", {
+      action: "CreateAssignment",
       customerId,
       userId,
       error: error.message,
@@ -153,7 +153,7 @@ async function update(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const allocation = await allocationService.update({
+    const assignment = await assignmentService.update({
       id,
       data: req.body,
       customerId,
@@ -164,15 +164,15 @@ async function update(req, res, next) {
       userId,
       ip,
       device,
-      action: "UpdateAllocation",
-      entity: "Allocation",
+      action: "UpdateAssignment",
+      entity: "Assignment",
       entityId: id,
       details: { updates: Object.keys(req.body) },
     });
-    res.json({ status: "success", data: allocation });
+    res.json({ status: "success", data: assignment });
   } catch (error) {
-    logger.logEvent("error", "Error updating allocation", {
-      action: "UpdateAllocation",
+    logger.logEvent("error", "Error updating assignment", {
+      action: "UpdateAssignment",
       id,
       customerId,
       userId,
@@ -191,7 +191,7 @@ async function patch(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    const allocation = await allocationService.patch({
+    const assignment = await assignmentService.patch({
       id,
       data: req.body,
       customerId,
@@ -202,15 +202,15 @@ async function patch(req, res, next) {
       userId,
       ip,
       device,
-      action: "PatchAllocation",
-      entity: "Allocation",
+      action: "PatchAssignment",
+      entity: "Assignment",
       entityId: id,
       details: { updates: Object.keys(req.body) },
     });
-    res.json({ status: "success", data: allocation });
+    res.json({ status: "success", data: assignment });
   } catch (error) {
-    logger.logEvent("error", "Error patching allocation", {
-      action: "PatchAllocation",
+    logger.logEvent("error", "Error patching assignment", {
+      action: "PatchAssignment",
       id,
       customerId,
       userId,
@@ -229,20 +229,20 @@ async function _delete(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   try {
-    await allocationService.delete({ id, customerId, userId });
+    await assignmentService.delete({ id, customerId, userId });
     await auditService.logEvent({
       customerId,
       userId,
       ip,
       device,
-      action: "DeleteAllocation",
-      entity: "Allocation",
+      action: "DeleteAssignment",
+      entity: "Assignment",
       entityId: id,
     });
     res.status(204).send();
   } catch (error) {
-    logger.logEvent("error", "Error deleting allocation", {
-      action: "DeleteAllocation",
+    logger.logEvent("error", "Error deleting assignment", {
+      action: "DeleteAssignment",
       id,
       customerId,
       userId,

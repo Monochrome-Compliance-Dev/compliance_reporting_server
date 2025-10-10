@@ -44,12 +44,10 @@ budgets.post("/link", requirePulse, async (req, res, next) => {
     if (!customerId)
       return res.status(400).json({ message: "Customer ID missing" });
     if (!trackableId || !budgetId) {
-      return res
-        .status(400)
-        .json({
-          status: "error",
-          message: "trackableId and budgetId are required",
-        });
+      return res.status(400).json({
+        status: "error",
+        message: "trackableId and budgetId are required",
+      });
     }
 
     const budget = await budgetService.budgets.getById({
@@ -60,16 +58,15 @@ budgets.post("/link", requirePulse, async (req, res, next) => {
       return res
         .status(404)
         .json({ status: "error", message: "Budget not found" });
-    if (budget.engagementId) {
+    if (budget.trackableId) {
       return res
         .status(409)
         .json({ status: "error", message: "Budget already linked" });
     }
 
-    // Reuse legacy service for now: engagementId === trackableId
-    const updated = await budgetService.budgets.linkToEngagement({
+    const updated = await budgetService.budgets.linkToTrackable({
       id: budgetId,
-      engagementId: trackableId,
+      trackableId: trackableId,
       customerId,
       userId,
     });
@@ -153,6 +150,50 @@ sections.delete("/:sectionId", requirePulse, deleteSection);
 
 // -------- Budget Sections via /budgets/:id/sections --------
 budgets.get("/:id/sections", requirePulse, listSectionsByBudget);
+// Resolve active/linked budget for a given trackable
+budgets.get("/active", requirePulse, async (req, res, next) => {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const { trackableId } = req.query || {};
+
+  try {
+    if (!trackableId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "trackableId is required" });
+    }
+
+    const row = await budgetService.budgets.getActiveByTrackable({
+      trackableId,
+      customerId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "GetActiveBudgetByTrackable",
+      entity: "Budget",
+      details: { trackableId, found: !!row },
+    });
+
+    return res.json({ status: "success", data: row });
+  } catch (error) {
+    logger.logEvent("error", "Error resolving active budget by trackable", {
+      action: "GetActiveBudgetByTrackable",
+      trackableId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+});
 budgets.post(
   "/:id/sections",
   requirePulse,
@@ -169,12 +210,12 @@ budgets.post(
   createSectionUnderBudget
 );
 
-// Link an existing budget to an engagement (used by BudgetBuilder "Link" UI)
+// Link an existing budget to an trackable (used by BudgetBuilder "Link" UI)
 router.post(
-  "/engagements/:engagementId/link-budget/:budgetId",
+  "/trackables/:trackableId/link-budget/:budgetId",
   requirePulse,
   async (req, res, next) => {
-    const { engagementId, budgetId } = req.params;
+    const { trackableId, budgetId } = req.params;
     const customerId = req.effectiveCustomerId;
     const userId = req.auth?.id;
     const ip = req.ip;
@@ -196,17 +237,17 @@ router.post(
       }
 
       // Prevent linking if it's already linked
-      if (budget.engagementId) {
+      if (budget.trackableId) {
         return res.status(409).json({
           status: "error",
-          message: "Budget already linked to an engagement",
+          message: "Budget already linked to an trackable",
         });
       }
 
-      // Patch only the engagementId (no full validation like name/version required)
-      const updated = await budgetService.budgets.linkToEngagement({
+      // Patch only the trackableId (no full validation like name/version required)
+      const updated = await budgetService.budgets.linkToTrackable({
         id: budgetId,
-        engagementId,
+        trackableId,
         customerId,
         userId,
       });
@@ -216,17 +257,17 @@ router.post(
         userId,
         ip,
         device,
-        action: "LinkBudgetToEngagement",
+        action: "LinkBudgetToTrackable",
         entity: "Budget",
         entityId: budgetId,
-        details: { engagementId },
+        details: { trackableId },
       });
 
       return res.json({ status: "success", data: updated });
     } catch (error) {
-      logger.logEvent("error", "Error linking budget to engagement", {
-        action: "LinkBudgetToEngagement",
-        engagementId,
+      logger.logEvent("error", "Error linking budget to trackable", {
+        action: "LinkBudgetToTrackable",
+        trackableId,
         budgetId,
         customerId,
         userId,
@@ -268,7 +309,7 @@ async function getAllItems(req, res, next) {
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { engagementId, budgetId } = req.query;
+    const { trackableId, budgetId } = req.query;
 
     const items = budgetId
       ? await budgetService.budgetItems.listByBudget({
@@ -276,9 +317,9 @@ async function getAllItems(req, res, next) {
           customerId,
           order: [["createdAt", "DESC"]],
         })
-      : engagementId
-        ? await budgetService.budgetItems.listByEngagement({
-            engagementId,
+      : trackableId
+        ? await budgetService.budgetItems.listByTrackable({
+            trackableId,
             customerId,
             order: [["createdAt", "DESC"]],
           })
@@ -294,12 +335,12 @@ async function getAllItems(req, res, next) {
       device,
       action: budgetId
         ? "GetBudgetItemsByBudget"
-        : engagementId
-          ? "GetBudgetItemsByEngagement"
+        : trackableId
+          ? "GetBudgetItemsByTrackable"
           : "GetAllBudgetItems",
       entity: "BudgetItem",
       details: {
-        engagementId: engagementId || undefined,
+        trackableId: trackableId || undefined,
         budgetId: budgetId || undefined,
         count: Array.isArray(items) ? items.length : undefined,
       },
@@ -701,9 +742,10 @@ async function getAllBudgets(req, res, next) {
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
-    const { unlinked } = req.query;
+    const { unlinked, trackableId } = req.query;
     const where = {};
-    if (String(unlinked) === "true") where.engagementId = null;
+    if (String(unlinked) === "true") where.trackableId = null;
+    if (trackableId) where.trackableId = trackableId;
 
     const rows = await budgetService.budgets.getAll({
       customerId,

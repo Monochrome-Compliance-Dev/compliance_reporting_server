@@ -1,6 +1,6 @@
 const JoiBase = require("joi");
 const { escape, trim, stripLow } = require("validator");
-const { logger } = require("../helpers/logger");
+const { logger } = require("@/helpers/logger");
 
 const Joi = JoiBase.extend((joi) => ({
   type: "string",
@@ -16,7 +16,10 @@ const Joi = JoiBase.extend((joi) => ({
       validate(value, helpers) {
         if (typeof value !== "string") return value;
 
-        const cleaned = escape(trim(stripLow(value)));
+        const cleaned = trim(stripLow(value));
+        if (/<[a-z][\s\S]*>/i.test(cleaned)) {
+          return helpers.error("string.sanitize");
+        }
         logger.logEvent("info", "Sanitizing string input", {
           action: "SanitizeInput",
           original: value,

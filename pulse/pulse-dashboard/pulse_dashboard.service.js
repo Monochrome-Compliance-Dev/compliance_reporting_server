@@ -7,7 +7,7 @@ const { logger } = require("@/helpers/logger");
 module.exports = {
   getDashboard,
   getTotals,
-  getEngagementStatus,
+  getTrackableStatus,
   getWeeklyBurn,
   getOverruns,
   getResourceUtilisation,
@@ -35,7 +35,7 @@ async function getDashboard(orgId, customerId) {
       transaction: t,
     });
     const status = await db.sequelize.query(
-      "SELECT * FROM v_engagement_status",
+      "SELECT * FROM v_trackable_status",
       { type: db.sequelize.QueryTypes.SELECT, transaction: t }
     );
     const weeklyBurn = await db.sequelize.query(
@@ -137,15 +137,15 @@ async function getTotals(orgId, customerId) {
   }
 }
 
-async function getEngagementStatus(orgId, customerId) {
+async function getTrackableStatus(orgId, customerId) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    logger.logEvent("info", "Pulse: fetching engagement status", {
+    logger.logEvent("info", "Pulse: fetching trackable status", {
       action: "PulseGetStatus",
       orgId,
       customerId,
     });
-    const rows = await db.sequelize.query("SELECT * FROM v_engagement_status", {
+    const rows = await db.sequelize.query("SELECT * FROM v_trackable_status", {
       type: db.sequelize.QueryTypes.SELECT,
       transaction: t,
     });
@@ -153,7 +153,7 @@ async function getEngagementStatus(orgId, customerId) {
     return rows;
   } catch (error) {
     await t.rollback();
-    logger.logEvent("error", "Pulse: engagement status failed", {
+    logger.logEvent("error", "Pulse: trackable status failed", {
       action: "PulseGetStatus",
       orgId,
       customerId,

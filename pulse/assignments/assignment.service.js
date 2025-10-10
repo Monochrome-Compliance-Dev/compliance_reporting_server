@@ -19,7 +19,7 @@ async function getAll({ customerId, budgetLineId, ...options } = {}) {
     const where = {};
     if (budgetLineId) where.budgetLineId = budgetLineId;
 
-    const rows = await db.Allocation.findAll({
+    const rows = await db.Assignment.findAll({
       where,
       order: [["createdAt", "DESC"]],
       ...options,
@@ -38,7 +38,7 @@ async function getAll({ customerId, budgetLineId, ...options } = {}) {
 async function listByBudgetLine({ budgetLineId, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const rows = await db.Allocation.findAll({
+    const rows = await db.Assignment.findAll({
       where: { budgetLineId },
       ...options,
       transaction: t,
@@ -56,12 +56,12 @@ async function listByBudgetLine({ budgetLineId, customerId, ...options }) {
 async function getById({ id, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const row = await db.Allocation.findOne({
+    const row = await db.Assignment.findOne({
       where: { id },
       ...options,
       transaction: t,
     });
-    if (!row) throw { status: 404, message: "Allocation not found" };
+    if (!row) throw { status: 404, message: "Assignment not found" };
     await t.commit();
     return row.get({ plain: true });
   } catch (error) {
@@ -75,7 +75,7 @@ async function getById({ id, customerId, ...options }) {
 async function create({ data, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const result = await db.Allocation.create(
+    const result = await db.Assignment.create(
       {
         ...data,
         customerId,
@@ -97,16 +97,16 @@ async function create({ data, customerId, ...options }) {
 async function update({ id, data, customerId, userId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    await db.Allocation.update(
+    await db.Assignment.update(
       { ...data, updatedBy: userId },
       { where: { id }, ...options, transaction: t }
     );
-    const result = await db.Allocation.findOne({
+    const result = await db.Assignment.findOne({
       where: { id },
       ...options,
       transaction: t,
     });
-    if (!result) throw { status: 404, message: "Allocation not found" };
+    if (!result) throw { status: 404, message: "Assignment not found" };
     await t.commit();
     return result.get({ plain: true });
   } catch (error) {
@@ -128,14 +128,14 @@ async function patch({
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
   try {
-    const [count, [updated]] = await db.Allocation.update(
+    const [count, [updated]] = await db.Assignment.update(
       { ...data, updatedBy: userId },
       { where: { id }, returning: true, ...options, transaction: t }
     );
     if (count === 0)
       throw {
         status: 404,
-        message: "Allocation not found or update blocked by RLS.",
+        message: "Assignment not found or update blocked by RLS.",
       };
     if (!transaction) await t.commit();
     return updated.get({ plain: true });
@@ -150,7 +150,7 @@ async function patch({
 async function _delete({ id, customerId, userId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const count = await db.Allocation.destroy({
+    const count = await db.Assignment.destroy({
       where: { id },
       ...options,
       transaction: t,
@@ -158,7 +158,7 @@ async function _delete({ id, customerId, userId, ...options }) {
     if (count === 0)
       throw {
         status: 404,
-        message: "Allocation not found or delete blocked by RLS.",
+        message: "Assignment not found or delete blocked by RLS.",
       };
     await t.commit();
   } catch (error) {

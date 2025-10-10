@@ -194,15 +194,15 @@ CREATE POLICY tbl_pulse_resource_rls_policy
 ALTER TABLE tbl_pulse_resource FORCE ROW LEVEL SECURITY;
 
 
--- Allocation (replaces Assignment)
-ALTER TABLE tbl_pulse_allocations ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_pulse_allocations_rls_policy ON tbl_pulse_allocations;
-CREATE POLICY tbl_pulse_allocations_rls_policy
-  ON tbl_pulse_allocations
+-- Assignment (replaces Assignment)
+ALTER TABLE tbl_pulse_assignments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_pulse_assignments_rls_policy ON tbl_pulse_assignments;
+CREATE POLICY tbl_pulse_assignments_rls_policy
+  ON tbl_pulse_assignments
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_pulse_allocations FORCE ROW LEVEL SECURITY;
+ALTER TABLE tbl_pulse_assignments FORCE ROW LEVEL SECURITY;
 
 -- Budget (header)
 ALTER TABLE tbl_pulse_budget ENABLE ROW LEVEL SECURITY;

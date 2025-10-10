@@ -27,14 +27,11 @@ async function getAll({ customerId, ...options } = {}) {
   }
 }
 
-/**
- * List items by engagement (legacy support). Excludes soft-deleted.
- */
-async function listByEngagement({ engagementId, customerId, ...options }) {
+async function listByTrackable({ trackableId, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rows = await db.BudgetItem.findAll({
-      where: { engagementId, deletedAt: null },
+      where: { trackableId, deletedAt: null },
       ...options,
       transaction: t,
     });
@@ -213,7 +210,7 @@ const budgetItems = {
   update,
   patch,
   delete: _delete,
-  listByEngagement,
+  listByTrackable,
   listByBudget,
 };
 
@@ -354,6 +351,34 @@ async function budgetsGetById({ id, customerId, ...options }) {
   }
 }
 
+// Fetch the active/linked budget for a given trackable (prefer isActive, else most recently updated)
+async function budgetsGetActiveByTrackable({
+  trackableId,
+  customerId,
+  ...options
+}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const row = await db.Budget.findOne({
+      where: { trackableId, deletedAt: null },
+      // Prefer explicitly active; otherwise fall back to most recently updated
+      order: [
+        ["isActive", "DESC"],
+        ["updatedAt", "DESC"],
+      ],
+      ...options,
+      transaction: t,
+    });
+    await t.commit();
+    return row ? row.get({ plain: true }) : null;
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
 async function budgetsCreate({ data, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
@@ -450,10 +475,10 @@ async function budgetsDelete({ id, customerId, userId, ...options }) {
   }
 }
 
-// Convenience helper to link a budget to an engagement
-async function budgetsLinkToEngagement({
+// Convenience helper to link a budget to an trackable
+async function budgetsLinkToTrackable({
   id,
-  engagementId,
+  trackableId,
   customerId,
   userId,
   transaction,
@@ -462,7 +487,7 @@ async function budgetsLinkToEngagement({
   // Thin wrapper over budgetsPatch to make intent explicit
   return budgetsPatch({
     id,
-    data: { engagementId, customerId, updatedBy: userId },
+    data: { trackableId, customerId, updatedBy: userId },
     customerId,
     userId,
     transaction,
@@ -477,7 +502,8 @@ const budgets = {
   update: budgetsUpdate,
   patch: budgetsPatch,
   delete: budgetsDelete,
-  linkToEngagement: budgetsLinkToEngagement,
+  linkToTrackable: budgetsLinkToTrackable,
+  getActiveByTrackable: budgetsGetActiveByTrackable,
 };
 
 module.exports = {

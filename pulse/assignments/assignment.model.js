@@ -17,7 +17,7 @@ function model(sequelize) {
     customerId: { type: DataTypes.STRING, allowNull: false },
     budgetLineId: { type: DataTypes.STRING(10), allowNull: false },
     resourceId: { type: DataTypes.STRING(10), allowNull: false },
-    allocationPct: {
+    assignmentPct: {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0,
@@ -38,8 +38,8 @@ function model(sequelize) {
     updatedBy: { type: DataTypes.STRING(10), allowNull: true },
   };
 
-  const Allocation = sequelize.define("Allocation", attributes, {
-    tableName: "tbl_pulse_allocations",
+  const Assignment = sequelize.define("Assignment", attributes, {
+    tableName: "tbl_pulse_assignments",
     timestamps: true,
     paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
@@ -52,5 +52,5 @@ function model(sequelize) {
     ],
   });
 
-  return Allocation;
+  return Assignment;
 }

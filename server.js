@@ -292,23 +292,23 @@ app.use(
   require("./pulse/resources/resource.controller")
 );
 app.use(
-  "/api/pulse/allocations",
-  require("./pulse/allocations/allocation.controller")
+  "/api/pulse/assignments",
+  require("./pulse/assignments/assignment.controller")
 );
-// app.use(
-//   "/api/pulse/contributions",
-//   require("./pulse/contributions/contribution.controller")
-// );
+app.use(
+  "/api/pulse/contributions",
+  require("./pulse/contributions/contribution.controller")
+);
 // Combined controller handles /budget-items and /budgets under /api/pulse
 app.use("/api/pulse", require("./pulse/budgets/budget.controller"));
-// app.use(
-//   "/api/pulse/maximiser",
-//   require("./pulse/maximiser/maximiser.controller")
-// );
-// app.use(
-//   "/api/pulse",
-//   require("./pulse/pulse-dashboard/pulse_dashboard.controller")
-// );
+app.use(
+  "/api/pulse/maximiser",
+  require("./pulse/maximiser/maximiser.controller")
+);
+app.use(
+  "/api/pulse",
+  require("./pulse/pulse-dashboard/pulse_dashboard.controller")
+);
 
 app.use("/api/stripe", require("./stripe/stripe.controller"));
 app.use("/api/billing", require("./stripe/billing.controller"));

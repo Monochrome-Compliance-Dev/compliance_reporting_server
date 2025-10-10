@@ -6,9 +6,9 @@
 const dayjs = require("dayjs");
 const {
   beginTransactionWithCustomerContext,
-} = require("../helpers/setCustomerIdRLS");
-const db = require("../db/database");
-const { logger } = require("../helpers/logger");
+} = require("@/helpers/setCustomerIdRLS");
+const db = require("@/db/database");
+const { logger } = require("@/helpers/logger");
 
 /**
  * Placeholder: fetch base signals for a set of teams and window.
@@ -19,7 +19,7 @@ const { logger } = require("../helpers/logger");
  *   hours: { total, billable, nonBillable, afterHours },
  *   estimation: [ { category, planned, actual } ],
  *   streaksOver10h: number,
- *   contextSwitchRate: number, // avg distinct engagements/categories per person-day
+ *   contextSwitchRate: number, // avg distinct trackables/categories per person-day
  *   tasksPerPersonPerWeek: number
  * }
  */
@@ -43,9 +43,9 @@ async function fetchBaseSignals({
     const [baseRows] = await db.sequelize.query(
       `WITH rows AS (
          SELECT tr.*, r.team AS "teamId"
-           FROM public.tbl_pulse_timesheet_row tr
-           JOIN public.tbl_pulse_timesheet ts
-             ON ts.id = tr."timesheetId" AND ts."customerId" = tr."customerId"
+           FROM public.tbl_pulse_contribution_row tr
+           JOIN public.tbl_pulse_contribution ts
+             ON ts.id = tr."contributionId" AND ts."customerId" = tr."customerId"
            JOIN public.tbl_pulse_resource r
              ON r.id = ts."resourceId" AND r."customerId" = ts."customerId"
           WHERE tr."customerId" = :customerId
@@ -87,13 +87,13 @@ async function fetchBaseSignals({
               COALESCE(bi."sectionName", 'Uncategorised') AS category,
               SUM(COALESCE(bi.hours, 0)) AS planned,
               SUM(COALESCE(tr.hours, 0)) AS actual
-         FROM public.tbl_pulse_timesheet_row tr
-         JOIN public.tbl_pulse_timesheet ts
-           ON ts.id = tr."timesheetId" AND ts."customerId" = tr."customerId"
+         FROM public.tbl_pulse_contribution_row tr
+         JOIN public.tbl_pulse_contribution ts
+           ON ts.id = tr."contributionId" AND ts."customerId" = tr."customerId"
          JOIN public.tbl_pulse_resource r
            ON r.id = ts."resourceId" AND r."customerId" = ts."customerId"
          LEFT JOIN public.tbl_pulse_budget_item bi
-           ON bi."customerId" = tr."customerId" AND bi."engagementId" = tr."engagementId" AND bi.id = tr."budgetItemId"
+           ON bi."customerId" = tr."customerId" AND bi."trackableId" = tr."trackableId" AND bi.id = tr."budgetItemId"
         WHERE tr."customerId" = :customerId
           AND r.team IN (:teamIds)
           AND tr."date" BETWEEN :from AND :to
@@ -110,9 +110,9 @@ async function fetchBaseSignals({
          SELECT r.team AS "teamId",
                 tr."date" AS d,
                 SUM(tr.hours) AS daily_hours
-           FROM public.tbl_pulse_timesheet_row tr
-           JOIN public.tbl_pulse_timesheet ts
-             ON ts.id = tr."timesheetId" AND ts."customerId" = tr."customerId"
+           FROM public.tbl_pulse_contribution_row tr
+           JOIN public.tbl_pulse_contribution ts
+             ON ts.id = tr."contributionId" AND ts."customerId" = tr."customerId"
            JOIN public.tbl_pulse_resource r
              ON r.id = ts."resourceId" AND r."customerId" = ts."customerId"
           WHERE tr."customerId" = :customerId
