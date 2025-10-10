@@ -10,7 +10,7 @@ const base = Joi.object({
   endDate: Joi.date().optional(),
   dueDate: Joi.date().optional(),
   completedAt: Joi.date().optional(),
-  allocatedHoursPerWeek: Joi.number().min(0).optional(),
+  assignedHoursPerWeek: Joi.number().min(0).optional(),
   notes: Joi.string().max(2000).optional().sanitize(),
 
   createdBy: Joi.string().length(10),

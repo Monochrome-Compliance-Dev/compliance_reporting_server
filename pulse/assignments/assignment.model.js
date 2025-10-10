@@ -28,7 +28,7 @@ function model(sequelize) {
     endDate: { type: DataTypes.DATEONLY, allowNull: true },
     dueDate: { type: DataTypes.DATEONLY, allowNull: true },
     completedAt: { type: DataTypes.DATE, allowNull: true },
-    allocatedHoursPerWeek: {
+    assignedHoursPerWeek: {
       type: DataTypes.DECIMAL(6, 2),
       allowNull: false,
       defaultValue: 0,
