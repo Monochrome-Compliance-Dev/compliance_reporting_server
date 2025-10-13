@@ -40,7 +40,7 @@
     "express-rate-limit": "^8.1.0",
     "gray-matter": "^4.0.3",
     "helmet": "^8.1.0",
-    "joi": "^17.12.1",
+    "joi": "^18.0.1",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "nanoid": "^5.1.6",
