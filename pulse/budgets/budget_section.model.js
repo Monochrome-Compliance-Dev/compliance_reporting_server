@@ -29,7 +29,10 @@ function model(sequelize) {
     paranoid: true, // enables soft delete via deletedAt
     indexes: [
       { fields: ["customerId"] },
-      { unique: true, fields: ["customerId", "budgetId", "order"] },
+      {
+        unique: true,
+        fields: ["customerId", "budgetId", "order", "deletedAt"],
+      },
     ],
   });
 

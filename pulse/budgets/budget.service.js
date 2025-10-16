@@ -268,6 +268,48 @@ async function _delete({ id, customerId, userId, ...options }) {
   }
 }
 
+/**
+ * List items by budget with enriched labels for FE selectors.
+ * Returns: [{ id, sectionName, budgetItemLabel, trackableName, uiLabel, budgetId }]
+ */
+async function listEnrichedByBudget({ budgetId, customerId }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const rows = await db.sequelize.query(
+      `
+      SELECT
+        i.id                               AS "id",
+        i."budgetId"                       AS "budgetId",
+        i."sectionName"                    AS "sectionName",
+        i."resourceLabel"                  AS "budgetItemLabel",
+        t."name"                           AS "trackableName",
+        (t."name" || ' — ' || i."sectionName" || ' — ' || i."resourceLabel") AS "uiLabel"
+      FROM tbl_pulse_budget_item i
+      LEFT JOIN tbl_pulse_budget b
+        ON i."budgetId" = b."id"
+      LEFT JOIN tbl_pulse_trackable t
+        ON b."trackableId" = t."id"
+      WHERE i."deletedAt" IS NULL
+        AND b."deletedAt" IS NULL
+        AND i."budgetId" = :budgetId
+      ORDER BY t."name", i."sectionName", i."resourceLabel"
+      `,
+      {
+        replacements: { budgetId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction: t,
+      }
+    );
+    await t.commit();
+    return rows;
+  } catch (error) {
+    await t.rollback();
+    throw { status: error.status || 500, message: error.message || error };
+  } finally {
+    if (!t.finished) await t.rollback();
+  }
+}
+
 const budgetItems = {
   getAll,
   getById,
@@ -277,6 +319,7 @@ const budgetItems = {
   delete: _delete,
   listByTrackable,
   listByBudget,
+  listEnrichedByBudget,
 };
 
 // ===== Budget Sections namespace =====

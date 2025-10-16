@@ -1,4 +1,4 @@
-const Joi = require("../../middleware/joiSanitizer");
+const Joi = require("@/middleware/joiSanitizer");
 
 // ================= Budget Item Schemas =================
 const itemBase = Joi.object({

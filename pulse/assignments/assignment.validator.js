@@ -1,7 +1,7 @@
 const Joi = require("@/middleware/joiSanitizer");
 
 const base = Joi.object({
-  budgetLineId: Joi.string().length(10).required().sanitize(),
+  budgetItemId: Joi.string().length(10).required().sanitize(),
   resourceId: Joi.string().length(10).required().sanitize(),
   assignmentPct: Joi.number().integer().min(0).max(100).required(),
   role: Joi.string().max(200).optional().sanitize(),

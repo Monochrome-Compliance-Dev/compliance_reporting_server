@@ -39,11 +39,11 @@ async function getAll(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const { budgetLineId } = req.query;
+  const { budgetItemId } = req.query;
   try {
     const assignments = await assignmentService.getAll({
       customerId,
-      budgetLineId,
+      budgetItemId,
       order: [["createdAt", "DESC"]],
     });
 
@@ -52,10 +52,10 @@ async function getAll(req, res, next) {
       userId,
       ip,
       device,
-      action: budgetLineId ? "GetAssignmentsByBudgetLine" : "GetAllAssignments",
+      action: budgetItemId ? "GetAssignmentsByBudgetItem" : "GetAllAssignments",
       entity: "Assignment",
       details: {
-        budgetLineId: budgetLineId || undefined,
+        budgetItemId: budgetItemId || undefined,
         count: Array.isArray(assignments) ? assignments.length : undefined,
       },
     });

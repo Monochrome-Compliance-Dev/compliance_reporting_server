@@ -55,7 +55,7 @@ function model(sequelize) {
       { fields: ["customerId"] },
       {
         unique: true,
-        fields: ["customerId", "budgetId", "sectionId", "order"],
+        fields: ["customerId", "budgetId", "sectionId", "order", "deletedAt"],
       },
     ],
     // Keep a simple lookup index for common queries

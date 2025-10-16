@@ -10,14 +10,14 @@ module.exports = {
   update,
   patch,
   delete: _delete,
-  listByBudgetLine,
+  listByBudgetItem,
 };
 
-async function getAll({ customerId, budgetLineId, ...options } = {}) {
+async function getAll({ customerId, budgetItemId, ...options } = {}) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = {};
-    if (budgetLineId) where.budgetLineId = budgetLineId;
+    if (budgetItemId) where.budgetItemId = budgetItemId;
 
     const rows = await db.Assignment.findAll({
       where,
@@ -35,11 +35,11 @@ async function getAll({ customerId, budgetLineId, ...options } = {}) {
   }
 }
 
-async function listByBudgetLine({ budgetLineId, customerId, ...options }) {
+async function listByBudgetItem({ budgetItemId, customerId, ...options }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rows = await db.Assignment.findAll({
-      where: { budgetLineId },
+      where: { budgetItemId },
       ...options,
       transaction: t,
     });

@@ -102,6 +102,7 @@ module.exports = router;
 
 // -------- Budget Items routes (/budget-items) --------
 items.get("/", requirePulse, getAllItems);
+items.get("/labels", requirePulse, getItemLabelsByBudget);
 items.get("/:id", requirePulse, getItemById);
 items.post(
   "/",
@@ -349,6 +350,53 @@ async function getAllItems(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error fetching budget items", {
       action: "GetBudgetItems",
+      userId: req.auth?.id,
+      customerId: req.effectiveCustomerId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+// Handler for GET /budget-items/labels
+async function getItemLabelsByBudget(req, res, next) {
+  try {
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const { budgetId } = req.query || {};
+
+    if (!budgetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "budgetId is required" });
+    }
+
+    const rows = await budgetService.budgetItems.listEnrichedByBudget({
+      budgetId,
+      customerId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "GetBudgetItemLabelsByBudget",
+      entity: "BudgetItem",
+      details: {
+        budgetId,
+        count: Array.isArray(rows) ? rows.length : undefined,
+      },
+    });
+
+    res.json({ status: "success", data: rows });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching budget item labels", {
+      action: "GetBudgetItemLabelsByBudget",
       userId: req.auth?.id,
       customerId: req.effectiveCustomerId,
       error: error.message,

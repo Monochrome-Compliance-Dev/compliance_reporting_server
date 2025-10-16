@@ -15,7 +15,7 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
-    budgetLineId: { type: DataTypes.STRING(10), allowNull: false },
+    budgetItemId: { type: DataTypes.STRING(10), allowNull: false },
     resourceId: { type: DataTypes.STRING(10), allowNull: false },
     assignmentPct: {
       type: DataTypes.INTEGER,
@@ -44,7 +44,7 @@ function model(sequelize) {
     paranoid: true, // enable soft-deletes via deletedAt
     indexes: [
       { fields: ["customerId"] },
-      { fields: ["budgetLineId"] },
+      { fields: ["budgetItemId"] },
       { fields: ["resourceId"] },
       { fields: ["startDate", "endDate"] },
       { fields: ["dueDate"] },
