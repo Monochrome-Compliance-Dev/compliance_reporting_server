@@ -7,14 +7,14 @@ module.exports = { getAll, getById, create, update, patch, delete: _delete };
 
 async function getAll({
   customerId,
-  budgetLineId,
+  budgetItemId,
   resourceId,
   ...options
 } = {}) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const where = { customerId };
-    if (budgetLineId) where.budgetLineId = budgetLineId;
+    if (budgetItemId) where.budgetItemId = budgetItemId;
     if (resourceId) where.resourceId = resourceId;
     const rows = await db.Contribution.findAll({
       where,

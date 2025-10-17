@@ -39,22 +39,30 @@ async function getAll(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const { budgetItemId } = req.query;
+  const { budgetItemId, trackableId } = req.query;
   try {
     const assignments = await assignmentService.getAll({
       customerId,
       budgetItemId,
+      trackableId,
       order: [["createdAt", "DESC"]],
     });
+
+    const auditAction = trackableId
+      ? "GetAssignmentsByTrackable"
+      : budgetItemId
+        ? "GetAssignmentsByBudgetItem"
+        : "GetAllAssignments";
 
     await auditService.logEvent({
       customerId,
       userId,
       ip,
       device,
-      action: budgetItemId ? "GetAssignmentsByBudgetItem" : "GetAllAssignments",
+      action: auditAction,
       entity: "Assignment",
       details: {
+        trackableId: trackableId || undefined,
         budgetItemId: budgetItemId || undefined,
         count: Array.isArray(assignments) ? assignments.length : undefined,
       },

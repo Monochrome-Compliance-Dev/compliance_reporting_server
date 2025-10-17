@@ -469,11 +469,11 @@ async function initialise() {
   // BudgetItem ↔ Assignment (canonical link)
   if (db.BudgetItem && db.Assignment) {
     db.BudgetItem.hasMany(db.Assignment, {
-      foreignKey: "budgetLineId",
+      foreignKey: "budgetItemId",
       onDelete: "CASCADE",
     });
     db.Assignment.belongsTo(db.BudgetItem, {
-      foreignKey: "budgetLineId",
+      foreignKey: "budgetItemId",
       as: "line",
     });
   }
@@ -490,10 +490,10 @@ async function initialise() {
   // Contribution relationships (New World)
   if (db.BudgetItem && db.Contribution) {
     db.BudgetItem.hasMany(db.Contribution, {
-      foreignKey: "budgetLineId",
+      foreignKey: "budgetItemId",
       onDelete: "CASCADE",
     });
-    db.Contribution.belongsTo(db.BudgetItem, { foreignKey: "budgetLineId" });
+    db.Contribution.belongsTo(db.BudgetItem, { foreignKey: "budgetItemId" });
   }
   if (db.Resource && db.Contribution) {
     db.Resource.hasMany(db.Contribution, {

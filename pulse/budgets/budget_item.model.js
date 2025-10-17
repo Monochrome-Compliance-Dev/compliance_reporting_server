@@ -54,6 +54,7 @@ function model(sequelize) {
     indexes: [
       { fields: ["customerId"] },
       {
+        name: "uniq_budgetitem_scope_del", // <= short, stable
         unique: true,
         fields: ["customerId", "budgetId", "sectionId", "order", "deletedAt"],
       },

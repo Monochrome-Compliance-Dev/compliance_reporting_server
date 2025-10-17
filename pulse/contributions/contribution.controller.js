@@ -42,13 +42,13 @@ module.exports = router;
 async function getAll(req, res, next) {
   try {
     const customerId = req.effectiveCustomerId;
-    const { budgetLineId, resourceId } = req.query || {};
+    const { budgetItemId, resourceId } = req.query || {};
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
     const contributions = await contributionService.getAll({
       customerId,
-      budgetLineId,
+      budgetItemId,
       resourceId,
       order: [["createdAt", "DESC"]],
     });
@@ -61,7 +61,7 @@ async function getAll(req, res, next) {
       entity: "Contribution",
       details: {
         count: Array.isArray(contributions) ? contributions.length : undefined,
-        budgetLineId,
+        budgetItemId,
         resourceId,
       },
     });

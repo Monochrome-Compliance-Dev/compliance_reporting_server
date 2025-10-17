@@ -13,9 +13,53 @@ module.exports = {
   listByBudgetItem,
 };
 
-async function getAll({ customerId, budgetItemId, ...options } = {}) {
+async function getAll({
+  customerId,
+  budgetItemId,
+  trackableId,
+  ...options
+} = {}) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
+    // If we are filtering by trackable, resolve the set of budgetItemIds
+    // that belong to any budget for that trackable, then fetch assignments
+    // for those budget items. This avoids assuming a trackableId column on Assignment.
+    if (trackableId && !budgetItemId) {
+      // 1) budgets for this trackable
+      const budgets = await db.Budget.findAll({
+        attributes: ["id"],
+        where: { trackableId },
+        transaction: t,
+      });
+      const budgetIds = budgets.map((b) => b.get("id"));
+      if (budgetIds.length === 0) {
+        await t.commit();
+        return [];
+      }
+
+      // 2) budget items for those budgets
+      const items = await db.BudgetItem.findAll({
+        attributes: ["id"],
+        where: { budgetId: budgetIds },
+        transaction: t,
+      });
+      const budgetItemIds = items.map((i) => i.get("id"));
+      if (budgetItemIds.length === 0) {
+        await t.commit();
+        return [];
+      }
+
+      const rows = await db.Assignment.findAll({
+        where: { budgetItemId: budgetItemIds },
+        order: [["createdAt", "DESC"]],
+        ...options,
+        transaction: t,
+      });
+      await t.commit();
+      return rows.map((r) => r.get({ plain: true }));
+    }
+
+    // Default path: direct filters
     const where = {};
     if (budgetItemId) where.budgetItemId = budgetItemId;
 
