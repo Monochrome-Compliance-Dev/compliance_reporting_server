@@ -18,6 +18,7 @@ const itemBase = Joi.object({
 
   billable: Joi.boolean().optional(),
   notes: Joi.string().max(2000).allow("", null).optional().sanitize(),
+  purpose: Joi.string().max(100).required().sanitize(),
 
   createdBy: Joi.string().length(10),
   updatedBy: Joi.string().length(10),

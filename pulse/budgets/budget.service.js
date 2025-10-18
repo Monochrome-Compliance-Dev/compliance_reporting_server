@@ -282,8 +282,12 @@ async function listEnrichedByBudget({ budgetId, customerId }) {
         i."budgetId"                       AS "budgetId",
         i."sectionName"                    AS "sectionName",
         i."resourceLabel"                  AS "budgetItemLabel",
+        i."purpose"                        AS "purpose",
         t."name"                           AS "trackableName",
-        (t."name" || ' — ' || i."sectionName" || ' — ' || i."resourceLabel") AS "uiLabel"
+        (
+          i."resourceLabel" ||
+          CASE WHEN COALESCE(i."purpose", '') <> '' THEN ' — ' || i."purpose" ELSE '' END
+        )                                   AS "uiLabel"
       FROM tbl_pulse_budget_item i
       LEFT JOIN tbl_pulse_budget b
         ON i."budgetId" = b."id"
@@ -292,7 +296,7 @@ async function listEnrichedByBudget({ budgetId, customerId }) {
       WHERE i."deletedAt" IS NULL
         AND b."deletedAt" IS NULL
         AND i."budgetId" = :budgetId
-      ORDER BY t."name", i."sectionName", i."resourceLabel"
+      ORDER BY t."name", i."sectionName", i."resourceLabel", COALESCE(i."purpose", '')
       `,
       {
         replacements: { budgetId },

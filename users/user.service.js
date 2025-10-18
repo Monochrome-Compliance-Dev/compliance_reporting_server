@@ -1,4 +1,5 @@
-﻿const os = require("os");
+﻿const REFRESH_RACE_GRACE_MS = Number(process.env.REFRESH_RACE_GRACE_MS || 5000);
+const os = require("os");
 const { logger } = require("../helpers/logger");
 const jwtSecret = process.env.JWT_SECRET;
 const jwt = require("jsonwebtoken");
@@ -133,6 +134,91 @@ async function refreshToken({ token, ipAddress }) {
       // Reuse detection: if the presented token was already rotated/revoked and has a replacement,
       // someone is trying to use an old token. Revoke the entire descendant chain.
       if (presented.replacedByToken) {
+        // Grace window: treat very-near reuse from the same device as a benign race
+        const replacement = await db.RefreshToken.findOne({
+          where: { token: presented.replacedByToken },
+          transaction: t,
+        });
+
+        const sameUser = replacement && replacement.userId === presented.userId;
+        const repCreatedTs =
+          replacement && (replacement.created || replacement.createdAt);
+        const repCreatedMs = repCreatedTs
+          ? new Date(repCreatedTs).getTime()
+          : 0;
+        const withinGrace =
+          repCreatedMs && Date.now() - repCreatedMs <= REFRESH_RACE_GRACE_MS;
+        const sameIp = replacement && replacement.createdByIp === ipAddress;
+
+        if (replacement && sameUser && withinGrace && sameIp) {
+          // Don’t nuke the family; accept the race and proceed as if the replacement was presented
+          logger.logEvent("info", "Refresh race tolerated; using replacement", {
+            action: "RefreshRace",
+            partialToken: token.slice(0, 6) + "...",
+            replacedBy: presented.replacedByToken.slice(0, 6) + "...",
+          });
+
+          // If the replacement is itself inactive, fall back to family revoke
+          const replacementActive =
+            replacement.expires > Date.now() && !replacement.revoked;
+          if (!replacementActive) {
+            await revokeTokenFamily(presented.replacedByToken, ipAddress, t);
+            logger.logEvent(
+              "warn",
+              "Replacement inactive during race; revoked family",
+              {
+                action: "RefreshReuse",
+                partialToken: token.slice(0, 6) + "...",
+                replacedBy: presented.replacedByToken.slice(0, 6) + "...",
+              }
+            );
+            throw {
+              status: 400,
+              message: "Invalid token: Token is not active",
+            };
+          }
+
+          // Switch context to the replacement token and continue rotation
+          const user = await replacement.getUser({ transaction: t });
+          const newRefreshToken = generateRefreshToken(user, ipAddress);
+
+          replacement.revoked = Date.now();
+          replacement.revokedByIp = ipAddress;
+          replacement.replacedByToken = newRefreshToken.token;
+          await replacement.save({ transaction: t });
+          await newRefreshToken.save({ transaction: t });
+
+          const jwtToken = generateJwtToken(user);
+
+          await db.sequelize.query("SET LOCAL app.current_customer_id = :cid", {
+            transaction: t,
+            replacements: { cid: user.customerId },
+          });
+
+          const entRows = await db.FeatureEntitlement.findAll({
+            where: {
+              customerId: user.customerId,
+              status: { [Op.in]: ACTIVE_ENT_STATES },
+              [Op.or]: [
+                { validTo: null },
+                { validTo: { [Op.gte]: new Date() } },
+              ],
+            },
+            attributes: ["feature"],
+            transaction: t,
+          });
+          const entitlements = entRows.map((r) => r.feature);
+
+          await t.commit();
+          return {
+            ...basicDetails(user),
+            jwtToken,
+            refreshToken: newRefreshToken.token,
+            entitlements,
+          };
+        }
+
+        // Not a benign race → revoke the whole family
         await revokeTokenFamily(presented.replacedByToken, ipAddress, t);
         logger.logEvent(
           "warn",

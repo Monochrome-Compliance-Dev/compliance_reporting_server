@@ -38,6 +38,11 @@ function model(sequelize) {
       defaultValue: 0,
     },
     billable: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    purpose: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      defaultValue: "",
+    },
     notes: { type: DataTypes.TEXT, allowNull: true },
 
     // Stable sort within a budget/section
