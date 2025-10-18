@@ -16,6 +16,7 @@ function model(sequelize) {
     },
     customerId: { type: DataTypes.STRING, allowNull: false },
     name: { type: DataTypes.STRING, allowNull: false },
+    email: { type: DataTypes.STRING, allowNull: true },
     position: { type: DataTypes.STRING, allowNull: false },
     hourlyRate: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     capacityHoursPerWeek: { type: DataTypes.INTEGER, allowNull: true },

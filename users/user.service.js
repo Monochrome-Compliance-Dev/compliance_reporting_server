@@ -113,14 +113,57 @@ async function authenticate({ email, password, ipAddress }) {
 async function refreshToken({ token, ipAddress }) {
   const t = await db.sequelize.transaction();
   try {
-    const refreshToken = await getRefreshToken(token, { transaction: t });
-    const user = await refreshToken.getUser({ transaction: t });
+    // Load the presented token even if it is inactive, so we can detect reuse
+    const presented = await db.RefreshToken.findOne({
+      where: { token },
+      transaction: t,
+    });
+
+    if (!presented) {
+      logger.logEvent("warn", "Refresh token not found (refresh)", {
+        action: "GetRefreshToken",
+        partialToken: token ? token.slice(0, 6) + "..." : "<none>",
+      });
+      throw { status: 400, message: "Invalid token: Token not found" };
+    }
+
+    const isActive = presented.expires > Date.now() && !presented.revoked;
+
+    if (!isActive) {
+      // Reuse detection: if the presented token was already rotated/revoked and has a replacement,
+      // someone is trying to use an old token. Revoke the entire descendant chain.
+      if (presented.replacedByToken) {
+        await revokeTokenFamily(presented.replacedByToken, ipAddress, t);
+        logger.logEvent(
+          "warn",
+          "Refresh token reuse detected; revoked family",
+          {
+            action: "RefreshReuse",
+            partialToken: token.slice(0, 6) + "...",
+            replacedBy: presented.replacedByToken.slice(0, 6) + "...",
+          }
+        );
+      } else {
+        logger.logEvent(
+          "warn",
+          "Inactive refresh token presented (no replacement)",
+          {
+            action: "RefreshReuse",
+            partialToken: token.slice(0, 6) + "...",
+          }
+        );
+      }
+      throw { status: 400, message: "Invalid token: Token is not active" };
+    }
+
+    // Token is active: proceed with rotation
+    const user = await presented.getUser({ transaction: t });
     const newRefreshToken = generateRefreshToken(user, ipAddress);
 
-    refreshToken.revoked = Date.now();
-    refreshToken.revokedByIp = ipAddress;
-    refreshToken.replacedByToken = newRefreshToken.token;
-    await refreshToken.save({ transaction: t });
+    presented.revoked = Date.now();
+    presented.revokedByIp = ipAddress;
+    presented.replacedByToken = newRefreshToken.token;
+    await presented.save({ transaction: t });
     await newRefreshToken.save({ transaction: t });
 
     // generate new jwt
@@ -144,7 +187,6 @@ async function refreshToken({ token, ipAddress }) {
     });
     const entitlements = entRows.map((r) => r.feature);
 
-    // return basic details and tokens
     await t.commit();
     return {
       ...basicDetails(user),
@@ -763,4 +805,25 @@ async function sendPasswordResetEmail(user, origin) {
     html: `<h4>Reset Password Email</h4>
                ${message}`,
   });
+}
+
+// Revoke a token and all its descendants by following replacedByToken
+async function revokeTokenFamily(token, ipAddress, transaction) {
+  if (!token) return;
+  let current = await db.RefreshToken.findOne({
+    where: { token },
+    transaction,
+  });
+  while (current) {
+    if (!current.revoked) {
+      current.revoked = Date.now();
+      current.revokedByIp = ipAddress;
+      await current.save({ transaction });
+    }
+    if (!current.replacedByToken) break;
+    current = await db.RefreshToken.findOne({
+      where: { token: current.replacedByToken },
+      transaction,
+    });
+  }
 }

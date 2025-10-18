@@ -17,6 +17,8 @@ const {
   validateResetTokenSchema,
   createSchema,
   inviteWithResourceSchema,
+  refreshTokenSchema,
+  revokeTokenSchema,
 } = require("./user.validator");
 
 const setPasswordSchema = Joi.object({
@@ -27,8 +29,12 @@ const setPasswordSchema = Joi.object({
 
 // routes
 router.post("/authenticate", validateRequest(authSchema), authenticate);
-router.post("/refresh-token", refreshToken);
-router.post("/revoke-token", authorise(), revokeTokenSchema, revokeToken);
+router.post(
+  "/refresh-token",
+  validateRequest(refreshTokenSchema),
+  refreshToken
+);
+router.post("/revoke-token", validateRequest(revokeTokenSchema), revokeToken);
 router.post("/register", validateRequest(registerSchema), register);
 router.post(
   "/register-first-user",
@@ -125,6 +131,17 @@ function refreshToken(req, res, next) {
     })
     .catch((err) => {
       if (err && err.status === 400) {
+        // Clear any stale refresh cookie to prevent FE retry loops
+        res.clearCookie("refreshToken", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "Lax",
+          path: "/",
+          domain:
+            process.env.NODE_ENV === "production"
+              ? process.env.COOKIE_DOMAIN_PROD
+              : process.env.COOKIE_DOMAIN_DEV,
+        });
         return unauthorised(res);
       }
       return res.status(500).json({ message: "Internal Server Error" });
@@ -135,13 +152,6 @@ async function unauthorised(res) {
   return res.status(401).json({ message: "Unauthorised" });
 }
 
-function revokeTokenSchema(req, res, next) {
-  const schema = Joi.object({
-    refreshToken: Joi.string().empty(""), // Validate only refreshToken
-  });
-  return validateRequest(schema)(req, res, next);
-}
-
 function revokeToken(req, res, next) {
   const { body } = req;
   const ip = req.ip;
@@ -149,40 +159,62 @@ function revokeToken(req, res, next) {
 
   const token = body.refreshToken || req.cookies.refreshToken;
 
+  // Always clear the cookie, regardless of token validity
+  const clearCookie = () =>
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax",
+      path: "/",
+      domain:
+        process.env.NODE_ENV === "production"
+          ? process.env.COOKIE_DOMAIN_PROD
+          : process.env.COOKIE_DOMAIN_DEV,
+    });
+
+  // If there is no token at all, treat as success (idempotent logout)
   if (!token) {
-    return res.status(400).json({ message: "Token is required" });
+    clearCookie();
+    logger.logEvent("info", "No refresh token provided; treated as revoked", {
+      action: "RevokeToken",
+      ip,
+      device,
+    });
+    return res.json({ message: "Token revoked" });
   }
 
-  if (!req.auth.ownsToken(token) && req.auth.role !== Role.Admin) {
-    return res.status(401).json({ message: "Unauthorised" });
-  }
-
+  // Proceed to revoke without requiring an authenticated user; possession of token is sufficient
   userService
     .revokeToken({
       token,
       ipAddress: ip,
     })
     .then(() => {
-      res.clearCookie("refreshToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "Lax",
-        path: "/",
-        domain:
-          process.env.NODE_ENV === "production"
-            ? process.env.COOKIE_DOMAIN_PROD
-            : process.env.COOKIE_DOMAIN_DEV,
-      });
+      clearCookie();
       logger.logEvent("info", "Refresh token revoked via controller", {
         action: "RevokeToken",
         token,
         ip,
-        userId: req.auth.id,
         device,
       });
       res.json({ message: "Token revoked" });
     })
     .catch((err) => {
+      // If token not found or not active, treat as success to avoid noisy loops
+      if (err && err.status === 400) {
+        clearCookie();
+        logger.logEvent(
+          "info",
+          "Refresh token already invalid; treated as revoked",
+          {
+            action: "RevokeToken",
+            token,
+            ip,
+            device,
+          }
+        );
+        return res.json({ message: "Token revoked" });
+      }
       console.error("→ revokeToken error", JSON.stringify(err, null, 2));
       next(err);
     });

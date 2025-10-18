@@ -75,6 +75,12 @@ const validateResetTokenSchema = Joi.object({
   token: Joi.string().required(),
 });
 
+const refreshTokenSchema = Joi.object({}).meta({ requireCustomer: false });
+
+const revokeTokenSchema = Joi.object({
+  refreshToken: Joi.string().allow("").optional(),
+}).meta({ requireCustomer: false });
+
 // Composite: invite user + create linked resource (Admin/Boss only)
 const inviteWithResourceSchema = Joi.object({
   user: Joi.object({
@@ -107,6 +113,8 @@ module.exports = {
   verifyEmailSchema,
   verifyTokenSchema,
   validateResetTokenSchema,
+  refreshTokenSchema,
+  revokeTokenSchema,
   createSchema: registerSchema,
   inviteWithResourceSchema,
 };
