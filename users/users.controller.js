@@ -132,16 +132,7 @@ function refreshToken(req, res, next) {
     .catch((err) => {
       if (err && err.status === 400) {
         // Clear any stale refresh cookie to prevent FE retry loops
-        res.clearCookie("refreshToken", {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "Lax",
-          path: "/",
-          domain:
-            process.env.NODE_ENV === "production"
-              ? process.env.COOKIE_DOMAIN_PROD
-              : process.env.COOKIE_DOMAIN_DEV,
-        });
+        clearRefreshCookie(res);
         return unauthorised(res);
       }
       return res.status(500).json({ message: "Internal Server Error" });
@@ -160,17 +151,7 @@ function revokeToken(req, res, next) {
   const token = body.refreshToken || req.cookies.refreshToken;
 
   // Always clear the cookie, regardless of token validity
-  const clearCookie = () =>
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Lax",
-      path: "/",
-      domain:
-        process.env.NODE_ENV === "production"
-          ? process.env.COOKIE_DOMAIN_PROD
-          : process.env.COOKIE_DOMAIN_DEV,
-    });
+  const clearCookie = () => clearRefreshCookie(res);
 
   // If there is no token at all, treat as success (idempotent logout)
   if (!token) {
@@ -285,16 +266,7 @@ function verifyEmail(req, res, next) {
   userService
     .verifyEmail(req.body)
     .then((user) => {
-      res.clearCookie("refreshToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "Lax",
-        path: "/",
-        domain:
-          process.env.NODE_ENV === "production"
-            ? process.env.COOKIE_DOMAIN_PROD
-            : process.env.COOKIE_DOMAIN_DEV,
-      });
+      clearRefreshCookie(res);
       res.json(user);
     })
     .catch(next);
@@ -334,16 +306,7 @@ function resetPassword(req, res, next) {
   userService
     .resetPassword(req.body)
     .then(() => {
-      res.clearCookie("refreshToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "Lax",
-        path: "/",
-        domain:
-          process.env.NODE_ENV === "production"
-            ? process.env.COOKIE_DOMAIN_PROD
-            : process.env.COOKIE_DOMAIN_DEV,
-      });
+      clearRefreshCookie(res);
       res.json({ message: "Password reset successful, you can now login" });
     })
     .then(() => {
@@ -514,14 +477,29 @@ function inviteWithResource(req, res, next) {
 }
 
 function setTokenCookie(res, token) {
-  res.cookie("refreshToken", token, {
+  const isProd = process.env.NODE_ENV === "production";
+  const options = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: isProd,
     sameSite: "Lax",
     path: "/",
-    domain:
-      process.env.NODE_ENV === "production"
-        ? process.env.COOKIE_DOMAIN_PROD
-        : process.env.COOKIE_DOMAIN_DEV,
-  });
+  };
+  if (isProd && process.env.COOKIE_DOMAIN_PROD) {
+    options.domain = process.env.COOKIE_DOMAIN_PROD;
+  }
+  res.cookie("refreshToken", token, options);
+}
+
+function clearRefreshCookie(res) {
+  const isProd = process.env.NODE_ENV === "production";
+  const options = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "Lax",
+    path: "/",
+  };
+  if (isProd && process.env.COOKIE_DOMAIN_PROD) {
+    options.domain = process.env.COOKIE_DOMAIN_PROD;
+  }
+  res.clearCookie("refreshToken", options);
 }
