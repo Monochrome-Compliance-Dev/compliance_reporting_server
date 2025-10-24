@@ -19,7 +19,7 @@ function model(sequelize) {
       primaryKey: true,
     },
     customerId: { type: DataTypes.STRING(10), allowNull: false },
-    uploadId: { type: DataTypes.STRING(10), allowNull: false },
+    runId: { type: DataTypes.STRING(10), allowNull: false },
     mappings: { type: DataTypes.JSONB, allowNull: false },
     createdBy: { type: DataTypes.STRING(10), allowNull: true },
   };
@@ -28,7 +28,7 @@ function model(sequelize) {
     tableName: "tbl_ptrs_column_map",
     timestamps: true,
     paranoid: false,
-    indexes: [{ name: "idx_ptrs_column_map_upload", fields: ["uploadId"] }],
+    indexes: [{ name: "idx_ptrs_column_map_upload", fields: ["runId"] }],
   });
 
   return PtrsColumnMap;

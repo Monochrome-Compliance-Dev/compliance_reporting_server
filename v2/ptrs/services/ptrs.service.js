@@ -3,17 +3,17 @@ const db = require("@/db/database");
 const csv = require("fast-csv");
 
 /** Get column map for an upload */
-async function getColumnMap({ customerId, uploadId }) {
+async function getColumnMap({ customerId, runId }) {
   return db.PtrsColumnMap.findOne({
-    where: { customerId, uploadId },
+    where: { customerId, runId },
     raw: true,
   });
 }
 
 /** Upsert column map for an upload */
-async function saveColumnMap({ customerId, uploadId, mappings, userId }) {
+async function saveColumnMap({ customerId, runId, mappings, userId }) {
   const existing = await db.PtrsColumnMap.findOne({
-    where: { customerId, uploadId },
+    where: { customerId, runId },
   });
   if (existing) {
     await existing.update({
@@ -24,7 +24,7 @@ async function saveColumnMap({ customerId, uploadId, mappings, userId }) {
   }
   const row = await db.PtrsColumnMap.create({
     customerId,
-    uploadId,
+    runId,
     mappings,
     createdBy: userId || null,
   });
@@ -34,15 +34,10 @@ async function saveColumnMap({ customerId, uploadId, mappings, userId }) {
 /**
  * Return a small window of staged rows plus count and inferred headers.
  */
-async function getImportSample({
-  customerId,
-  uploadId,
-  limit = 10,
-  offset = 0,
-}) {
+async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   // rows
   const rows = await db.PtrsImportRaw.findAll({
-    where: { customerId, uploadId },
+    where: { customerId, runId },
     order: [["rowNo", "ASC"]],
     limit,
     offset,
@@ -52,12 +47,12 @@ async function getImportSample({
 
   // total
   const total = await db.PtrsImportRaw.count({
-    where: { customerId, uploadId },
+    where: { customerId, runId },
   });
 
   // headers: scan up to 500 earliest rows to reduce noise
   const headerScan = await db.PtrsImportRaw.findAll({
-    where: { customerId, uploadId },
+    where: { customerId, runId },
     order: [["rowNo", "ASC"]],
     limit: 500,
     attributes: ["data"],
@@ -79,8 +74,8 @@ async function getImportSample({
 }
 
 /** Fetch one upload (tenant-scoped) */
-async function getUpload({ uploadId, customerId }) {
-  return db.PtrsUpload.findOne({ where: { id: uploadId, customerId } });
+async function getUpload({ runId, customerId }) {
+  return db.PtrsUpload.findOne({ where: { id: runId, customerId } });
 }
 
 /**
@@ -88,7 +83,7 @@ async function getUpload({ uploadId, customerId }) {
  * - stream: Readable of CSV
  * - returns rowsInserted (int)
  */
-async function importCsvStream({ customerId, uploadId, stream }) {
+async function importCsvStream({ customerId, runId, stream }) {
   let rowNo = 0;
   let rowsInserted = 0;
 
@@ -113,7 +108,7 @@ async function importCsvStream({ customerId, uploadId, stream }) {
         rowNo += 1;
         batch.push({
           customerId,
-          uploadId,
+          runId,
           rowNo,
           data: row,
           errors: null,
@@ -130,7 +125,7 @@ async function importCsvStream({ customerId, uploadId, stream }) {
           await flush();
           await db.PtrsUpload.update(
             { status: "Ingested", rowCount: rowsInserted },
-            { where: { id: uploadId, customerId } }
+            { where: { id: runId, customerId } }
           );
           resolve(rowsInserted);
         } catch (e) {
@@ -194,14 +189,9 @@ async function createUpload(params) {
  * - derive: { as, sql }   // SQL snippet referencing logical fields
  * - rename: { from, to }
  */
-async function previewTransform({
-  customerId,
-  uploadId,
-  steps = [],
-  limit = 50,
-}) {
+async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
   // Load column map (required to project JSONB -> columns)
-  const mapRow = await getColumnMap({ customerId, uploadId });
+  const mapRow = await getColumnMap({ customerId, runId });
   if (!mapRow || !mapRow.mappings) {
     throw new Error("No column map saved for this upload");
   }
@@ -233,7 +223,7 @@ async function previewTransform({
 
   // Build WHERE clause and parameters from filter steps
   const where = [];
-  const params = { customerId, uploadId, limit };
+  const params = { customerId, runId, limit };
   let pIndex = 0;
   const param = (val) => {
     const key = `p${pIndex++}`;
@@ -314,11 +304,11 @@ async function previewTransform({
       SELECT "rowNo",
              ${projections.join(",\n               ")}
       FROM "tbl_ptrs_import_raw"
-      WHERE "uploadId" = :uploadId AND "customerId" = :customerId;
+      WHERE "runId" = :runId AND "customerId" = :customerId;
     `;
     await db.sequelize.query(createTempSql, {
       transaction: t,
-      replacements: { uploadId, customerId },
+      replacements: { runId, customerId },
     });
 
     // Build filtered CTE

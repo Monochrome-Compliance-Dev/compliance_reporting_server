@@ -1,6 +1,9 @@
 const express = require("express");
 const router = express.Router();
 
+const multer = require("multer");
+const upload = multer(); // in-memory storage for multipart/form-data
+
 const authorise = require("@/middleware/authorise");
 const ptrsController = require("@/v2/ptrs/controllers/ptrs.controller");
 
@@ -11,18 +14,23 @@ const requirePtrs = authorise({
 });
 
 // v2 PTRS routes
-// Create an upload metadata record (returns upload id and metadata)
-router.post("/uploads", requirePtrs, ptrsController.createUpload);
-router.post("/uploads/:id/import", requirePtrs, ptrsController.importCsv);
+// Create a run metadata record (returns run id and metadata)
+router.post("/runs", requirePtrs, ptrsController.createUpload);
+router.post(
+  "/runs/:id/import",
+  requirePtrs,
+  upload.single("file"),
+  ptrsController.importCsv
+);
 
 // Peek at staged rows
-router.get("/uploads/:id/sample", requirePtrs, ptrsController.getSample);
+router.get("/runs/:id/sample", requirePtrs, ptrsController.getSample);
 
 // Column mapping
-router.get("/uploads/:id/map", requirePtrs, ptrsController.getMap);
-router.post("/uploads/:id/map", requirePtrs, ptrsController.saveMap);
+router.get("/runs/:id/map", requirePtrs, ptrsController.getMap);
+router.post("/runs/:id/map", requirePtrs, ptrsController.saveMap);
 
 // Preview transformed sample (no mutation)
-router.post("/uploads/:id/preview", requirePtrs, ptrsController.preview);
+router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
 
 module.exports = router;

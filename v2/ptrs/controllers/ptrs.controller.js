@@ -3,7 +3,7 @@ const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
 
 /**
- * POST /api/v2/ptrs/uploads
+ * POST /api/v2/ptrs/uploads  (alias: POST /api/v2/ptrs/runs)
  * Body: { fileName: string, fileSize?: number, mimeType?: string, hash?: string }
  */
 async function createUpload(req, res, next) {
@@ -71,7 +71,7 @@ async function importCsv(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const uploadId = req.params.id;
+  const runId = req.params.id;
 
   try {
     if (!customerId) {
@@ -81,7 +81,7 @@ async function importCsv(req, res, next) {
     }
 
     // Confirm the upload exists and belongs to this tenant
-    const upload = await ptrsService.getUpload({ uploadId, customerId });
+    const upload = await ptrsService.getUpload({ runId, customerId });
     if (!upload) {
       return res
         .status(404)
@@ -107,7 +107,7 @@ async function importCsv(req, res, next) {
       // Stream directly from request
       rowsInserted = await ptrsService.importCsvStream({
         customerId,
-        uploadId,
+        runId,
         stream: req, // readable
       });
     } else {
@@ -116,7 +116,7 @@ async function importCsv(req, res, next) {
       const stream = Readable.from(fileBuffer);
       rowsInserted = await ptrsService.importCsvStream({
         customerId,
-        uploadId,
+        runId,
         stream,
       });
     }
@@ -130,7 +130,7 @@ async function importCsv(req, res, next) {
       device,
       action: "PtrsV2ImportCsv",
       entity: "PtrsUpload",
-      entityId: uploadId,
+      entityId: runId,
       details: { rowsInserted, durationMs },
     });
 
@@ -140,7 +140,7 @@ async function importCsv(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error importing PTRS v2 CSV", {
       action: "PtrsV2ImportCsv",
-      uploadId,
+      runId,
       customerId,
       userId,
       error: error.message,
@@ -160,7 +160,7 @@ async function getSample(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const uploadId = req.params.id;
+  const runId = req.params.id;
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
   const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
 
@@ -171,7 +171,7 @@ async function getSample(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const upload = await ptrsService.getUpload({ uploadId, customerId });
+    const upload = await ptrsService.getUpload({ runId, customerId });
     if (!upload) {
       return res
         .status(404)
@@ -180,7 +180,7 @@ async function getSample(req, res, next) {
 
     const { rows, total, headers } = await ptrsService.getImportSample({
       customerId,
-      uploadId,
+      runId,
       limit,
       offset,
     });
@@ -192,7 +192,7 @@ async function getSample(req, res, next) {
       device,
       action: "PtrsV2GetSample",
       entity: "PtrsUpload",
-      entityId: uploadId,
+      entityId: runId,
       details: { limit, offset, returned: rows.length, total },
     });
 
@@ -203,7 +203,7 @@ async function getSample(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 sample", {
       action: "PtrsV2GetSample",
-      uploadId,
+      runId,
       customerId,
       userId,
       error: error.message,
@@ -223,7 +223,7 @@ async function getMap(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const uploadId = req.params.id;
+  const runId = req.params.id;
 
   try {
     if (!customerId) {
@@ -232,17 +232,17 @@ async function getMap(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const upload = await ptrsService.getUpload({ uploadId, customerId });
+    const upload = await ptrsService.getUpload({ runId, customerId });
     if (!upload) {
       return res
         .status(404)
         .json({ status: "error", message: "Upload not found" });
     }
 
-    const map = await ptrsService.getColumnMap({ customerId, uploadId });
+    const map = await ptrsService.getColumnMap({ customerId, runId });
     const { headers, total } = await ptrsService.getImportSample({
       customerId,
-      uploadId,
+      runId,
       limit: 10,
       offset: 0,
     });
@@ -254,7 +254,7 @@ async function getMap(req, res, next) {
       device,
       action: "PtrsV2GetMap",
       entity: "PtrsUpload",
-      entityId: uploadId,
+      entityId: runId,
       details: { hasMap: !!map, total },
     });
 
@@ -265,7 +265,7 @@ async function getMap(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 map", {
       action: "PtrsV2GetMap",
-      uploadId,
+      runId,
       customerId,
       userId,
       error: error.message,
@@ -285,7 +285,7 @@ async function saveMap(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const uploadId = req.params.id;
+  const runId = req.params.id;
   const { mappings } = req.body || {};
 
   try {
@@ -300,7 +300,7 @@ async function saveMap(req, res, next) {
         .json({ status: "error", message: "mappings object is required" });
     }
 
-    const upload = await ptrsService.getUpload({ uploadId, customerId });
+    const upload = await ptrsService.getUpload({ runId, customerId });
     if (!upload) {
       return res
         .status(404)
@@ -310,7 +310,7 @@ async function saveMap(req, res, next) {
     // Validate source headers exist (best-effort using inferred headers)
     const { headers } = await ptrsService.getImportSample({
       customerId,
-      uploadId,
+      runId,
       limit: 50,
       offset: 0,
     });
@@ -327,7 +327,7 @@ async function saveMap(req, res, next) {
 
     const saved = await ptrsService.saveColumnMap({
       customerId,
-      uploadId,
+      runId,
       mappings,
       userId,
     });
@@ -339,7 +339,7 @@ async function saveMap(req, res, next) {
       device,
       action: "PtrsV2SaveMap",
       entity: "PtrsUpload",
-      entityId: uploadId,
+      entityId: runId,
       details: { keys: Object.keys(mappings).length },
     });
 
@@ -347,7 +347,7 @@ async function saveMap(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error saving PTRS v2 map", {
       action: "PtrsV2SaveMap",
-      uploadId,
+      runId,
       customerId,
       userId,
       error: error.message,
@@ -374,7 +374,7 @@ async function preview(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const uploadId = req.params.id;
+  const runId = req.params.id;
   const { steps = [], limit = 50 } = req.body || {};
 
   try {
@@ -383,7 +383,7 @@ async function preview(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Customer ID missing" });
     }
-    const upload = await ptrsService.getUpload({ uploadId, customerId });
+    const upload = await ptrsService.getUpload({ runId, customerId });
     if (!upload) {
       return res
         .status(404)
@@ -392,7 +392,7 @@ async function preview(req, res, next) {
 
     const result = await ptrsService.previewTransform({
       customerId,
-      uploadId,
+      runId,
       steps,
       limit: Math.min(Number(limit) || 50, 500),
     });
@@ -404,7 +404,7 @@ async function preview(req, res, next) {
       device,
       action: "PtrsV2Preview",
       entity: "PtrsUpload",
-      entityId: uploadId,
+      entityId: runId,
       details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
     });
 
@@ -412,7 +412,7 @@ async function preview(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error previewing PTRS v2 transform", {
       action: "PtrsV2Preview",
-      uploadId,
+      runId,
       customerId,
       userId,
       error: error.message,
