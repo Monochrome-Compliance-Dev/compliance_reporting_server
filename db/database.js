@@ -2,6 +2,9 @@ const { Sequelize } = require("sequelize");
 const { logger } = require("@/helpers/logger");
 const fs = require("fs");
 const path = require("path");
+
+// v2 PTRS model loader (New World)
+const { initPtrsV2Models } = require("@/v2/ptrs/models/ptrs_model_loader");
 const { Pool } = require("pg");
 
 const DB_HOST = process.env.DB_HOST;
@@ -83,6 +86,12 @@ function walkModelFiles(dir) {
   return results;
 }
 
+const toPascal = (s) =>
+  s
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+
 async function initialise() {
   let retries = 5;
   while (retries) {
@@ -162,11 +171,6 @@ async function initialise() {
           return;
         }
         const model = factory(sequelize);
-        const toPascal = (s) =>
-          s
-            .split("_")
-            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join("");
         const name = toPascal(model.name);
         db[name] = model;
       } catch (err) {
@@ -178,6 +182,25 @@ async function initialise() {
       }
     });
   });
+
+  // --- Load PTRS v2 New World models (non-*.model.js, via explicit loader) ---
+  try {
+    const v2Models = initPtrsV2Models(sequelize);
+    for (const [name, model] of Object.entries(v2Models)) {
+      // Keep naming consistent with existing convention
+      db[toPascal(model.name)] = model;
+    }
+    logger.logEvent("info", "PTRS v2 models initialised", {
+      action: "DatabaseInit",
+      count: Object.keys(v2Models).length,
+    });
+  } catch (err) {
+    logger.logEvent("error", "Failed to initialise PTRS v2 models", {
+      action: "DatabaseInit",
+      error: err.message,
+      stack: err.stack,
+    });
+  }
 
   // Setup model relationships
   if (db.User && db.RefreshToken) {
