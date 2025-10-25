@@ -2,7 +2,7 @@ const { logger } = require("@/helpers/logger");
 const db = require("@/db/database");
 const csv = require("fast-csv");
 
-/** Get column map for an upload */
+/** Get column map for a run */
 async function getColumnMap({ customerId, runId }) {
   return db.PtrsColumnMap.findOne({
     where: { customerId, runId },
@@ -10,23 +10,47 @@ async function getColumnMap({ customerId, runId }) {
   });
 }
 
-/** Upsert column map for an upload */
-async function saveColumnMap({ customerId, runId, mappings, userId }) {
+/** Upsert column map for a run */
+async function saveColumnMap({
+  customerId,
+  runId,
+  mappings,
+  extras = null,
+  fallbacks = null,
+  defaults = null,
+  joins = null,
+  rowRules = null,
+  profileId = null,
+  userId,
+}) {
   const existing = await db.PtrsColumnMap.findOne({
     where: { customerId, runId },
   });
+
+  const payload = {
+    mappings,
+    extras,
+    fallbacks,
+    defaults,
+    joins,
+    rowRules,
+    profileId,
+  };
+
   if (existing) {
     await existing.update({
-      mappings,
-      createdBy: userId || existing.createdBy || null,
+      ...payload,
+      updatedBy: userId || existing.updatedBy || existing.createdBy || null,
     });
     return existing.get({ plain: true });
   }
+
   const row = await db.PtrsColumnMap.create({
     customerId,
     runId,
-    mappings,
+    ...payload,
     createdBy: userId || null,
+    updatedBy: userId || null,
   });
   return row.get({ plain: true });
 }
@@ -64,7 +88,9 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
     for (const k of Object.keys(d)) headerSet.add(k);
     if (headerSet.size > 2000) break; // sanity cap
   }
-  const headers = Array.from(headerSet.values());
+  const headers = Array.from(headerSet.values())
+    .filter((h) => h != null && String(h).trim() !== "")
+    .map((h) => String(h));
 
   return {
     rows,
@@ -193,7 +219,7 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
   // Load column map (required to project JSONB -> columns)
   const mapRow = await getColumnMap({ customerId, runId });
   if (!mapRow || !mapRow.mappings) {
-    throw new Error("No column map saved for this upload");
+    throw new Error("No column map saved for this run");
   }
   const mappings = mapRow.mappings || {};
 
@@ -362,6 +388,42 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
   });
 }
 
+/**
+ * List runs for a tenant. If hasMap=true, only include runs that have a saved column map.
+ */
+async function listRuns({ customerId, hasMap = false }) {
+  const attrs = [
+    "id",
+    "customerId",
+    "fileName",
+    "fileSize",
+    "mimeType",
+    "rowCount",
+    "status",
+    "createdAt",
+    "updatedAt",
+  ];
+
+  const runs = await db.PtrsUpload.findAll({
+    where: { customerId },
+    attributes: attrs,
+    order: [["createdAt", "DESC"]],
+    raw: true,
+  });
+
+  if (!hasMap) return runs;
+
+  if (!runs.length) return [];
+  const runIds = runs.map((r) => r.id);
+  const maps = await db.PtrsColumnMap.findAll({
+    where: { customerId, runId: runIds },
+    attributes: ["runId"],
+    raw: true,
+  });
+  const mappedSet = new Set(maps.map((m) => m.runId));
+  return runs.filter((r) => mappedSet.has(r.id));
+}
+
 module.exports = {
   createUpload,
   getUpload,
@@ -370,4 +432,5 @@ module.exports = {
   getColumnMap,
   saveColumnMap,
   previewTransform,
+  listRuns,
 };

@@ -1,9 +1,11 @@
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
+const fs = require("fs");
+const path = require("path");
 
 /**
- * POST /api/v2/ptrs/uploads  (alias: POST /api/v2/ptrs/runs)
+ * POST /api/v2/ptrs/runs
  * Body: { fileName: string, fileSize?: number, mimeType?: string, hash?: string }
  */
 async function createUpload(req, res, next) {
@@ -61,7 +63,7 @@ async function createUpload(req, res, next) {
 }
 
 /**
- * POST /api/v2/ptrs/uploads/:id/import
+ * POST /api/v2/ptrs/runs/:id/import
  * Accepts:
  *  - text/csv body
  *  - multipart/form-data (file field named "file")
@@ -85,7 +87,7 @@ async function importCsv(req, res, next) {
     if (!upload) {
       return res
         .status(404)
-        .json({ status: "error", message: "Upload not found" });
+        .json({ status: "error", message: "Run not found" });
     }
 
     // Choose input source:
@@ -152,7 +154,7 @@ async function importCsv(req, res, next) {
 }
 
 /**
- * GET /api/v2/ptrs/uploads/:id/sample?limit=10&offset=0
+ * GET /api/v2/ptrs/runs/:id/sample?limit=10&offset=0
  * Returns a small window of staged rows + total count + inferred headers.
  */
 async function getSample(req, res, next) {
@@ -175,7 +177,7 @@ async function getSample(req, res, next) {
     if (!upload) {
       return res
         .status(404)
-        .json({ status: "error", message: "Upload not found" });
+        .json({ status: "error", message: "Run not found" });
     }
 
     const { rows, total, headers } = await ptrsService.getImportSample({
@@ -215,7 +217,7 @@ async function getSample(req, res, next) {
 }
 
 /**
- * GET /api/v2/ptrs/uploads/:id/map
+ * GET /api/v2/ptrs/runs/:id/map
  * Returns existing column map (if any) and inferred headers to assist UI mapping.
  */
 async function getMap(req, res, next) {
@@ -236,7 +238,7 @@ async function getMap(req, res, next) {
     if (!upload) {
       return res
         .status(404)
-        .json({ status: "error", message: "Upload not found" });
+        .json({ status: "error", message: "Run not found" });
     }
 
     const map = await ptrsService.getColumnMap({ customerId, runId });
@@ -277,8 +279,17 @@ async function getMap(req, res, next) {
 }
 
 /**
- * POST /api/v2/ptrs/uploads/:id/map
- * Body: { mappings: { "<sourceHeader>": { field: "<logical>", type: "<type>", fmt?: "<format>" } } }
+ * POST /api/v2/ptrs/runs/:id/map
+ * Body:
+ * {
+ *   mappings: { "<sourceHeader>": { field: "<logical>", type: "<type>", fmt?: "<format>", alias?: "<string>" } },
+ *   extras?: { "<sourceHeader>": "<alias|null>" },
+ *   fallbacks?: { "<canonicalField>": ["Alt A","Alt B","RUN_DEFAULT:..."] },
+ *   defaults?: { "payerEntityName"?: "...", "payerEntityAbn"?: "..." },
+ *   joins?: any,
+ *   rowRules?: any[],
+ *   profileId?: string
+ * }
  */
 async function saveMap(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -286,7 +297,15 @@ async function saveMap(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const runId = req.params.id;
-  const { mappings } = req.body || {};
+  const {
+    mappings,
+    extras = null,
+    fallbacks = null,
+    defaults = null,
+    joins = null,
+    rowRules = null,
+    profileId = null,
+  } = req.body || {};
 
   try {
     if (!customerId) {
@@ -307,28 +326,44 @@ async function saveMap(req, res, next) {
         .json({ status: "error", message: "Upload not found" });
     }
 
-    // Validate source headers exist (best-effort using inferred headers)
+    // Best-effort validation: warn but don't block if headers slightly differ (case/space)
     const { headers } = await ptrsService.getImportSample({
       customerId,
       runId,
       limit: 50,
       offset: 0,
     });
+    const norm = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/\s+/g, "");
+    const headerSet = new Set((headers || []).map(norm));
     const missing = Object.keys(mappings).filter(
-      (src) => !headers.includes(src)
+      (src) => !headerSet.has(norm(src))
     );
     if (missing.length) {
-      return res.status(400).json({
-        status: "error",
-        message: "One or more source headers were not found in the staged data",
-        details: { missing },
-      });
+      // Include a hint but allow save (front-end will reconcile via tolerant matching)
+      logger.info(
+        "PTRS v2 saveMap: some mapping headers not found exactly in inferred headers",
+        {
+          action: "PtrsV2SaveMap",
+          runId,
+          customerId,
+          missing,
+        }
+      );
     }
 
     const saved = await ptrsService.saveColumnMap({
       customerId,
       runId,
       mappings,
+      extras,
+      fallbacks,
+      defaults,
+      joins,
+      rowRules,
+      profileId,
       userId,
     });
 
@@ -359,7 +394,7 @@ async function saveMap(req, res, next) {
 }
 
 /**
- * POST /api/v2/ptrs/uploads/:id/preview
+ * POST /api/v2/ptrs/runs/:id/preview
  * Body: {
  *   steps?: Array<{
  *     kind: "filter" | "derive" | "rename",
@@ -387,7 +422,7 @@ async function preview(req, res, next) {
     if (!upload) {
       return res
         .status(404)
-        .json({ status: "error", message: "Upload not found" });
+        .json({ status: "error", message: "Run not found" });
     }
 
     const result = await ptrsService.previewTransform({
@@ -423,6 +458,82 @@ async function preview(req, res, next) {
   }
 }
 
+/**
+ * GET /api/v2/ptrs/runs?hasMap=true
+ * Returns a list of runs for the tenant (optionally only those with a saved column map)
+ */
+async function listRuns(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const hasMap =
+      String(req.query.hasMap || req.query.mapped || "")
+        .toLowerCase()
+        .startsWith("t") || req.query.hasMap === "1";
+
+    const items = await ptrsService.listRuns({
+      customerId,
+      hasMap,
+    });
+
+    return res.status(200).json({ status: "success", data: { items } });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/blueprint?profileId=veolia
+ * Returns the generic blueprint optionally merged with a customer/profile overlay.
+ */
+async function getBlueprint(req, res, next) {
+  try {
+    const basePath = path.resolve(
+      __dirname,
+      "../config/ptrsCalculationBlueprint.json"
+    );
+    const rawBase = JSON.parse(fs.readFileSync(basePath, "utf8"));
+
+    const profileId = (req.query.profileId || "").trim();
+    let merged = rawBase;
+
+    if (profileId) {
+      const profilePath = path.resolve(
+        __dirname,
+        `../config/profiles/${profileId}.json`
+      );
+      if (fs.existsSync(profilePath)) {
+        const rawProfile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
+        // Shallow-merge known hook areas
+        merged = {
+          ...rawBase,
+          synonyms: {
+            ...(rawBase.synonyms || {}),
+            ...(rawProfile.synonyms || {}),
+          },
+          fallbacks: {
+            ...(rawBase.fallbacks || {}),
+            ...(rawProfile.fallbacks || {}),
+          },
+          rowRules: [
+            ...(rawBase.rowRules || []),
+            ...(rawProfile.rowRules || []),
+          ],
+          joins: { ...(rawBase.joins || {}), ...(rawProfile.joins || {}) },
+        };
+      }
+    }
+
+    return res.status(200).json({ status: "success", data: merged });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   createUpload,
   importCsv,
@@ -430,4 +541,6 @@ module.exports = {
   getMap,
   saveMap,
   preview,
+  listRuns,
+  getBlueprint,
 };

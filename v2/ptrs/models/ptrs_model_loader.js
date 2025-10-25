@@ -39,8 +39,47 @@ function initPtrsV2Models(sequelize) {
     });
   }
 
-  // Future: upload -> column_map / import_raw relationships can be added once those models are wired
-  // (we'll deliberately keep it light until services/controllers rely on these).
+  // Link upload -> column map (1:1)
+  if (models.ptrs_upload && models.ptrs_column_map) {
+    models.ptrs_column_map.belongsTo(models.ptrs_upload, {
+      foreignKey: "runId",
+      targetKey: "id",
+      as: "run",
+    });
+    models.ptrs_upload.hasOne(models.ptrs_column_map, {
+      foreignKey: "runId",
+      sourceKey: "id",
+      as: "columnMap",
+    });
+  }
+
+  // Link upload -> import_raw (1:N)
+  if (models.ptrs_upload && models.ptrs_import_raw) {
+    models.ptrs_import_raw.belongsTo(models.ptrs_upload, {
+      foreignKey: "runId",
+      targetKey: "id",
+      as: "run",
+    });
+    models.ptrs_upload.hasMany(models.ptrs_import_raw, {
+      foreignKey: "runId",
+      sourceKey: "id",
+      as: "rawRows",
+    });
+  }
+
+  // Link upload -> norm_row (1:N)
+  if (models.ptrs_upload && models.ptrs_norm_row) {
+    models.ptrs_norm_row.belongsTo(models.ptrs_upload, {
+      foreignKey: "runId",
+      targetKey: "id",
+      as: "run",
+    });
+    models.ptrs_upload.hasMany(models.ptrs_norm_row, {
+      foreignKey: "runId",
+      sourceKey: "id",
+      as: "normRows",
+    });
+  }
 
   return models;
 }

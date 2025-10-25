@@ -1,0 +1,31 @@
+{
+  "id": "veolia",
+  "extends": "ptrsCalculationBlueprint",
+  "synonyms": {
+    "paymentAmount": ["company code currency value", "document currency value"],
+    "payeeEntityName": ["vendor account: name 1", "supplier"],
+    "payeeEntityAbn": ["vat registration no."],
+    "paymentDate": ["clearing date", "posting date"],
+    "documentReference": ["invoice reference number", "clearing document"]
+  },
+  "fallbacks": {
+    "paymentDate": ["Clearing Date", "Posting Date", "Document Date"],
+    "supplyDate": ["Supply Date", "Invoice Receipt Date", "Invoice Issue Date"]
+  },
+  "rowRules": [
+    {
+      "id": "veolia_et_negate",
+      "label": "Veolia ET: negate and net by document reference",
+      "when": { "documentType": { "contains": "ET", "caseInsensitive": true } },
+      "action": "adjust",
+      "amount": { "op": "negate", "field": "paymentAmount" },
+      "groupBy": ["documentReference"]
+    }
+  ],
+  "joins": {
+    "transactions→vendorMaster": {
+      "leftKey": "Vendor Account",
+      "rightKey": "Vendor Account"
+    }
+  }
+}

@@ -16,6 +16,8 @@ const requirePtrs = authorise({
 // v2 PTRS routes
 // Create a run metadata record (returns run id and metadata)
 router.post("/runs", requirePtrs, ptrsController.createUpload);
+
+// Upload the CSV for a run (multipart or text/csv)
 router.post(
   "/runs/:id/import",
   requirePtrs,
@@ -26,11 +28,17 @@ router.post(
 // Peek at staged rows
 router.get("/runs/:id/sample", requirePtrs, ptrsController.getSample);
 
-// Column mapping
+// Column mapping (get/save)
 router.get("/runs/:id/map", requirePtrs, ptrsController.getMap);
 router.post("/runs/:id/map", requirePtrs, ptrsController.saveMap);
 
 // Preview transformed sample (no mutation)
 router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
+
+// List runs (optionally filter to those that already have a saved column map)
+router.get("/runs", requirePtrs, ptrsController.listRuns);
+
+// Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
+router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
 
 module.exports = router;
