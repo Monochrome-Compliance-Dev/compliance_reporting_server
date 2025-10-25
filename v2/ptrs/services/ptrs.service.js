@@ -1,6 +1,176 @@
 const { logger } = require("@/helpers/logger");
 const db = require("@/db/database");
 const csv = require("fast-csv");
+const fs = require("fs");
+const path = require("path");
+const { Readable } = require("stream");
+
+const { Worker } = require("worker_threads");
+
+let XLSX = null;
+try {
+  XLSX = require("xlsx");
+} catch (e) {
+  if (logger && logger.warn) {
+    logger.warn(
+      "XLSX module not found — install 'xlsx' to enable Excel uploads."
+    );
+  }
+}
+
+function looksLikeXlsx(buffer, mime) {
+  if (mime && /spreadsheetml|ms-excel/i.test(mime)) return true;
+  if (!buffer || buffer.length < 4) return false;
+  // XLSX is a ZIP starting with 'PK\x03\x04'
+  return (
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    buffer[2] === 0x03 &&
+    buffer[3] === 0x04
+  );
+}
+
+function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.resolve(
+      __dirname,
+      "../workers/xlsxToCsv.worker.js"
+    );
+    let settled = false;
+    const worker = new Worker(workerPath);
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        worker.terminate();
+      } catch {}
+      const err = new Error("Excel conversion timed out");
+      err.statusCode = 408;
+      return reject(err);
+    }, timeoutMs);
+
+    worker.on("message", (msg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (msg && msg.ok) return resolve(msg.csv);
+      const err = new Error(msg?.error?.message || "Excel conversion failed");
+      err.statusCode = 400;
+      return reject(err);
+    });
+
+    worker.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      err.statusCode = 500;
+      return reject(err);
+    });
+
+    worker.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        const err = new Error(
+          "Excel conversion worker exited with code " + code
+        );
+        err.statusCode = 500;
+        return reject(err);
+      }
+    });
+
+    // Transfer the underlying ArrayBuffer for zero-copy
+    const ab = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength
+    );
+    worker.postMessage({ buffer: ab }, [ab]);
+  });
+}
+
+async function parseCsvMetaFromStream(stream) {
+  // 1) Read full text and normalize
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  // Grab the first line as header row (robust split)
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV header splitter (handles quotes and escaped quotes)
+  const splitCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++; // skip escaped quote
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        // ignore stray EOL in header
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  let rawHeaders = splitCsvLine(headerLine).map((s) => String(s || "").trim());
+  if (!rawHeaders.length || rawHeaders.every((h) => h === "")) {
+    const err = new Error("CSV appears to have no header row");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // 2) Deduplicate/repair headers: "", "New value", "New value" => "column_1","New value","New value_2"
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h) => {
+    let base = h || "column";
+    let count = seen.get(base) || 0;
+    seen.set(base, count + 1);
+    if (count === 0) return base;
+    return `${base}_${count + 1}`;
+  });
+
+  // 3) Second pass: parse the whole CSV with the fixed headers, skipping the first line
+  const fixedStream = Readable.from(text);
+  return new Promise((resolve, reject) => {
+    let rowsCount = 0;
+    fixedStream
+      .pipe(
+        csv.parse({
+          headers: headersArray, // supply our deduped headers
+          renameHeaders: false, // not renaming; we're providing the final headers
+          ignoreEmpty: true,
+          trim: true,
+          strictColumnHandling: false,
+          skipLines: 1, // skip the original header row we consumed
+        })
+      )
+      .on("error", (err) => reject(err))
+      .on("data", () => {
+        rowsCount += 1;
+      })
+      .on("end", () => resolve({ headers: headersArray, rowsCount }));
+  });
+}
 
 /** Get column map for a run */
 async function getColumnMap({ customerId, runId }) {
@@ -128,7 +298,13 @@ async function importCsvStream({ customerId, runId, stream }) {
 
   return new Promise((resolve, reject) => {
     const parser = csv
-      .parse({ headers: true, trim: true })
+      .parse({
+        headers: true,
+        renameHeaders: true,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+      })
       .on("error", (err) => reject(err))
       .on("data", (row) => {
         rowNo += 1;
@@ -165,6 +341,154 @@ async function importCsvStream({ customerId, runId, stream }) {
       reject(e);
     }
   });
+}
+
+/**
+ * Create a raw dataset record and persist the uploaded file to local storage.
+ * Returns the created dataset row (plain) including a populated meta block.
+ * `buffer` is required (from multer). Role is required.
+ */
+async function addDataset({
+  customerId,
+  runId,
+  role,
+  sourceName = null,
+  fileName = null,
+  fileSize = null,
+  mimeType = null,
+  buffer,
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  if (!role) throw new Error("role is required");
+  if (!buffer || !Buffer.isBuffer(buffer))
+    throw new Error("file buffer is required");
+
+  // Ensure run exists for tenant
+  const run = await db.PtrsUpload.findOne({ where: { id: runId, customerId } });
+  if (!run) {
+    const e = new Error("Run not found");
+    e.statusCode = 404;
+    throw e;
+  }
+
+  // Normalize to CSV if an Excel file is uploaded
+  let workBuffer = buffer;
+  let workMime = mimeType || null;
+  let workExt = (fileName && path.extname(fileName)) || ".csv";
+  try {
+    const MAX_EXCEL_BYTES = 25 * 1024 * 1024; // 25 MB limit for Excel uploads
+    if (looksLikeXlsx(buffer, mimeType)) {
+      if (buffer.length > MAX_EXCEL_BYTES) {
+        const e = new Error("Excel file too large; please split and retry");
+        e.statusCode = 413;
+        throw e;
+      }
+      const csvText = await excelBufferToCsv(buffer, { timeoutMs: 15000 });
+      workBuffer = Buffer.from(csvText, "utf8");
+      workMime = "text/csv";
+      workExt = ".csv";
+    }
+  } catch (convErr) {
+    convErr.statusCode = convErr.statusCode || 400;
+    if (logger && logger.error) {
+      logger.error("PTRS v2 XLSX->CSV conversion failed", {
+        action: "PtrsV2AddDatasetConvert",
+        runId,
+        customerId,
+        error: convErr.message,
+      });
+    }
+    throw convErr;
+  }
+
+  // Create DB row first to get dataset id
+  const row = await db.PtrsRawDataset.create({
+    customerId,
+    runId,
+    role,
+    sourceName: sourceName || fileName || null,
+    fileName: fileName || null,
+    fileSize: Number.isFinite(fileSize) ? fileSize : workBuffer.length || null,
+    mimeType: workMime || mimeType || null,
+    storageRef: null,
+    meta: null,
+    createdBy: userId || null,
+    updatedBy: userId || null,
+  });
+
+  const datasetId = row.id;
+
+  // Persist bytes to local storage (can be swapped for S3 later)
+  const baseDir = path.resolve(
+    process.cwd(),
+    "storage",
+    "ptrs_datasets",
+    String(customerId),
+    String(runId)
+  );
+  fs.mkdirSync(baseDir, { recursive: true });
+  const ext = workExt || ".csv";
+  const storagePath = path.join(baseDir, `${datasetId}${ext}`);
+  fs.writeFileSync(storagePath, workBuffer);
+
+  // Parse headers + count rows (tolerant to duplicate headers)
+  const { headers, rowsCount } = await parseCsvMetaFromStream(
+    Readable.from(workBuffer)
+  );
+  const meta = { headers, rowsCount };
+
+  await row.update({ storageRef: storagePath, meta });
+  return row.get({ plain: true });
+}
+
+/** List datasets attached to a run (tenant-scoped) */
+async function listDatasets({ customerId, runId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  const rows = await db.PtrsRawDataset.findAll({
+    where: { customerId, runId },
+    order: [["createdAt", "DESC"]],
+    raw: true,
+  });
+  return rows;
+}
+
+/** Remove a dataset (deletes DB row and best-effort removes stored file) */
+async function removeDataset({ customerId, runId, datasetId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+
+  const row = await db.PtrsRawDataset.findOne({
+    where: { id: datasetId, customerId, runId },
+    raw: false,
+  });
+  if (!row) {
+    const e = new Error("Dataset not found");
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const storageRef = row.get("storageRef");
+  await row.destroy();
+
+  if (storageRef) {
+    try {
+      fs.unlinkSync(storageRef);
+    } catch (e) {
+      // ignore unlink errors; file may have been moved/deleted
+      logger.info("PTRS v2 removeDataset: could not delete file", {
+        action: "PtrsV2RemoveDataset",
+        datasetId,
+        storageRef,
+        error: e.message,
+      });
+    }
+  }
+
+  return { ok: true };
 }
 
 /**
@@ -433,4 +757,7 @@ module.exports = {
   saveColumnMap,
   previewTransform,
   listRuns,
+  addDataset,
+  listDatasets,
+  removeDataset,
 };

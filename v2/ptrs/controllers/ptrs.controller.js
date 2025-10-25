@@ -323,7 +323,7 @@ async function saveMap(req, res, next) {
     if (!upload) {
       return res
         .status(404)
-        .json({ status: "error", message: "Upload not found" });
+        .json({ status: "error", message: "Run not found" });
     }
 
     // Best-effort validation: warn but don't block if headers slightly differ (case/space)
@@ -487,6 +487,144 @@ async function listRuns(req, res, next) {
 }
 
 /**
+ * POST /api/v2/ptrs/runs/:id/datasets
+ * Multipart (file) + fields: role, sourceName (optional)
+ */
+async function addDataset(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const role = (req.body?.role || req.query?.role || "").trim();
+  const sourceName = req.body?.sourceName || req.query?.sourceName || null;
+  const file = req.file;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!file || !file.buffer) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "File is required" });
+    }
+    if (!role) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "role is required" });
+    }
+
+    const created = await ptrsService.addDataset({
+      customerId,
+      runId,
+      role,
+      sourceName,
+      fileName: file.originalname || null,
+      fileSize: file.size || null,
+      mimeType: file.mimetype || null,
+      buffer: file.buffer,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2AddDataset",
+      entity: "PtrsRawDataset",
+      entityId: created.id,
+      details: {
+        role,
+        fileName: created.fileName,
+        rowsCount: created.meta?.rowsCount || 0,
+      },
+    });
+
+    return res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    logger.logEvent("error", "Error adding PTRS v2 dataset", {
+      action: "PtrsV2AddDataset",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/runs/:id/datasets
+ */
+async function listDatasets(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const runId = req.params.id;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const items = await ptrsService.listDatasets({ customerId, runId });
+    return res.status(200).json({ status: "success", data: { items } });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * DELETE /api/v2/ptrs/runs/:id/datasets/:datasetId
+ */
+async function removeDataset(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const datasetId = req.params.datasetId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const result = await ptrsService.removeDataset({
+      customerId,
+      runId,
+      datasetId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RemoveDataset",
+      entity: "PtrsRawDataset",
+      entityId: datasetId,
+      details: { ok: result.ok === true },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error removing PTRS v2 dataset", {
+      action: "PtrsV2RemoveDataset",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
  * GET /api/v2/ptrs/blueprint?profileId=veolia
  * Returns the generic blueprint optionally merged with a customer/profile overlay.
  */
@@ -542,5 +680,8 @@ module.exports = {
   saveMap,
   preview,
   listRuns,
+  addDataset,
+  listDatasets,
+  removeDataset,
   getBlueprint,
 };

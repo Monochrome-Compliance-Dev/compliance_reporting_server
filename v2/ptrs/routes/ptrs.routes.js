@@ -32,6 +32,20 @@ router.get("/runs/:id/sample", requirePtrs, ptrsController.getSample);
 router.get("/runs/:id/map", requirePtrs, ptrsController.getMap);
 router.post("/runs/:id/map", requirePtrs, ptrsController.saveMap);
 
+// Datasets: upload/list/delete additional files for a run (vendor master, terms, etc.)
+router.post(
+  "/runs/:id/datasets",
+  requirePtrs,
+  upload.single("file"),
+  ptrsController.addDataset
+);
+router.get("/runs/:id/datasets", requirePtrs, ptrsController.listDatasets);
+router.delete(
+  "/runs/:id/datasets/:datasetId",
+  requirePtrs,
+  ptrsController.removeDataset
+);
+
 // Preview transformed sample (no mutation)
 router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
 
