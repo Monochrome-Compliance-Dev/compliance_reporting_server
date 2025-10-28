@@ -8,7 +8,7 @@ const path = require("path");
  * POST /api/v2/ptrs/runs
  * Body: { fileName: string, fileSize?: number, mimeType?: string, hash?: string }
  */
-async function createUpload(req, res, next) {
+async function createRun(req, res, next) {
   const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
@@ -28,7 +28,7 @@ async function createUpload(req, res, next) {
         .json({ status: "error", message: "fileName is required" });
     }
 
-    const upload = await ptrsService.createUpload({
+    const upload = await ptrsService.createRun({
       customerId,
       fileName,
       fileSize,
@@ -154,6 +154,31 @@ async function importCsv(req, res, next) {
 }
 
 /**
+ * GET /api/v2/ptrs/runs/:id
+ * Returns the run/upload metadata for the tenant
+ */
+async function getRun(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const runId = req.params.id;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const run = await ptrsService.getRun({ customerId, runId });
+    if (!run) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+    return res.status(200).json({ status: "success", data: run });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
  * GET /api/v2/ptrs/runs/:id/sample?limit=10&offset=0
  * Returns a small window of staged rows + total count + inferred headers.
  */
@@ -242,6 +267,22 @@ async function getMap(req, res, next) {
     }
 
     const map = await ptrsService.getColumnMap({ customerId, runId });
+    // Normalize JSON-typed fields that might be persisted as TEXT
+    const maybeParse = (v) => {
+      if (v == null || typeof v !== "string") return v;
+      try {
+        return JSON.parse(v);
+      } catch {
+        return v;
+      }
+    };
+    if (map) {
+      map.extras = maybeParse(map.extras);
+      map.fallbacks = maybeParse(map.fallbacks);
+      map.defaults = maybeParse(map.defaults);
+      map.joins = maybeParse(map.joins);
+      map.rowRules = maybeParse(map.rowRules);
+    }
     const { headers, total } = await ptrsService.getImportSample({
       customerId,
       runId,
@@ -308,6 +349,8 @@ async function saveMap(req, res, next) {
   } = req.body || {};
 
   try {
+    // Log incoming joins before validation
+    console.log("[PTRS v2 saveMap] incoming joins:", joins);
     if (!customerId) {
       return res
         .status(400)
@@ -394,6 +437,90 @@ async function saveMap(req, res, next) {
 }
 
 /**
+ * POST /api/v2/ptrs/runs/:id/stage
+ * Body: { steps?: Array<...>, persist?: boolean, limit?: number }
+ * When persist=true, writes staged rows and updates run status.
+ */
+async function stageRun(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const {
+    steps = [],
+    persist = false,
+    limit = 50,
+    profileId = null,
+  } = req.body || {};
+
+  console.log("[PTRS controller.stageRun] received", {
+    customerId: req.effectiveCustomerId,
+    runId: req.params.id,
+    body: req.body,
+    profileId,
+  });
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    console.log("[PTRS controller.stageRun] invoking service", {
+      steps,
+      persist,
+      limit,
+      profileId,
+    });
+
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+
+    const result = await ptrsService.stageRun({
+      customerId,
+      runId,
+      steps,
+      persist: Boolean(persist),
+      limit: Math.min(Number(limit) || 50, 500),
+      userId,
+      profileId,
+    });
+
+    console.log("[PTRS controller.stageRun] result", result);
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: persist ? "PtrsV2StagePersist" : "PtrsV2StagePreview",
+      entity: "PtrsStage",
+      entityId: runId,
+      details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error staging PTRS v2 run", {
+      action: "PtrsV2StageRun",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
  * POST /api/v2/ptrs/runs/:id/preview
  * Body: {
  *   steps?: Array<{
@@ -453,6 +580,99 @@ async function preview(req, res, next) {
       error: error.message,
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET or POST /api/v2/ptrs/runs/:id/stage/preview
+ * Accepts steps + limit in body (POST) or as query (GET with steps as JSON string).
+ * Returns: { sample: [], affectedCount: number }
+ */
+async function getStagePreview(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+
+  console.log("[PTRS controller.getStagePreview] received", {
+    customerId: req.effectiveCustomerId,
+    runId: req.params.id,
+    body: req.body,
+    query: req.query,
+  });
+
+  // Allow steps from body or query (query.steps can be a JSON string)
+  let steps = req.body?.steps;
+  if (!steps && req.query?.steps) {
+    try {
+      steps = JSON.parse(req.query.steps);
+    } catch {
+      steps = [];
+    }
+  }
+  const limit = Math.min(
+    Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
+    500
+  );
+
+  const profileId = req.body?.profileId ?? req.query?.profileId ?? null;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+
+    console.log("[PTRS controller.getStagePreview] invoking service", {
+      steps,
+      limit,
+      profileId,
+    });
+
+    const result = await ptrsService.getStagePreview({
+      customerId,
+      runId,
+      steps: Array.isArray(steps) ? steps : [],
+      limit,
+      profileId,
+    });
+
+    console.log("[PTRS controller.getStagePreview] result", {
+      headers: result?.headers?.length || 0,
+      rows: result?.rows?.length || 0,
+      sample: result?.rows?.[0],
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2StagePreview",
+      entity: "PtrsStage",
+      entityId: runId,
+      details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error getting PTRS v2 stage preview", {
+      action: "PtrsV2StagePreview",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
     });
     return next(error);
   }
@@ -672,16 +892,167 @@ async function getBlueprint(req, res, next) {
   }
 }
 
+// in v2/ptrs/controllers/ptrs.controller.js
+async function listProfiles(req, res, next) {
+  try {
+    const customerId = req.query.customerId || req.effectiveCustomerId;
+    const profiles = await ptrsService.listProfiles(customerId);
+    res.status(200).json({ status: "success", data: { items: profiles } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/profiles
+ * Body: { profileId?, name, description?, isDefault?, config? }
+ */
+async function createProfile(req, res, next) {
+  const customerId = req.effectiveCustomerId || req.body?.customerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const created = await ptrsService.createProfile({
+      customerId,
+      payload: req.body || {},
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2CreateProfile",
+      entity: "PtrsProfile",
+      entityId: created.id,
+      details: {
+        name: created.name,
+        profileId: created.profileId || created.id,
+      },
+    });
+    return res.status(201).json({ status: "success", data: created });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/profiles/:id
+ */
+async function getProfile(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const profileId = req.params.id;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const row = await ptrsService.getProfile({ customerId, profileId });
+    if (!row) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Profile not found" });
+    }
+    return res.status(200).json({ status: "success", data: row });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * PATCH /api/v2/ptrs/profiles/:id
+ */
+async function updateProfile(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const profileId = req.params.id;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const updated = await ptrsService.updateProfile({
+      customerId,
+      profileId,
+      payload: req.body || {},
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2UpdateProfile",
+      entity: "PtrsProfile",
+      entityId: profileId,
+    });
+    return res.status(200).json({ status: "success", data: updated });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * DELETE /api/v2/ptrs/profiles/:id
+ */
+async function deleteProfile(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const profileId = req.params.id;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const result = await ptrsService.deleteProfile({ customerId, profileId });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2DeleteProfile",
+      entity: "PtrsProfile",
+      entityId: profileId,
+      details: { ok: result.ok === true },
+    });
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
-  createUpload,
+  createRun,
   importCsv,
+  getRun,
   getSample,
   getMap,
   saveMap,
+  stageRun,
   preview,
+  getStagePreview,
   listRuns,
   addDataset,
   listDatasets,
   removeDataset,
   getBlueprint,
+  listProfiles,
+  // Profiles CRUD
+  createProfile,
+  getProfile,
+  updateProfile,
+  deleteProfile,
 };

@@ -39,7 +39,7 @@ module.exports = (sequelize) => {
       },
     },
     {
-      tableName: "ptrs_stage_row",
+      tableName: "tbl_ptrs_stage_row",
       timestamps: true,
       indexes: [{ fields: ["runId"] }],
     }

@@ -15,7 +15,10 @@ const requirePtrs = authorise({
 
 // v2 PTRS routes
 // Create a run metadata record (returns run id and metadata)
-router.post("/runs", requirePtrs, ptrsController.createUpload);
+router.post("/runs", requirePtrs, ptrsController.createRun);
+
+// Read a single run by id
+router.get("/runs/:id", requirePtrs, ptrsController.getRun);
 
 // Upload the CSV for a run (multipart or text/csv)
 router.post(
@@ -23,6 +26,16 @@ router.post(
   requirePtrs,
   upload.single("file"),
   ptrsController.importCsv
+);
+
+// Stage normalized rows for a run
+router.post("/runs/:id/stage", requirePtrs, ptrsController.stageRun);
+
+// Preview staged rows (read-only, small page)
+router.get(
+  "/runs/:id/stage/preview",
+  requirePtrs,
+  ptrsController.getStagePreview
 );
 
 // Peek at staged rows
@@ -54,5 +67,15 @@ router.get("/runs", requirePtrs, ptrsController.listRuns);
 
 // Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
 router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
+
+// List all PTRS profiles for a customer
+
+router.get("/profiles", requirePtrs, ptrsController.listProfiles);
+// Profiles CRUD
+router.post("/profiles", requirePtrs, ptrsController.createProfile);
+router.get("/profiles/:id", requirePtrs, ptrsController.getProfile);
+router.patch("/profiles/:id", requirePtrs, ptrsController.updateProfile);
+router.put("/profiles/:id", requirePtrs, ptrsController.updateProfile);
+router.delete("/profiles/:id", requirePtrs, ptrsController.deleteProfile);
 
 module.exports = router;

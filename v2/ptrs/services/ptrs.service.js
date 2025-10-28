@@ -269,6 +269,17 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   };
 }
 
+/** Fetch one run/upload metadata (tenant-scoped) */
+async function getRun({ customerId, runId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  const row = await db.PtrsUpload.findOne({
+    where: { id: runId, customerId },
+    raw: true,
+  });
+  return row || null;
+}
+
 /** Fetch one upload (tenant-scoped) */
 async function getUpload({ runId, customerId }) {
   return db.PtrsUpload.findOne({ where: { id: runId, customerId } });
@@ -501,7 +512,7 @@ async function removeDataset({ customerId, runId, datasetId }) {
  * @param {string} [params.hash]
  * @param {string} [params.createdBy]
  */
-async function createUpload(params) {
+async function createRun(params) {
   const { customerId, fileName, fileSize, mimeType, hash, createdBy } =
     params || {};
 
@@ -712,6 +723,452 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
   });
 }
 
+async function materialiseCsvDatasetToTemp({
+  sequelize,
+  transaction,
+  storageRef,
+  tempName,
+  selectCols,
+}) {
+  // selectCols: array of { name: 'abn', fromHeader: 'ABN' } etc.
+  const { Readable } = require("stream");
+  const _csv = require("fast-csv");
+  const fs = require("fs");
+
+  // 1) Create a simple temp table of text columns, drop if exists, ensure ON COMMIT DROP
+  const colsSql = selectCols.map((c) => `"${c.name}" text`).join(", ");
+  await sequelize.query(`DROP TABLE IF EXISTS ${tempName};`, { transaction });
+  await sequelize.query(
+    `CREATE TEMP TABLE ${tempName} (${colsSql}) ON COMMIT DROP;`,
+    { transaction }
+  );
+
+  // 2) Stream rows and batch insert
+  const BATCH = 2000;
+  let batch = [];
+
+  const flush = async () => {
+    if (!batch.length) return;
+    const placeholders = batch
+      .map(
+        (row, i) =>
+          `(${selectCols.map((_, j) => `$${i * selectCols.length + j + 1}`).join(",")})`
+      )
+      .join(",");
+    const values = batch.flatMap((row) =>
+      selectCols.map((c) => row[c.name] ?? null)
+    );
+    const insertSql = `INSERT INTO ${tempName} (${selectCols.map((c) => `"${c.name}"`).join(",")}) VALUES ${placeholders};`;
+    await sequelize.query(insertSql, { bind: values, transaction });
+    batch = [];
+  };
+
+  await new Promise((resolve, reject) => {
+    // --- Read first line to build a de-duplicated header array ---
+    function readFirstLine(filePath) {
+      const fd = fs.openSync(filePath, "r");
+      try {
+        const CHUNK = 64 * 1024;
+        const buf = Buffer.alloc(CHUNK);
+        let acc = "";
+        let pos = 0;
+        while (true) {
+          const bytes = fs.readSync(fd, buf, 0, CHUNK, pos);
+          if (!bytes) break;
+          const chunk = buf.toString("utf8", 0, bytes);
+          const nl = chunk.search(/\r?\n/);
+          if (nl >= 0) {
+            acc += chunk.slice(0, nl);
+            break;
+          }
+          acc += chunk;
+          pos += bytes;
+          if (pos > 1024 * 1024) break; // safety cap at 1MB
+        }
+        return acc.replace(/^\uFEFF/, "");
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+
+    function splitCsvLine(line) {
+      const out = [];
+      let cur = "";
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQ && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else {
+            inQ = !inQ;
+          }
+        } else if (ch === "," && !inQ) {
+          out.push(cur);
+          cur = "";
+        } else if ((ch === "\r" || ch === "\n") && !inQ) {
+          /* skip */
+        } else {
+          cur += ch;
+        }
+      }
+      out.push(cur);
+      return out.map((s) => String(s || "").trim());
+    }
+
+    function dedupeHeaders(rawHeaders) {
+      const seen = new Map();
+      return rawHeaders.map((h) => {
+        let base = h || "column";
+        const n = (seen.get(base) || 0) + 1;
+        seen.set(base, n);
+        return n === 1 ? base : `${base}_${n}`;
+      });
+    }
+
+    const headerLine = readFirstLine(storageRef);
+    const rawHeaders = splitCsvLine(headerLine);
+    const headersArray = dedupeHeaders(rawHeaders);
+
+    const stream = fs.createReadStream(storageRef);
+    const parser = _csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        trim: true,
+        skipLines: 1,
+        ignoreEmpty: true,
+        strictColumnHandling: false,
+      })
+      .on("error", reject)
+      .on("data", (row) => {
+        const out = {};
+        for (const col of selectCols) {
+          out[col.name] = row[col.fromHeader] ?? null;
+        }
+        batch.push(out);
+        if (batch.length >= BATCH) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch(reject);
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+    stream.pipe(parser);
+  });
+}
+
+/**
+ * Stage data for a run. Reuses previewTransform pipeline to project/optionally filter, then
+ * (when persist=true) writes rows into tbl_ptrs_stage_row and updates run status.
+ * Returns { sample, affectedCount, persistedCount? }.
+ */
+async function stageRun({
+  customerId,
+  runId,
+  steps = [],
+  persist = false,
+  limit = 50,
+  profileId = null,
+}) {
+  console.log("[PTRS service.stageRun] input", {
+    customerId,
+    runId,
+    steps,
+    persist,
+    limit,
+    profileId,
+  });
+
+  const requestedProfileId = profileId || null;
+
+  // Load column map
+  const mapRow = await getColumnMap({ customerId, runId });
+  if (!mapRow || !mapRow.mappings) {
+    const e = new Error("No column map saved for this run");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const effectiveProfileId =
+    requestedProfileId || (mapRow && mapRow.profileId) || null;
+  console.log("[PTRS service.stageRun] effective profile", {
+    requestedProfileId,
+    mapProfileId: mapRow && mapRow.profileId ? String(mapRow.profileId) : null,
+    effectiveProfileId,
+  });
+
+  const mappings = mapRow.mappings || {};
+
+  console.log("[PTRS service.stageRun] loaded map", {
+    hasMappings: !!mapRow?.mappings,
+    profileId: mapRow?.profileId,
+    joinCount: Array.isArray(mapRow?.joins) ? mapRow.joins.length : 0,
+  });
+
+  // Build projection list
+  const projections = [];
+  const logicalFields = new Set();
+  for (const [source, cfg] of Object.entries(mappings)) {
+    const field = cfg.field;
+    if (!field) continue;
+    logicalFields.add(field);
+    const ty = (cfg.type || "string").toLowerCase();
+    let cast;
+    if (ty === "number" || ty === "numeric" || ty === "decimal")
+      cast = "::numeric";
+    else if (ty === "date" || ty === "datetime" || ty === "timestamp")
+      cast = "::timestamptz";
+    else cast = "";
+    const expr =
+      ty === "string"
+        ? `(data->>'${source.replace(/'/g, "''")}') AS "${field}"`
+        : `((data->>'${source.replace(/'/g, "''")}')${cast}) AS "${field}"`;
+    projections.push(expr);
+  }
+  if (projections.length === 0) {
+    throw new Error("Column map has no usable field mappings");
+  }
+
+  console.log("[PTRS service.stageRun] projections", {
+    projectedColumns: Array.isArray(projections) ? projections.length : 0,
+  });
+
+  // WHERE from steps (filters only)
+  const where = [];
+  const params = { customerId, runId, limit };
+  let pIndex = 0;
+  const param = (val) => {
+    const key = `p${pIndex++}`;
+    params[key] = val;
+    return `:${key}`;
+  };
+
+  const renamePairs = [];
+  const deriveExprs = [];
+  for (const step of steps) {
+    if (!step || typeof step !== "object") continue;
+    const { kind, config = {} } = step;
+    if (kind === "filter") {
+      const { field, op, value } = config;
+      if (!field || !logicalFields.has(field)) continue;
+      switch ((op || "eq").toLowerCase()) {
+        case "eq":
+          where.push(`"${field}" = ${param(value)}`);
+          break;
+        case "ne":
+          where.push(`"${field}" <> ${param(value)}`);
+          break;
+        case "gt":
+          where.push(`"${field}" > ${param(value)}`);
+          break;
+        case "gte":
+          where.push(`"${field}" >= ${param(value)}`);
+          break;
+        case "lt":
+          where.push(`"${field}" < ${param(value)}`);
+          break;
+        case "lte":
+          where.push(`"${field}" <= ${param(value)}`);
+          break;
+        case "contains":
+          where.push(
+            `CAST("${field}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
+          );
+          break;
+        case "in": {
+          const arr = Array.isArray(value) ? value : [value];
+          const placeholders = arr.map((v) => param(v)).join(", ");
+          where.push(`"${field}" IN (${placeholders})`);
+          break;
+        }
+        default:
+          break;
+      }
+    } else if (kind === "rename") {
+      const { from, to } = config || {};
+      if (from && to && logicalFields.has(from)) {
+        renamePairs.push({ from, to });
+      }
+    } else if (kind === "derive") {
+      const { as, sql } = config || {};
+      if (as && sql) deriveExprs.push(`${sql} AS "${as}"`);
+    }
+  }
+
+  console.log("[PTRS service.stageRun] loading datasets for run", runId);
+
+  // Transaction scope
+  return db.sequelize.transaction(async (t) => {
+    await db.sequelize.query(
+      `SET LOCAL app.current_customer_id = :customerId;`,
+      {
+        transaction: t,
+        replacements: { customerId },
+      }
+    );
+
+    // Create temp projected table
+    const createTempSql = `
+      CREATE TEMP TABLE tmp_ptrs_stage ON COMMIT DROP AS
+      SELECT "rowNo",
+             ${projections.join(",\n               ")}
+      FROM "tbl_ptrs_import_raw"
+      WHERE "runId" = :runId AND "customerId" = :customerId;
+    `;
+
+    // Ensure temp table exists before any joins
+    await db.sequelize.query(createTempSql, {
+      transaction: t,
+      replacements: { runId, customerId },
+    });
+
+    // Load 'vendorMaster' dataset (if it exists) -> temp table, then join
+    const vendorDs = await db.PtrsRawDataset.findOne({
+      where: { customerId, runId, role: "vendorMaster" },
+      raw: true,
+      transaction: t,
+    });
+
+    if (vendorDs?.storageRef) {
+      // Use a run-scoped temp table name to avoid conflicts
+      const tempVendor = `tmp_vendor_master_${String(runId).replace(/[^a-zA-Z0-9_]/g, "_")}`;
+      await materialiseCsvDatasetToTemp({
+        sequelize: db.sequelize,
+        transaction: t,
+        storageRef: vendorDs.storageRef,
+        tempName: tempVendor,
+        selectCols: [
+          { name: "abn", fromHeader: "ABN" },
+          { name: "supplierName", fromHeader: "SupplierName" },
+        ],
+      });
+
+      await db.sequelize.query(
+        `
+    CREATE TEMP TABLE tmp_ptrs_stage_joined ON COMMIT DROP AS
+    SELECT s.*, v.supplierName
+    FROM tmp_ptrs_stage s
+    LEFT JOIN ${tempVendor} v
+      ON NULLIF(TRIM(s."payeeEntityAbn"), '') = NULLIF(TRIM(v."abn"), '');
+    DROP TABLE tmp_ptrs_stage;
+    ALTER TABLE tmp_ptrs_stage_joined RENAME TO tmp_ptrs_stage;
+    `,
+        { transaction: t }
+      );
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // Count
+    const countSql = `
+      WITH filtered AS (
+        SELECT "rowNo" FROM tmp_ptrs_stage
+        ${whereSql}
+      )
+      SELECT COUNT(*)::int AS cnt FROM filtered;
+    `;
+    const [countRows] = await db.sequelize.query(countSql, {
+      type: db.sequelize.QueryTypes.SELECT,
+      transaction: t,
+      replacements: { ...params },
+    });
+    const affectedCount = countRows ? countRows.cnt || 0 : 0;
+
+    // Sample (include renames/derives)
+    const baseCols = Array.from(logicalFields).map((f) => `"${f}"`);
+    for (const { from, to } of renamePairs)
+      baseCols.push(`"${from}" AS "${to}"`);
+    for (const expr of deriveExprs) baseCols.push(expr);
+
+    const sampleSql = `
+      WITH filtered AS (
+        SELECT * FROM tmp_ptrs_stage
+        ${whereSql}
+      )
+      SELECT ${baseCols.join(", ")}
+      FROM filtered
+      ORDER BY "rowNo"
+      LIMIT :limit;
+    `;
+    const sample = await db.sequelize.query(sampleSql, {
+      type: db.sequelize.QueryTypes.SELECT,
+      transaction: t,
+      replacements: { ...params },
+    });
+
+    console.log("[PTRS service.stageRun] inserting staged rows", {
+      projectedCount: Array.isArray(sample) ? sample.length : 0,
+    });
+
+    let persistedCount = 0;
+    if (persist) {
+      // Materialise into tbl_ptrs_stage_row
+      await db.PtrsStageRow.destroy({
+        where: { customerId, runId },
+        transaction: t,
+      });
+
+      const selectForJson = `
+        WITH filtered AS (
+          SELECT * FROM tmp_ptrs_stage
+          ${whereSql}
+        )
+        SELECT :customerId AS "customerId",
+               :runId AS "runId",
+               f."rowNo" AS "rowNo",
+               to_jsonb(f) - 'rowNo' AS "data",
+               NULL::jsonb AS "errors",
+               NOW() AS "createdAt",
+               NOW() AS "updatedAt"
+        FROM filtered f
+        ORDER BY f."rowNo";
+      `;
+
+      const insertSql = `
+        INSERT INTO "tbl_ptrs_stage_row" ("customerId","runId","rowNo","data","errors","createdAt","updatedAt")
+        ${selectForJson};
+      `;
+      await db.sequelize.query(insertSql, {
+        transaction: t,
+        replacements: { ...params, customerId, runId },
+      });
+
+      await db.PtrsUpload.update(
+        { status: "Staged" },
+        { where: { id: runId, customerId }, transaction: t }
+      );
+
+      const [cnt] = await db.sequelize.query(
+        `SELECT COUNT(*)::int AS cnt FROM "tbl_ptrs_stage_row" WHERE "customerId"=:customerId AND "runId"=:runId;`,
+        {
+          type: db.sequelize.QueryTypes.SELECT,
+          transaction: t,
+          replacements: { customerId, runId },
+        }
+      );
+      persistedCount = cnt ? cnt.cnt || 0 : 0;
+    }
+
+    console.log("[PTRS service.stageRun] complete", {
+      stagedCount: typeof persistedCount === "number" ? persistedCount : 0,
+      sampleCount: Array.isArray(sample) ? sample.length : 0,
+    });
+
+    return { sample, affectedCount, persistedCount };
+  });
+}
+
 /**
  * List runs for a tenant. If hasMap=true, only include runs that have a saved column map.
  */
@@ -748,8 +1205,105 @@ async function listRuns({ customerId, hasMap = false }) {
   return runs.filter((r) => mappedSet.has(r.id));
 }
 
+/**
+ * Convenience wrapper used by the controller/routes.
+ * Returns a preview of staged data using the current column map and step pipeline.
+ */
+async function getStagePreview({ customerId, runId, steps = [], limit = 50 }) {
+  return previewTransform({ customerId, runId, steps, limit });
+}
+
+// in v2/ptrs/services/ptrs.service.js
+async function listProfiles(customerId) {
+  console.log("customerId: ", customerId);
+  if (!customerId) throw new Error("customerId is required");
+  return await db.PtrsProfile.findAll({ where: { customerId } });
+}
+
+/** ---------------------------
+ * Profiles CRUD
+ * ---------------------------*/
+
+/** Create a PTRS profile (tenant-scoped) */
+async function createProfile({ customerId, payload = {}, userId = null }) {
+  if (!customerId) throw new Error("customerId is required");
+  const data = {
+    customerId,
+    // Only persist known-safe top-level fields; everything else into config
+    profileId: payload.profileId || payload.code || null,
+    name: payload.name || payload.label || null,
+    description: payload.description || null,
+    isDefault: payload.isDefault === true,
+    config: payload.config || null,
+    createdBy: userId || null,
+    updatedBy: userId || null,
+  };
+  // Drop undefined keys
+  Object.keys(data).forEach((k) => data[k] === undefined && delete data[k]);
+  const row = await db.PtrsProfile.create(data);
+  return row.get({ plain: true });
+}
+
+/** Read a single profile (tenant-scoped) */
+async function getProfile({ customerId, profileId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!profileId) throw new Error("profileId is required");
+  const row = await db.PtrsProfile.findOne({
+    where: { customerId, id: profileId },
+    raw: true,
+  });
+  return row || null;
+}
+
+/** Update a profile (tenant-scoped, partial update) */
+async function updateProfile({
+  customerId,
+  profileId,
+  payload = {},
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!profileId) throw new Error("profileId is required");
+  const row = await db.PtrsProfile.findOne({
+    where: { customerId, id: profileId },
+  });
+  if (!row) {
+    const e = new Error("Profile not found");
+    e.statusCode = 404;
+    throw e;
+  }
+  const patch = {
+    profileId: payload.profileId ?? payload.code,
+    name: payload.name ?? payload.label,
+    description: payload.description,
+    isDefault:
+      typeof payload.isDefault === "boolean" ? payload.isDefault : undefined,
+    config: payload.config,
+    updatedBy: userId || row.updatedBy || row.createdBy || null,
+  };
+  Object.keys(patch).forEach((k) => patch[k] === undefined && delete patch[k]);
+  await row.update(patch);
+  return row.get({ plain: true });
+}
+
+/** Delete a profile (tenant-scoped) */
+async function deleteProfile({ customerId, profileId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!profileId) throw new Error("profileId is required");
+  const row = await db.PtrsProfile.findOne({
+    where: { customerId, id: profileId },
+  });
+  if (!row) {
+    const e = new Error("Profile not found");
+    e.statusCode = 404;
+    throw e;
+  }
+  await row.destroy();
+  return { ok: true };
+}
+
 module.exports = {
-  createUpload,
+  createRun,
   getUpload,
   importCsvStream,
   getImportSample,
@@ -760,4 +1314,13 @@ module.exports = {
   addDataset,
   listDatasets,
   removeDataset,
+  getRun,
+  getStagePreview,
+  stageRun,
+  listProfiles,
+  // Profiles CRUD
+  createProfile,
+  getProfile,
+  updateProfile,
+  deleteProfile,
 };

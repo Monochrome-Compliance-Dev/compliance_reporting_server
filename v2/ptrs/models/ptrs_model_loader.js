@@ -26,6 +26,13 @@ function initPtrsV2Models(sequelize) {
     }
   }
 
+  // Run model-level associations if provided (e.g., ptrs_profile ↔ ptrs_customer_profile)
+  Object.values(models).forEach((m) => {
+    if (m && typeof m.associate === "function") {
+      m.associate(models);
+    }
+  });
+
   // --- Associations (limited, add more as we introduce models) ---
   // Recipe 1<->N TransformStep
   if (models.ptrs_recipe && models.ptrs_transform_step) {
