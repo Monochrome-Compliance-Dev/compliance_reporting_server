@@ -1,3 +1,126 @@
+/**
+ * Return a small sample of rows from a raw dataset file plus headers and total row count.
+ * Handles CSV (and Excel that was already normalised to CSV on upload).
+ */
+async function getDatasetSample({
+  customerId,
+  datasetId,
+  limit = 10,
+  offset = 0,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+
+  const row = await db.PtrsRawDataset.findOne({
+    where: { id: datasetId, customerId },
+    raw: true,
+  });
+  if (!row) {
+    const e = new Error("Dataset not found");
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const storageRef = row.storageRef;
+  if (!storageRef || !fs.existsSync(storageRef)) {
+    const e = new Error("Dataset file missing");
+    e.statusCode = 404;
+    throw e;
+  }
+
+  function readFirstLine(filePath) {
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const CHUNK = 64 * 1024;
+      const buf = Buffer.alloc(CHUNK);
+      let acc = "";
+      let pos = 0;
+      while (true) {
+        const bytes = fs.readSync(fd, buf, 0, CHUNK, pos);
+        if (!bytes) break;
+        const chunk = buf.toString("utf8", 0, bytes);
+        const nl = chunk.search(/\r?\n/);
+        if (nl >= 0) {
+          acc += chunk.slice(0, nl);
+          break;
+        }
+        acc += chunk;
+        pos += bytes;
+        if (pos > 1024 * 1024) break; // safety cap at 1MB
+      }
+      return acc.replace(/^\uFEFF/, "");
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = "";
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQ = !inQ;
+        }
+      } else if (ch === "," && !inQ) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQ) {
+        /* skip */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out.map((s) => String(s || "").trim());
+  }
+
+  function dedupeHeaders(rawHeaders) {
+    const seen = new Map();
+    return rawHeaders.map((h, i) => {
+      const label = h && h.trim().length ? h.trim() : `column_${i + 1}`;
+      const n = (seen.get(label) || 0) + 1;
+      seen.set(label, n);
+      return n === 1 ? label : `${label}_${n}`;
+    });
+  }
+
+  const headerLine = readFirstLine(storageRef);
+  const rawHeaders = splitCsvLine(headerLine);
+  const headers = dedupeHeaders(rawHeaders);
+
+  const rows = [];
+  let total = 0;
+
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(storageRef);
+    const parser = csv
+      .parse({
+        headers,
+        renameHeaders: false,
+        trim: true,
+        skipLines: 1, // skip original header row
+        ignoreEmpty: true,
+        strictColumnHandling: false,
+        discardUnmappedColumns: true,
+      })
+      .on("error", reject)
+      .on("data", (row) => {
+        if (total >= offset && rows.length < limit) rows.push(row);
+        total += 1;
+      })
+      .on("end", () => resolve());
+
+    stream.pipe(parser);
+  });
+
+  return { headers, rows, total };
+}
 const { logger } = require("@/helpers/logger");
 const db = require("@/db/database");
 const csv = require("fast-csv");
@@ -140,35 +263,50 @@ async function parseCsvMetaFromStream(stream) {
   }
 
   // 2) Deduplicate/repair headers: "", "New value", "New value" => "column_1","New value","New value_2"
+  // Replace blanks with deterministic dummy names and dedupe
   const seen = new Map();
-  const headersArray = rawHeaders.map((h) => {
-    let base = h || "column";
-    let count = seen.get(base) || 0;
-    seen.set(base, count + 1);
-    if (count === 0) return base;
-    return `${base}_${count + 1}`;
+  const headersArray = rawHeaders.map((h, i) => {
+    // If header is blank after trimming, synthesize a name that encodes position
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
   });
 
   // 3) Second pass: parse the whole CSV with the fixed headers, skipping the first line
   const fixedStream = Readable.from(text);
   return new Promise((resolve, reject) => {
     let rowsCount = 0;
+    const nonEmptyByHeader = Object.fromEntries(
+      headersArray.map((h) => [h, false])
+    );
+
     fixedStream
       .pipe(
         csv.parse({
           headers: headersArray, // supply our deduped headers
-          renameHeaders: false, // not renaming; we're providing the final headers
+          renameHeaders: false,
           ignoreEmpty: true,
           trim: true,
           strictColumnHandling: false,
           skipLines: 1, // skip the original header row we consumed
+          discardUnmappedColumns: true,
         })
       )
       .on("error", (err) => reject(err))
-      .on("data", () => {
+      .on("data", (row) => {
         rowsCount += 1;
+        // Track which headers have at least one non-empty value
+        for (const [key, val] of Object.entries(row)) {
+          if (val != null && String(val).trim() !== "") {
+            nonEmptyByHeader[key] = true;
+          }
+        }
       })
-      .on("end", () => resolve({ headers: headersArray, rowsCount }));
+      .on("end", () => {
+        // Keep all headers (we already synthesized names for blanks)
+        resolve({ headers: headersArray, rowsCount });
+      });
   });
 }
 
@@ -227,8 +365,19 @@ async function saveColumnMap({
 
 /**
  * Return a small window of staged rows plus count and inferred headers.
+ * Also returns headerMeta: sources and example values per header.
  */
 async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
+  if (logger && logger.info) {
+    logger.info("PTRS v2 getImportSample: begin", {
+      action: "PtrsV2GetImportSample",
+      customerId,
+      runId,
+      limit,
+      offset,
+    });
+  }
+
   // rows
   const rows = await db.PtrsImportRaw.findAll({
     where: { customerId, runId },
@@ -243,6 +392,16 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   const total = await db.PtrsImportRaw.count({
     where: { customerId, runId },
   });
+
+  if (logger && logger.debug) {
+    logger.debug("PTRS v2 getImportSample: raw import snapshot", {
+      action: "PtrsV2GetImportSample",
+      customerId,
+      runId,
+      fetchedRows: Array.isArray(rows) ? rows.length : 0,
+      total,
+    });
+  }
 
   // headers: scan up to 500 earliest rows to reduce noise
   const headerScan = await db.PtrsImportRaw.findAll({
@@ -262,10 +421,177 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
     .filter((h) => h != null && String(h).trim() !== "")
     .map((h) => String(h));
 
+  if (logger && logger.debug) {
+    logger.debug("PTRS v2 getImportSample: inferred main headers", {
+      action: "PtrsV2GetImportSample",
+      customerId,
+      runId,
+      headersCount: Array.isArray(headers) ? headers.length : 0,
+      sampleHeader:
+        Array.isArray(headers) && headers.length ? headers[0] : null,
+    });
+  }
+
+  // Build examples for main dataset from the scanned rows
+  const exampleByHeaderMain = {};
+  for (const r of headerScan) {
+    const d = r.data || {};
+    for (const k of Object.keys(d)) {
+      if (exampleByHeaderMain[k] == null) {
+        const v = d[k];
+        if (v != null && String(v).trim() !== "") {
+          exampleByHeaderMain[k] = v;
+        }
+      }
+    }
+  }
+
+  // Accumulate per-header metadata: sources and examples
+  const headerMeta = {};
+  for (const h of headers) {
+    headerMeta[h] = headerMeta[h] || { sources: new Set(), examples: {} };
+    headerMeta[h].sources.add("main");
+    if (exampleByHeaderMain[h] != null)
+      headerMeta[h].examples.main = exampleByHeaderMain[h];
+  }
+
+  // --- Merge supporting dataset headers and collect examples ---
+  try {
+    const dsRows = await db.PtrsRawDataset.findAll({
+      where: { customerId, runId },
+      attributes: ["id", "meta", "role"],
+      raw: true,
+    });
+    if (logger && logger.info) {
+      logger.info("PTRS v2 getImportSample: supporting datasets found", {
+        action: "PtrsV2GetImportSampleMergeHeaders",
+        customerId,
+        runId,
+        datasetCount: Array.isArray(dsRows) ? dsRows.length : 0,
+      });
+    }
+    if (Array.isArray(dsRows) && dsRows.length) {
+      const addHeaders = (arr, role) => {
+        for (const h of arr || []) {
+          if (h == null) continue;
+          const s = String(h).trim();
+          if (!s) continue;
+          headerSet.add(s);
+          headerMeta[s] = headerMeta[s] || { sources: new Set(), examples: {} };
+          if (role) headerMeta[s].sources.add(role);
+        }
+      };
+
+      for (const ds of dsRows) {
+        const role = ds.role || "dataset";
+        // Prefer meta.headers
+        const meta = ds.meta || {};
+        let dsHeaders = Array.isArray(meta.headers) ? meta.headers : null;
+        let sampleRows = null;
+        try {
+          // Always try to fetch a tiny sample to capture example values
+          const sample = await getDatasetSample({
+            customerId,
+            datasetId: ds.id,
+            limit: 5,
+            offset: 0,
+          });
+          dsHeaders =
+            dsHeaders && dsHeaders.length ? dsHeaders : sample.headers;
+          sampleRows = Array.isArray(sample.rows) ? sample.rows : [];
+        } catch (_) {
+          // ignore
+        }
+        addHeaders(dsHeaders, role);
+        // examples: first non-empty per header from this dataset
+        if (sampleRows && sampleRows.length) {
+          for (const row of sampleRows) {
+            for (const [k, v] of Object.entries(row)) {
+              if (v != null && String(v).trim() !== "") {
+                headerMeta[k] = headerMeta[k] || {
+                  sources: new Set(),
+                  examples: {},
+                };
+                if (headerMeta[k].examples[role] == null) {
+                  headerMeta[k].examples[role] = v;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (logger && logger.info) {
+        logger.info("PTRS v2 getImportSample: merged supporting headers", {
+          action: "PtrsV2GetImportSampleMergeHeaders",
+          customerId,
+          runId,
+          unifiedHeaderCount: headerSet ? headerSet.size : 0,
+        });
+      }
+    }
+  } catch (e) {
+    if (logger && logger.warn) {
+      logger.warn(
+        "PTRS v2 getImportSample: failed merging supporting dataset headers",
+        {
+          action: "PtrsV2GetSampleMergeHeaders",
+          customerId,
+          runId,
+          error: e.message,
+        }
+      );
+    }
+  }
+
+  // Re-materialize headers from the augmented set for return
+  const unifiedHeaders = Array.from(headerSet.values());
+
+  // Finalize headerMeta: convert Sets to arrays and derive a preferred example
+  const finalizedHeaderMeta = {};
+  for (const key of Object.keys(headerMeta)) {
+    const meta = headerMeta[key];
+    const sources = Array.from(meta.sources || []);
+    // pick example preference: main, else any role value
+    let example = null;
+    if (meta.examples) {
+      if (meta.examples.main != null) example = meta.examples.main;
+      else {
+        const firstRole = Object.keys(meta.examples)[0];
+        if (firstRole) example = meta.examples[firstRole];
+      }
+    }
+    finalizedHeaderMeta[key] = {
+      sources,
+      examples: meta.examples || {},
+      example,
+    };
+  }
+
+  if (logger && logger.info) {
+    logger.info("PTRS v2 getImportSample: done", {
+      action: "PtrsV2GetImportSample",
+      customerId,
+      runId,
+      rowsReturned: Array.isArray(rows) ? rows.length : 0,
+      total,
+      unifiedHeadersCount: Array.isArray(unifiedHeaders)
+        ? unifiedHeaders.length
+        : 0,
+      headerMetaKeys: finalizedHeaderMeta
+        ? Object.keys(finalizedHeaderMeta).length
+        : 0,
+      exampleForFirstHeader:
+        Array.isArray(unifiedHeaders) && unifiedHeaders.length
+          ? (finalizedHeaderMeta[unifiedHeaders[0]]?.example ?? null)
+          : null,
+    });
+  }
+
   return {
     rows,
     total,
-    headers,
+    headers: unifiedHeaders,
+    headerMeta: finalizedHeaderMeta,
   };
 }
 
@@ -296,9 +622,8 @@ async function importCsvStream({ customerId, runId, stream }) {
 
   const BATCH_SIZE = 1000;
   const batch = [];
-
   const flush = async () => {
-    if (batch.length === 0) return;
+    if (!batch.length) return;
     try {
       await db.PtrsImportRaw.bulkCreate(batch, { validate: false });
       rowsInserted += batch.length;
@@ -307,25 +632,82 @@ async function importCsvStream({ customerId, runId, stream }) {
     }
   };
 
+  // Buffer once so we can synthesize headers
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  // First line = header
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV splitter for one line
+  const splitCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const rawHeaders = splitCsvLine(headerLine).map((s) =>
+    String(s || "").trim()
+  );
+  if (!rawHeaders.length) {
+    const err = new Error("CSV appears to have no header row");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Synthesize blanks + dedupe
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
+
+  const fixedStream = Readable.from(text);
+
   return new Promise((resolve, reject) => {
     const parser = csv
       .parse({
-        headers: true,
-        renameHeaders: true,
+        headers: headersArray,
+        renameHeaders: false,
         ignoreEmpty: true,
         trim: true,
         strictColumnHandling: false,
+        skipLines: 1, // skip original header row
+        discardUnmappedColumns: true,
       })
       .on("error", (err) => reject(err))
       .on("data", (row) => {
         rowNo += 1;
-        batch.push({
-          customerId,
-          runId,
-          rowNo,
-          data: row,
-          errors: null,
-        });
+        batch.push({ customerId, runId, rowNo, data: row, errors: null });
         if (batch.length >= BATCH_SIZE) {
           parser.pause();
           flush()
@@ -347,7 +729,7 @@ async function importCsvStream({ customerId, runId, stream }) {
       });
 
     try {
-      stream.pipe(parser);
+      fixedStream.pipe(parser);
     } catch (e) {
       reject(e);
     }
@@ -819,11 +1201,11 @@ async function materialiseCsvDatasetToTemp({
 
     function dedupeHeaders(rawHeaders) {
       const seen = new Map();
-      return rawHeaders.map((h) => {
-        let base = h || "column";
-        const n = (seen.get(base) || 0) + 1;
-        seen.set(base, n);
-        return n === 1 ? base : `${base}_${n}`;
+      return rawHeaders.map((h, i) => {
+        const label = h && h.trim().length ? h.trim() : `column_${i + 1}`;
+        const n = (seen.get(label) || 0) + 1;
+        seen.set(label, n);
+        return n === 1 ? label : `${label}_${n}`;
       });
     }
 
@@ -840,6 +1222,7 @@ async function materialiseCsvDatasetToTemp({
         skipLines: 1,
         ignoreEmpty: true,
         strictColumnHandling: false,
+        discardUnmappedColumns: true,
       })
       .on("error", reject)
       .on("data", (row) => {
@@ -1313,6 +1696,7 @@ module.exports = {
   listRuns,
   addDataset,
   listDatasets,
+  getDatasetSample,
   removeDataset,
   getRun,
   getStagePreview,

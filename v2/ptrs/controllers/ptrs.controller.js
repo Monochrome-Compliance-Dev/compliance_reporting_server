@@ -1,3 +1,57 @@
+/**
+ * GET /api/v2/ptrs/datasets/:datasetId/sample
+ * Query: limit, offset
+ */
+async function getDatasetSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const datasetId = req.params.datasetId;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const { headers, rows, total } = await ptrsService.getDatasetSample({
+      customerId,
+      datasetId,
+      limit,
+      offset,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetDatasetSample",
+      entity: "PtrsRawDataset",
+      entityId: datasetId,
+      details: { returned: rows.length, total, limit, offset },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { headers, rows, total, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 dataset sample", {
+      action: "PtrsV2GetDatasetSample",
+      datasetId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
@@ -205,12 +259,13 @@ async function getSample(req, res, next) {
         .json({ status: "error", message: "Run not found" });
     }
 
-    const { rows, total, headers } = await ptrsService.getImportSample({
-      customerId,
-      runId,
-      limit,
-      offset,
-    });
+    const { rows, total, headers, headerMeta } =
+      await ptrsService.getImportSample({
+        customerId,
+        runId,
+        limit,
+        offset,
+      });
 
     await auditService.logEvent({
       customerId,
@@ -225,7 +280,7 @@ async function getSample(req, res, next) {
 
     res.status(200).json({
       status: "success",
-      data: { rows, total, headers, limit, offset },
+      data: { rows, total, headers, headerMeta, limit, offset },
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 sample", {
@@ -283,7 +338,7 @@ async function getMap(req, res, next) {
       map.joins = maybeParse(map.joins);
       map.rowRules = maybeParse(map.rowRules);
     }
-    const { headers, total } = await ptrsService.getImportSample({
+    const { headers, total, headerMeta } = await ptrsService.getImportSample({
       customerId,
       runId,
       limit: 10,
@@ -303,7 +358,7 @@ async function getMap(req, res, next) {
 
     res.status(200).json({
       status: "success",
-      data: { map, headers },
+      data: { map, headers, headerMeta },
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 map", {
@@ -1047,6 +1102,7 @@ module.exports = {
   listRuns,
   addDataset,
   listDatasets,
+  getDatasetSample,
   removeDataset,
   getBlueprint,
   listProfiles,

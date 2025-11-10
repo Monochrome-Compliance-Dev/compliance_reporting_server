@@ -58,6 +58,19 @@ router.delete(
   requirePtrs,
   ptrsController.removeDataset
 );
+// Dataset sample (used for per-dataset header examples in FE)
+router.get(
+  "/datasets/:datasetId/sample",
+  requirePtrs,
+  ptrsController.getDatasetSample
+);
+
+// Unified headers + examples across main and supporting datasets
+router.get(
+  "/runs/:id/unified-sample",
+  requirePtrs,
+  ptrsController.getSample // alias to reuse existing controller logic
+);
 
 // Preview transformed sample (no mutation)
 router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
