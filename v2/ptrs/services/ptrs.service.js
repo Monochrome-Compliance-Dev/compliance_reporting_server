@@ -1,3 +1,11 @@
+const db = require("@/db/database");
+const csv = require("fast-csv");
+const fs = require("fs");
+const path = require("path");
+const { Readable } = require("stream");
+
+const { Worker } = require("worker_threads");
+
 /**
  * Return a small sample of rows from a raw dataset file plus headers and total row count.
  * Handles CSV (and Excel that was already normalised to CSV on upload).
@@ -188,13 +196,90 @@ function buildCoalesceJsonbExpr(sourceKey) {
   );
   return `COALESCE(${variants.join(", ")})`;
 }
-const db = require("@/db/database");
-const csv = require("fast-csv");
-const fs = require("fs");
-const path = require("path");
-const { Readable } = require("stream");
 
-const { Worker } = require("worker_threads");
+// ----- JOIN HELPERS (file-backed datasets) -----
+function normalizeJoinKeyValue(v) {
+  if (v == null) return "";
+  return String(v).trim().toUpperCase();
+}
+
+function headerVariants(key) {
+  const original = String(key || "");
+  const snake = toSnake(original);
+  const underscored = original.replace(/\s+/g, "_");
+  const cased = original.toLowerCase();
+  const set = new Set([original, snake, underscored, cased]);
+  return Array.from(set.values());
+}
+
+function pickFromRowLoose(row, header) {
+  if (!row || !header) return undefined;
+  for (const h of headerVariants(header)) {
+    if (row[h] != null) return row[h];
+    const kh = Object.keys(row).find(
+      (k) => String(k).toLowerCase() === String(h).toLowerCase()
+    );
+    if (kh && row[kh] != null) return row[kh];
+  }
+  return undefined;
+}
+
+async function buildDatasetIndexByRole({ customerId, runId, role, keyColumn }) {
+  const ds = await db.PtrsRawDataset.findOne({
+    where: { customerId, runId, role },
+    raw: true,
+  });
+  if (!ds) return { map: new Map(), headers: [], rowsIndexed: 0 };
+  const storageRef = ds.storageRef;
+  if (!storageRef || !fs.existsSync(storageRef)) {
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
+
+  const index = new Map();
+  let headers = [];
+  await new Promise((resolve, reject) => {
+    let isFirst = true;
+    const stream = fs.createReadStream(storageRef);
+    const parser = csv
+      .parse({ headers: true, trim: true, ignoreEmpty: true })
+      .on("error", reject)
+      .on("data", (row) => {
+        if (isFirst) {
+          headers = Object.keys(row || {});
+          isFirst = false;
+        }
+        const rawKey = pickFromRowLoose(row, keyColumn);
+        const normKey = normalizeJoinKeyValue(rawKey);
+        if (!index.has(normKey)) index.set(normKey, row);
+      })
+      .on("end", () => resolve());
+    stream.pipe(parser);
+  });
+
+  return { map: index, headers, rowsIndexed: index.size };
+}
+
+function mergeJoinedRow(mainRowData, joinedRow) {
+  if (!joinedRow) return mainRowData;
+  return { ...joinedRow, ...mainRowData };
+}
+
+function applyColumnMappingsToRow({ mappings, sourceRow }) {
+  const out = {};
+  for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
+    if (!cfg) continue;
+    const target = cfg.field || cfg.target;
+    if (!target) continue;
+    let value;
+    if (Object.prototype.hasOwnProperty.call(cfg, "value")) {
+      value = cfg.value;
+    } else {
+      value = pickFromRowLoose(sourceRow, sourceHeader);
+    }
+    out[toSnake(target)] = value ?? null;
+  }
+  return out;
+}
 
 let XLSX = null;
 try {
@@ -609,15 +694,12 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
     }
   }
 
-  // Re-materialize headers from the augmented set for return
+  // --- Finalise unified headers and headerMeta into plain structures ---
   const unifiedHeaders = Array.from(headerSet.values());
-
-  // Finalize headerMeta: convert Sets to arrays and derive a preferred example
   const finalizedHeaderMeta = {};
-  for (const key of Object.keys(headerMeta)) {
-    const meta = headerMeta[key];
+  for (const key of unifiedHeaders) {
+    const meta = headerMeta[key] || { sources: new Set(), examples: {} };
     const sources = Array.from(meta.sources || []);
-    // pick example preference: main, else any role value
     let example = null;
     if (meta.examples) {
       if (meta.examples.main != null) example = meta.examples.main;
@@ -656,6 +738,128 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   return {
     rows,
     total,
+    headers: unifiedHeaders,
+    headerMeta: finalizedHeaderMeta,
+  };
+}
+
+/**
+ * Return unified headers and examples across main import + all supporting datasets.
+ * Reuses getImportSample for main rows/headers and augments headerMeta with supporting datasets.
+ */
+async function getUnifiedSample({ customerId, runId, limit = 10, offset = 0 }) {
+  // Base = main only
+  const base = await getImportSample({ customerId, runId, limit, offset });
+  const headerSet = new Set(base.headers || []);
+
+  // Make headerMeta mutable (sources as Set)
+  const headerMeta = {};
+  for (const [k, meta] of Object.entries(base.headerMeta || {})) {
+    headerMeta[k] = {
+      sources: new Set([...(meta.sources || [])]),
+      examples: { ...(meta.examples || {}) },
+    };
+  }
+
+  // Merge supporting dataset headers + examples
+  try {
+    const dsRows = await db.PtrsRawDataset.findAll({
+      where: { customerId, runId },
+      attributes: ["id", "meta", "role"],
+      raw: true,
+    });
+
+    if (Array.isArray(dsRows) && dsRows.length) {
+      const addHeaders = (arr, role) => {
+        for (const h of arr || []) {
+          if (h == null) continue;
+          const s = String(h).trim();
+          if (!s) continue;
+          headerSet.add(s);
+          headerMeta[s] = headerMeta[s] || { sources: new Set(), examples: {} };
+          if (role) headerMeta[s].sources.add(role);
+        }
+      };
+
+      for (const ds of dsRows) {
+        const role = ds.role || "dataset";
+        const meta = ds.meta || {};
+        let dsHeaders = Array.isArray(meta.headers) ? meta.headers : null;
+        let sampleRows = null;
+        try {
+          const sample = await getDatasetSample({
+            customerId,
+            datasetId: ds.id,
+            limit: 5,
+            offset: 0,
+          });
+          dsHeaders =
+            dsHeaders && dsHeaders.length ? dsHeaders : sample.headers;
+          sampleRows = Array.isArray(sample.rows) ? sample.rows : [];
+        } catch (_) {}
+
+        addHeaders(dsHeaders, role);
+
+        if (sampleRows && sampleRows.length) {
+          for (const row of sampleRows) {
+            for (const [k, v] of Object.entries(row)) {
+              if (v != null && String(v).trim() !== "") {
+                headerMeta[k] = headerMeta[k] || {
+                  sources: new Set(),
+                  examples: {},
+                };
+                if (headerMeta[k].examples[role] == null) {
+                  headerMeta[k].examples[role] = v;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    slog.warn("PTRS v2 getUnifiedSample: failed merging supporting datasets", {
+      action: "PtrsV2GetUnifiedSampleMergeHeaders",
+      customerId,
+      runId,
+      error: e.message,
+    });
+  }
+
+  // Finalise: convert Sets to arrays and pick a preferred example
+  const unifiedHeaders = Array.from(headerSet.values());
+  const finalizedHeaderMeta = {};
+  for (const key of Object.keys(headerMeta)) {
+    const meta = headerMeta[key];
+    const sources = Array.from(meta.sources || []);
+    let example = null;
+    if (meta.examples) {
+      if (meta.examples.main != null) example = meta.examples.main;
+      else {
+        const firstRole = Object.keys(meta.examples)[0];
+        if (firstRole) example = meta.examples[firstRole];
+      }
+    }
+    finalizedHeaderMeta[key] = {
+      sources,
+      examples: meta.examples || {},
+      example,
+    };
+  }
+
+  slog.info("PTRS v2 getUnifiedSample: done", {
+    action: "PtrsV2GetUnifiedSample",
+    customerId,
+    runId,
+    rowsReturned: Array.isArray(base.rows) ? base.rows.length : 0,
+    total: base.total || 0,
+    unifiedHeadersCount: unifiedHeaders.length,
+    headerMetaKeys: Object.keys(finalizedHeaderMeta).length,
+  });
+
+  return {
+    rows: base.rows || [],
+    total: base.total || 0,
     headers: unifiedHeaders,
     headerMeta: finalizedHeaderMeta,
   };
@@ -1063,6 +1267,8 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
     throw new Error("Column map has no usable field mappings");
   }
 
+  console.log("projections: ", projections);
+
   const projectedFields = Array.isArray(projections)
     ? projections.map((p) => p.as || p.key || p)
     : [];
@@ -1422,339 +1628,138 @@ async function stageRun({
   steps = [],
   persist = false,
   limit = 50,
+  userId,
   profileId = null,
 }) {
-  console.log("[PTRS service.stageRun] input", {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+
+  const started = Date.now();
+  const preview = await getStagePreview({
     customerId,
     runId,
     steps,
-    persist,
     limit,
     profileId,
   });
+  const rows = preview.rows || [];
 
-  const requestedProfileId = profileId || null;
+  if (persist) {
+    {
+      // 1) Build base payload from composed rows
+      const basePayload = rows.map((r) => {
+        const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
+        const dataObj =
+          r && typeof r === "object" && Object.keys(r).length
+            ? r
+            : { _warning: "⚠️ No mapped data for this row" };
 
-  // Load column map
-  const mapRow = await getColumnMap({ customerId, runId });
-  if (!mapRow || !mapRow.mappings) {
-    const e = new Error("No column map saved for this run");
-    e.statusCode = 400;
-    throw e;
-  }
+        return {
+          customerId: String(customerId),
+          runId: String(runId),
+          rowNo: rowNoVal,
+          // JSONB columns only accept objects or null
+          data: dataObj,
+          errors: null,
+          standard: null,
+          custom: null,
+          meta: { _stage: "ptrs.v2.stageRun", at: new Date().toISOString() },
+        };
+      });
 
-  const effectiveProfileId =
-    requestedProfileId || (mapRow && mapRow.profileId) || null;
-  console.log("[PTRS service.stageRun] effective profile", {
-    requestedProfileId,
-    mapProfileId: mapRow && mapRow.profileId ? String(mapRow.profileId) : null,
-    effectiveProfileId,
-  });
+      // 2) Normalise any empty JSONB objects → warning objects; undefined → null
+      const isEmptyPlain = (v) =>
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        Object.keys(v).length === 0;
 
-  const mappings = mapRow.mappings || {};
-
-  console.log("[PTRS service.stageRun] loaded map", {
-    hasMappings: !!mapRow?.mappings,
-    profileId: mapRow?.profileId,
-    joinCount: Array.isArray(mapRow?.joins) ? mapRow.joins.length : 0,
-  });
-  console.log("mappings: ", mappings);
-
-  // Build projection list (group by logical field, coalesce multiple source headers).
-  const byField = new Map(); // field_snk -> { type, sources: [] }
-  for (const [sourceHeader, cfg] of Object.entries(mappings)) {
-    const fieldRaw = cfg.field;
-    if (!fieldRaw) continue;
-    const field = toSnake(fieldRaw);
-    const type = (cfg.type || "string").toLowerCase();
-    const existing = byField.get(field);
-    if (existing) {
-      const promote = (prev, next) => {
-        const order = [
-          "string",
-          "number",
-          "numeric",
-          "decimal",
-          "date",
-          "datetime",
-          "timestamp",
-        ];
-        const ip = order.indexOf(prev);
-        const inx = order.indexOf(next);
-        return ip === -1 ? next : inx === -1 ? prev : order[Math.max(ip, inx)];
+      const insertWarning = (obj) => {
+        if (!obj || typeof obj !== "object") return obj;
+        for (const key of ["data", "errors", "standard", "custom", "meta"]) {
+          if (isEmptyPlain(obj[key])) {
+            obj[key] = {
+              _warning: "⚠️ Empty JSONB payload — nothing to insert",
+            };
+          }
+          if (typeof obj[key] === "undefined") {
+            obj[key] = null;
+          }
+        }
+        return obj;
       };
-      existing.type = promote(existing.type, type);
-      existing.sources.push(sourceHeader);
-    } else {
-      byField.set(field, { type, sources: [sourceHeader] });
-    }
-  }
 
-  const projections = [];
-  const logicalFields = new Set(byField.keys());
-  for (const [field, { type, sources }] of byField.entries()) {
-    const variants = sources.flatMap((s) => jsonKeyVariants(s));
-    const jsonExprs = variants.map((k) => `data->>'${k.replace(/'/g, "''")}'`);
-    const coalesced = `COALESCE(${jsonExprs.join(", ")})`;
-    let cast = "";
-    const ty = type;
-    if (ty === "number" || ty === "numeric" || ty === "decimal")
-      cast = "::numeric";
-    else if (ty === "date" || ty === "datetime" || ty === "timestamp")
-      cast = "::timestamptz";
-    const expr =
-      ty === "string"
-        ? `${coalesced} AS "${field}"`
-        : `(${coalesced})${cast} AS "${field}"`;
-    projections.push(expr);
-  }
+      const safePayload = basePayload.map(insertWarning);
+      console.log("safePayload: ", safePayload);
 
-  if (projections.length === 0) {
-    throw new Error("Column map has no usable field mappings");
-  }
+      // 3) Diagnostics
+      slog.info("PTRS v2 stageRun: preparing to insert", {
+        action: "PtrsV2StageRunBatch",
+        customerId,
+        runId,
+        batchSize: safePayload.length,
+        sampleRow: safeMeta(safePayload[0] || {}),
+      });
 
-  console.log("[PTRS service.stageRun] projections", {
-    projectedColumns: Array.isArray(projections) ? projections.length : 0,
-  });
-
-  // WHERE from steps (filters only)
-  const where = [];
-  const params = { customerId, runId, limit };
-  let pIndex = 0;
-  const param = (val) => {
-    const key = `p${pIndex++}`;
-    params[key] = val;
-    return `:${key}`;
-  };
-
-  const renamePairs = [];
-  const deriveExprs = [];
-  for (const step of steps) {
-    if (!step || typeof step !== "object") continue;
-    const { kind, config = {} } = step;
-    if (kind === "filter") {
-      const fieldName = toSnake(config.field);
-      const { op, value } = config;
-      if (!fieldName || !logicalFields.has(fieldName)) continue;
-      switch ((op || "eq").toLowerCase()) {
-        case "eq":
-          where.push(`"${fieldName}" = ${param(value)}`);
-          break;
-        case "ne":
-          where.push(`"${fieldName}" <> ${param(value)}`);
-          break;
-        case "gt":
-          where.push(`"${fieldName}" > ${param(value)}`);
-          break;
-        case "gte":
-          where.push(`"${fieldName}" >= ${param(value)}`);
-          break;
-        case "lt":
-          where.push(`"${fieldName}" < ${param(value)}`);
-          break;
-        case "lte":
-          where.push(`"${fieldName}" <= ${param(value)}`);
-          break;
-        case "contains":
-          where.push(
-            `CAST("${fieldName}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
+      const offenders = safePayload
+        .filter((p) => {
+          const hasWarn = Boolean(
+            p?.data?._warning ||
+              p?.errors?._warning ||
+              p?.standard?._warning ||
+              p?.custom?._warning ||
+              p?.meta?._warning
           );
-          break;
-        case "in": {
-          const arr = Array.isArray(value) ? value : [value];
-          const placeholders = arr.map((v) => param(v)).join(", ");
-          where.push(`"${fieldName}" IN (${placeholders})`);
-          break;
-        }
-        default:
-          break;
+          const hasEmpty =
+            isEmptyPlain(p?.data) ||
+            isEmptyPlain(p?.errors) ||
+            isEmptyPlain(p?.standard) ||
+            isEmptyPlain(p?.custom) ||
+            isEmptyPlain(p?.meta);
+          return hasWarn || hasEmpty;
+        })
+        .slice(0, 3)
+        .map((p) => ({
+          rowNo: p.rowNo,
+          dataKeys: p.data ? Object.keys(p.data) : null,
+          hasWarning: Boolean(
+            p?.data?._warning ||
+              p?.errors?._warning ||
+              p?.standard?._warning ||
+              p?.custom?._warning ||
+              p?.meta?._warning
+          ),
+        }));
+
+      if (offenders.length) {
+        slog.warn("PTRS v2 stageRun: warning/empty JSONB rows detected", {
+          action: "PtrsV2StageRunWarningRows",
+          runId,
+          customerId,
+          offenderCount: offenders.length,
+          sample: safeMeta(offenders),
+        });
       }
-    } else if (kind === "rename") {
-      const { from, to } = config || {};
-      const fromSnake = toSnake(from);
-      const toSnakeName = toSnake(to);
-      if (fromSnake && toSnakeName && logicalFields.has(fromSnake)) {
-        renamePairs.push({ from: fromSnake, to: toSnakeName });
-      }
-    } else if (kind === "derive") {
-      const { as, sql } = config || {};
-      if (as && sql) {
-        const asSnake = toSnake(as);
-        deriveExprs.push(`${sql} AS "${asSnake}"`);
+
+      // 4) Replace staged rows and insert the SAFE payload
+      await db.PtrsStageRow.destroy({ where: { customerId, runId } });
+      if (safePayload.length) {
+        await db.PtrsStageRow.bulkCreate(safePayload, {
+          validate: false,
+          returning: false,
+        });
       }
     }
   }
 
-  console.log("[PTRS service.stageRun] loading datasets for run", runId);
-
-  // Transaction scope
-  return db.sequelize.transaction(async (t) => {
-    await db.sequelize.query(
-      `SET LOCAL app.current_customer_id = :customerId;`,
-      {
-        transaction: t,
-        replacements: { customerId },
-      }
-    );
-
-    // Create temp projected table
-    const createTempSql = `
-      CREATE TEMP TABLE tmp_ptrs_stage ON COMMIT DROP AS
-      SELECT "rowNo",
-             ${projections.join(",\n               ")}
-      FROM "tbl_ptrs_import_raw"
-      WHERE "runId" = :runId AND "customerId" = :customerId;
-    `;
-
-    // Ensure temp table exists before any joins
-    await db.sequelize.query(createTempSql, {
-      transaction: t,
-      replacements: { runId, customerId },
-    });
-
-    // Load 'vendorMaster' dataset (if it exists) -> temp table, then join
-    const vendorDs = await db.PtrsRawDataset.findOne({
-      where: { customerId, runId, role: "vendorMaster" },
-      raw: true,
-      transaction: t,
-    });
-
-    if (vendorDs?.storageRef) {
-      // Use a run-scoped temp table name to avoid conflicts
-      const tempVendor = `tmp_vendor_master_${String(runId).replace(/[^a-zA-Z0-9_]/g, "_")}`;
-      await materialiseCsvDatasetToTemp({
-        sequelize: db.sequelize,
-        transaction: t,
-        storageRef: vendorDs.storageRef,
-        tempName: tempVendor,
-        selectCols: [
-          {
-            name: "abn",
-            fromHeader: ["ABN", "Tax number", "Tax Number", "ABN/ACN"],
-          },
-          {
-            name: "supplier_name",
-            fromHeader: ["SupplierName", "Vendor Account: Name 1", "Name"],
-          },
-        ],
-      });
-
-      await db.sequelize.query(
-        `
-    CREATE TEMP TABLE tmp_ptrs_stage_joined ON COMMIT DROP AS
-    SELECT s.*, v."supplier_name" AS "supplier_name"
-    FROM tmp_ptrs_stage s
-    LEFT JOIN ${tempVendor} v
-      ON NULLIF(TRIM(s."payee_entity_abn"), '') = NULLIF(TRIM(v."abn"), '');
-    DROP TABLE tmp_ptrs_stage;
-    ALTER TABLE tmp_ptrs_stage_joined RENAME TO tmp_ptrs_stage;
-    `,
-        { transaction: t }
-      );
-    }
-
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-    // Count
-    const countSql = `
-      WITH filtered AS (
-        SELECT "rowNo" FROM tmp_ptrs_stage
-        ${whereSql}
-      )
-      SELECT COUNT(*)::int AS cnt FROM filtered;
-    `;
-    const [countRows] = await db.sequelize.query(countSql, {
-      type: db.sequelize.QueryTypes.SELECT,
-      transaction: t,
-      replacements: { ...params },
-    });
-    const affectedCount = countRows ? countRows.cnt || 0 : 0;
-
-    // Sample (include renames/derives)
-    const baseCols = Array.from(logicalFields).map((f) => `"${f}"`);
-    for (const { from, to } of renamePairs)
-      baseCols.push(`"${from}" AS "${to}"`);
-    for (const expr of deriveExprs) baseCols.push(expr);
-
-    const sampleSql = `
-      WITH filtered AS (
-        SELECT * FROM tmp_ptrs_stage
-        ${whereSql}
-      )
-      SELECT ${baseCols.join(", ")}
-      FROM filtered
-      ORDER BY "rowNo"
-      LIMIT :limit;
-    `;
-    const sample = await db.sequelize.query(sampleSql, {
-      type: db.sequelize.QueryTypes.SELECT,
-      transaction: t,
-      replacements: { ...params },
-    });
-
-    console.log("[PTRS service.stageRun] inserting staged rows", {
-      projectedCount: Array.isArray(sample) ? sample.length : 0,
-    });
-
-    let persistedCount = 0;
-    if (persist) {
-      // Materialise into tbl_ptrs_stage_row
-      await db.PtrsStageRow.destroy({
-        where: { customerId, runId },
-        transaction: t,
-      });
-
-      const selectForJson = `
-        WITH filtered AS (
-          SELECT * FROM tmp_ptrs_stage
-          ${whereSql}
-        )
-        SELECT
-          md5(random()::text || clock_timestamp()::text || COALESCE(f."rowNo"::text, '')) AS "id",
-          :customerId AS "customerId",
-          :runId      AS "runId",
-          f."rowNo"   AS "rowNo",
-          to_jsonb(f) - 'rowNo' AS "data",
-          NULL::jsonb  AS "errors",
-          NOW()        AS "createdAt",
-          NOW()        AS "updatedAt"
-        FROM filtered f
-        ORDER BY f."rowNo";
-      `;
-
-      const insertSql = `
-        INSERT INTO "tbl_ptrs_stage_row"
-          ("id","customerId","runId","rowNo","data","errors","createdAt","updatedAt")
-        ${selectForJson};
-      `;
-      await db.sequelize.query(insertSql, {
-        transaction: t,
-        replacements: { ...params, customerId, runId },
-      });
-
-      await db.PtrsUpload.update(
-        { status: "Staged" },
-        { where: { id: runId, customerId }, transaction: t, validate: false }
-      );
-
-      const [cnt] = await db.sequelize.query(
-        `SELECT COUNT(*)::int AS cnt FROM "tbl_ptrs_stage_row" WHERE "customerId"=:customerId AND "runId"=:runId;`,
-        {
-          type: db.sequelize.QueryTypes.SELECT,
-          transaction: t,
-          replacements: { customerId, runId },
-        }
-      );
-      persistedCount = cnt ? cnt.cnt || 0 : 0;
-    }
-
-    console.log("[PTRS service.stageRun] complete", {
-      stagedCount: typeof persistedCount === "number" ? persistedCount : 0,
-      sampleCount: Array.isArray(sample) ? sample.length : 0,
-    });
-
-    return { sample, affectedCount, persistedCount };
-  });
+  const tookMs = Date.now() - started;
+  return {
+    rowsIn: rows.length,
+    rowsOut: rows.length,
+    tookMs,
+    sample: rows[0] || null,
+    stats: preview.stats || null,
+  };
 }
 
 /**
@@ -1797,162 +1802,88 @@ async function listRuns({ customerId, hasMap = false }) {
  * Returns a preview of staged data using the current column map and step pipeline,
  * but previews directly from the staged table using snake_case logical fields.
  */
-async function getStagePreview({ customerId, runId, steps = [], limit = 50 }) {
+async function getStagePreview({
+  customerId,
+  runId,
+  steps = [],
+  limit = 50,
+  profileId = null,
+}) {
   if (!customerId) throw new Error("customerId is required");
   if (!runId) throw new Error("runId is required");
 
-  // Load the saved column map to know which logical (snake_case) fields to project.
   const mapRow = await getColumnMap({ customerId, runId });
-  if (!mapRow || !mapRow.mappings) {
-    // If no map yet, there's nothing meaningful to preview from staged rows.
-    return { headers: [], rows: [] };
-  }
-
-  // Group mappings by logical field (snake_case) and coalesce duplicates.
-  const byField = new Map(); // field_snk -> { type, sources: [] }
-  for (const [sourceHeader, cfg] of Object.entries(mapRow.mappings || {})) {
-    if (!cfg || !cfg.field) continue;
-    const field = toSnake(cfg.field);
-    const type = (cfg.type || "string").toLowerCase();
-    const ex = byField.get(field);
-    if (ex) {
-      // keep the "widest" type and push another source for diagnostics if needed
-      const order = [
-        "string",
-        "number",
-        "numeric",
-        "decimal",
-        "date",
-        "datetime",
-        "timestamp",
-      ];
-      const ip = order.indexOf(ex.type);
-      const inx = order.indexOf(type);
-      ex.type =
-        ip === -1 ? type : inx === -1 ? ex.type : order[Math.max(ip, inx)];
-    } else {
-      byField.set(field, { type, sources: [sourceHeader] });
+  const map = mapRow || {};
+  const mappings = map.mappings || {};
+  let joins = map.joins;
+  if (typeof joins === "string") {
+    try {
+      joins = JSON.parse(joins);
+    } catch {
+      joins = null;
     }
   }
 
-  const logicalFields = new Set(byField.keys());
-  if (!logicalFields.size) {
-    return { headers: [], rows: [] };
+  let otherIndex = { map: new Map(), headers: [], rowsIndexed: 0 };
+  let joinSpec = null;
+
+  if (Array.isArray(joins) && joins.length) {
+    joinSpec = joins.find(
+      (j) => j?.to?.role && j?.from?.role && j?.to?.column && j?.from?.column
+    );
+    if (joinSpec) {
+      const rhsRole =
+        joinSpec.to?.role === "main" ? joinSpec.from?.role : joinSpec.to?.role;
+      const rhsCol =
+        joinSpec.to?.role === "main"
+          ? joinSpec.from?.column
+          : joinSpec.to?.column;
+      if (rhsRole && rhsCol) {
+        otherIndex = await buildDatasetIndexByRole({
+          customerId,
+          runId,
+          role: String(rhsRole).toLowerCase(),
+          keyColumn: rhsCol,
+        });
+      }
+    }
   }
 
-  // Build JSON extracts against the staged JSON column ("data") using snake_case keys.
-  // e.g. data->>'company_code' AS "company_code"
-  const jsonExtract = (key) => `data->>'${String(key).replace(/'/g, "''")}'`;
-  const selectCols = Array.from(logicalFields).map(
-    (f) => `${jsonExtract(f)} AS "${f}"`
+  const mainRows = await db.PtrsImportRaw.findAll({
+    where: { customerId, runId },
+    order: [["rowNo", "ASC"]],
+    limit: Math.min(Number(limit) || 50, 500),
+    attributes: ["rowNo", "data"],
+    raw: true,
+  });
+
+  const composed = [];
+  for (const r of mainRows) {
+    const d = r.data || {};
+    let srcRow = d;
+    if (joinSpec && otherIndex.map.size) {
+      const lhsCol =
+        joinSpec.to?.role === "main"
+          ? joinSpec.to?.column
+          : joinSpec.from?.column;
+      const key = normalizeJoinKeyValue(pickFromRowLoose(d, lhsCol));
+      const joined = otherIndex.map.get(key);
+      srcRow = mergeJoinedRow(d, joined);
+    }
+    const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+    out.row_no = r.rowNo;
+    composed.push(out);
+  }
+
+  const headers = Array.from(
+    new Set(composed.flatMap((row) => Object.keys(row)))
   );
 
-  // WHERE from steps (filters only), using the same snake_case logical fields.
-  const where = [];
-  const params = {
-    customerId,
-    runId,
-    limit: Math.min(Number(limit) || 50, 500),
+  return {
+    headers,
+    rows: composed,
+    stats: { joinedRows: otherIndex.rowsIndexed },
   };
-  let pIndex = 0;
-  const param = (val) => {
-    const k = `p${pIndex++}`;
-    params[k] = val;
-    return `:${k}`;
-  };
-
-  for (const step of steps) {
-    if (!step || typeof step !== "object") continue;
-    const { kind, config = {} } = step;
-    if (kind !== "filter") continue;
-
-    const fieldName = toSnake(config.field);
-    if (!fieldName || !logicalFields.has(fieldName)) continue;
-
-    const op = String(config.op || "eq").toLowerCase();
-    const val = config.value;
-    const expr = `CAST(${jsonExtract(fieldName)} AS text)`;
-
-    switch (op) {
-      case "eq":
-        where.push(`${expr} = ${param(val)}`);
-        break;
-      case "ne":
-        where.push(`${expr} <> ${param(val)}`);
-        break;
-      case "gt":
-        where.push(`${jsonExtract(fieldName)} > ${param(val)}`);
-        break;
-      case "gte":
-        where.push(`${jsonExtract(fieldName)} >= ${param(val)}`);
-        break;
-      case "lt":
-        where.push(`${jsonExtract(fieldName)} < ${param(val)}`);
-        break;
-      case "lte":
-        where.push(`${jsonExtract(fieldName)} <= ${param(val)}`);
-        break;
-      case "contains":
-        where.push(`${expr} ILIKE '%' || ${param(String(val))} || '%'`);
-        break;
-      case "in": {
-        const arr = Array.isArray(val) ? val : [val];
-        const placeholders = arr.map((v) => param(v)).join(", ");
-        where.push(`${expr} IN (${placeholders})`);
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  // Compose SQL reading directly from staged rows
-  const whereSql = where.length ? `AND ${where.join(" AND ")}` : "";
-
-  // Count first for affected rows
-  const countSql = `
-    SELECT COUNT(1)::int AS cnt
-    FROM "tbl_ptrs_stage_row"
-    WHERE "customerId" = :customerId
-      AND "runId" = :runId
-      ${whereSql ? whereSql.replace(/^AND /, "AND ") : ""}
-  `;
-  const [countRow] = await db.sequelize.query(countSql, {
-    type: db.sequelize.QueryTypes.SELECT,
-    replacements: params,
-  });
-  const affectedCount = countRow ? countRow.cnt || 0 : 0;
-
-  // Fetch preview sample
-  const sampleSql = `
-    SELECT "rowNo", ${selectCols.join(", ")}
-    FROM "tbl_ptrs_stage_row"
-    WHERE "customerId" = :customerId
-      AND "runId" = :runId
-      ${whereSql}
-    ORDER BY "rowNo"
-    LIMIT :limit
-  `;
-  const rows = await db.sequelize.query(sampleSql, {
-    type: db.sequelize.QueryTypes.SELECT,
-    replacements: params,
-  });
-
-  // Build headers from logical fields
-  const headers = Array.from(logicalFields);
-
-  // Minimal diagnostics
-  logger?.info &&
-    logger.info("PTRS v2 getStagePreview (staged): result", {
-      action: "PtrsV2GetStagePreviewStaged",
-      customerId,
-      runId,
-      projectedCount: headers.length,
-      rows: rows.length,
-      firstRowKeys: rows[0] ? Object.keys(rows[0]) : [],
-    });
-
-  return { headers, rows, affectedCount };
 }
 
 // in v2/ptrs/services/ptrs.service.js
@@ -2049,6 +1980,7 @@ module.exports = {
   getUpload,
   importCsvStream,
   getImportSample,
+  getUnifiedSample,
   getColumnMap,
   saveColumnMap,
   previewTransform,

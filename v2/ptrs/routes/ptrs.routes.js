@@ -69,7 +69,7 @@ router.get(
 router.get(
   "/runs/:id/unified-sample",
   requirePtrs,
-  ptrsController.getSample // alias to reuse existing controller logic
+  ptrsController.getUnifiedSample
 );
 
 // Preview transformed sample (no mutation)

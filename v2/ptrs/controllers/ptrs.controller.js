@@ -332,6 +332,70 @@ async function getSample(req, res, next) {
 }
 
 /**
+ * GET /api/v2/ptrs/runs/:id/unified-sample?limit=10&offset=0
+ * Returns a small window of main rows + unified headers/examples merged from all datasets.
+ */
+async function getUnifiedSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+
+    const { rows, total, headers, headerMeta } =
+      await ptrsService.getUnifiedSample({
+        customerId,
+        runId,
+        limit,
+        offset,
+      });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetUnifiedSample",
+      entity: "PtrsUpload",
+      entityId: runId,
+      details: { limit, offset, returned: rows.length, total },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { rows, total, headers, headerMeta, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 unified sample", {
+      action: "PtrsV2GetUnifiedSample",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
  * GET /api/v2/ptrs/runs/:id/map
  * Returns existing column map (if any) and inferred headers to assist UI mapping.
  */
@@ -1138,6 +1202,7 @@ module.exports = {
   importCsv,
   getRun,
   getSample,
+  getUnifiedSample,
   getMap,
   saveMap,
   stageRun,

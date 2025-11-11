@@ -1,5 +1,9 @@
-const { DataTypes } = require("sequelize");
-const getNanoid = async () => (await import("nanoid")).nanoid;
+const { DataTypes, INTEGER } = require("sequelize");
+let nanoid;
+(async () => {
+  const { nanoid: importedNanoid } = await import("nanoid");
+  nanoid = importedNanoid;
+})();
 
 module.exports = (sequelize) => {
   const PtrsStageRow = sequelize.define(
@@ -8,10 +12,7 @@ module.exports = (sequelize) => {
       id: {
         type: DataTypes.STRING,
         primaryKey: true,
-        defaultValue: async () => {
-          const nanoid = await getNanoid();
-          return nanoid();
-        },
+        defaultValue: () => nanoid(10),
       },
       customerId: {
         type: DataTypes.STRING,
