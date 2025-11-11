@@ -842,6 +842,108 @@ async function getStagePreview(req, res, next) {
 }
 
 /**
+ * GET /api/v2/ptrs/runs/:id/rules/preview?limit=50
+ */
+async function rulesPreview(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "50", 10), 500);
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+    const out = await ptrsService.getRulesPreview({ customerId, runId, limit });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RulesPreview",
+      entity: "PtrsUpload",
+      entityId: runId,
+      details: {
+        limit,
+        returned: Array.isArray(out?.rows) ? out.rows.length : 0,
+      },
+    });
+    return res.status(200).json({ status: "success", data: out });
+  } catch (error) {
+    logger.logEvent("error", "Error previewing PTRS v2 rules", {
+      action: "PtrsV2RulesPreview",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/runs/:id/rules/apply
+ * Body: { profileId? }
+ */
+async function rulesApply(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const profileId = req.body?.profileId || null;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+    const out = await ptrsService.applyRulesAndPersist({
+      customerId,
+      runId,
+      profileId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RulesApply",
+      entity: "PtrsUpload",
+      entityId: runId,
+      details: { persisted: out?.persisted ?? 0 },
+    });
+    return res.status(200).json({ status: "success", data: out });
+  } catch (error) {
+    logger.logEvent("error", "Error applying PTRS v2 rules", {
+      action: "PtrsV2RulesApply",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
  * GET /api/v2/ptrs/runs?hasMap=true
  * Returns a list of runs for the tenant (optionally only those with a saved column map)
  */
@@ -1208,6 +1310,8 @@ module.exports = {
   stageRun,
   preview,
   getStagePreview,
+  rulesPreview,
+  rulesApply,
   listRuns,
   addDataset,
   listDatasets,

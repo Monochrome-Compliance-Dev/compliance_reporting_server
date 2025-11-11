@@ -281,6 +281,115 @@ function applyColumnMappingsToRow({ mappings, sourceRow }) {
   return out;
 }
 
+// ----- RULE ENGINE HELPERS -----
+function _toNum(v) {
+  if (v == null || v === "") return 0;
+  const s = String(v).replace(/[, ]+/g, "");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+function _round(n, dp = 2) {
+  const f = Math.pow(10, dp);
+  return Math.round(n * f) / f;
+}
+function _matches(row, cond) {
+  if (!cond || !cond.field) return false;
+  const a = row[cond.field];
+  const op = String(cond.op || "eq").toLowerCase();
+  switch (op) {
+    case "eq":
+      return String(a) === String(cond.value);
+    case "neq":
+      return String(a) !== String(cond.value);
+    case "in": {
+      const arr = Array.isArray(cond.value) ? cond.value : [cond.value];
+      return arr.map(String).includes(String(a));
+    }
+    case "nin": {
+      const arr = Array.isArray(cond.value) ? cond.value : [cond.value];
+      return !arr.map(String).includes(String(a));
+    }
+    case "gt":
+      return _toNum(a) > _toNum(cond.value);
+    case "gte":
+      return _toNum(a) >= _toNum(cond.value);
+    case "lt":
+      return _toNum(a) < _toNum(cond.value);
+    case "lte":
+      return _toNum(a) <= _toNum(cond.value);
+    case "is_null":
+      return a == null || a === "";
+    case "not_null":
+      return !(a == null || a === "");
+    default:
+      return false;
+  }
+}
+
+function _applyAction(row, act) {
+  if (!act || !act.op) return;
+  if (act.op === "exclude") {
+    row.exclude = true;
+    row._warnings = Array.isArray(row._warnings) ? row._warnings : [];
+    row._warnings.push(act.reason || "Excluded by rule");
+    return;
+  }
+  if (!act.field) return;
+  const cur = _toNum(row[act.field]);
+  const val = Object.prototype.hasOwnProperty.call(act, "value")
+    ? _toNum(act.value)
+    : act.valueField
+      ? _toNum(row[act.valueField])
+      : 0;
+  let next = cur;
+  switch (act.op) {
+    case "add":
+      next = cur + val;
+      break;
+    case "sub":
+      next = cur - val;
+      break;
+    case "mul":
+      next = cur * val;
+      break;
+    case "div":
+      next = val === 0 ? cur : cur / val;
+      break;
+    case "assign":
+      next = val;
+      break;
+    default:
+      return;
+  }
+  row[act.field] = act.round != null ? _round(next, act.round) : next;
+}
+
+function applyRules(rows, rules = []) {
+  const enabled = (rules || []).filter((r) => r && r.enabled !== false);
+  const stats = { rulesTried: enabled.length, rowsAffected: 0, actions: 0 };
+  if (!Array.isArray(rows) || !rows.length || !enabled.length) {
+    return { rows: rows || [], stats };
+  }
+  for (const row of rows) {
+    let touched = false;
+    for (const rule of enabled) {
+      const conds = Array.isArray(rule.when) ? rule.when : [];
+      const ok = conds.every((c) => _matches(row, c));
+      if (!ok) continue;
+      const actions = Array.isArray(rule.then) ? rule.then : [];
+      for (const act of actions) {
+        _applyAction(row, act);
+        stats.actions++;
+        touched = true;
+      }
+      row._appliedRules = row._appliedRules || [];
+      row._appliedRules.push(rule.id || rule.label || "rule");
+    }
+    if (touched) stats.rowsAffected++;
+  }
+  return { rows, stats };
+}
+
 let XLSX = null;
 try {
   XLSX = require("xlsx");
@@ -1644,6 +1753,39 @@ async function stageRun({
   });
   const rows = preview.rows || [];
 
+  const rulesStats = preview?.stats?.rules || null;
+
+  if (persist) {
+    const payload = rows.map((r) => {
+      const safeData =
+        r && Object.keys(r || {}).length
+          ? r
+          : { _warning: "⚠️ No mapped data for this row" };
+
+      return {
+        customerId,
+        runId,
+        rowNo: r.row_no || r.rowNo || null,
+        data: safeData,
+        meta: {
+          rules: {
+            applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
+            exclude: !!r.exclude,
+            at: new Date().toISOString(),
+          },
+        },
+      };
+    });
+
+    await db.PtrsStageRow.destroy({ where: { customerId, runId } });
+    if (payload.length) {
+      await db.PtrsStageRow.bulkCreate(payload, {
+        validate: false,
+        returning: false,
+      });
+    }
+  }
+
   if (persist) {
     {
       // 1) Build base payload from composed rows
@@ -1758,7 +1900,7 @@ async function stageRun({
     rowsOut: rows.length,
     tookMs,
     sample: rows[0] || null,
-    stats: preview.stats || null,
+    stats: { ...(preview.stats || {}), rules: rulesStats },
   };
 }
 
@@ -1879,11 +2021,106 @@ async function getStagePreview({
     new Set(composed.flatMap((row) => Object.keys(row)))
   );
 
+  // --- Apply row rules (if any) ---
+  let rowRules = null;
+  try {
+    const mapRow = await getColumnMap({ customerId, runId });
+    rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
+    if (typeof rowRules === "string") {
+      try {
+        rowRules = JSON.parse(rowRules);
+      } catch {
+        rowRules = null;
+      }
+    }
+  } catch (_) {
+    rowRules = null;
+  }
+
+  const rulesResult = applyRules(
+    composed,
+    Array.isArray(rowRules) ? rowRules : []
+  );
+  const rowsAfterRules = rulesResult.rows || composed;
+  const rulesStats = rulesResult.stats || null;
+
+  // Replace the return to include rules + adjusted rows
+  const baseStats =
+    typeof previewStats === "object" && previewStats !== null
+      ? previewStats
+      : {};
+
   return {
     headers,
-    rows: composed,
-    stats: { joinedRows: otherIndex.rowsIndexed },
+    rows: rowsAfterRules,
+    stats: { ...baseStats, rules: rulesStats },
   };
+}
+
+async function getRulesPreview({
+  customerId,
+  runId,
+  limit = 50,
+  profileId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  const prev = await getStagePreview({
+    customerId,
+    runId,
+    steps: [],
+    limit,
+    profileId,
+  });
+  return {
+    headers: prev.headers || [],
+    rows: prev.rows || [],
+    stats: prev.stats || null,
+  };
+}
+
+async function applyRulesAndPersist({
+  customerId,
+  runId,
+  profileId = null,
+  limit = 5000,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+  const prev = await getStagePreview({
+    customerId,
+    runId,
+    steps: [],
+    limit,
+    profileId,
+  });
+  const rows = prev.rows || [];
+
+  const payload = rows.map((r) => ({
+    customerId,
+    runId,
+    rowNo: r.row_no || r.rowNo || null,
+    data:
+      r && Object.keys(r || {}).length
+        ? r
+        : { _warning: "⚠️ No mapped data for this row" },
+    meta: {
+      rules: {
+        applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
+        exclude: !!r.exclude,
+        at: new Date().toISOString(),
+      },
+    },
+  }));
+
+  await db.PtrsStageRow.destroy({ where: { customerId, runId } });
+  if (payload.length) {
+    await db.PtrsStageRow.bulkCreate(payload, {
+      validate: false,
+      returning: false,
+    });
+  }
+  return { ok: true, stats: prev.stats || null, persisted: payload.length };
 }
 
 // in v2/ptrs/services/ptrs.service.js
@@ -1993,6 +2230,8 @@ module.exports = {
   getStagePreview,
   stageRun,
   listProfiles,
+  getRulesPreview,
+  applyRulesAndPersist,
   // Profiles CRUD
   createProfile,
   getProfile,
