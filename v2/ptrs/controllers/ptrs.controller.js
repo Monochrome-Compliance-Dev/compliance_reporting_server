@@ -57,6 +57,41 @@ const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
 const fs = require("fs");
 const path = require("path");
+// --- Safe logging helpers (avoid circular/Set/BigInt issues) ---
+function _safeReplacer() {
+  const seen = new WeakSet();
+  return function (key, value) {
+    if (typeof value === "bigint") return value.toString();
+    if (value instanceof Set) return Array.from(value);
+    if (value instanceof Map) return Object.fromEntries(value);
+    if (Buffer.isBuffer?.(value))
+      return { __type: "Buffer", length: value.length };
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
+    }
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  };
+}
+function safeJson(obj, { maxLen = 5000 } = {}) {
+  try {
+    const s = JSON.stringify(obj, _safeReplacer());
+    if (s.length > maxLen) return s.slice(0, maxLen) + "...[truncated]";
+    return s;
+  } catch (e) {
+    return `"[Unserializable: ${e.message}]"`;
+  }
+}
+function safeLog(prefix, meta) {
+  try {
+    console.log(prefix, JSON.parse(safeJson(meta)));
+  } catch {
+    console.log(prefix, meta);
+  }
+}
 
 /**
  * POST /api/v2/ptrs/runs
@@ -509,7 +544,7 @@ async function stageRun(req, res, next) {
     profileId = null,
   } = req.body || {};
 
-  console.log("[PTRS controller.stageRun] received", {
+  safeLog("[PTRS controller.stageRun] received", {
     customerId: req.effectiveCustomerId,
     runId: req.params.id,
     body: req.body,
@@ -523,7 +558,7 @@ async function stageRun(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    console.log("[PTRS controller.stageRun] invoking service", {
+    safeLog("[PTRS controller.stageRun] invoking service", {
       steps,
       persist,
       limit,
@@ -547,7 +582,7 @@ async function stageRun(req, res, next) {
       profileId,
     });
 
-    console.log("[PTRS controller.stageRun] result", result);
+    // safeLog("[PTRS controller.stageRun] result", result);
 
     await auditService.logEvent({
       customerId,
@@ -652,7 +687,7 @@ async function getStagePreview(req, res, next) {
   const device = req.headers["user-agent"];
   const runId = req.params.id;
 
-  console.log("[PTRS controller.getStagePreview] received", {
+  safeLog("[PTRS controller.getStagePreview] received", {
     customerId: req.effectiveCustomerId,
     runId: req.params.id,
     body: req.body,
@@ -688,7 +723,7 @@ async function getStagePreview(req, res, next) {
         .json({ status: "error", message: "Run not found" });
     }
 
-    console.log("[PTRS controller.getStagePreview] invoking service", {
+    safeLog("[PTRS controller.getStagePreview] invoking service", {
       steps,
       limit,
       profileId,
@@ -702,10 +737,19 @@ async function getStagePreview(req, res, next) {
       profileId,
     });
 
-    console.log("[PTRS controller.getStagePreview] result", {
-      headers: result?.headers?.length || 0,
-      rows: result?.rows?.length || 0,
-      sample: result?.rows?.[0],
+    safeLog("[PTRS controller.getStagePreview] result", {
+      headers: Array.isArray(result?.headers) ? result.headers.length : 0,
+      rows: Array.isArray(result?.rows) ? result.rows.length : 0,
+      headerSample:
+        Array.isArray(result?.headers) && result.headers.length
+          ? result.headers.slice(0, 10)
+          : [],
+      firstRowKeys:
+        Array.isArray(result?.rows) && result.rows[0]
+          ? Object.keys(result.rows[0])
+          : [],
+      firstRowSample:
+        Array.isArray(result?.rows) && result.rows[0] ? result.rows[0] : null,
     });
 
     await auditService.logEvent({

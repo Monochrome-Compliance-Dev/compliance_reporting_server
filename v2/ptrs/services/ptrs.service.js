@@ -122,6 +122,72 @@ async function getDatasetSample({
   return { headers, rows, total };
 }
 const { logger } = require("@/helpers/logger");
+// --- Safe logging helpers for service layer ---
+function _svcReplacer() {
+  const seen = new WeakSet();
+  return function (key, value) {
+    if (typeof value === "bigint") return value.toString();
+    if (value instanceof Set) return Array.from(value);
+    if (value instanceof Map) return Object.fromEntries(value);
+    if (Buffer.isBuffer?.(value))
+      return { __type: "Buffer", length: value.length };
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
+    }
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  };
+}
+function safeMeta(meta) {
+  try {
+    return JSON.parse(JSON.stringify(meta, _svcReplacer()));
+  } catch {
+    return { note: "unserializable meta" };
+  }
+}
+const slog = {
+  info: (msg, meta) => logger?.info?.(msg, safeMeta(meta)),
+  warn: (msg, meta) => logger?.warn?.(msg, safeMeta(meta)),
+  error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
+  debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
+};
+// --- identifier helpers (enforce snake_case everywhere for SQL identifiers) ---
+function toSnake(str) {
+  if (str == null) return "";
+  return (
+    String(str)
+      // replace non-alphanumerics with underscores
+      .replace(/[^a-zA-Z0-9]+/g, "_")
+      // insert underscores between camelCase boundaries
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase()
+      .replace(/^_+|_+$/g, "")
+      .replace(/_{2,}/g, "_")
+  );
+}
+
+// Build tolerant JSONB extract that tries snake_case, original, and underscored variants
+function jsonKeyVariants(key) {
+  const original = String(key || "");
+  const snake = toSnake(original);
+  const underscored = original.replace(/\s+/g, "_");
+  // ensure unique order-preserving
+  const seen = new Set();
+  return [snake, original, underscored].filter((k) => {
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+function buildCoalesceJsonbExpr(sourceKey) {
+  const variants = jsonKeyVariants(sourceKey).map(
+    (k) => `data->>'${k.replace(/'/g, "''")}'`
+  );
+  return `COALESCE(${variants.join(", ")})`;
+}
 const db = require("@/db/database");
 const csv = require("fast-csv");
 const fs = require("fs");
@@ -369,7 +435,7 @@ async function saveColumnMap({
  */
 async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   if (logger && logger.info) {
-    logger.info("PTRS v2 getImportSample: begin", {
+    slog.info("PTRS v2 getImportSample: begin", {
       action: "PtrsV2GetImportSample",
       customerId,
       runId,
@@ -394,7 +460,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   });
 
   if (logger && logger.debug) {
-    logger.debug("PTRS v2 getImportSample: raw import snapshot", {
+    slog.debug("PTRS v2 getImportSample: raw import snapshot", {
       action: "PtrsV2GetImportSample",
       customerId,
       runId,
@@ -422,7 +488,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
     .map((h) => String(h));
 
   if (logger && logger.debug) {
-    logger.debug("PTRS v2 getImportSample: inferred main headers", {
+    slog.debug("PTRS v2 getImportSample: inferred main headers", {
       action: "PtrsV2GetImportSample",
       customerId,
       runId,
@@ -463,7 +529,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
       raw: true,
     });
     if (logger && logger.info) {
-      logger.info("PTRS v2 getImportSample: supporting datasets found", {
+      slog.info("PTRS v2 getImportSample: supporting datasets found", {
         action: "PtrsV2GetImportSampleMergeHeaders",
         customerId,
         runId,
@@ -521,7 +587,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
         }
       }
       if (logger && logger.info) {
-        logger.info("PTRS v2 getImportSample: merged supporting headers", {
+        slog.info("PTRS v2 getImportSample: merged supporting headers", {
           action: "PtrsV2GetImportSampleMergeHeaders",
           customerId,
           runId,
@@ -531,7 +597,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
     }
   } catch (e) {
     if (logger && logger.warn) {
-      logger.warn(
+      slog.warn(
         "PTRS v2 getImportSample: failed merging supporting dataset headers",
         {
           action: "PtrsV2GetSampleMergeHeaders",
@@ -568,7 +634,7 @@ async function getImportSample({ customerId, runId, limit = 10, offset = 0 }) {
   }
 
   if (logger && logger.info) {
-    logger.info("PTRS v2 getImportSample: done", {
+    slog.info("PTRS v2 getImportSample: done", {
       action: "PtrsV2GetImportSample",
       customerId,
       runId,
@@ -940,28 +1006,75 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
   }
   const mappings = mapRow.mappings || {};
 
-  // Build projection list from JSONB to SQL columns using mapping types
+  // Build projection list from JSONB to SQL columns using mapping types.
+  // Group by logical field so multiple source headers coalesce into a single column.
+  const byField = new Map(); // field_snk -> { type, sources: [] }
+  for (const [sourceHeader, cfg] of Object.entries(mappings)) {
+    const fieldRaw = cfg.field;
+    if (!fieldRaw) continue;
+    const field = toSnake(fieldRaw);
+    const type = (cfg.type || "string").toLowerCase();
+    const existing = byField.get(field);
+    if (existing) {
+      // Optionally promote type if any mapping asks for stronger typing
+      const promote = (prev, next) => {
+        const order = [
+          "string",
+          "number",
+          "numeric",
+          "decimal",
+          "date",
+          "datetime",
+          "timestamp",
+        ];
+        const ip = order.indexOf(prev);
+        const inx = order.indexOf(next);
+        return ip === -1 ? next : inx === -1 ? prev : order[Math.max(ip, inx)];
+      };
+      existing.type = promote(existing.type, type);
+      existing.sources.push(sourceHeader);
+    } else {
+      byField.set(field, { type, sources: [sourceHeader] });
+    }
+  }
+
   const projections = [];
-  const logicalFields = new Set();
-  for (const [source, cfg] of Object.entries(mappings)) {
-    const field = cfg.field;
-    if (!field) continue;
-    logicalFields.add(field);
-    const ty = (cfg.type || "string").toLowerCase();
-    let cast;
+  const logicalFields = new Set(byField.keys());
+  for (const [field, { type, sources }] of byField.entries()) {
+    // Expand each source header into tolerant json key variants (snake, original, underscored).
+    const variants = sources.flatMap((s) => jsonKeyVariants(s));
+    // Build COALESCE(data->>'a', data->>'b', ...)
+    const jsonExprs = variants.map((k) => `data->>'${k.replace(/'/g, "''")}'`);
+    const coalesced = `COALESCE(${jsonExprs.join(", ")})`;
+    let cast = "";
+    const ty = type;
     if (ty === "number" || ty === "numeric" || ty === "decimal")
       cast = "::numeric";
     else if (ty === "date" || ty === "datetime" || ty === "timestamp")
       cast = "::timestamptz";
-    else cast = ""; // text by default via ->>
     const expr =
       ty === "string"
-        ? `(data->>'${source.replace(/'/g, "''")}') AS "${field}"`
-        : `((data->>'${source.replace(/'/g, "''")}')${cast}) AS "${field}"`;
+        ? `${coalesced} AS "${field}"`
+        : `(${coalesced})${cast} AS "${field}"`;
     projections.push(expr);
   }
+
   if (projections.length === 0) {
     throw new Error("Column map has no usable field mappings");
+  }
+
+  const projectedFields = Array.isArray(projections)
+    ? projections.map((p) => p.as || p.key || p)
+    : [];
+
+  if (logger && logger.info) {
+    logger.info("PTRS v2 getStagePreview: projections", {
+      action: "PtrsV2GetStagePreviewProjections",
+      customerId,
+      runId,
+      projectedCount: projectedFields.length,
+      projectedSample: projectedFields.slice(0, 20),
+    });
   }
 
   // Build WHERE clause and parameters from filter steps
@@ -981,36 +1094,37 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
     if (!step || typeof step !== "object") continue;
     const { kind, config = {} } = step;
     if (kind === "filter") {
-      const { field, op, value } = config;
-      if (!field || !logicalFields.has(field)) continue;
+      const fieldName = toSnake(config.field);
+      const { op, value } = config;
+      if (!fieldName || !logicalFields.has(fieldName)) continue;
       switch ((op || "eq").toLowerCase()) {
         case "eq":
-          where.push(`"${field}" = ${param(value)}`);
+          where.push(`"${fieldName}" = ${param(value)}`);
           break;
         case "ne":
-          where.push(`"${field}" <> ${param(value)}`);
+          where.push(`"${fieldName}" <> ${param(value)}`);
           break;
         case "gt":
-          where.push(`"${field}" > ${param(value)}`);
+          where.push(`"${fieldName}" > ${param(value)}`);
           break;
         case "gte":
-          where.push(`"${field}" >= ${param(value)}`);
+          where.push(`"${fieldName}" >= ${param(value)}`);
           break;
         case "lt":
-          where.push(`"${field}" < ${param(value)}`);
+          where.push(`"${fieldName}" < ${param(value)}`);
           break;
         case "lte":
-          where.push(`"${field}" <= ${param(value)}`);
+          where.push(`"${fieldName}" <= ${param(value)}`);
           break;
         case "contains":
           where.push(
-            `CAST("${field}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
+            `CAST("${fieldName}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
           );
           break;
         case "in": {
           const arr = Array.isArray(value) ? value : [value];
           const placeholders = arr.map((v) => param(v)).join(", ");
-          where.push(`"${field}" IN (${placeholders})`);
+          where.push(`"${fieldName}" IN (${placeholders})`);
           break;
         }
         default:
@@ -1019,14 +1133,16 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
       }
     } else if (kind === "rename") {
       const { from, to } = config || {};
-      if (from && to && logicalFields.has(from)) {
-        renamePairs.push({ from, to });
+      const fromSnake = toSnake(from);
+      const toSnakeName = toSnake(to);
+      if (fromSnake && toSnakeName && logicalFields.has(fromSnake)) {
+        renamePairs.push({ from: fromSnake, to: toSnakeName });
       }
     } else if (kind === "derive") {
       const { as, sql } = config || {};
       if (as && sql) {
-        // very light safety: restrict to allowed chars
-        deriveExprs.push(`${sql} AS "${as}"`);
+        const asSnake = toSnake(as);
+        deriveExprs.push(`${sql} AS "${asSnake}"`);
       }
     }
   }
@@ -1044,11 +1160,19 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
     // Create temp table with projected columns
     const createTempSql = `
       CREATE TEMP TABLE tmp_ptrs_preview ON COMMIT DROP AS
-      SELECT "rowNo",
+      SELECT "rowNo", "data",
              ${projections.join(",\n               ")}
-      FROM "tbl_ptrs_import_raw"
+      FROM "tbl_ptrs_stage_row"
       WHERE "runId" = :runId AND "customerId" = :customerId;
     `;
+
+    if (logger && logger.debug) {
+      logger.debug("PTRS v2 getStagePreview: createTempSql", {
+        action: "PtrsV2GetStagePreviewSQL",
+        sql: createTempSql,
+      });
+    }
+
     await db.sequelize.query(createTempSql, {
       transaction: t,
       replacements: { runId, customerId },
@@ -1101,6 +1225,29 @@ async function previewTransform({ customerId, runId, steps = [], limit = 50 }) {
       replacements: { ...params },
     });
 
+    try {
+      const peek = await db.PtrsStageRow.findOne({
+        where: { customerId, runId },
+        attributes: ["rowNo", "data"],
+        order: [["rowNo", "ASC"]],
+        raw: true,
+      });
+      if (logger && logger.info) {
+        logger.info("PTRS v2 getStagePreview: staged row peek", {
+          action: "PtrsV2GetStagePreviewPeek",
+          rowNo: peek?.rowNo ?? null,
+          dataKeys: peek?.data ? Object.keys(peek.data) : [],
+        });
+      }
+    } catch (e) {
+      if (logger && logger.warn) {
+        logger.warn("PTRS v2 getStagePreview: failed to peek staged row", {
+          action: "PtrsV2GetStagePreviewPeekError",
+          error: e.message,
+        });
+      }
+    }
+
     return { sample, affectedCount };
   });
 }
@@ -1117,8 +1264,14 @@ async function materialiseCsvDatasetToTemp({
   const _csv = require("fast-csv");
   const fs = require("fs");
 
+  // Normalise selectCols to ensure snake_case everywhere and support multiple fallback headers
+  const normCols = selectCols.map((c) => ({
+    name: toSnake(c.name),
+    fromHeaders: Array.isArray(c.fromHeader) ? c.fromHeader : [c.fromHeader],
+  }));
+
   // 1) Create a simple temp table of text columns, drop if exists, ensure ON COMMIT DROP
-  const colsSql = selectCols.map((c) => `"${c.name}" text`).join(", ");
+  const colsSql = normCols.map((c) => `"${c.name}" text`).join(", ");
   await sequelize.query(`DROP TABLE IF EXISTS ${tempName};`, { transaction });
   await sequelize.query(
     `CREATE TEMP TABLE ${tempName} (${colsSql}) ON COMMIT DROP;`,
@@ -1134,13 +1287,13 @@ async function materialiseCsvDatasetToTemp({
     const placeholders = batch
       .map(
         (row, i) =>
-          `(${selectCols.map((_, j) => `$${i * selectCols.length + j + 1}`).join(",")})`
+          `(${normCols.map((_, j) => `$${i * normCols.length + j + 1}`).join(",")})`
       )
       .join(",");
     const values = batch.flatMap((row) =>
-      selectCols.map((c) => row[c.name] ?? null)
+      normCols.map((c) => row[c.name] ?? null)
     );
-    const insertSql = `INSERT INTO ${tempName} (${selectCols.map((c) => `"${c.name}"`).join(",")}) VALUES ${placeholders};`;
+    const insertSql = `INSERT INTO ${tempName} (${normCols.map((c) => `"${c.name}"`).join(",")}) VALUES ${placeholders};`;
     await sequelize.query(insertSql, { bind: values, transaction });
     batch = [];
   };
@@ -1227,8 +1380,15 @@ async function materialiseCsvDatasetToTemp({
       .on("error", reject)
       .on("data", (row) => {
         const out = {};
-        for (const col of selectCols) {
-          out[col.name] = row[col.fromHeader] ?? null;
+        for (const col of normCols) {
+          let value = null;
+          for (const h of col.fromHeaders) {
+            if (h && row[h] != null && String(row[h]).trim() !== "") {
+              value = row[h];
+              break;
+            }
+          }
+          out[col.name] = value;
         }
         batch.push(out);
         if (batch.length >= BATCH) {
@@ -1298,27 +1458,57 @@ async function stageRun({
     profileId: mapRow?.profileId,
     joinCount: Array.isArray(mapRow?.joins) ? mapRow.joins.length : 0,
   });
+  console.log("mappings: ", mappings);
 
-  // Build projection list
+  // Build projection list (group by logical field, coalesce multiple source headers).
+  const byField = new Map(); // field_snk -> { type, sources: [] }
+  for (const [sourceHeader, cfg] of Object.entries(mappings)) {
+    const fieldRaw = cfg.field;
+    if (!fieldRaw) continue;
+    const field = toSnake(fieldRaw);
+    const type = (cfg.type || "string").toLowerCase();
+    const existing = byField.get(field);
+    if (existing) {
+      const promote = (prev, next) => {
+        const order = [
+          "string",
+          "number",
+          "numeric",
+          "decimal",
+          "date",
+          "datetime",
+          "timestamp",
+        ];
+        const ip = order.indexOf(prev);
+        const inx = order.indexOf(next);
+        return ip === -1 ? next : inx === -1 ? prev : order[Math.max(ip, inx)];
+      };
+      existing.type = promote(existing.type, type);
+      existing.sources.push(sourceHeader);
+    } else {
+      byField.set(field, { type, sources: [sourceHeader] });
+    }
+  }
+
   const projections = [];
-  const logicalFields = new Set();
-  for (const [source, cfg] of Object.entries(mappings)) {
-    const field = cfg.field;
-    if (!field) continue;
-    logicalFields.add(field);
-    const ty = (cfg.type || "string").toLowerCase();
-    let cast;
+  const logicalFields = new Set(byField.keys());
+  for (const [field, { type, sources }] of byField.entries()) {
+    const variants = sources.flatMap((s) => jsonKeyVariants(s));
+    const jsonExprs = variants.map((k) => `data->>'${k.replace(/'/g, "''")}'`);
+    const coalesced = `COALESCE(${jsonExprs.join(", ")})`;
+    let cast = "";
+    const ty = type;
     if (ty === "number" || ty === "numeric" || ty === "decimal")
       cast = "::numeric";
     else if (ty === "date" || ty === "datetime" || ty === "timestamp")
       cast = "::timestamptz";
-    else cast = "";
     const expr =
       ty === "string"
-        ? `(data->>'${source.replace(/'/g, "''")}') AS "${field}"`
-        : `((data->>'${source.replace(/'/g, "''")}')${cast}) AS "${field}"`;
+        ? `${coalesced} AS "${field}"`
+        : `(${coalesced})${cast} AS "${field}"`;
     projections.push(expr);
   }
+
   if (projections.length === 0) {
     throw new Error("Column map has no usable field mappings");
   }
@@ -1343,36 +1533,37 @@ async function stageRun({
     if (!step || typeof step !== "object") continue;
     const { kind, config = {} } = step;
     if (kind === "filter") {
-      const { field, op, value } = config;
-      if (!field || !logicalFields.has(field)) continue;
+      const fieldName = toSnake(config.field);
+      const { op, value } = config;
+      if (!fieldName || !logicalFields.has(fieldName)) continue;
       switch ((op || "eq").toLowerCase()) {
         case "eq":
-          where.push(`"${field}" = ${param(value)}`);
+          where.push(`"${fieldName}" = ${param(value)}`);
           break;
         case "ne":
-          where.push(`"${field}" <> ${param(value)}`);
+          where.push(`"${fieldName}" <> ${param(value)}`);
           break;
         case "gt":
-          where.push(`"${field}" > ${param(value)}`);
+          where.push(`"${fieldName}" > ${param(value)}`);
           break;
         case "gte":
-          where.push(`"${field}" >= ${param(value)}`);
+          where.push(`"${fieldName}" >= ${param(value)}`);
           break;
         case "lt":
-          where.push(`"${field}" < ${param(value)}`);
+          where.push(`"${fieldName}" < ${param(value)}`);
           break;
         case "lte":
-          where.push(`"${field}" <= ${param(value)}`);
+          where.push(`"${fieldName}" <= ${param(value)}`);
           break;
         case "contains":
           where.push(
-            `CAST("${field}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
+            `CAST("${fieldName}" AS text) ILIKE '%' || ${param(String(value))} || '%'`
           );
           break;
         case "in": {
           const arr = Array.isArray(value) ? value : [value];
           const placeholders = arr.map((v) => param(v)).join(", ");
-          where.push(`"${field}" IN (${placeholders})`);
+          where.push(`"${fieldName}" IN (${placeholders})`);
           break;
         }
         default:
@@ -1380,12 +1571,17 @@ async function stageRun({
       }
     } else if (kind === "rename") {
       const { from, to } = config || {};
-      if (from && to && logicalFields.has(from)) {
-        renamePairs.push({ from, to });
+      const fromSnake = toSnake(from);
+      const toSnakeName = toSnake(to);
+      if (fromSnake && toSnakeName && logicalFields.has(fromSnake)) {
+        renamePairs.push({ from: fromSnake, to: toSnakeName });
       }
     } else if (kind === "derive") {
       const { as, sql } = config || {};
-      if (as && sql) deriveExprs.push(`${sql} AS "${as}"`);
+      if (as && sql) {
+        const asSnake = toSnake(as);
+        deriveExprs.push(`${sql} AS "${asSnake}"`);
+      }
     }
   }
 
@@ -1432,18 +1628,24 @@ async function stageRun({
         storageRef: vendorDs.storageRef,
         tempName: tempVendor,
         selectCols: [
-          { name: "abn", fromHeader: "ABN" },
-          { name: "supplierName", fromHeader: "SupplierName" },
+          {
+            name: "abn",
+            fromHeader: ["ABN", "Tax number", "Tax Number", "ABN/ACN"],
+          },
+          {
+            name: "supplier_name",
+            fromHeader: ["SupplierName", "Vendor Account: Name 1", "Name"],
+          },
         ],
       });
 
       await db.sequelize.query(
         `
     CREATE TEMP TABLE tmp_ptrs_stage_joined ON COMMIT DROP AS
-    SELECT s.*, v.supplierName
+    SELECT s.*, v."supplier_name" AS "supplier_name"
     FROM tmp_ptrs_stage s
     LEFT JOIN ${tempVendor} v
-      ON NULLIF(TRIM(s."payeeEntityAbn"), '') = NULLIF(TRIM(v."abn"), '');
+      ON NULLIF(TRIM(s."payee_entity_abn"), '') = NULLIF(TRIM(v."abn"), '');
     DROP TABLE tmp_ptrs_stage;
     ALTER TABLE tmp_ptrs_stage_joined RENAME TO tmp_ptrs_stage;
     `,
@@ -1507,19 +1709,22 @@ async function stageRun({
           SELECT * FROM tmp_ptrs_stage
           ${whereSql}
         )
-        SELECT :customerId AS "customerId",
-               :runId AS "runId",
-               f."rowNo" AS "rowNo",
-               to_jsonb(f) - 'rowNo' AS "data",
-               NULL::jsonb AS "errors",
-               NOW() AS "createdAt",
-               NOW() AS "updatedAt"
+        SELECT
+          md5(random()::text || clock_timestamp()::text || COALESCE(f."rowNo"::text, '')) AS "id",
+          :customerId AS "customerId",
+          :runId      AS "runId",
+          f."rowNo"   AS "rowNo",
+          to_jsonb(f) - 'rowNo' AS "data",
+          NULL::jsonb  AS "errors",
+          NOW()        AS "createdAt",
+          NOW()        AS "updatedAt"
         FROM filtered f
         ORDER BY f."rowNo";
       `;
 
       const insertSql = `
-        INSERT INTO "tbl_ptrs_stage_row" ("customerId","runId","rowNo","data","errors","createdAt","updatedAt")
+        INSERT INTO "tbl_ptrs_stage_row"
+          ("id","customerId","runId","rowNo","data","errors","createdAt","updatedAt")
         ${selectForJson};
       `;
       await db.sequelize.query(insertSql, {
@@ -1529,7 +1734,7 @@ async function stageRun({
 
       await db.PtrsUpload.update(
         { status: "Staged" },
-        { where: { id: runId, customerId }, transaction: t }
+        { where: { id: runId, customerId }, transaction: t, validate: false }
       );
 
       const [cnt] = await db.sequelize.query(
@@ -1589,11 +1794,165 @@ async function listRuns({ customerId, hasMap = false }) {
 }
 
 /**
- * Convenience wrapper used by the controller/routes.
- * Returns a preview of staged data using the current column map and step pipeline.
+ * Returns a preview of staged data using the current column map and step pipeline,
+ * but previews directly from the staged table using snake_case logical fields.
  */
 async function getStagePreview({ customerId, runId, steps = [], limit = 50 }) {
-  return previewTransform({ customerId, runId, steps, limit });
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+
+  // Load the saved column map to know which logical (snake_case) fields to project.
+  const mapRow = await getColumnMap({ customerId, runId });
+  if (!mapRow || !mapRow.mappings) {
+    // If no map yet, there's nothing meaningful to preview from staged rows.
+    return { headers: [], rows: [] };
+  }
+
+  // Group mappings by logical field (snake_case) and coalesce duplicates.
+  const byField = new Map(); // field_snk -> { type, sources: [] }
+  for (const [sourceHeader, cfg] of Object.entries(mapRow.mappings || {})) {
+    if (!cfg || !cfg.field) continue;
+    const field = toSnake(cfg.field);
+    const type = (cfg.type || "string").toLowerCase();
+    const ex = byField.get(field);
+    if (ex) {
+      // keep the "widest" type and push another source for diagnostics if needed
+      const order = [
+        "string",
+        "number",
+        "numeric",
+        "decimal",
+        "date",
+        "datetime",
+        "timestamp",
+      ];
+      const ip = order.indexOf(ex.type);
+      const inx = order.indexOf(type);
+      ex.type =
+        ip === -1 ? type : inx === -1 ? ex.type : order[Math.max(ip, inx)];
+    } else {
+      byField.set(field, { type, sources: [sourceHeader] });
+    }
+  }
+
+  const logicalFields = new Set(byField.keys());
+  if (!logicalFields.size) {
+    return { headers: [], rows: [] };
+  }
+
+  // Build JSON extracts against the staged JSON column ("data") using snake_case keys.
+  // e.g. data->>'company_code' AS "company_code"
+  const jsonExtract = (key) => `data->>'${String(key).replace(/'/g, "''")}'`;
+  const selectCols = Array.from(logicalFields).map(
+    (f) => `${jsonExtract(f)} AS "${f}"`
+  );
+
+  // WHERE from steps (filters only), using the same snake_case logical fields.
+  const where = [];
+  const params = {
+    customerId,
+    runId,
+    limit: Math.min(Number(limit) || 50, 500),
+  };
+  let pIndex = 0;
+  const param = (val) => {
+    const k = `p${pIndex++}`;
+    params[k] = val;
+    return `:${k}`;
+  };
+
+  for (const step of steps) {
+    if (!step || typeof step !== "object") continue;
+    const { kind, config = {} } = step;
+    if (kind !== "filter") continue;
+
+    const fieldName = toSnake(config.field);
+    if (!fieldName || !logicalFields.has(fieldName)) continue;
+
+    const op = String(config.op || "eq").toLowerCase();
+    const val = config.value;
+    const expr = `CAST(${jsonExtract(fieldName)} AS text)`;
+
+    switch (op) {
+      case "eq":
+        where.push(`${expr} = ${param(val)}`);
+        break;
+      case "ne":
+        where.push(`${expr} <> ${param(val)}`);
+        break;
+      case "gt":
+        where.push(`${jsonExtract(fieldName)} > ${param(val)}`);
+        break;
+      case "gte":
+        where.push(`${jsonExtract(fieldName)} >= ${param(val)}`);
+        break;
+      case "lt":
+        where.push(`${jsonExtract(fieldName)} < ${param(val)}`);
+        break;
+      case "lte":
+        where.push(`${jsonExtract(fieldName)} <= ${param(val)}`);
+        break;
+      case "contains":
+        where.push(`${expr} ILIKE '%' || ${param(String(val))} || '%'`);
+        break;
+      case "in": {
+        const arr = Array.isArray(val) ? val : [val];
+        const placeholders = arr.map((v) => param(v)).join(", ");
+        where.push(`${expr} IN (${placeholders})`);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // Compose SQL reading directly from staged rows
+  const whereSql = where.length ? `AND ${where.join(" AND ")}` : "";
+
+  // Count first for affected rows
+  const countSql = `
+    SELECT COUNT(1)::int AS cnt
+    FROM "tbl_ptrs_stage_row"
+    WHERE "customerId" = :customerId
+      AND "runId" = :runId
+      ${whereSql ? whereSql.replace(/^AND /, "AND ") : ""}
+  `;
+  const [countRow] = await db.sequelize.query(countSql, {
+    type: db.sequelize.QueryTypes.SELECT,
+    replacements: params,
+  });
+  const affectedCount = countRow ? countRow.cnt || 0 : 0;
+
+  // Fetch preview sample
+  const sampleSql = `
+    SELECT "rowNo", ${selectCols.join(", ")}
+    FROM "tbl_ptrs_stage_row"
+    WHERE "customerId" = :customerId
+      AND "runId" = :runId
+      ${whereSql}
+    ORDER BY "rowNo"
+    LIMIT :limit
+  `;
+  const rows = await db.sequelize.query(sampleSql, {
+    type: db.sequelize.QueryTypes.SELECT,
+    replacements: params,
+  });
+
+  // Build headers from logical fields
+  const headers = Array.from(logicalFields);
+
+  // Minimal diagnostics
+  logger?.info &&
+    logger.info("PTRS v2 getStagePreview (staged): result", {
+      action: "PtrsV2GetStagePreviewStaged",
+      customerId,
+      runId,
+      projectedCount: headers.length,
+      rows: rows.length,
+      firstRowKeys: rows[0] ? Object.keys(rows[0]) : [],
+    });
+
+  return { headers, rows, affectedCount };
 }
 
 // in v2/ptrs/services/ptrs.service.js

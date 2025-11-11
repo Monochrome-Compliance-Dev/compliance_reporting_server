@@ -21,10 +21,16 @@ module.exports = (sequelize) => {
         type: DataTypes.STRING,
         allowNull: false,
       },
+      rowNo: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      },
       srcRowId: {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      data: { type: DataTypes.JSONB, allowNull: true, field: "data" },
+      errors: { type: DataTypes.JSONB, allowNull: true, field: "errors" },
       standard: {
         type: DataTypes.JSONB,
         allowNull: true,
@@ -41,7 +47,10 @@ module.exports = (sequelize) => {
     {
       tableName: "tbl_ptrs_stage_row",
       timestamps: true,
-      indexes: [{ fields: ["runId"] }],
+      indexes: [
+        { fields: ["runId"] },
+        { fields: ["customerId", "runId", "rowNo"] },
+      ],
     }
   );
 
