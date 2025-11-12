@@ -75,8 +75,12 @@ router.get(
 // Preview transformed sample (no mutation)
 router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
 
-router.get("/api/v2/ptrs/runs/:id/rules/preview", ptrsController.rulesPreview);
-router.post("/api/v2/ptrs/runs/:id/rules/apply", ptrsController.rulesApply);
+// Rules (preview/apply)
+router.get("/runs/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
+router.post("/runs/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
+// Rules (get/save) — FE writes rules without resending mappings
+router.get("/runs/:id/rules", requirePtrs, ptrsController.getRules);
+router.post("/runs/:id/rules", requirePtrs, ptrsController.saveRules);
 
 // List runs (optionally filter to those that already have a saved column map)
 router.get("/runs", requirePtrs, ptrsController.listRuns);

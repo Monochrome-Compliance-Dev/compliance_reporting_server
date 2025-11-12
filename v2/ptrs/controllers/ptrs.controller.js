@@ -1299,6 +1299,115 @@ async function deleteProfile(req, res, next) {
   }
 }
 
+// GET /v2/ptrs/runs/:id/rules
+async function getRules(req, res, next) {
+  try {
+    const { id } = req.params;
+    const customerId =
+      req.customerId || req.auth?.customerId || req.user?.customerId || null;
+    const map = await ptrsService.getMap({ runId: id, customerId });
+    const src = map?.map || map || {};
+    const extras =
+      typeof src.extras === "string"
+        ? JSON.parse(src.extras)
+        : src.extras || {};
+    const rowRules =
+      typeof src.rowRules === "string"
+        ? JSON.parse(src.rowRules)
+        : src.rowRules || [];
+    const crossRowRules = extras?.__experimentalCrossRowRules || [];
+    return res.json({ data: { rowRules, crossRowRules } });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// POST /v2/ptrs/runs/:id/rules
+/**
+ * POST /api/v2/ptrs/runs/:id/rules
+ * Body: { rowRules?: [], crossRowRules?: [] }
+ * Persist only rules — do NOT overwrite mappings/defaults/joins.
+ */
+async function saveRules(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const runId = req.params.id;
+  const { rowRules = [], crossRowRules = [] } = req.body || {};
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    // Ensure run exists in this tenant
+    const upload = await ptrsService.getUpload({ runId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Run not found" });
+    }
+
+    // Persist rules only
+    const updated = await ptrsService.updateRulesOnly({
+      customerId,
+      runId,
+      rowRules: Array.isArray(rowRules) ? rowRules : [],
+      crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
+      userId,
+    });
+
+    // Unwrap what we actually stored
+    const extras =
+      typeof updated.extras === "string"
+        ? (() => {
+            try {
+              return JSON.parse(updated.extras);
+            } catch {
+              return {};
+            }
+          })()
+        : updated.extras || {};
+    const storedCross = (extras && extras.__experimentalCrossRowRules) || [];
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2SaveRules",
+      entity: "PtrsUpload",
+      entityId: runId,
+      details: {
+        rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
+        crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
+      },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        rowRules: Array.isArray(updated.rowRules) ? updated.rowRules : [],
+        crossRowRules: Array.isArray(storedCross) ? storedCross : [],
+      },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error saving PTRS v2 rules", {
+      action: "PtrsV2SaveRules",
+      runId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
 module.exports = {
   createRun,
   importCsv,
@@ -1319,6 +1428,8 @@ module.exports = {
   removeDataset,
   getBlueprint,
   listProfiles,
+  getRules,
+  saveRules,
   // Profiles CRUD
   createProfile,
   getProfile,

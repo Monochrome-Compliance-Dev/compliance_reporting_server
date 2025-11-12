@@ -623,6 +623,102 @@ async function saveColumnMap({
   return row.get({ plain: true });
 }
 
+/** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
+async function getMap({ customerId, runId }) {
+  const map = await getColumnMap({ customerId, runId });
+  if (!map) return null;
+  const maybeParse = (v) => {
+    if (v == null || typeof v !== "string") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  };
+  map.extras = maybeParse(map.extras);
+  map.fallbacks = maybeParse(map.fallbacks);
+  map.defaults = maybeParse(map.defaults);
+  map.joins = maybeParse(map.joins);
+  map.rowRules = maybeParse(map.rowRules);
+  return map;
+}
+
+/** Controller-friendly wrapper: saveMap delegates to saveColumnMap */
+async function saveMap(payload) {
+  return saveColumnMap(payload);
+}
+
+/** Update only rules-related fields without touching mappings/defaults/joins */
+async function updateRulesOnly({
+  customerId,
+  runId,
+  rowRules = [],
+  crossRowRules = [],
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!runId) throw new Error("runId is required");
+
+  // Load existing column map row
+  const existing = await db.PtrsColumnMap.findOne({
+    where: { customerId, runId },
+  });
+
+  // Helper to parse JSON/TEXT extras safely
+  const parseMaybe = (v) => {
+    if (v == null) return null;
+    if (typeof v === "string") {
+      try {
+        return JSON.parse(v);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof v === "object") return v;
+    return null;
+  };
+
+  if (!existing) {
+    // Create a minimal row; keep other config fields null/untouched
+    const row = await db.PtrsColumnMap.create({
+      customerId,
+      runId,
+      // Some schemas set NOT NULL on mappings; use {} to be safe.
+      mappings: {},
+      extras: {
+        __experimentalCrossRowRules: Array.isArray(crossRowRules)
+          ? crossRowRules
+          : [],
+      },
+      fallbacks: null,
+      defaults: null,
+      joins: null,
+      rowRules: Array.isArray(rowRules) ? rowRules : [],
+      createdBy: userId || null,
+      updatedBy: userId || null,
+    });
+    return row.get({ plain: true });
+  }
+
+  // Merge into existing.extras without clobbering other keys
+  const prevExtras = parseMaybe(existing.extras) || {};
+  const nextExtras = {
+    ...prevExtras,
+    __experimentalCrossRowRules: Array.isArray(crossRowRules)
+      ? crossRowRules
+      : [],
+  };
+
+  await existing.update({
+    // Only touch rules-related fields
+    rowRules: Array.isArray(rowRules) ? rowRules : [],
+    extras: nextExtras,
+    updatedBy: userId || existing.updatedBy || existing.createdBy || null,
+  });
+
+  return existing.get({ plain: true });
+}
+
 /**
  * Return a small window of staged rows plus count and inferred headers.
  * Also returns headerMeta: sources and example values per header.
@@ -2220,6 +2316,9 @@ module.exports = {
   getUnifiedSample,
   getColumnMap,
   saveColumnMap,
+  getMap,
+  saveMap,
+  updateRulesOnly,
   previewTransform,
   listRuns,
   addDataset,
