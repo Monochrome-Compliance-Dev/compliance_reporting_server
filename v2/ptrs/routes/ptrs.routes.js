@@ -14,88 +14,87 @@ const requirePtrs = authorise({
 });
 
 // v2 PTRS routes
-// Create a run metadata record (returns run id and metadata)
-router.post("/runs", requirePtrs, ptrsController.createRun);
+// // Create a ptrs metadata record (returns ptrs id and metadata)
+// router.post("", requirePtrs, ptrsController.createPtrs);
 
-// Read a single run by id
-router.get("/runs/:id", requirePtrs, ptrsController.getRun);
+// Read a single ptrs by id
+router.get("/:id", requirePtrs, ptrsController.getPtrs);
 
-// Upload the CSV for a run (multipart or text/csv)
-router.post(
-  "/runs/:id/import",
-  requirePtrs,
-  upload.single("file"),
-  ptrsController.importCsv
-);
+// // Upload the CSV for a ptrs (multipart or text/csv)
+// router.post(
+//   "/:id/import",
+//   requirePtrs,
+//   upload.single("file"),
+//   ptrsController.importCsv
+// );
 
-// Stage normalized rows for a run
-router.post("/runs/:id/stage", requirePtrs, ptrsController.stageRun);
+// // Stage normalized rows for a ptrs
+// router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
 
-// Preview staged rows (read-only, small page)
-router.get(
-  "/runs/:id/stage/preview",
-  requirePtrs,
-  ptrsController.getStagePreview
-);
+// // Preview staged rows (read-only, small page)
+// router.get(
+//   "/:id/stage/preview",
+//   requirePtrs,
+//   ptrsController.getStagePreview
+// );
 
-// Peek at staged rows
-router.get("/runs/:id/sample", requirePtrs, ptrsController.getSample);
+// // Peek at staged rows
+// router.get("/:id/sample", requirePtrs, ptrsController.getSample);
 
 // Column mapping (get/save)
-router.get("/runs/:id/map", requirePtrs, ptrsController.getMap);
-router.post("/runs/:id/map", requirePtrs, ptrsController.saveMap);
+router.get("/:id/map", requirePtrs, ptrsController.getMap);
+// router.post("/:id/map", requirePtrs, ptrsController.saveMap);
 
-// Datasets: upload/list/delete additional files for a run (vendor master, terms, etc.)
+// Datasets: upload/list/delete additional files for a ptrs (vendor master, terms, etc.)
 router.post(
-  "/runs/:id/datasets",
+  "/:id/datasets",
   requirePtrs,
   upload.single("file"),
   ptrsController.addDataset
 );
-router.get("/runs/:id/datasets", requirePtrs, ptrsController.listDatasets);
-router.delete(
-  "/runs/:id/datasets/:datasetId",
-  requirePtrs,
-  ptrsController.removeDataset
-);
-// Dataset sample (used for per-dataset header examples in FE)
-router.get(
-  "/datasets/:datasetId/sample",
-  requirePtrs,
-  ptrsController.getDatasetSample
-);
+router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
+// router.delete(
+//   "/:id/datasets/:datasetId",
+//   requirePtrs,
+//   ptrsController.removeDataset
+// );
+// // Dataset sample (used for per-dataset header examples in FE)
+// router.get(
+//   "/datasets/:datasetId/sample",
+//   requirePtrs,
+//   ptrsController.getDatasetSample
+// );
 
-// Unified headers + examples across main and supporting datasets
-router.get(
-  "/runs/:id/unified-sample",
-  requirePtrs,
-  ptrsController.getUnifiedSample
-);
+// // Unified headers + examples across main and supporting datasets
+// router.get(
+//   "/:id/unified-sample",
+//   requirePtrs,
+//   ptrsController.getUnifiedSample
+// );
 
-// Preview transformed sample (no mutation)
-router.post("/runs/:id/preview", requirePtrs, ptrsController.preview);
+// // Preview transformed sample (no mutation)
+// router.post("/:id/preview", requirePtrs, ptrsController.preview);
 
-// Rules (preview/apply)
-router.get("/runs/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
-router.post("/runs/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
-// Rules (get/save) — FE writes rules without resending mappings
-router.get("/runs/:id/rules", requirePtrs, ptrsController.getRules);
-router.post("/runs/:id/rules", requirePtrs, ptrsController.saveRules);
+// // Rules (preview/apply)
+// router.get("/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
+// router.post("/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
+// // Rules (get/save) — FE writes rules without resending mappings
+// router.get("/:id/rules", requirePtrs, ptrsController.getRules);
+// router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
 
-// List runs (optionally filter to those that already have a saved column map)
-router.get("/runs", requirePtrs, ptrsController.listRuns);
+// // List ptrss (optionally filter to those that already have a saved column map)
+// router.get("", requirePtrs, ptrsController.listPtrs);
 
 // Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
 router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
 
 // List all PTRS profiles for a customer
-
-router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 // Profiles CRUD
-router.post("/profiles", requirePtrs, ptrsController.createProfile);
-router.get("/profiles/:id", requirePtrs, ptrsController.getProfile);
-router.patch("/profiles/:id", requirePtrs, ptrsController.updateProfile);
-router.put("/profiles/:id", requirePtrs, ptrsController.updateProfile);
-router.delete("/profiles/:id", requirePtrs, ptrsController.deleteProfile);
+router.get("/profiles", requirePtrs, ptrsController.listProfiles);
+// router.post("/profiles", requirePtrs, ptrsController.createProfile);
+// router.get("/profiles/:id", requirePtrs, ptrsController.getProfile);
+// router.patch("/profiles/:id", requirePtrs, ptrsController.updateProfile);
+// router.put("/profiles/:id", requirePtrs, ptrsController.updateProfile);
+// router.delete("/profiles/:id", requirePtrs, ptrsController.deleteProfile);
 
 module.exports = router;

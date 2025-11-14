@@ -15,8 +15,73 @@ CREATE POLICY tbl_tcp_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 
+
 ALTER TABLE tbl_ptrs FORCE ROW LEVEL SECURITY;
 ALTER TABLE tbl_tcp FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- PTRS v2 core tables: RLS policies
+-- =============================
+
+-- PTRS Profiles
+ALTER TABLE tbl_ptrs_profile ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_profile_rls_policy ON tbl_ptrs_profile;
+CREATE POLICY tbl_ptrs_profile_rls_policy
+  ON tbl_ptrs_profile
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_profile FORCE ROW LEVEL SECURITY;
+
+-- PTRS Datasets (supporting files attached to a PTRS)
+ALTER TABLE tbl_ptrs_dataset ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_dataset_rls_policy ON tbl_ptrs_dataset;
+CREATE POLICY tbl_ptrs_dataset_rls_policy
+  ON tbl_ptrs_dataset
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_dataset FORCE ROW LEVEL SECURITY;
+
+-- PTRS Column Map (mappings + joins + rules)
+ALTER TABLE tbl_ptrs_column_map ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_column_map_rls_policy ON tbl_ptrs_column_map;
+CREATE POLICY tbl_ptrs_column_map_rls_policy
+  ON tbl_ptrs_column_map
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_column_map FORCE ROW LEVEL SECURITY;
+
+-- PTRS Uploads (PTRS header / upload metadata)
+ALTER TABLE tbl_ptrs_upload ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_upload_rls_policy ON tbl_ptrs_upload;
+CREATE POLICY tbl_ptrs_upload_rls_policy
+  ON tbl_ptrs_upload
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_upload FORCE ROW LEVEL SECURITY;
+
+-- PTRS Import (raw rows ingested from main CSV)
+ALTER TABLE tbl_ptrs_import_raw ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_import_raw_rls_policy ON tbl_ptrs_import_raw;
+CREATE POLICY tbl_ptrs_import_raw_rls_policy
+  ON tbl_ptrs_import_raw
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_import_raw FORCE ROW LEVEL SECURITY;
+
+-- PTRS Staging rows (post-join, pre-rules)
+ALTER TABLE tbl_ptrs_stage_row ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_stage_row_rls_policy ON tbl_ptrs_stage_row;
+CREATE POLICY tbl_ptrs_stage_row_rls_policy
+  ON tbl_ptrs_stage_row
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_stage_row FORCE ROW LEVEL SECURITY;
 
 -- TCP error rows (per-tenant)
 ALTER TABLE tbl_tcp_error ENABLE ROW LEVEL SECURITY;

@@ -33,58 +33,53 @@ function initPtrsV2Models(sequelize) {
     }
   });
 
-  // --- Associations (limited, add more as we introduce models) ---
-  // Recipe 1<->N TransformStep
-  if (models.ptrs_recipe && models.ptrs_transform_step) {
-    models.ptrs_transform_step.belongsTo(models.ptrs_recipe, {
-      foreignKey: "recipeId",
-      as: "recipe",
+  // --- Associations for PTRS v2 models ---
+
+  // PTRS 1<->N datasets
+  if (models.ptrs && models.ptrs_dataset) {
+    models.ptrs_dataset.belongsTo(models.ptrs, {
+      foreignKey: "ptrsId",
+      as: "ptrs",
     });
-    models.ptrs_recipe.hasMany(models.ptrs_transform_step, {
-      foreignKey: "recipeId",
-      as: "steps",
+    models.ptrs.hasMany(models.ptrs_dataset, {
+      foreignKey: "ptrsId",
+      as: "datasets",
     });
   }
 
-  // Link upload -> column map (1:1)
-  if (models.ptrs_upload && models.ptrs_column_map) {
-    models.ptrs_column_map.belongsTo(models.ptrs_upload, {
-      foreignKey: "runId",
-      targetKey: "id",
-      as: "run",
+  // PTRS 1<->1 column map
+  if (models.ptrs && models.ptrs_column_map) {
+    models.ptrs_column_map.belongsTo(models.ptrs, {
+      foreignKey: "ptrsId",
+      as: "ptrs",
     });
-    models.ptrs_upload.hasOne(models.ptrs_column_map, {
-      foreignKey: "runId",
-      sourceKey: "id",
+    models.ptrs.hasOne(models.ptrs_column_map, {
+      foreignKey: "ptrsId",
       as: "columnMap",
     });
   }
 
-  // Link upload -> import_raw (1:N)
-  if (models.ptrs_upload && models.ptrs_import_raw) {
-    models.ptrs_import_raw.belongsTo(models.ptrs_upload, {
-      foreignKey: "runId",
-      targetKey: "id",
-      as: "run",
+  // Profile 1<->N PTRS instances
+  if (models.ptrs_profile && models.ptrs) {
+    models.ptrs.belongsTo(models.ptrs_profile, {
+      foreignKey: "profileId",
+      as: "profile",
     });
-    models.ptrs_upload.hasMany(models.ptrs_import_raw, {
-      foreignKey: "runId",
-      sourceKey: "id",
-      as: "rawRows",
+    models.ptrs_profile.hasMany(models.ptrs, {
+      foreignKey: "profileId",
+      as: "ptrsList",
     });
   }
 
-  // Link upload -> norm_row (1:N)
-  if (models.ptrs_upload && models.ptrs_norm_row) {
-    models.ptrs_norm_row.belongsTo(models.ptrs_upload, {
-      foreignKey: "runId",
-      targetKey: "id",
-      as: "run",
+  // Profile 1<->N column maps
+  if (models.ptrs_profile && models.ptrs_column_map) {
+    models.ptrs_column_map.belongsTo(models.ptrs_profile, {
+      foreignKey: "profileId",
+      as: "profile",
     });
-    models.ptrs_upload.hasMany(models.ptrs_norm_row, {
-      foreignKey: "runId",
-      sourceKey: "id",
-      as: "normRows",
+    models.ptrs_profile.hasMany(models.ptrs_column_map, {
+      foreignKey: "profileId",
+      as: "columnMaps",
     });
   }
 
