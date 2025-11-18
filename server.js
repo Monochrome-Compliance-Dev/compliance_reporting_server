@@ -315,8 +315,16 @@ app.use("/api/billing", require("./stripe/billing.controller"));
 
 app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
-// V2 PTRS routes
+// V2 routes
+// PTRS
 app.use("/api/v2/ptrs", require("@/v2/ptrs/routes/ptrs.routes"));
+
+// Customers
+app.use("/api/v2/customers", require("@/v2/customers/customers.controller"));
+app.use(
+  "/api/v2/customers",
+  require("@/v2/entitlements/customerEntitlements.controller")
+);
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

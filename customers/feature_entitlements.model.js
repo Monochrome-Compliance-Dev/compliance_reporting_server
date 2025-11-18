@@ -38,6 +38,7 @@ function model(sequelize) {
     {
       tableName: "tbl_feature_entitlements",
       timestamps: true,
+      paranoid: true,
       indexes: [
         {
           unique: true,
