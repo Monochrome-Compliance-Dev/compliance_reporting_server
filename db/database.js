@@ -134,6 +134,7 @@ async function initialise() {
     "../products",
     "../stripe",
     "../pulse",
+    "../v2/profiles", // added to load CustomerProfile model
   ];
 
   modelDirs.forEach((dir) => {

@@ -8,7 +8,7 @@ function model(sequelize) {
     id: {
       type: DataTypes.STRING(10),
       primaryKey: true,
-      defaultValue: async () => await getNanoid()(10),
+      defaultValue: () => getNanoid(10),
     },
 
     customerId: {
@@ -16,15 +16,9 @@ function model(sequelize) {
       allowNull: false,
     },
 
-    customerProfileId: {
-      type: DataTypes.STRING(10),
-      allowNull: false,
-    },
-
-    label: {
+    name: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      // Example: "Veolia – Default Profile"
     },
 
     description: {
@@ -32,14 +26,15 @@ function model(sequelize) {
       allowNull: true,
     },
 
-    // JSON blob for profile-level defaults:
-    //   - standard field overrides
-    //   - joining rules
-    //   - any profile-specific transformations
-    //   - customer-specific metadata
-    meta: {
-      type: DataTypes.JSONB,
-      allowNull: true,
+    product: {
+      type: DataTypes.STRING(16),
+      allowNull: false, // 'ptrs', 'pulse', etc.
+    },
+
+    status: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "active",
     },
 
     createdBy: {
@@ -58,15 +53,17 @@ function model(sequelize) {
     },
   };
 
-  const PtrsProfile = sequelize.define("ptrs_profile", attributes, {
-    tableName: "tbl_ptrs_profile",
+  const CustomerProfile = sequelize.define("CustomerProfile", attributes, {
+    tableName: "tbl_customer_profile",
     timestamps: true,
     paranoid: true,
     indexes: [
       { fields: ["customerId"] },
-      { fields: ["customerId", "label", "customerProfileId"] },
+      { fields: ["customerId", "product"] },
+      // optional, if you want to optimise name lookup:
+      // { fields: ["customerId", "product", "name"] },
     ],
   });
 
-  return PtrsProfile;
+  return CustomerProfile;
 }

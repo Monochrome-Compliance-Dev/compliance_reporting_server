@@ -325,6 +325,10 @@ app.use(
   "/api/v2/customers",
   require("@/v2/entitlements/customerEntitlements.controller")
 );
+app.use(
+  "/api/v2/customers",
+  require("@/v2/profiles/customerProfiles.controller")
+);
 
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {

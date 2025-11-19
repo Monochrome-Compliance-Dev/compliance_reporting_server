@@ -1230,6 +1230,7 @@ async function getBlueprint(req, res, next) {
 async function listProfiles(req, res, next) {
   try {
     const customerId = req.query.customerId || req.effectiveCustomerId;
+    const customerProfileId = req.query.customerProfileId || null;
     const userId = req.auth?.id;
     const ip = req.ip;
     const device = req.headers["user-agent"];
@@ -1240,7 +1241,10 @@ async function listProfiles(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const profiles = await ptrsService.listProfiles(customerId);
+    const profiles = await ptrsService.listProfiles(
+      customerId,
+      customerProfileId
+    );
 
     await auditService.logEvent({
       customerId,
@@ -1250,7 +1254,10 @@ async function listProfiles(req, res, next) {
       action: "PtrsV2ListProfiles",
       entity: "PtrsProfile",
       entityId: null,
-      details: { count: Array.isArray(profiles) ? profiles.length : 0 },
+      details: {
+        count: Array.isArray(profiles) ? profiles.length : 0,
+        customerProfileId,
+      },
     });
 
     res.status(200).json({ status: "success", data: { items: profiles } });
