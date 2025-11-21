@@ -11,10 +11,14 @@ function initPtrsV2Models(sequelize) {
   const models = {};
   const dir = __dirname;
 
-  // Load every .js file in this directory except this loader itself.
-  const files = fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith(".js") && f !== "ptrs_model_loader.js");
+  // Load every .js file in this directory except this loader itself and old_models folder.
+  const files = fs.readdirSync(dir).filter((f) => {
+    // Exclude loader itself
+    // if (f === "ptrs_model_loader.js") return false;
+    // Exclude anything inside old_models
+    if (f === "old_models") return false;
+    return f.endsWith(".js");
+  });
 
   for (const file of files) {
     const define = require(path.join(dir, file));

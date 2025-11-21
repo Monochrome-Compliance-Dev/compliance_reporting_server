@@ -4,6 +4,11 @@ const fs = require("fs");
 const path = require("path");
 const { Readable } = require("stream");
 
+const { logger } = require("@/helpers/logger");
+const {
+  beginTransactionWithCustomerContext,
+} = require("@/helpers/setCustomerIdRLS");
+
 const { Worker } = require("worker_threads");
 
 /**
@@ -19,7 +24,7 @@ async function getDatasetSample({
   if (!customerId) throw new Error("customerId is required");
   if (!datasetId) throw new Error("datasetId is required");
 
-  const row = await db.PtrsRawDataset.findOne({
+  const row = await db.PtrsDataset.findOne({
     where: { id: datasetId, customerId },
     raw: true,
   });
@@ -130,40 +135,39 @@ async function getDatasetSample({
   return { headers, rows, total };
 }
 
-// const { logger } = require("@/helpers/logger");
-// // --- Safe logging helpers for service layer ---
-// function _svcReplacer() {
-//   const seen = new WeakSet();
-//   return function (key, value) {
-//     if (typeof value === "bigint") return value.toString();
-//     if (value instanceof Set) return Array.from(value);
-//     if (value instanceof Map) return Object.fromEntries(value);
-//     if (Buffer.isBuffer?.(value))
-//       return { __type: "Buffer", length: value.length };
-//     if (value instanceof Error) {
-//       return { name: value.name, message: value.message, stack: value.stack };
-//     }
-//     if (typeof value === "object" && value !== null) {
-//       if (seen.has(value)) return "[Circular]";
-//       seen.add(value);
-//     }
-//     return value;
-//   };
-// }
-// function safeMeta(meta) {
-//   try {
-//     return JSON.parse(JSON.stringify(meta, _svcReplacer()));
-//   } catch {
-//     return { note: "unserializable meta" };
-//   }
-// }
-// const slog = {
-//   info: (msg, meta) => logger?.info?.(msg, safeMeta(meta)),
-//   warn: (msg, meta) => logger?.warn?.(msg, safeMeta(meta)),
-//   error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
-//   debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
-// };
-// // --- identifier helpers (enforce snake_case everywhere for SQL identifiers) ---
+// --- Safe logging helpers for service layer ---
+function _svcReplacer() {
+  const seen = new WeakSet();
+  return function (key, value) {
+    if (typeof value === "bigint") return value.toString();
+    if (value instanceof Set) return Array.from(value);
+    if (value instanceof Map) return Object.fromEntries(value);
+    if (Buffer.isBuffer?.(value))
+      return { __type: "Buffer", length: value.length };
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
+    }
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  };
+}
+function safeMeta(meta) {
+  try {
+    return JSON.parse(JSON.stringify(meta, _svcReplacer()));
+  } catch {
+    return { note: "unserializable meta" };
+  }
+}
+const slog = {
+  info: (msg, meta) => logger?.info?.(msg, safeMeta(meta)),
+  warn: (msg, meta) => logger?.warn?.(msg, safeMeta(meta)),
+  error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
+  debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
+};
+// --- identifier helpers (enforce snake_case everywhere for SQL identifiers) ---
 // function toSnake(str) {
 //   if (str == null) return "";
 //   return (
@@ -226,7 +230,7 @@ async function getDatasetSample({
 // }
 
 // async function buildDatasetIndexByRole({ customerId, ptrsId, role, keyColumn }) {
-//   const ds = await db.PtrsRawDataset.findOne({
+//   const ds = await db.PtrsDataset.findOne({
 //     where: { customerId, ptrsId, role },
 //     raw: true,
 //   });
@@ -812,7 +816,7 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
 
   // --- Merge supporting dataset headers and collect examples ---
   try {
-    const dsRows = await db.PtrsRawDataset.findAll({
+    const dsRows = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId },
       attributes: ["id", "meta", "role"],
       raw: true,
@@ -967,7 +971,7 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
 
 //   // Merge supporting dataset headers + examples
 //   try {
-//     const dsRows = await db.PtrsRawDataset.findAll({
+//     const dsRows = await db.PtrsDataset.findAll({
 //       where: { customerId, ptrsId },
 //       attributes: ["id", "meta", "role"],
 //       raw: true,
@@ -1073,7 +1077,7 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
 async function getPtrs({ customerId, ptrsId }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
-  const row = await db.PtrsUpload.findOne({
+  const row = await db.Ptrs.findOne({
     where: { id: ptrsId, customerId },
     raw: true,
   });
@@ -1082,133 +1086,204 @@ async function getPtrs({ customerId, ptrsId }) {
 
 /** Fetch one upload (tenant-scoped) */
 async function getUpload({ ptrsId, customerId }) {
-  return db.PtrsUpload.findOne({ where: { id: ptrsId, customerId } });
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const upload = await db.PtrsUpload.findOne({
+      where: { ptrsId, customerId },
+      transaction: t,
+      raw: true,
+    });
+    await t.commit();
+    return upload || null;
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
 }
 
-// /**
-//  * Stream a CSV into tbl_ptrs_import_raw as JSONB rows
-//  * - stream: Readable of CSV
-//  * - returns rowsInserted (int)
-//  */
-// async function importCsvStream({ customerId, ptrsId, stream }) {
-//   let rowNo = 0;
-//   let rowsInserted = 0;
+/**
+ * Stream a CSV into tbl_ptrs_import_raw as JSONB rows
+ * - stream: Readable of CSV
+ * - returns rowsInserted (int)
+ */
+async function importCsvStream({
+  customerId,
+  ptrsId,
+  stream,
+  fileMeta = null,
+}) {
+  let rowNo = 0;
+  let rowsInserted = 0;
 
-//   const BATCH_SIZE = 1000;
-//   const batch = [];
-//   const flush = async () => {
-//     if (!batch.length) return;
-//     try {
-//       await db.PtrsImportRaw.bulkCreate(batch, { validate: false });
-//       rowsInserted += batch.length;
-//     } finally {
-//       batch.length = 0;
-//     }
-//   };
+  const BATCH_SIZE = 1000;
+  const batch = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      await db.PtrsImportRaw.bulkCreate(batch, { validate: false });
+      rowsInserted += batch.length;
+    } finally {
+      batch.length = 0;
+    }
+  };
 
-//   // Buffer once so we can synthesize headers
-//   const chunks = [];
-//   for await (const chunk of stream) {
-//     chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
-//   }
-//   let text = chunks.join("");
-//   text = text.replace(/^\uFEFF/, ""); // strip BOM
-//   text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+  // Buffer once so we can synthesize headers
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
 
-//   // First line = header
-//   const firstNewlineIdx = text.search(/\r?\n/);
-//   const headerLine =
-//     firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+  // First line = header
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
 
-//   // Minimal CSV splitter for one line
-//   const splitCsvLine = (line) => {
-//     const out = [];
-//     let cur = "";
-//     let inQuotes = false;
-//     for (let i = 0; i < line.length; i++) {
-//       const ch = line[i];
-//       if (ch === '"') {
-//         if (inQuotes && line[i + 1] === '"') {
-//           cur += '"';
-//           i++;
-//         } else {
-//           inQuotes = !inQuotes;
-//         }
-//       } else if (ch === "," && !inQuotes) {
-//         out.push(cur);
-//         cur = "";
-//       } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
-//         /* ignore */
-//       } else {
-//         cur += ch;
-//       }
-//     }
-//     out.push(cur);
-//     return out;
-//   };
+  // Minimal CSV splitter for one line
+  const splitCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
 
-//   const rawHeaders = splitCsvLine(headerLine).map((s) =>
-//     String(s || "").trim()
-//   );
-//   if (!rawHeaders.length) {
-//     const err = new Error("CSV appears to have no header row");
-//     err.statusCode = 400;
-//     throw err;
-//   }
+  const rawHeaders = splitCsvLine(headerLine).map((s) =>
+    String(s || "").trim()
+  );
+  if (!rawHeaders.length) {
+    const err = new Error("CSV appears to have no header row");
+    err.statusCode = 400;
+    throw err;
+  }
 
-//   // Synthesize blanks + dedupe
-//   const seen = new Map();
-//   const headersArray = rawHeaders.map((h, i) => {
-//     const label = h && h.length ? h : `column_${i + 1}`;
-//     const n = (seen.get(label) || 0) + 1;
-//     seen.set(label, n);
-//     return n === 1 ? label : `${label}_${n}`;
-//   });
+  // Synthesize blanks + dedupe
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
 
-//   const fixedStream = Readable.from(text);
+  const fixedStream = Readable.from(text);
 
-//   return new Promise((resolve, reject) => {
-//     const parser = csv
-//       .parse({
-//         headers: headersArray,
-//         renameHeaders: false,
-//         ignoreEmpty: true,
-//         trim: true,
-//         strictColumnHandling: false,
-//         skipLines: 1, // skip original header row
-//         discardUnmappedColumns: true,
-//       })
-//       .on("error", (err) => reject(err))
-//       .on("data", (row) => {
-//         rowNo += 1;
-//         batch.push({ customerId, ptrsId, rowNo, data: row, errors: null });
-//         if (batch.length >= BATCH_SIZE) {
-//           parser.pause();
-//           flush()
-//             .then(() => parser.resume())
-//             .catch((err) => reject(err));
-//         }
-//       })
-//       .on("end", async () => {
-//         try {
-//           await flush();
-//           await db.PtrsUpload.update(
-//             { status: "Ingested", rowCount: rowsInserted },
-//             { where: { id: ptrsId, customerId } }
-//           );
-//           resolve(rowsInserted);
-//         } catch (e) {
-//           reject(e);
-//         }
-//       });
+  return new Promise((resolve, reject) => {
+    const parser = csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+        skipLines: 1, // skip original header row
+        discardUnmappedColumns: true,
+      })
+      .on("error", (err) => reject(err))
+      .on("data", (row) => {
+        rowNo += 1;
+        batch.push({ customerId, ptrsId, rowNo, data: row, errors: null });
+        if (batch.length >= BATCH_SIZE) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch((err) => reject(err));
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
 
-//     try {
-//       fixedStream.pipe(parser);
-//     } catch (e) {
-//       reject(e);
-//     }
-//   });
-// }
+          // Ensure there is a PtrsUpload record for this run, and update its status/row count.
+          const uploadWhere = { customerId, ptrsId };
+          const defaults = {
+            customerId,
+            ptrsId,
+            status: "Ingested",
+            rowCount: rowsInserted,
+          };
+
+          if (fileMeta) {
+            if (fileMeta.originalName || fileMeta.fileName) {
+              defaults.fileName =
+                fileMeta.originalName || fileMeta.fileName || null;
+            }
+            if (
+              Object.prototype.hasOwnProperty.call(fileMeta, "sizeBytes") ||
+              Object.prototype.hasOwnProperty.call(fileMeta, "fileSize")
+            ) {
+              const size = fileMeta.sizeBytes ?? fileMeta.fileSize ?? null;
+              if (size != null) defaults.fileSize = size;
+            }
+            if (fileMeta.mimeType) {
+              defaults.mimeType = fileMeta.mimeType;
+            }
+          }
+
+          const [upload, created] = await db.PtrsUpload.findOrCreate({
+            where: uploadWhere,
+            defaults,
+          });
+
+          if (!created) {
+            const updatePayload = {
+              status: "Ingested",
+              rowCount: rowsInserted,
+            };
+            if (fileMeta) {
+              if (fileMeta.originalName || fileMeta.fileName) {
+                updatePayload.fileName =
+                  fileMeta.originalName || fileMeta.fileName || null;
+              }
+              if (
+                Object.prototype.hasOwnProperty.call(fileMeta, "sizeBytes") ||
+                Object.prototype.hasOwnProperty.call(fileMeta, "fileSize")
+              ) {
+                const size = fileMeta.sizeBytes ?? fileMeta.fileSize ?? null;
+                if (size != null) updatePayload.fileSize = size;
+              }
+              if (fileMeta.mimeType) {
+                updatePayload.mimeType = fileMeta.mimeType;
+              }
+            }
+            await upload.update(updatePayload);
+          }
+
+          resolve(rowsInserted);
+        } catch (e) {
+          reject(e);
+        }
+      });
+
+    try {
+      fixedStream.pipe(parser);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
 
 /**
  * Create a raw dataset record and persist the uploaded file to local storage.
@@ -1233,7 +1308,7 @@ async function addDataset({
     throw new Error("file buffer is required");
 
   // Ensure ptrs exists for tenant
-  const ptrs = await db.PtrsUpload.findOne({
+  const ptrs = await db.Ptrs.findOne({
     where: { id: ptrsId, customerId },
   });
   if (!ptrs) {
@@ -1273,7 +1348,7 @@ async function addDataset({
   }
 
   // Create DB row first to get dataset id
-  const row = await db.PtrsRawDataset.create({
+  const row = await db.PtrsDataset.create({
     customerId,
     ptrsId,
     role,
@@ -1316,7 +1391,7 @@ async function addDataset({
 async function listDatasets({ customerId, ptrsId }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
-  const rows = await db.PtrsRawDataset.findAll({
+  const rows = await db.PtrsDataset.findAll({
     where: { customerId, ptrsId },
     order: [["createdAt", "DESC"]],
     raw: true,
@@ -1330,7 +1405,7 @@ async function listDatasets({ customerId, ptrsId }) {
 //   if (!ptrsId) throw new Error("ptrsId is required");
 //   if (!datasetId) throw new Error("datasetId is required");
 
-//   const row = await db.PtrsRawDataset.findOne({
+//   const row = await db.PtrsDataset.findOne({
 //     where: { id: datasetId, customerId, ptrsId },
 //     raw: false,
 //   });
@@ -1360,46 +1435,66 @@ async function listDatasets({ customerId, ptrsId }) {
 //   return { ok: true };
 // }
 
-// /**
-//  * Create a new PTRS v2 upload metadata record.
-//  * @param {Object} params
-//  * @param {string} params.customerId
-//  * @param {string} params.fileName
-//  * @param {number} [params.fileSize]
-//  * @param {string} [params.mimeType]
-//  * @param {string} [params.hash]
-//  * @param {string} [params.createdBy]
-//  */
-// async function createPtrs(params) {
-//   const { customerId, fileName, fileSize, mimeType, hash, createdBy } =
-//     params || {};
+/**
+ * Create a new PTRS v2 run record (tbl_ptrs).
+ * @param {Object} params
+ * @param {string} params.customerId
+ * @param {string} [params.profileId]
+ * @param {string} [params.label]
+ * @param {string} [params.periodStart] - YYYY-MM-DD
+ * @param {string} [params.periodEnd] - YYYY-MM-DD
+ * @param {string} [params.reportingEntityName]
+ * @param {string} [params.createdBy]
+ */
+async function createPtrs(params) {
+  const {
+    customerId,
+    profileId,
+    label,
+    periodStart,
+    periodEnd,
+    reportingEntityName,
+    createdBy,
+  } = params || {};
 
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!fileName) throw new Error("fileName is required");
+  if (!customerId) throw new Error("customerId is required");
 
-//   try {
-//     const row = await db.PtrsUpload.create({
-//       customerId,
-//       fileName,
-//       fileSize: Number.isFinite(fileSize) ? fileSize : null,
-//       mimeType: mimeType || null,
-//       hash: hash || null,
-//       status: "Uploaded",
-//       createdBy: createdBy || null,
-//       updatedBy: createdBy || null,
-//     });
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const row = await db.Ptrs.create(
+      {
+        customerId,
+        profileId: profileId || null,
+        label: label || null,
+        periodStart: periodStart || null,
+        periodEnd: periodEnd || null,
+        reportingEntityName: reportingEntityName || null,
+        status: "draft",
+        currentStep: "create",
+        meta: null,
+        createdBy: createdBy || null,
+        updatedBy: createdBy || null,
+      },
+      { transaction: t }
+    );
 
-//     return row;
-//   } catch (err) {
-//     logger.logEvent("error", "Failed to create PTRS v2 upload", {
-//       action: "PtrsV2CreateUpload",
-//       customerId,
-//       fileName,
-//       error: err.message,
-//     });
-//     throw err;
-//   }
-// }
+    await t.commit();
+
+    return row.get ? row.get({ plain: true }) : row;
+  } catch (err) {
+    if (!t.finished) {
+      await t.rollback();
+    }
+    logger.logEvent("error", "Failed to create PTRS v2 record", {
+      action: "PtrsV2CreatePtrs",
+      customerId,
+      profileId: profileId || null,
+      label: label || null,
+      error: err.message,
+    });
+    throw err;
+  }
+}
 
 // /**
 //  * Compile and ptrs a preview over staged data (+column map).
@@ -2077,41 +2172,33 @@ async function listDatasets({ customerId, ptrsId }) {
 //   };
 // }
 
-// /**
-//  * List ptrss for a tenant. If hasMap=true, only include ptrss that have a saved column map.
-//  */
-// async function listPtrss({ customerId, hasMap = false }) {
-//   const attrs = [
-//     "id",
-//     "customerId",
-//     "fileName",
-//     "fileSize",
-//     "mimeType",
-//     "rowCount",
-//     "status",
-//     "createdAt",
-//     "updatedAt",
-//   ];
+/**
+ * List ptrs for a tenant. If hasMap=true, only include ptrs that have a saved column map.
+ */
+async function listPtrs({ customerId, hasMap = false }) {
+  if (!customerId) throw new Error("customerId is required");
 
-//   const ptrss = await db.PtrsUpload.findAll({
-//     where: { customerId },
-//     attributes: attrs,
-//     order: [["createdAt", "DESC"]],
-//     raw: true,
-//   });
+  // Fetch PTRS runs from tbl_ptrs
+  const ptrs = await db.Ptrs.findAll({
+    where: { customerId },
+    order: [["createdAt", "DESC"]],
+    raw: true,
+  });
 
-//   if (!hasMap) return ptrss;
+  if (!hasMap) return ptrs;
 
-//   if (!ptrss.length) return [];
-//   const ptrsIds = ptrss.map((r) => r.id);
-//   const maps = await db.PtrsColumnMap.findAll({
-//     where: { customerId, ptrsId: ptrsIds },
-//     attributes: ["ptrsId"],
-//     raw: true,
-//   });
-//   const mappedSet = new Set(maps.map((m) => m.ptrsId));
-//   return ptrss.filter((r) => mappedSet.has(r.id));
-// }
+  if (!ptrs.length) return [];
+  const ptrsIds = ptrs.map((r) => r.id);
+
+  const maps = await db.PtrsColumnMap.findAll({
+    where: { customerId, ptrsId: ptrsIds },
+    attributes: ["ptrsId"],
+    raw: true,
+  });
+
+  const mappedSet = new Set(maps.map((m) => m.ptrsId));
+  return ptrs.filter((r) => mappedSet.has(r.id));
+}
 
 // /**
 //  * Returns a preview of staged data using the current column map and step pipeline,
@@ -2319,9 +2406,9 @@ async function listProfiles(customerId) {
 // }
 
 module.exports = {
-  //   createPtrs,
+  createPtrs,
   getUpload,
-  //   importCsvStream,
+  importCsvStream,
   getImportSample,
   //   getUnifiedSample,
   getColumnMap,
@@ -2330,7 +2417,7 @@ module.exports = {
   //   saveMap,
   //   updateRulesOnly,
   //   previewTransform,
-  //   listPtrss,
+  listPtrs,
   addDataset,
   listDatasets,
   //   getDatasetSample,

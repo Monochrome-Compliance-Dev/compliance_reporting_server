@@ -7,7 +7,7 @@ function model(sequelize) {
   const attributes = {
     id: {
       type: DataTypes.STRING(10),
-      defaultValue: async () => await getNanoid()(10),
+      defaultValue: () => getNanoid(10),
       primaryKey: true,
     },
     customerId: {
@@ -32,6 +32,14 @@ function model(sequelize) {
     },
     sizeBytes: {
       type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    createdBy: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    updatedBy: {
+      type: DataTypes.STRING,
       allowNull: true,
     },
   };

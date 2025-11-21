@@ -14,19 +14,19 @@ const requirePtrs = authorise({
 });
 
 // v2 PTRS routes
-// // Create a ptrs metadata record (returns ptrs id and metadata)
-// router.post("", requirePtrs, ptrsController.createPtrs);
+// Create a ptrs metadata record (returns ptrs id and metadata)
+router.post("", requirePtrs, ptrsController.createPtrs);
 
 // Read a single ptrs by id
 router.get("/:id", requirePtrs, ptrsController.getPtrs);
 
-// // Upload the CSV for a ptrs (multipart or text/csv)
-// router.post(
-//   "/:id/import",
-//   requirePtrs,
-//   upload.single("file"),
-//   ptrsController.importCsv
-// );
+// Upload the CSV for a ptrs (multipart or text/csv)
+router.post(
+  "/:id/import",
+  requirePtrs,
+  upload.single("file"),
+  ptrsController.importCsv
+);
 
 // // Stage normalized rows for a ptrs
 // router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
@@ -38,8 +38,8 @@ router.get("/:id", requirePtrs, ptrsController.getPtrs);
 //   ptrsController.getStagePreview
 // );
 
-// // Peek at staged rows
-// router.get("/:id/sample", requirePtrs, ptrsController.getSample);
+// Peek at staged rows
+router.get("/:id/sample", requirePtrs, ptrsController.getSample);
 
 // Column mapping (get/save)
 router.get("/:id/map", requirePtrs, ptrsController.getMap);
@@ -82,8 +82,8 @@ router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
 // router.get("/:id/rules", requirePtrs, ptrsController.getRules);
 // router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
 
-// // List ptrss (optionally filter to those that already have a saved column map)
-// router.get("", requirePtrs, ptrsController.listPtrs);
+// List ptrs (optionally filter to those that already have a saved column map)
+router.get("", requirePtrs, ptrsController.listPtrs);
 
 // Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
 router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);

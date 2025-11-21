@@ -8,7 +8,7 @@ function model(sequelize) {
     id: {
       type: DataTypes.STRING(10),
       primaryKey: true,
-      defaultValue: async () => await getNanoid()(10),
+      defaultValue: () => getNanoid(10),
     },
 
     customerId: {

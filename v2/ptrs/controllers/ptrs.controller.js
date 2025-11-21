@@ -95,154 +95,177 @@ const path = require("path");
 //   }
 // }
 
-// /**
-//  * POST /api/v2/ptrs
-//  * Body: { fileName: string, fileSize?: number, mimeType?: string, hash?: string }
-//  */
-// async function createPtrs(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
+/**
+ * POST /api/v2/ptrs
+ * Creates a new PTRS run record (tbl_ptrs) for the current customer.
+ * Body (JSON): {
+ *   profileId?: string,
+ *   label?: string,
+ *   periodStart?: string (YYYY-MM-DD),
+ *   periodEnd?: string (YYYY-MM-DD),
+ *   reportingEntityName?: string
+ * }
+ */
+async function createPtrs(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     const { fileName, fileSize, mimeType, hash } = req.body || {};
-//     if (!fileName || typeof fileName !== "string") {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "fileName is required" });
-//     }
+    const { profileId, label, periodStart, periodEnd, reportingEntityName } =
+      req.body || {};
 
-//     const upload = await ptrsService.createPtrs({
-//       customerId,
-//       fileName,
-//       fileSize,
-//       mimeType,
-//       hash,
-//       createdBy: userId,
-//     });
+    const ptrs = await ptrsService.createPtrs({
+      customerId,
+      profileId,
+      label,
+      periodStart,
+      periodEnd,
+      reportingEntityName,
+      createdBy: userId,
+    });
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2CreateUpload",
-//       entity: "PtrsUpload",
-//       entityId: upload.id,
-//       details: { fileName, fileSize, mimeType },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2CreatePtrs",
+      entity: "Ptrs",
+      entityId: ptrs.id,
+      details: {
+        profileId: ptrs.profileId || null,
+        periodStart: ptrs.periodStart || null,
+        periodEnd: ptrs.periodEnd || null,
+        label: ptrs.label || null,
+      },
+    });
 
-//     res.status(201).json({ status: "success", data: upload });
-//   } catch (error) {
-//     logger.logEvent("error", "Error creating PTRS v2 upload", {
-//       action: "PtrsV2CreateUpload",
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//       timestamp: new Date().toISOString(),
-//     });
-//     return next(error);
-//   }
-// }
+    return res.status(201).json({ status: "success", data: ptrs });
+  } catch (error) {
+    logger.logEvent("error", "Error creating PTRS v2 record", {
+      action: "PtrsV2CreatePtrs",
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
-// /**
-//  * POST /api/v2/ptrs/:id/import
-//  * Accepts:
-//  *  - text/csv body
-//  *  - multipart/form-data (file field named "file")
-//  */
-// async function importCsv(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
+/**
+ * POST /api/v2/ptrs/:id/import
+ * Accepts:
+ *  - text/csv body
+ *  - multipart/form-data (file field named "file")
+ */
+async function importCsv(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     // Confirm the upload exists and belongs to this tenant
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+    // Confirm the upload exists and belongs to this tenant
+    const upload = await ptrsService.getUpload({ ptrsId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
 
-//     // Choose input source:
-//     const isTextCsv = (req.headers["content-type"] || "").includes("text/csv");
-//     const fileBuffer = req.file?.buffer;
+    // Choose input source:
+    const isTextCsv = (req.headers["content-type"] || "").includes("text/csv");
+    const fileBuffer = req.file?.buffer;
+    const fileMeta =
+      req.file && fileBuffer
+        ? {
+            originalName: req.file.originalname || null,
+            mimeType: req.file.mimetype || null,
+            sizeBytes: typeof req.file.size === "number" ? req.file.size : null,
+          }
+        : null;
 
-//     if (!isTextCsv && !fileBuffer) {
-//       return res.status(400).json({
-//         status: "error",
-//         message:
-//           "Provide CSV as text/csv body or multipart/form-data with 'file'",
-//       });
-//     }
+    if (!isTextCsv && !fileBuffer) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Provide CSV as text/csv body or multipart/form-data with 'file'",
+      });
+    }
 
-//     let rowsInserted = 0;
-//     const started = Date.now();
+    let rowsInserted = 0;
+    const started = Date.now();
 
-//     if (isTextCsv) {
-//       // Stream directly from request
-//       rowsInserted = await ptrsService.importCsvStream({
-//         customerId,
-//         ptrsId,
-//         stream: req, // readable
-//       });
-//     } else {
-//       // Parse the in-memory buffer (if using Multer)
-//       const { Readable } = require("stream");
-//       const stream = Readable.from(fileBuffer);
-//       rowsInserted = await ptrsService.importCsvStream({
-//         customerId,
-//         ptrsId,
-//         stream,
-//       });
-//     }
+    if (isTextCsv) {
+      // Stream directly from request
+      rowsInserted = await ptrsService.importCsvStream({
+        customerId,
+        ptrsId,
+        stream: req, // readable
+        fileMeta: fileMeta || {
+          originalName: `ptrs-${ptrsId}.csv`,
+          mimeType: "text/csv",
+          sizeBytes: null,
+        },
+      });
+    } else {
+      // Parse the in-memory buffer (if using Multer)
+      const { Readable } = require("stream");
+      const stream = Readable.from(fileBuffer);
+      rowsInserted = await ptrsService.importCsvStream({
+        customerId,
+        ptrsId,
+        stream,
+        fileMeta,
+      });
+    }
 
-//     const durationMs = Date.now() - started;
+    const durationMs = Date.now() - started;
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2ImportCsv",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: { rowsInserted, durationMs },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2ImportCsv",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: { rowsInserted, durationMs },
+    });
 
-//     res
-//       .status(200)
-//       .json({ status: "success", data: { rowsInserted, durationMs } });
-//   } catch (error) {
-//     logger.logEvent("error", "Error importing PTRS v2 CSV", {
-//       action: "PtrsV2ImportCsv",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//       timestamp: new Date().toISOString(),
-//     });
-//     return next(error);
-//   }
-// }
+    res
+      .status(200)
+      .json({ status: "success", data: { rowsInserted, durationMs } });
+  } catch (error) {
+    logger.logEvent("error", "Error importing PTRS v2 CSV", {
+      action: "PtrsV2ImportCsv",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
 /**
  * GET /api/v2/ptrs/:id
@@ -290,65 +313,65 @@ async function getPtrs(req, res, next) {
  * GET /api/v2/ptrs/:id/sample?limit=10&offset=0
  * Returns a small window of staged rows + total count + inferred headers.
  */
-// async function getSample(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
-//   const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+async function getSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+    const upload = await ptrsService.getUpload({ ptrsId, customerId });
+    if (!upload) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
 
-//     const { rows, total, headers, headerMeta } =
-//       await ptrsService.getImportSample({
-//         customerId,
-//         ptrsId,
-//         limit,
-//         offset,
-//       });
+    const { rows, total, headers, headerMeta } =
+      await ptrsService.getImportSample({
+        customerId,
+        ptrsId,
+        limit,
+        offset,
+      });
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2GetSample",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: { limit, offset, returned: rows.length, total },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetSample",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: { limit, offset, returned: rows.length, total },
+    });
 
-//     res.status(200).json({
-//       status: "success",
-//       data: { rows, total, headers, headerMeta, limit, offset },
-//     });
-//   } catch (error) {
-//     logger.logEvent("error", "Error fetching PTRS v2 sample", {
-//       action: "PtrsV2GetSample",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//       timestamp: new Date().toISOString(),
-//     });
-//     return next(error);
-//   }
-// }
+    res.status(200).json({
+      status: "success",
+      data: { rows, total, headers, headerMeta, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 sample", {
+      action: "PtrsV2GetSample",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
 // /**
 //  * GET /api/v2/ptrs/:id/unified-sample?limit=10&offset=0
@@ -962,48 +985,48 @@ async function getMap(req, res, next) {
 //   }
 // }
 
-// /**
-//  * GET /api/v2/ptrs?hasMap=true
-//  * Returns a list of ptrss for the tenant (optionally only those with a saved column map)
-//  */
-// async function listPtrs(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
-//     const hasMap =
-//       String(req.query.hasMap || req.query.mapped || "")
-//         .toLowerCase()
-//         .startsWith("t") || req.query.hasMap === "1";
+/**
+ * GET /api/v2/ptrs?hasMap=true
+ * Returns a list of ptrss for the tenant (optionally only those with a saved column map)
+ */
+async function listPtrs(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const hasMap =
+      String(req.query.hasMap || req.query.mapped || "")
+        .toLowerCase()
+        .startsWith("t") || req.query.hasMap === "1";
 
-//     const items = await ptrsService.listPtrs({
-//       customerId,
-//       hasMap,
-//     });
+    const items = await ptrsService.listPtrs({
+      customerId,
+      hasMap,
+    });
 
-//     const userId = req.auth?.id;
-//     const ip = req.ip;
-//     const device = req.headers["user-agent"];
+    const userId = req.auth?.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2ListPtrs",
-//       entity: "Ptrs",
-//       entityId: null,
-//       details: { count: Array.isArray(items) ? items.length : 0, hasMap },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2ListPtrs",
+      entity: "Ptrs",
+      entityId: null,
+      details: { count: Array.isArray(items) ? items.length : 0, hasMap },
+    });
 
-//     return res.status(200).json({ status: "success", data: { items } });
-//   } catch (error) {
-//     return next(error);
-//   }
-// }
+    return res.status(200).json({ status: "success", data: { items } });
+  } catch (error) {
+    return next(error);
+  }
+}
 
 /**
  * POST /api/v2/ptrs/:id/datasets
@@ -1531,10 +1554,10 @@ async function listProfiles(req, res, next) {
 // }
 
 module.exports = {
-  //   createPtrs,
-  //   importCsv,
+  createPtrs,
+  importCsv,
   getPtrs,
-  //   getSample,
+  getSample,
   //   getUnifiedSample,
   getMap,
   //   saveMap,
@@ -1543,7 +1566,7 @@ module.exports = {
   //   getStagePreview,
   //   rulesPreview,
   //   rulesApply,
-  //   listPtrs,
+  listPtrs,
   addDataset,
   listDatasets,
   //   getDatasetSample,
