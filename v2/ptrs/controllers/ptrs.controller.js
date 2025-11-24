@@ -1145,52 +1145,52 @@ async function listDatasets(req, res, next) {
   }
 }
 
-// /**
-//  * DELETE /api/v2/ptrs/:id/datasets/:datasetId
-//  */
-// async function removeDataset(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const datasetId = req.params.datasetId;
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
-//     const result = await ptrsService.removeDataset({
-//       customerId,
-//       ptrsId,
-//       datasetId,
-//     });
+/**
+ * DELETE /api/v2/ptrs/:id/datasets/:datasetId
+ */
+async function removeDataset(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const datasetId = req.params.datasetId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const result = await ptrsService.removeDataset({
+      customerId,
+      ptrsId,
+      datasetId,
+    });
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2RemoveDataset",
-//       entity: "PtrsRawDataset",
-//       entityId: datasetId,
-//       details: { ok: result.ok === true },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RemoveDataset",
+      entity: "PtrsRawDataset",
+      entityId: datasetId,
+      details: { ok: result.ok === true },
+    });
 
-//     return res.status(200).json({ status: "success", data: result });
-//   } catch (error) {
-//     logger.logEvent("error", "Error removing PTRS v2 dataset", {
-//       action: "PtrsV2RemoveDataset",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//     });
-//     return next(error);
-//   }
-// }
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error removing PTRS v2 dataset", {
+      action: "PtrsV2RemoveDataset",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 
 /**
  * GET /api/v2/ptrs/blueprint?profileId=veolia
@@ -1579,7 +1579,7 @@ module.exports = {
   addDataset,
   listDatasets,
   //   getDatasetSample,
-  //   removeDataset,
+  removeDataset,
   getBlueprint,
   listProfiles,
   //   getRules,

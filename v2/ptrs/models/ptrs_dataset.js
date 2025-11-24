@@ -37,7 +37,7 @@ function model(sequelize) {
     },
 
     // Storage key / path (e.g. S3 key or local path)
-    storageKey: {
+    storageRef: {
       type: DataTypes.STRING(255),
       allowNull: false,
     },

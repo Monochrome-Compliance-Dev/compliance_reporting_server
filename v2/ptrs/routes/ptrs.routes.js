@@ -53,11 +53,11 @@ router.post(
   ptrsController.addDataset
 );
 router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
-// router.delete(
-//   "/:id/datasets/:datasetId",
-//   requirePtrs,
-//   ptrsController.removeDataset
-// );
+router.delete(
+  "/:id/datasets/:datasetId",
+  requirePtrs,
+  ptrsController.removeDataset
+);
 // // Dataset sample (used for per-dataset header examples in FE)
 // router.get(
 //   "/datasets/:datasetId/sample",

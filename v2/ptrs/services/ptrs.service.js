@@ -416,77 +416,77 @@ const slog = {
 //   }
 // }
 
-// function looksLikeXlsx(buffer, mime) {
-//   if (mime && /spreadsheetml|ms-excel/i.test(mime)) return true;
-//   if (!buffer || buffer.length < 4) return false;
-//   // XLSX is a ZIP starting with 'PK\x03\x04'
-//   return (
-//     buffer[0] === 0x50 &&
-//     buffer[1] === 0x4b &&
-//     buffer[2] === 0x03 &&
-//     buffer[3] === 0x04
-//   );
-// }
+function looksLikeXlsx(buffer, mime) {
+  if (mime && /spreadsheetml|ms-excel/i.test(mime)) return true;
+  if (!buffer || buffer.length < 4) return false;
+  // XLSX is a ZIP starting with 'PK\x03\x04'
+  return (
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    buffer[2] === 0x03 &&
+    buffer[3] === 0x04
+  );
+}
 
-// function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
-//   return new Promise((resolve, reject) => {
-//     const workerPath = path.resolve(
-//       __dirname,
-//       "../workers/xlsxToCsv.worker.js"
-//     );
-//     let settled = false;
-//     const worker = new Worker(workerPath);
+function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.resolve(
+      __dirname,
+      "../workers/xlsxToCsv.worker.js"
+    );
+    let settled = false;
+    const worker = new Worker(workerPath);
 
-//     const timer = setTimeout(() => {
-//       if (settled) return;
-//       settled = true;
-//       try {
-//         worker.terminate();
-//       } catch {}
-//       const err = new Error("Excel conversion timed out");
-//       err.statusCode = 408;
-//       return reject(err);
-//     }, timeoutMs);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        worker.terminate();
+      } catch {}
+      const err = new Error("Excel conversion timed out");
+      err.statusCode = 408;
+      return reject(err);
+    }, timeoutMs);
 
-//     worker.on("message", (msg) => {
-//       if (settled) return;
-//       settled = true;
-//       clearTimeout(timer);
-//       if (msg && msg.ok) return resolve(msg.csv);
-//       const err = new Error(msg?.error?.message || "Excel conversion failed");
-//       err.statusCode = 400;
-//       return reject(err);
-//     });
+    worker.on("message", (msg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (msg && msg.ok) return resolve(msg.csv);
+      const err = new Error(msg?.error?.message || "Excel conversion failed");
+      err.statusCode = 400;
+      return reject(err);
+    });
 
-//     worker.on("error", (err) => {
-//       if (settled) return;
-//       settled = true;
-//       clearTimeout(timer);
-//       err.statusCode = 500;
-//       return reject(err);
-//     });
+    worker.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      err.statusCode = 500;
+      return reject(err);
+    });
 
-//     worker.on("exit", (code) => {
-//       if (settled) return;
-//       settled = true;
-//       clearTimeout(timer);
-//       if (code !== 0) {
-//         const err = new Error(
-//           "Excel conversion worker exited with code " + code
-//         );
-//         err.statusCode = 500;
-//         return reject(err);
-//       }
-//     });
+    worker.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        const err = new Error(
+          "Excel conversion worker exited with code " + code
+        );
+        err.statusCode = 500;
+        return reject(err);
+      }
+    });
 
-//     // Transfer the underlying ArrayBuffer for zero-copy
-//     const ab = buffer.buffer.slice(
-//       buffer.byteOffset,
-//       buffer.byteOffset + buffer.byteLength
-//     );
-//     worker.postMessage({ buffer: ab }, [ab]);
-//   });
-// }
+    // Transfer the underlying ArrayBuffer for zero-copy
+    const ab = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength
+    );
+    worker.postMessage({ buffer: ab }, [ab]);
+  });
+}
 
 async function parseCsvMetaFromStream(stream) {
   // 1) Read full text and normalize
@@ -1353,17 +1353,7 @@ async function addDataset({
   if (!buffer || !Buffer.isBuffer(buffer))
     throw new Error("file buffer is required");
 
-  // Ensure ptrs exists for tenant
-  const ptrs = await db.Ptrs.findOne({
-    where: { id: ptrsId, customerId },
-  });
-  if (!ptrs) {
-    const e = new Error("Ptrs not found");
-    e.statusCode = 404;
-    throw e;
-  }
-
-  // Normalize to CSV if an Excel file is uploaded
+  // Normalise to CSV if an Excel file is uploaded
   let workBuffer = buffer;
   let workMime = mimeType || null;
   let workExt = (fileName && path.extname(fileName)) || ".csv";
@@ -1393,93 +1383,161 @@ async function addDataset({
     throw convErr;
   }
 
-  // Create DB row first to get dataset id
-  const row = await db.PtrsDataset.create({
-    customerId,
-    ptrsId,
-    role,
-    sourceName: sourceName || fileName || null,
-    fileName: fileName || null,
-    fileSize: Number.isFinite(fileSize) ? fileSize : workBuffer.length || null,
-    mimeType: workMime || mimeType || null,
-    storageRef: null,
-    meta: null,
-    createdBy: userId || null,
-    updatedBy: userId || null,
-  });
+  // Begin a customer-scoped transaction for all DB writes (RLS-safe)
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Ensure ptrs exists for tenant
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, customerId },
+      transaction: t,
+    });
+    if (!ptrs) {
+      const e = new Error("Ptrs not found");
+      e.statusCode = 404;
+      throw e;
+    }
 
-  const datasetId = row.id;
+    // Create DB row first to get dataset id
+    const row = await db.PtrsDataset.create(
+      {
+        customerId,
+        ptrsId,
+        role,
+        sourceName: sourceName || fileName || null,
+        fileName: fileName || null,
+        fileSize: Number.isFinite(fileSize)
+          ? fileSize
+          : workBuffer.length || null,
+        mimeType: workMime || mimeType || null,
+        storageRef: "",
+        meta: null,
+        createdBy: userId || null,
+        updatedBy: userId || null,
+      },
+      { transaction: t }
+    );
 
-  // Persist bytes to local storage (can be swapped for S3 later)
-  const baseDir = path.resolve(
-    process.cwd(),
-    "storage",
-    "ptrs_datasets",
-    String(customerId),
-    String(ptrsId)
-  );
-  fs.mkdirSync(baseDir, { recursive: true });
-  const ext = workExt || ".csv";
-  const storagePath = path.join(baseDir, `${datasetId}${ext}`);
-  fs.writeFileSync(storagePath, workBuffer);
+    const datasetId = row.id;
 
-  // Parse headers + count rows (tolerant to duplicate headers)
-  const { headers, rowsCount } = await parseCsvMetaFromStream(
-    Readable.from(workBuffer)
-  );
-  const meta = { headers, rowsCount };
+    // Persist bytes to local storage (can be swapped for S3 later)
+    const baseDir = path.resolve(
+      process.cwd(),
+      "storage",
+      "ptrs_datasets",
+      String(customerId),
+      String(ptrsId)
+    );
+    fs.mkdirSync(baseDir, { recursive: true });
+    const ext = workExt || ".csv";
+    const storagePath = path.join(baseDir, `${datasetId}${ext}`);
+    fs.writeFileSync(storagePath, workBuffer);
 
-  await row.update({ storageRef: storagePath, meta });
-  return row.get({ plain: true });
+    // Parse headers + count rows (tolerant to duplicate headers)
+    const { headers, rowsCount } = await parseCsvMetaFromStream(
+      Readable.from(workBuffer)
+    );
+    const meta = { headers, rowsCount };
+
+    await row.update({ storageRef: storagePath, meta }, { transaction: t });
+
+    await t.commit();
+
+    return row.get({ plain: true });
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
 }
 
 /** List datasets attached to a ptrs (tenant-scoped) */
 async function listDatasets({ customerId, ptrsId }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
-  const rows = await db.PtrsDataset.findAll({
-    where: { customerId, ptrsId },
-    order: [["createdAt", "DESC"]],
-    raw: true,
-  });
-  return rows;
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const rows = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId },
+      order: [["createdAt", "DESC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    await t.commit();
+
+    return rows;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
 }
 
-// /** Remove a dataset (deletes DB row and best-effort removes stored file) */
-// async function removeDataset({ customerId, ptrsId, datasetId }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
-//   if (!datasetId) throw new Error("datasetId is required");
+/** Remove a dataset (deletes DB row and best-effort removes stored file) */
+async function removeDataset({ customerId, ptrsId, datasetId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
 
-//   const row = await db.PtrsDataset.findOne({
-//     where: { id: datasetId, customerId, ptrsId },
-//     raw: false,
-//   });
-//   if (!row) {
-//     const e = new Error("Dataset not found");
-//     e.statusCode = 404;
-//     throw e;
-//   }
+  const t = await beginTransactionWithCustomerContext(customerId);
+  let storageRef = null;
 
-//   const storageRef = row.get("storageRef");
-//   await row.destroy();
+  try {
+    const row = await db.PtrsDataset.findOne({
+      where: { id: datasetId, customerId, ptrsId },
+      raw: false,
+      transaction: t,
+    });
+    if (!row) {
+      const e = new Error("Dataset not found");
+      e.statusCode = 404;
+      throw e;
+    }
 
-//   if (storageRef) {
-//     try {
-//       fs.unlinkSync(storageRef);
-//     } catch (e) {
-//       // ignore unlink errors; file may have been moved/deleted
-//       logger.info("PTRS v2 removeDataset: could not delete file", {
-//         action: "PtrsV2RemoveDataset",
-//         datasetId,
-//         storageRef,
-//         error: e.message,
-//       });
-//     }
-//   }
+    storageRef = row.get("storageRef");
 
-//   return { ok: true };
-// }
+    await row.destroy({ transaction: t });
+
+    await t.commit();
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
+
+  if (storageRef) {
+    try {
+      fs.unlinkSync(storageRef);
+    } catch (e) {
+      // ignore unlink errors; file may have been moved/deleted
+      logger.info("PTRS v2 removeDataset: could not delete file", {
+        action: "PtrsV2RemoveDataset",
+        datasetId,
+        storageRef,
+        error: e.message,
+      });
+    }
+  }
+
+  return { ok: true };
+}
 
 /**
  * Create a new PTRS v2 run record (tbl_ptrs).
@@ -2467,7 +2525,7 @@ module.exports = {
   addDataset,
   listDatasets,
   //   getDatasetSample,
-  //   removeDataset,
+  removeDataset,
   getPtrs,
   //   getStagePreview,
   //   stagePtrs,
