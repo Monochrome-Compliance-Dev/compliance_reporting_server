@@ -44,7 +44,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsUpload = sequelize.define("tbl_ptrs_upload", attributes, {
+  const PtrsUpload = sequelize.define("PtrsUpload", attributes, {
     tableName: "tbl_ptrs_upload",
     timestamps: true,
     paranoid: false,

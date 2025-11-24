@@ -28,7 +28,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsImportRaw = sequelize.define("tbl_ptrs_import_raw", attributes, {
+  const PtrsImportRaw = sequelize.define("PtrsImportRaw", attributes, {
     tableName: "tbl_ptrs_import_raw",
     timestamps: true,
     paranoid: false,

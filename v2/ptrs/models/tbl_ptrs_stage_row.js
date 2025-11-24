@@ -36,7 +36,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsStageRow = sequelize.define("tbl_ptrs_stage_row", attributes, {
+  const PtrsStageRow = sequelize.define("PtrsStageRow", attributes, {
     tableName: "tbl_ptrs_stage_row",
     timestamps: true,
     paranoid: false,

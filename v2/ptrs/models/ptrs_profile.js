@@ -58,7 +58,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsProfile = sequelize.define("ptrs_profile", attributes, {
+  const PtrsProfile = sequelize.define("PtrsProfile", attributes, {
     tableName: "tbl_ptrs_profile",
     timestamps: true,
     paranoid: true,

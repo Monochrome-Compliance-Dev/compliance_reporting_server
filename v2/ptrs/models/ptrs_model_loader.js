@@ -2,20 +2,16 @@ const fs = require("fs");
 const path = require("path");
 
 /**
- * Initialize all PTRS v2 models found in this folder and set up lightweight associations.
- * Usage:
- *   const { initPtrsV2Models } = require("./v2/ptrs/models/ptrs_model_loader");
- *   const models = initPtrsV2Models(sequelize);
+ * Initialize all PTRS v2 models in this folder using CamelCase model names exactly as
+ * defined inside each model file.
  */
 function initPtrsV2Models(sequelize) {
   const models = {};
   const dir = __dirname;
 
-  // Load every .js file in this directory except this loader itself and old_models folder.
+  // Load *.js files except loader + old_models folder
   const files = fs.readdirSync(dir).filter((f) => {
-    // Exclude loader itself
-    // if (f === "ptrs_model_loader.js") return false;
-    // Exclude anything inside old_models
+    if (f === "ptrs_model_loader.js") return false;
     if (f === "old_models") return false;
     return f.endsWith(".js");
   });
@@ -24,64 +20,62 @@ function initPtrsV2Models(sequelize) {
     const define = require(path.join(dir, file));
     if (typeof define === "function") {
       const model = define(sequelize);
+
+      // Use the model.name EXACTLY as declared in the model
       if (model && model.name) {
         models[model.name] = model;
       }
     }
   }
 
-  // Run model-level associations if provided (e.g., ptrs_profile ↔ ptrs_customer_profile)
+  // --- Run model-level associations ---
   Object.values(models).forEach((m) => {
     if (m && typeof m.associate === "function") {
       m.associate(models);
     }
   });
 
-  // --- Associations for PTRS v2 models ---
+  // --- Associations using CamelCase model names ---
 
-  // PTRS 1<->N datasets
-  if (models.ptrs && models.ptrs_dataset) {
-    models.ptrs_dataset.belongsTo(models.ptrs, {
+  if (models.Ptrs && models.PtrsDataset) {
+    models.PtrsDataset.belongsTo(models.Ptrs, {
       foreignKey: "ptrsId",
       as: "ptrs",
     });
-    models.ptrs.hasMany(models.ptrs_dataset, {
+    models.Ptrs.hasMany(models.PtrsDataset, {
       foreignKey: "ptrsId",
       as: "datasets",
     });
   }
 
-  // PTRS 1<->1 column map
-  if (models.ptrs && models.ptrs_column_map) {
-    models.ptrs_column_map.belongsTo(models.ptrs, {
+  if (models.Ptrs && models.PtrsColumnMap) {
+    models.PtrsColumnMap.belongsTo(models.Ptrs, {
       foreignKey: "ptrsId",
       as: "ptrs",
     });
-    models.ptrs.hasOne(models.ptrs_column_map, {
+    models.Ptrs.hasOne(models.PtrsColumnMap, {
       foreignKey: "ptrsId",
       as: "columnMap",
     });
   }
 
-  // Profile 1<->N PTRS instances
-  if (models.ptrs_profile && models.ptrs) {
-    models.ptrs.belongsTo(models.ptrs_profile, {
+  if (models.PtrsProfile && models.Ptrs) {
+    models.Ptrs.belongsTo(models.PtrsProfile, {
       foreignKey: "profileId",
       as: "profile",
     });
-    models.ptrs_profile.hasMany(models.ptrs, {
+    models.PtrsProfile.hasMany(models.Ptrs, {
       foreignKey: "profileId",
       as: "ptrsList",
     });
   }
 
-  // Profile 1<->N column maps
-  if (models.ptrs_profile && models.ptrs_column_map) {
-    models.ptrs_column_map.belongsTo(models.ptrs_profile, {
+  if (models.PtrsProfile && models.PtrsColumnMap) {
+    models.PtrsColumnMap.belongsTo(models.PtrsProfile, {
       foreignKey: "profileId",
       as: "profile",
     });
-    models.ptrs_profile.hasMany(models.ptrs_column_map, {
+    models.PtrsProfile.hasMany(models.PtrsColumnMap, {
       foreignKey: "profileId",
       as: "columnMaps",
     });

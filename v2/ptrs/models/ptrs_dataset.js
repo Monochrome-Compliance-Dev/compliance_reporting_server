@@ -80,7 +80,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsDataset = sequelize.define("ptrs_dataset", attributes, {
+  const PtrsDataset = sequelize.define("PtrsDataset", attributes, {
     tableName: "tbl_ptrs_dataset",
     timestamps: true,
     paranoid: true,

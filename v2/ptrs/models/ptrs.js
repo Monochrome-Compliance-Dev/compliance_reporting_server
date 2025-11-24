@@ -61,7 +61,7 @@ function model(sequelize) {
     },
   };
 
-  const Ptrs = sequelize.define("ptrs", attributes, {
+  const Ptrs = sequelize.define("Ptrs", attributes, {
     tableName: "tbl_ptrs",
     timestamps: true,
     paranoid: true,

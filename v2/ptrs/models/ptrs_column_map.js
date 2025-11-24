@@ -73,7 +73,7 @@ function model(sequelize) {
     },
   };
 
-  const PtrsColumnMap = sequelize.define("ptrs_column_map", attributes, {
+  const PtrsColumnMap = sequelize.define("PtrsColumnMap", attributes, {
     tableName: "tbl_ptrs_column_map",
     timestamps: true,
     paranoid: true,

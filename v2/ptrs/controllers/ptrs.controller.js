@@ -182,9 +182,9 @@ async function importCsv(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    // Confirm the upload exists and belongs to this tenant
-    const upload = await ptrsService.getUpload({ ptrsId, customerId });
-    if (!upload) {
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
       return res
         .status(404)
         .json({ status: "error", message: "Ptrs not found" });
@@ -329,8 +329,9 @@ async function getSample(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const upload = await ptrsService.getUpload({ ptrsId, customerId });
-    if (!upload) {
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
       return res
         .status(404)
         .json({ status: "error", message: "Ptrs not found" });
@@ -393,12 +394,13 @@ async function getSample(req, res, next) {
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
 
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     const { rows, total, headers, headerMeta } =
 //       await ptrsService.getUnifiedSample({
@@ -455,8 +457,9 @@ async function getMap(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const upload = await ptrsService.getUpload({ ptrsId, customerId });
-    if (!upload) {
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
       return res
         .status(404)
         .json({ status: "error", message: "Ptrs not found" });
@@ -558,12 +561,13 @@ async function getMap(req, res, next) {
 //         .json({ status: "error", message: "mappings object is required" });
 //     }
 
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     // Best-effort validation: warn but don't block if headers slightly differ (case/space)
 //     const { headers } = await ptrsService.getImportSample({
@@ -671,12 +675,13 @@ async function getMap(req, res, next) {
 //       profileId,
 //     });
 
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     const result = await ptrsService.stagePtrs({
 //       customerId,
@@ -741,12 +746,13 @@ async function getMap(req, res, next) {
 //         .status(400)
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     const result = await ptrsService.previewTransform({
 //       customerId,
@@ -822,12 +828,13 @@ async function getMap(req, res, next) {
 //         .status(400)
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     safeLog("[PTRS controller.getStagePreview] invoking service", {
 //       steps,
@@ -899,12 +906,13 @@ async function getMap(req, res, next) {
 //         .status(400)
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 //     const out = await ptrsService.getRulesPreview({ customerId, ptrsId, limit });
 //     await auditService.logEvent({
 //       customerId,
@@ -950,12 +958,13 @@ async function getMap(req, res, next) {
 //         .status(400)
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 //     const out = await ptrsService.applyRulesAndPersist({
 //       customerId,
 //       ptrsId,
@@ -1488,13 +1497,13 @@ async function listProfiles(req, res, next) {
 //         .json({ status: "error", message: "Customer ID missing" });
 //     }
 
-//     // Ensure ptrs exists in this tenant
-//     const upload = await ptrsService.getUpload({ ptrsId, customerId });
-//     if (!upload) {
-//       return res
-//         .status(404)
-//         .json({ status: "error", message: "Ptrs not found" });
-//     }
+//     // Confirm the PTRS run exists and belongs to this tenant
+// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+// if (!ptrs) {
+//   return res
+//     .status(404)
+//     .json({ status: "error", message: "Ptrs not found" });
+// }
 
 //     // Persist rules only
 //     const updated = await ptrsService.updateRulesOnly({
