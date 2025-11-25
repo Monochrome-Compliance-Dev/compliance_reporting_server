@@ -603,50 +603,76 @@ async function getColumnMap({ customerId, ptrsId }) {
   }
 }
 
-// /** Upsert column map for a ptrs */
-// async function saveColumnMap({
-//   customerId,
-//   ptrsId,
-//   mappings,
-//   extras = null,
-//   fallbacks = null,
-//   defaults = null,
-//   joins = null,
-//   rowRules = null,
-//   profileId = null,
-//   userId,
-// }) {
-//   const existing = await db.PtrsColumnMap.findOne({
-//     where: { customerId, ptrsId },
-//   });
+/** Upsert column map for a ptrs — now RLS-safe */
+async function saveColumnMap({
+  customerId,
+  ptrsId,
+  mappings,
+  extras = null,
+  fallbacks = null,
+  defaults = null,
+  joins = null,
+  rowRules = null,
+  profileId = null,
+  userId,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
 
-//   const payload = {
-//     mappings,
-//     extras,
-//     fallbacks,
-//     defaults,
-//     joins,
-//     rowRules,
-//     profileId,
-//   };
+  // 🔐 RLS-safe tenant-scoped transaction
+  const t = await beginTransactionWithCustomerContext(customerId);
 
-//   if (existing) {
-//     await existing.update({
-//       ...payload,
-//       updatedBy: userId || existing.updatedBy || existing.createdBy || null,
-//     });
-//     return existing.get({ plain: true });
-//   }
+  try {
+    const existing = await db.PtrsColumnMap.findOne({
+      where: { customerId, ptrsId },
+      transaction: t,
+    });
 
-//   const row = await db.PtrsColumnMap.create({
-//     customerId,
-//     ptrsId,
-//     ...payload,
-//     createdBy: userId || null,
-//     updatedBy: userId || null,
-//   });
-//   return row.get({ plain: true });
-// }
+    const payload = {
+      mappings,
+      extras,
+      fallbacks,
+      defaults,
+      joins,
+      rowRules,
+      profileId,
+    };
+
+    if (existing) {
+      await existing.update(
+        {
+          ...payload,
+          updatedBy: userId || existing.updatedBy || existing.createdBy || null,
+        },
+        { transaction: t }
+      );
+
+      await t.commit();
+      return existing.get({ plain: true });
+    }
+
+    const row = await db.PtrsColumnMap.create(
+      {
+        customerId,
+        ptrsId,
+        ...payload,
+        createdBy: userId || null,
+        updatedBy: userId || null,
+      },
+      { transaction: t }
+    );
+
+    await t.commit();
+    return row.get({ plain: true });
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
 
 // /** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
 // async function getMap({ customerId, ptrsId }) {
@@ -988,127 +1014,150 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
   }
 }
 
-// /**
-//  * Return unified headers and examples across main import + all supporting datasets.
-//  * Reuses getImportSample for main rows/headers and augments headerMeta with supporting datasets.
-//  */
-// async function getUnifiedSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
-//   // Base = main only
-//   const base = await getImportSample({ customerId, ptrsId, limit, offset });
-//   const headerSet = new Set(base.headers || []);
+/**
+ * Return unified headers and examples across main import + all supporting datasets.
+ * Reuses getImportSample for main rows/headers and augments headerMeta with supporting datasets.
+ */
+async function getUnifiedSample({
+  customerId,
+  ptrsId,
+  limit = 10,
+  offset = 0,
+}) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Base = main only
+    const base = await getImportSample({ customerId, ptrsId, limit, offset });
+    const headerSet = new Set(base.headers || []);
 
-//   // Make headerMeta mutable (sources as Set)
-//   const headerMeta = {};
-//   for (const [k, meta] of Object.entries(base.headerMeta || {})) {
-//     headerMeta[k] = {
-//       sources: new Set([...(meta.sources || [])]),
-//       examples: { ...(meta.examples || {}) },
-//     };
-//   }
+    // Make headerMeta mutable (sources as Set)
+    const headerMeta = {};
+    for (const [k, meta] of Object.entries(base.headerMeta || {})) {
+      headerMeta[k] = {
+        sources: new Set([...(meta.sources || [])]),
+        examples: { ...(meta.examples || {}) },
+      };
+    }
 
-//   // Merge supporting dataset headers + examples
-//   try {
-//     const dsRows = await db.PtrsDataset.findAll({
-//       where: { customerId, ptrsId },
-//       attributes: ["id", "meta", "role"],
-//       raw: true,
-//     });
+    // Merge supporting dataset headers + examples
+    try {
+      const dsRows = await db.PtrsDataset.findAll({
+        where: { customerId, ptrsId },
+        attributes: ["id", "meta", "role"],
+        raw: true,
+        transaction: t,
+      });
 
-//     if (Array.isArray(dsRows) && dsRows.length) {
-//       const addHeaders = (arr, role) => {
-//         for (const h of arr || []) {
-//           if (h == null) continue;
-//           const s = String(h).trim();
-//           if (!s) continue;
-//           headerSet.add(s);
-//           headerMeta[s] = headerMeta[s] || { sources: new Set(), examples: {} };
-//           if (role) headerMeta[s].sources.add(role);
-//         }
-//       };
+      if (Array.isArray(dsRows) && dsRows.length) {
+        const addHeaders = (arr, role) => {
+          for (const h of arr || []) {
+            if (h == null) continue;
+            const s = String(h).trim();
+            if (!s) continue;
+            headerSet.add(s);
+            headerMeta[s] = headerMeta[s] || {
+              sources: new Set(),
+              examples: {},
+            };
+            if (role) headerMeta[s].sources.add(role);
+          }
+        };
 
-//       for (const ds of dsRows) {
-//         const role = ds.role || "dataset";
-//         const meta = ds.meta || {};
-//         let dsHeaders = Array.isArray(meta.headers) ? meta.headers : null;
-//         let sampleRows = null;
-//         try {
-//           const sample = await getDatasetSample({
-//             customerId,
-//             datasetId: ds.id,
-//             limit: 5,
-//             offset: 0,
-//           });
-//           dsHeaders =
-//             dsHeaders && dsHeaders.length ? dsHeaders : sample.headers;
-//           sampleRows = Array.isArray(sample.rows) ? sample.rows : [];
-//         } catch (_) {}
+        for (const ds of dsRows) {
+          const role = ds.role || "dataset";
+          const meta = ds.meta || {};
+          let dsHeaders = Array.isArray(meta.headers) ? meta.headers : null;
+          let sampleRows = null;
+          try {
+            const sample = await getDatasetSample({
+              customerId,
+              datasetId: ds.id,
+              limit: 5,
+              offset: 0,
+            });
+            dsHeaders =
+              dsHeaders && dsHeaders.length ? dsHeaders : sample.headers;
+            sampleRows = Array.isArray(sample.rows) ? sample.rows : [];
+          } catch (_) {}
 
-//         addHeaders(dsHeaders, role);
+          addHeaders(dsHeaders, role);
 
-//         if (sampleRows && sampleRows.length) {
-//           for (const row of sampleRows) {
-//             for (const [k, v] of Object.entries(row)) {
-//               if (v != null && String(v).trim() !== "") {
-//                 headerMeta[k] = headerMeta[k] || {
-//                   sources: new Set(),
-//                   examples: {},
-//                 };
-//                 if (headerMeta[k].examples[role] == null) {
-//                   headerMeta[k].examples[role] = v;
-//                 }
-//               }
-//             }
-//           }
-//         }
-//       }
-//     }
-//   } catch (e) {
-//     slog.warn("PTRS v2 getUnifiedSample: failed merging supporting datasets", {
-//       action: "PtrsV2GetUnifiedSampleMergeHeaders",
-//       customerId,
-//       ptrsId,
-//       error: e.message,
-//     });
-//   }
+          if (sampleRows && sampleRows.length) {
+            for (const row of sampleRows) {
+              for (const [k, v] of Object.entries(row)) {
+                if (v != null && String(v).trim() !== "") {
+                  headerMeta[k] = headerMeta[k] || {
+                    sources: new Set(),
+                    examples: {},
+                  };
+                  if (headerMeta[k].examples[role] == null) {
+                    headerMeta[k].examples[role] = v;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      slog.warn(
+        "PTRS v2 getUnifiedSample: failed merging supporting datasets",
+        {
+          action: "PtrsV2GetUnifiedSampleMergeHeaders",
+          customerId,
+          ptrsId,
+          error: e.message,
+        }
+      );
+    }
 
-//   // Finalise: convert Sets to arrays and pick a preferred example
-//   const unifiedHeaders = Array.from(headerSet.values());
-//   const finalizedHeaderMeta = {};
-//   for (const key of Object.keys(headerMeta)) {
-//     const meta = headerMeta[key];
-//     const sources = Array.from(meta.sources || []);
-//     let example = null;
-//     if (meta.examples) {
-//       if (meta.examples.main != null) example = meta.examples.main;
-//       else {
-//         const firstRole = Object.keys(meta.examples)[0];
-//         if (firstRole) example = meta.examples[firstRole];
-//       }
-//     }
-//     finalizedHeaderMeta[key] = {
-//       sources,
-//       examples: meta.examples || {},
-//       example,
-//     };
-//   }
+    // Finalise: convert Sets to arrays and pick a preferred example
+    const unifiedHeaders = Array.from(headerSet.values());
+    const finalizedHeaderMeta = {};
+    for (const key of Object.keys(headerMeta)) {
+      const meta = headerMeta[key];
+      const sources = Array.from(meta.sources || []);
+      let example = null;
+      if (meta.examples) {
+        if (meta.examples.main != null) example = meta.examples.main;
+        else {
+          const firstRole = Object.keys(meta.examples)[0];
+          if (firstRole) example = meta.examples[firstRole];
+        }
+      }
+      finalizedHeaderMeta[key] = {
+        sources,
+        examples: meta.examples || {},
+        example,
+      };
+    }
 
-//   slog.info("PTRS v2 getUnifiedSample: done", {
-//     action: "PtrsV2GetUnifiedSample",
-//     customerId,
-//     ptrsId,
-//     rowsReturned: Array.isArray(base.rows) ? base.rows.length : 0,
-//     total: base.total || 0,
-//     unifiedHeadersCount: unifiedHeaders.length,
-//     headerMetaKeys: Object.keys(finalizedHeaderMeta).length,
-//   });
+    slog.info("PTRS v2 getUnifiedSample: done", {
+      action: "PtrsV2GetUnifiedSample",
+      customerId,
+      ptrsId,
+      rowsReturned: Array.isArray(base.rows) ? base.rows.length : 0,
+      total: base.total || 0,
+      unifiedHeadersCount: unifiedHeaders.length,
+      headerMetaKeys: Object.keys(finalizedHeaderMeta).length,
+    });
 
-//   return {
-//     rows: base.rows || [],
-//     total: base.total || 0,
-//     headers: unifiedHeaders,
-//     headerMeta: finalizedHeaderMeta,
-//   };
-// }
+    await t.commit();
+    return {
+      rows: base.rows || [],
+      total: base.total || 0,
+      headers: unifiedHeaders,
+      headerMeta: finalizedHeaderMeta,
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
 
 /** Fetch one ptrs/upload metadata (tenant-scoped) */
 async function getPtrs({ customerId, ptrsId }) {
@@ -1123,6 +1172,64 @@ async function getPtrs({ customerId, ptrsId }) {
     });
     await t.commit();
     return row || null;
+  } catch (err) {
+    await t.rollback();
+    throw err;
+  }
+}
+
+async function updatePtrs({
+  customerId,
+  ptrsId,
+  currentStep,
+  label,
+  periodStart,
+  periodEnd,
+  reportingEntityName,
+  profileId,
+  status,
+  meta,
+  userId,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, customerId },
+      transaction: t,
+    });
+
+    if (!ptrs) {
+      const e = new Error("Ptrs not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const updates = {};
+
+    if (currentStep != null) updates.currentStep = currentStep;
+    if (label != null) updates.label = label;
+    if (periodStart != null) updates.periodStart = periodStart;
+    if (periodEnd != null) updates.periodEnd = periodEnd;
+    if (reportingEntityName != null)
+      updates.reportingEntityName = reportingEntityName;
+    if (profileId != null) updates.profileId = profileId;
+    if (status != null) updates.status = status;
+    if (meta != null) updates.meta = meta;
+
+    if (Object.keys(updates).length === 0) {
+      await t.commit();
+      return ptrs.get({ plain: true });
+    }
+
+    updates.updatedBy = userId || ptrs.updatedBy || ptrs.createdBy || null;
+
+    await ptrs.update(updates, { transaction: t });
+    await t.commit();
+
+    return ptrs.get({ plain: true });
   } catch (err) {
     await t.rollback();
     throw err;
@@ -1350,41 +1457,13 @@ async function addDataset({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!role) throw new Error("role is required");
-  if (!buffer || !Buffer.isBuffer(buffer))
+  if (!buffer || !Buffer.isBuffer(buffer)) {
     throw new Error("file buffer is required");
-
-  // Normalise to CSV if an Excel file is uploaded
-  let workBuffer = buffer;
-  let workMime = mimeType || null;
-  let workExt = (fileName && path.extname(fileName)) || ".csv";
-  try {
-    const MAX_EXCEL_BYTES = 25 * 1024 * 1024; // 25 MB limit for Excel uploads
-    if (looksLikeXlsx(buffer, mimeType)) {
-      if (buffer.length > MAX_EXCEL_BYTES) {
-        const e = new Error("Excel file too large; please split and retry");
-        e.statusCode = 413;
-        throw e;
-      }
-      const csvText = await excelBufferToCsv(buffer, { timeoutMs: 15000 });
-      workBuffer = Buffer.from(csvText, "utf8");
-      workMime = "text/csv";
-      workExt = ".csv";
-    }
-  } catch (convErr) {
-    convErr.statusCode = convErr.statusCode || 400;
-    if (logger && logger.error) {
-      logger.error("PTRS v2 XLSX->CSV conversion failed", {
-        action: "PtrsV2AddDatasetConvert",
-        ptrsId,
-        customerId,
-        error: convErr.message,
-      });
-    }
-    throw convErr;
   }
 
-  // Begin a customer-scoped transaction for all DB writes (RLS-safe)
   const t = await beginTransactionWithCustomerContext(customerId);
+  let storagePath = null;
+
   try {
     // Ensure ptrs exists for tenant
     const ptrs = await db.Ptrs.findOne({
@@ -1395,6 +1474,37 @@ async function addDataset({
       const e = new Error("Ptrs not found");
       e.statusCode = 404;
       throw e;
+    }
+
+    // Normalise to CSV if an Excel file is uploaded
+    let workBuffer = buffer;
+    let workMime = mimeType || null;
+    let workExt = (fileName && path.extname(fileName)) || ".csv";
+
+    try {
+      const MAX_EXCEL_BYTES = 25 * 1024 * 1024; // 25 MB
+      if (looksLikeXlsx(buffer, mimeType)) {
+        if (buffer.length > MAX_EXCEL_BYTES) {
+          const e = new Error("Excel file too large; please split and retry");
+          e.statusCode = 413;
+          throw e;
+        }
+        const csvText = await excelBufferToCsv(buffer, { timeoutMs: 15000 });
+        workBuffer = Buffer.from(csvText, "utf8");
+        workMime = "text/csv";
+        workExt = ".csv";
+      }
+    } catch (convErr) {
+      convErr.statusCode = convErr.statusCode || 400;
+      if (logger && logger.error) {
+        logger.error("PTRS v2 XLSX->CSV conversion failed", {
+          action: "PtrsV2AddDatasetConvert",
+          ptrsId,
+          customerId,
+          error: convErr.message,
+        });
+      }
+      throw convErr;
     }
 
     // Create DB row first to get dataset id
@@ -1409,7 +1519,9 @@ async function addDataset({
           ? fileSize
           : workBuffer.length || null,
         mimeType: workMime || mimeType || null,
-        storageRef: "",
+        storageRef: null,
+        rowsCount: null,
+        status: "uploaded",
         meta: null,
         createdBy: userId || null,
         updatedBy: userId || null,
@@ -1419,7 +1531,7 @@ async function addDataset({
 
     const datasetId = row.id;
 
-    // Persist bytes to local storage (can be swapped for S3 later)
+    // Persist bytes to local storage
     const baseDir = path.resolve(
       process.cwd(),
       "storage",
@@ -1429,26 +1541,33 @@ async function addDataset({
     );
     fs.mkdirSync(baseDir, { recursive: true });
     const ext = workExt || ".csv";
-    const storagePath = path.join(baseDir, `${datasetId}${ext}`);
+    storagePath = path.join(baseDir, `${datasetId}${ext}`);
     fs.writeFileSync(storagePath, workBuffer);
 
-    // Parse headers + count rows (tolerant to duplicate headers)
+    // Parse headers + count rows
     const { headers, rowsCount } = await parseCsvMetaFromStream(
       Readable.from(workBuffer)
     );
     const meta = { headers, rowsCount };
 
-    await row.update({ storageRef: storagePath, meta }, { transaction: t });
+    await row.update(
+      { storageRef: storagePath, rowsCount, meta },
+      { transaction: t }
+    );
 
     await t.commit();
-
     return row.get({ plain: true });
   } catch (err) {
-    if (!t.finished) {
+    try {
+      await t.rollback();
+    } catch {
+      // ignore rollback errors
+    }
+    if (storagePath) {
       try {
-        await t.rollback();
-      } catch (_) {
-        // ignore rollback errors
+        fs.unlinkSync(storagePath);
+      } catch {
+        // ignore unlink errors
       }
     }
     throw err;
@@ -1500,6 +1619,7 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
       raw: false,
       transaction: t,
     });
+
     if (!row) {
       const e = new Error("Dataset not found");
       e.statusCode = 404;
@@ -1509,15 +1629,12 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
     storageRef = row.get("storageRef");
 
     await row.destroy({ transaction: t });
-
     await t.commit();
   } catch (err) {
-    if (!t.finished) {
-      try {
-        await t.rollback();
-      } catch (_) {
-        // ignore rollback errors
-      }
+    try {
+      await t.rollback();
+    } catch {
+      // ignore rollback errors
     }
     throw err;
   }
@@ -1526,7 +1643,6 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
     try {
       fs.unlinkSync(storageRef);
     } catch (e) {
-      // ignore unlink errors; file may have been moved/deleted
       logger.info("PTRS v2 removeDataset: could not delete file", {
         action: "PtrsV2RemoveDataset",
         datasetId,
@@ -2277,31 +2393,82 @@ async function createPtrs(params) {
 // }
 
 /**
- * List ptrs for a tenant. If hasMap=true, only include ptrs that have a saved column map.
+ * List ptrs for a tenant. Always returns full PTRS rows for the customer.
  */
-async function listPtrs({ customerId, hasMap = false }) {
+async function listPtrs({ customerId }) {
   if (!customerId) throw new Error("customerId is required");
 
-  // Fetch PTRS runs from tbl_ptrs
-  const ptrs = await db.Ptrs.findAll({
-    where: { customerId },
-    order: [["createdAt", "DESC"]],
-    raw: true,
-  });
+  const t = await beginTransactionWithCustomerContext(customerId);
 
-  if (!hasMap) return ptrs;
+  try {
+    const ptrs = await db.Ptrs.findAll({
+      where: { customerId },
+      order: [["createdAt", "DESC"]],
+      raw: true,
+      transaction: t,
+    });
 
-  if (!ptrs.length) return [];
-  const ptrsIds = ptrs.map((r) => r.id);
+    await t.commit();
+    return ptrs;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch {
+        /* ignore rollback errors */
+      }
+    }
+    throw err;
+  }
+}
 
-  const maps = await db.PtrsColumnMap.findAll({
-    where: { customerId, ptrsId: ptrsIds },
-    attributes: ["ptrsId"],
-    raw: true,
-  });
+/**
+ * List ptrs for a tenant that have an associated column map.
+ * Returns full PTRS rows filtered to only those with a saved map.
+ */
+async function listPtrsWithMap({ customerId }) {
+  if (!customerId) throw new Error("customerId is required");
 
-  const mappedSet = new Set(maps.map((m) => m.ptrsId));
-  return ptrs.filter((r) => mappedSet.has(r.id));
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // Fetch PTRS runs from tbl_ptrs
+    const ptrs = await db.Ptrs.findAll({
+      where: { customerId },
+      order: [["createdAt", "DESC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    if (!ptrs.length) {
+      await t.commit();
+      return [];
+    }
+
+    const ptrsIds = ptrs.map((r) => r.id);
+
+    const maps = await db.PtrsColumnMap.findAll({
+      where: { customerId, ptrsId: ptrsIds },
+      attributes: ["ptrsId"],
+      raw: true,
+      transaction: t,
+    });
+
+    const mappedSet = new Set(maps.map((m) => m.ptrsId));
+    const filtered = ptrs.filter((r) => mappedSet.has(r.id));
+
+    await t.commit();
+    return filtered;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch {
+        /* ignore rollback errors */
+      }
+    }
+    throw err;
+  }
 }
 
 // /**
@@ -2514,19 +2681,21 @@ module.exports = {
   getUpload,
   importCsvStream,
   getImportSample,
-  //   getUnifiedSample,
+  getUnifiedSample,
   getColumnMap,
-  //   saveColumnMap,
+  saveColumnMap,
   // getMap,
   //   saveMap,
   //   updateRulesOnly,
   //   previewTransform,
   listPtrs,
+  listPtrsWithMap,
   addDataset,
   listDatasets,
-  //   getDatasetSample,
+  getDatasetSample,
   removeDataset,
   getPtrs,
+  updatePtrs,
   //   getStagePreview,
   //   stagePtrs,
   listProfiles,

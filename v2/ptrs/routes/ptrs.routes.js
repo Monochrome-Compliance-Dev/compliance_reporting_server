@@ -20,6 +20,9 @@ router.post("", requirePtrs, ptrsController.createPtrs);
 // Read a single ptrs by id
 router.get("/:id", requirePtrs, ptrsController.getPtrs);
 
+// Update currentStep when user progresses through steps
+router.put("/:id", requirePtrs, ptrsController.updatePtrs);
+
 // Upload the CSV for a ptrs (multipart or text/csv)
 router.post(
   "/:id/import",
@@ -43,7 +46,7 @@ router.get("/:id/sample", requirePtrs, ptrsController.getSample);
 
 // Column mapping (get/save)
 router.get("/:id/map", requirePtrs, ptrsController.getMap);
-// router.post("/:id/map", requirePtrs, ptrsController.saveMap);
+router.post("/:id/map", requirePtrs, ptrsController.saveMap);
 
 // Datasets: upload/list/delete additional files for a ptrs (vendor master, terms, etc.)
 router.post(
@@ -58,19 +61,15 @@ router.delete(
   requirePtrs,
   ptrsController.removeDataset
 );
-// // Dataset sample (used for per-dataset header examples in FE)
-// router.get(
-//   "/datasets/:datasetId/sample",
-//   requirePtrs,
-//   ptrsController.getDatasetSample
-// );
+// Dataset sample (used for per-dataset header examples in FE)
+router.get(
+  "/datasets/:datasetId/sample",
+  requirePtrs,
+  ptrsController.getDatasetSample
+);
 
-// // Unified headers + examples across main and supporting datasets
-// router.get(
-//   "/:id/unified-sample",
-//   requirePtrs,
-//   ptrsController.getUnifiedSample
-// );
+// Unified headers + examples across main and supporting datasets
+router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
 
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);
@@ -82,7 +81,7 @@ router.delete(
 // router.get("/:id/rules", requirePtrs, ptrsController.getRules);
 // router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
 
-// List ptrs (optionally filter to those that already have a saved column map)
+// List ptrs
 router.get("", requirePtrs, ptrsController.listPtrs);
 
 // Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
