@@ -2,6 +2,21 @@ const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
 
+function safeMeta(meta) {
+  try {
+    return JSON.parse(JSON.stringify(meta, _svcReplacer()));
+  } catch {
+    return { note: "unserializable meta" };
+  }
+}
+
+const slog = {
+  info: (msg, meta) => logger?.info?.(msg, safeMeta(meta)),
+  warn: (msg, meta) => logger?.warn?.(msg, safeMeta(meta)),
+  error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
+  debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
+};
+
 /**
  * GET /api/v2/ptrs/datasets/:datasetId/sample
  * Query: limit, offset
@@ -57,41 +72,43 @@ async function getDatasetSample(req, res, next) {
   }
 }
 
-// // --- Safe logging helpers (avoid circular/Set/BigInt issues) ---
-// function _safeReplacer() {
-//   const seen = new WeakSet();
-//   return function (key, value) {
-//     if (typeof value === "bigint") return value.toString();
-//     if (value instanceof Set) return Array.from(value);
-//     if (value instanceof Map) return Object.fromEntries(value);
-//     if (Buffer.isBuffer?.(value))
-//       return { __type: "Buffer", length: value.length };
-//     if (value instanceof Error) {
-//       return { name: value.name, message: value.message, stack: value.stack };
-//     }
-//     if (typeof value === "object" && value !== null) {
-//       if (seen.has(value)) return "[Circular]";
-//       seen.add(value);
-//     }
-//     return value;
-//   };
-// }
-// function safeJson(obj, { maxLen = 5000 } = {}) {
-//   try {
-//     const s = JSON.stringify(obj, _safeReplacer());
-//     if (s.length > maxLen) return s.slice(0, maxLen) + "...[truncated]";
-//     return s;
-//   } catch (e) {
-//     return `"[Unserializable: ${e.message}]"`;
-//   }
-// }
-// function safeLog(prefix, meta) {
-//   try {
-//     console.log(prefix, JSON.parse(safeJson(meta)));
-//   } catch {
-//     console.log(prefix, meta);
-//   }
-// }
+// --- Safe logging helpers (avoid circular/Set/BigInt issues) ---
+function _safeReplacer() {
+  const seen = new WeakSet();
+  return function (key, value) {
+    if (typeof value === "bigint") return value.toString();
+    if (value instanceof Set) return Array.from(value);
+    if (value instanceof Map) return Object.fromEntries(value);
+    if (Buffer.isBuffer?.(value))
+      return { __type: "Buffer", length: value.length };
+    if (value instanceof Error) {
+      return { name: value.name, message: value.message, stack: value.stack };
+    }
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  };
+}
+function safeJson(obj, { maxLen = 5000 } = {}) {
+  try {
+    const s = JSON.stringify(obj, _safeReplacer());
+    if (typeof s === "string" && s.length > maxLen) {
+      return s.slice(0, maxLen) + "...[truncated]";
+    }
+    return s;
+  } catch (e) {
+    return `"[Unserializable: ${e.message}]"`;
+  }
+}
+function safeLog(prefix, meta) {
+  try {
+    console.log(prefix, JSON.parse(safeJson(meta)));
+  } catch {
+    console.log(prefix, meta);
+  }
+}
 
 /**
  * POST /api/v2/ptrs
@@ -555,6 +572,23 @@ async function getMap(req, res, next) {
       offset: 0,
     });
 
+    slog.info("getColumnMap", {
+      id: map?.id,
+      joinsType: typeof map?.joins,
+      joinsRaw: map?.joins,
+    });
+
+    safeLog("[PTRS controller.getMap] map + header meta", {
+      id: map?.id || null,
+      hasMap: !!map,
+      joinsType: typeof map?.joins,
+      joinsRaw: map?.joins,
+      mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
+      headersCount: Array.isArray(headers) ? headers.length : 0,
+      headerSample: Array.isArray(headers) ? headers.slice(0, 10) : [],
+      hasHeaderMeta: !!headerMeta,
+    });
+
     await auditService.logEvent({
       customerId,
       userId,
@@ -612,6 +646,15 @@ async function saveMap(req, res, next) {
     rowRules = null,
     profileId = null,
   } = req.body || {};
+
+  slog.info(
+    "[PTRS v2 saveMap] body",
+    safeMeta({
+      ptrsId,
+      mappingsKeys: Object.keys(req.body.mappings || {}),
+      joins: req.body.joins,
+    })
+  );
 
   try {
     // Log incoming joins before validation
@@ -702,90 +745,90 @@ async function saveMap(req, res, next) {
   }
 }
 
-// /**
-//  * POST /api/v2/ptrs/:id/stage
-//  * Body: { steps?: Array<...>, persist?: boolean, limit?: number }
-//  * When persist=true, writes staged rows and updates ptrs status.
-//  */
-// async function stagePtrs(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const {
-//     steps = [],
-//     persist = false,
-//     limit = 50,
-//     profileId = null,
-//   } = req.body || {};
+/**
+ * POST /api/v2/ptrs/:id/stage
+ * Body: { steps?: Array<...>, persist?: boolean, limit?: number }
+ * When persist=true, writes staged rows and updates ptrs status.
+ */
+async function stagePtrs(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const {
+    steps = [],
+    persist = false,
+    limit = 50,
+    profileId = null,
+  } = req.body || {};
 
-//   safeLog("[PTRS controller.stagePtrs] received", {
-//     customerId: req.effectiveCustomerId,
-//     ptrsId: req.params.id,
-//     body: req.body,
-//     profileId,
-//   });
+  safeLog("[PTRS controller.stagePtrs] received", {
+    customerId: req.effectiveCustomerId,
+    ptrsId: req.params.id,
+    body: req.body,
+    profileId,
+  });
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     safeLog("[PTRS controller.stagePtrs] invoking service", {
-//       steps,
-//       persist,
-//       limit,
-//       profileId,
-//     });
+    safeLog("[PTRS controller.stagePtrs] invoking service", {
+      steps,
+      persist,
+      limit,
+      profileId,
+    });
 
-//     // Confirm the PTRS run exists and belongs to this tenant
-// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-// if (!ptrs) {
-//   return res
-//     .status(404)
-//     .json({ status: "error", message: "Ptrs not found" });
-// }
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
 
-//     const result = await ptrsService.stagePtrs({
-//       customerId,
-//       ptrsId,
-//       steps,
-//       persist: Boolean(persist),
-//       limit: Math.min(Number(limit) || 50, 500),
-//       userId,
-//       profileId,
-//     });
+    const result = await ptrsService.stagePtrs({
+      customerId,
+      ptrsId,
+      steps,
+      persist: Boolean(persist),
+      limit: Math.min(Number(limit) || 50, 500),
+      userId,
+      profileId,
+    });
 
-//     // safeLog("[PTRS controller.stagePtrs] result", result);
+    safeLog("[PTRS controller.stagePtrs] result", result);
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: persist ? "PtrsV2StagePersist" : "PtrsV2StagePreview",
-//       entity: "PtrsStage",
-//       entityId: ptrsId,
-//       details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: persist ? "PtrsV2StagePersist" : "PtrsV2StagePreview",
+      entity: "PtrsStage",
+      entityId: ptrsId,
+      details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
+    });
 
-//     return res.status(200).json({ status: "success", data: result });
-//   } catch (error) {
-//     logger.logEvent("error", "Error staging PTRS v2 ptrs", {
-//       action: "PtrsV2StagePtrs",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//       timestamp: new Date().toISOString(),
-//     });
-//     return next(error);
-//   }
-// }
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error staging PTRS v2 ptrs", {
+      action: "PtrsV2StagePtrs",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
 // /**
 //  * POST /api/v2/ptrs/:id/preview
@@ -855,7 +898,6 @@ async function saveMap(req, res, next) {
 
 /**
  * GET or POST /api/v2/ptrs/:id/stage/preview
- * Accepts steps + limit in body (POST) or as query (GET with steps as JSON string).
  * Returns: { sample: [], affectedCount: number }
  */
 async function getStagePreview(req, res, next) {
@@ -872,15 +914,6 @@ async function getStagePreview(req, res, next) {
     query: req.query,
   });
 
-  // Allow steps from body or query (query.steps can be a JSON string)
-  let steps = req.body?.steps;
-  if (!steps && req.query?.steps) {
-    try {
-      steps = JSON.parse(req.query.steps);
-    } catch {
-      steps = [];
-    }
-  }
   const limit = Math.min(
     Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
     500
@@ -903,7 +936,6 @@ async function getStagePreview(req, res, next) {
     }
 
     safeLog("[PTRS controller.getStagePreview] invoking service", {
-      steps,
       limit,
       profileId,
     });
@@ -911,9 +943,7 @@ async function getStagePreview(req, res, next) {
     const result = await ptrsService.getStagePreview({
       customerId,
       ptrsId,
-      steps: Array.isArray(steps) ? steps : [],
       limit,
-      profileId,
     });
 
     safeLog("[PTRS controller.getStagePreview] result", {
@@ -939,7 +969,7 @@ async function getStagePreview(req, res, next) {
       action: "PtrsV2StagePreview",
       entity: "PtrsStage",
       entityId: ptrsId,
-      details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
+      details: { limit },
     });
 
     return res.status(200).json({ status: "success", data: result });
@@ -1641,7 +1671,7 @@ module.exports = {
   getUnifiedSample,
   getMap,
   saveMap,
-  //   stagePtrs,
+  stagePtrs,
   //   preview,
   getStagePreview,
   //   rulesPreview,

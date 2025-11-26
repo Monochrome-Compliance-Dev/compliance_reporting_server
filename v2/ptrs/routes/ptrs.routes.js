@@ -39,8 +39,8 @@ router.post(
   ptrsController.importCsv
 );
 
-// // Stage normalized rows for a ptrs
-// router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
+// Stage normalized rows for a ptrs
+router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
 
 // Preview staged rows (read-only, small page)
 router.get("/:id/stage/preview", requirePtrs, ptrsController.getStagePreview);

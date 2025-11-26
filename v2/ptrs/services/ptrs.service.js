@@ -2,6 +2,7 @@ const db = require("@/db/database");
 const csv = require("fast-csv");
 const path = require("path");
 const { Readable } = require("stream");
+const fs = require("fs");
 
 const { logger } = require("@/helpers/logger");
 const {
@@ -176,20 +177,21 @@ const slog = {
   error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
   debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
 };
+
 // --- identifier helpers (enforce snake_case everywhere for SQL identifiers) ---
-// function toSnake(str) {
-//   if (str == null) return "";
-//   return (
-//     String(str)
-//       // replace non-alphanumerics with underscores
-//       .replace(/[^a-zA-Z0-9]+/g, "_")
-//       // insert underscores between camelCase boundaries
-//       .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-//       .toLowerCase()
-//       .replace(/^_+|_+$/g, "")
-//       .replace(/_{2,}/g, "_")
-//   );
-// }
+function toSnake(str) {
+  if (str == null) return "";
+  return (
+    String(str)
+      // replace non-alphanumerics with underscores
+      .replace(/[^a-zA-Z0-9]+/g, "_")
+      // insert underscores between camelCase boundaries
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .toLowerCase()
+      .replace(/^_+|_+$/g, "")
+      .replace(/_{2,}/g, "_")
+  );
+}
 
 // // Build tolerant JSONB extract that tries snake_case, original, and underscored variants
 // function jsonKeyVariants(key) {
@@ -211,89 +213,245 @@ const slog = {
 //   return `COALESCE(${variants.join(", ")})`;
 // }
 
-// // ----- JOIN HELPERS (file-backed datasets) -----
-// function normalizeJoinKeyValue(v) {
-//   if (v == null) return "";
-//   return String(v).trim().toUpperCase();
-// }
+// ----- JOIN HELPERS (file-backed datasets) -----
+function normalizeJoinKeyValue(v) {
+  console.log("[JOIN DEEP] normalizeJoinKeyValue called with:", v);
+  if (v == null) return "";
+  const out = String(v).trim().toUpperCase();
+  // Existing debug log retained for compatibility
+  console.log(
+    "[JOIN DEBUG] normalizeJoinKeyValue input:",
+    v,
+    "output:",
+    String(v == null ? "" : String(v).trim().toUpperCase())
+  );
+  console.log("[JOIN DEEP] normalizeJoinKeyValue returning:", out);
+  return out;
+}
 
-// function headerVariants(key) {
-//   const original = String(key || "");
-//   const snake = toSnake(original);
-//   const underscored = original.replace(/\s+/g, "_");
-//   const cased = original.toLowerCase();
-//   const set = new Set([original, snake, underscored, cased]);
-//   return Array.from(set.values());
-// }
+function headerVariants(key) {
+  console.log("[JOIN DEEP] headerVariants input:", key);
+  const original = String(key || "");
+  const snake = toSnake(original);
+  const underscored = original.replace(/\s+/g, "_");
+  const cased = original.toLowerCase();
+  const set = new Set([original, snake, underscored, cased]);
+  const result = Array.from(set.values());
+  console.log("[JOIN DEEP] headerVariants output:", result);
+  return result;
+}
 
-// function pickFromRowLoose(row, header) {
-//   if (!row || !header) return undefined;
-//   for (const h of headerVariants(header)) {
-//     if (row[h] != null) return row[h];
-//     const kh = Object.keys(row).find(
-//       (k) => String(k).toLowerCase() === String(h).toLowerCase()
-//     );
-//     if (kh && row[kh] != null) return row[kh];
-//   }
-//   return undefined;
-// }
+function pickFromRowLoose(row, header) {
+  console.log(
+    "[JOIN DEEP] pickFromRowLoose START header=",
+    header,
+    "row keys=",
+    row ? Object.keys(row) : null
+  );
+  // Existing debug log retained for compatibility
+  console.log(
+    "[JOIN DEBUG] pickFromRowLoose header=",
+    header,
+    "row keys=",
+    row ? Object.keys(row) : null
+  );
+  if (!row || !header) return undefined;
+  for (const h of headerVariants(header)) {
+    if (row[h] != null) {
+      console.log(
+        "[JOIN DEEP] pickFromRowLoose MATCH key=",
+        h,
+        "value=",
+        row[h]
+      );
+      return row[h];
+    }
+    const kh = Object.keys(row).find(
+      (k) => String(k).toLowerCase() === String(h).toLowerCase()
+    );
+    if (kh && row[kh] != null) {
+      console.log(
+        "[JOIN DEEP] pickFromRowLoose MATCH key=",
+        kh || h,
+        "value=",
+        row[kh || h]
+      );
+      return row[kh];
+    }
+  }
+  console.log(
+    "[JOIN DEEP] pickFromRowLoose no match found for header=",
+    header
+  );
+  return undefined;
+}
 
-// async function buildDatasetIndexByRole({ customerId, ptrsId, role, keyColumn }) {
-//   const ds = await db.PtrsDataset.findOne({
-//     where: { customerId, ptrsId, role },
-//     raw: true,
-//   });
-//   if (!ds) return { map: new Map(), headers: [], rowsIndexed: 0 };
-//   const storageRef = ds.storageRef;
-//   if (!storageRef || !fs.existsSync(storageRef)) {
-//     return { map: new Map(), headers: [], rowsIndexed: 0 };
-//   }
+async function buildDatasetIndexByRole({
+  customerId,
+  ptrsId,
+  role,
+  keyColumn,
+}) {
+  console.log("[JOIN DEEP] buildDatasetIndexByRole START", {
+    customerId,
+    ptrsId,
+    role,
+    keyColumn,
+  });
 
-//   const index = new Map();
-//   let headers = [];
-//   await new Promise((resolve, reject) => {
-//     let isFirst = true;
-//     const stream = fs.createReadStream(storageRef);
-//     const parser = csv
-//       .parse({ headers: true, trim: true, ignoreEmpty: true })
-//       .on("error", reject)
-//       .on("data", (row) => {
-//         if (isFirst) {
-//           headers = Object.keys(row || {});
-//           isFirst = false;
-//         }
-//         const rawKey = pickFromRowLoose(row, keyColumn);
-//         const normKey = normalizeJoinKeyValue(rawKey);
-//         if (!index.has(normKey)) index.set(normKey, row);
-//       })
-//       .on("end", () => resolve());
-//     stream.pipe(parser);
-//   });
+  // 🔐 Ensure RLS customer context is set for this lookup
+  const t = await beginTransactionWithCustomerContext(customerId);
+  let ds;
+  try {
+    ds = await db.PtrsDataset.findOne({
+      where: { customerId, ptrsId, role },
+      raw: true,
+      transaction: t,
+    });
+    await t.commit();
+  } catch (err) {
+    try {
+      await t.rollback();
+    } catch (_) {}
+    throw err;
+  }
 
-//   return { map: index, headers, rowsIndexed: index.size };
-// }
+  if (!ds) {
+    console.log("[JOIN DEEP] buildDatasetIndexByRole NO DATASET", {
+      customerId,
+      ptrsId,
+      role,
+    });
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
 
-// function mergeJoinedRow(mainRowData, joinedRow) {
-//   if (!joinedRow) return mainRowData;
-//   return { ...joinedRow, ...mainRowData };
-// }
+  const storageRef = ds.storageRef;
+  if (!storageRef || !fs.existsSync(storageRef)) {
+    console.log("[JOIN DEEP] buildDatasetIndexByRole MISSING FILE", {
+      customerId,
+      ptrsId,
+      role,
+      storageRef,
+      exists: storageRef ? fs.existsSync(storageRef) : false,
+    });
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
 
-// function applyColumnMappingsToRow({ mappings, sourceRow }) {
-//   const out = {};
-//   for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
-//     if (!cfg) continue;
-//     const target = cfg.field || cfg.target;
-//     if (!target) continue;
-//     let value;
-//     if (Object.prototype.hasOwnProperty.call(cfg, "value")) {
-//       value = cfg.value;
-//     } else {
-//       value = pickFromRowLoose(sourceRow, sourceHeader);
-//     }
-//     out[toSnake(target)] = value ?? null;
-//   }
-//   return out;
-// }
+  const index = new Map();
+  let headers = [];
+
+  await new Promise((resolve, reject) => {
+    let isFirst = true;
+    const stream = fs.createReadStream(storageRef);
+    const parser = csv
+      .parse({ headers: true, trim: true, ignoreEmpty: true })
+      .on("error", (err) => {
+        console.error(
+          "[JOIN DEEP] buildDatasetIndexByRole PARSE ERROR",
+          err.message
+        );
+        reject(err);
+      })
+      .on("data", (row) => {
+        if (isFirst) {
+          headers = Object.keys(row || {});
+          isFirst = false;
+        }
+        const rawKey = pickFromRowLoose(row, keyColumn);
+        const normKey = normalizeJoinKeyValue(rawKey);
+        console.log(
+          "[JOIN DEBUG] buildDatasetIndexByRole role=",
+          role,
+          "keyColumn=",
+          keyColumn,
+          "rawKey=",
+          rawKey,
+          "normKey=",
+          normKey
+        );
+        if (!index.has(normKey)) index.set(normKey, row);
+      })
+      .on("end", () => {
+        console.log(
+          "[JOIN DEEP] buildDatasetIndexByRole STREAM END",
+          "role=",
+          role,
+          "rowsIndexed=",
+          index.size
+        );
+        resolve();
+      });
+
+    stream.pipe(parser);
+  });
+
+  console.log(
+    "[JOIN DEBUG] buildDatasetIndexByRole complete role=",
+    role,
+    "rowsIndexed=",
+    index.size
+  );
+  console.log("[JOIN DEEP] buildDatasetIndexByRole END", {
+    rowsIndexed: index.size,
+    headers,
+  });
+
+  return { map: index, headers, rowsIndexed: index.size };
+}
+
+function mergeJoinedRow(mainRowData, joinedRow) {
+  console.log("[JOIN TRACE] mergeJoinedRow called", {
+    mainKeys: mainRowData ? Object.keys(mainRowData) : null,
+    joinedKeys: joinedRow ? Object.keys(joinedRow) : null,
+  });
+
+  if (!joinedRow) {
+    console.log(
+      "[JOIN TRACE] mergeJoinedRow: no joined row, returning mainRowData"
+    );
+    return mainRowData;
+  }
+
+  const merged = { ...joinedRow, ...mainRowData };
+
+  console.log("[JOIN TRACE] mergeJoinedRow result keys", {
+    mergedKeys: Object.keys(merged),
+  });
+
+  return merged;
+}
+
+function applyColumnMappingsToRow({ mappings, sourceRow }) {
+  console.log(
+    "[JOIN DEEP] applyColumnMappingsToRow START sourceRow keys=",
+    sourceRow ? Object.keys(sourceRow) : null
+  );
+  const out = {};
+  for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
+    if (!cfg) continue;
+    const target = cfg.field || cfg.target;
+    if (!target) continue;
+    let value;
+    if (Object.prototype.hasOwnProperty.call(cfg, "value")) {
+      value = cfg.value;
+    } else {
+      value = pickFromRowLoose(sourceRow, sourceHeader);
+    }
+    out[toSnake(target)] = value ?? null;
+  }
+  // Existing debug log retained for compatibility
+  console.log(
+    "[JOIN DEBUG] applyColumnMappingsToRow sourceRow keys=",
+    sourceRow ? Object.keys(sourceRow) : null,
+    "output keys=",
+    Object.keys(out)
+  );
+  console.log(
+    "[JOIN DEEP] applyColumnMappingsToRow END output keys=",
+    Object.keys(out)
+  );
+  return out;
+}
 
 // // ----- RULE ENGINE HELPERS -----
 // function _toNum(v) {
@@ -378,31 +536,31 @@ const slog = {
 //   row[act.field] = act.round != null ? _round(next, act.round) : next;
 // }
 
-// function applyRules(rows, rules = []) {
-//   const enabled = (rules || []).filter((r) => r && r.enabled !== false);
-//   const stats = { rulesTried: enabled.length, rowsAffected: 0, actions: 0 };
-//   if (!Array.isArray(rows) || !rows.length || !enabled.length) {
-//     return { rows: rows || [], stats };
-//   }
-//   for (const row of rows) {
-//     let touched = false;
-//     for (const rule of enabled) {
-//       const conds = Array.isArray(rule.when) ? rule.when : [];
-//       const ok = conds.every((c) => _matches(row, c));
-//       if (!ok) continue;
-//       const actions = Array.isArray(rule.then) ? rule.then : [];
-//       for (const act of actions) {
-//         _applyAction(row, act);
-//         stats.actions++;
-//         touched = true;
-//       }
-//       row._appliedRules = row._appliedRules || [];
-//       row._appliedRules.push(rule.id || rule.label || "rule");
-//     }
-//     if (touched) stats.rowsAffected++;
-//   }
-//   return { rows, stats };
-// }
+function applyRules(rows, rules = []) {
+  const enabled = (rules || []).filter((r) => r && r.enabled !== false);
+  const stats = { rulesTried: enabled.length, rowsAffected: 0, actions: 0 };
+  if (!Array.isArray(rows) || !rows.length || !enabled.length) {
+    return { rows: rows || [], stats };
+  }
+  for (const row of rows) {
+    let touched = false;
+    for (const rule of enabled) {
+      const conds = Array.isArray(rule.when) ? rule.when : [];
+      const ok = conds.every((c) => _matches(row, c));
+      if (!ok) continue;
+      const actions = Array.isArray(rule.then) ? rule.then : [];
+      for (const act of actions) {
+        _applyAction(row, act);
+        stats.actions++;
+        touched = true;
+      }
+      row._appliedRules = row._appliedRules || [];
+      row._appliedRules.push(rule.id || rule.label || "rule");
+    }
+    if (touched) stats.rowsAffected++;
+  }
+  return { rows, stats };
+}
 
 // let XLSX = null;
 // try {
@@ -593,7 +751,19 @@ async function getColumnMap({ customerId, ptrsId }) {
     });
     await t.commit();
     console.log("getColumnMap", map);
-
+    slog.info(
+      "PTRS v2 getColumnMap: loaded map",
+      safeMeta({
+        customerId,
+        ptrsId,
+        hasMap: !!map,
+        id: map?.id || null,
+        hasMappings: !!(map && map.mappings),
+        hasJoins: !!(map && map.joins),
+        hasRowRules: !!(map && map.rowRules),
+        mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
+      })
+    );
     return map || null;
   } catch (err) {
     await t.rollback();
@@ -1452,9 +1622,11 @@ async function addDataset({
   buffer,
   userId = null,
 }) {
+  const rawRole = typeof role === "string" ? role.trim() : "";
+  const normalisedRole = rawRole.toLowerCase();
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
-  if (!role) throw new Error("role is required");
+  if (!normalisedRole) throw new Error("role is required");
   if (!buffer || !Buffer.isBuffer(buffer)) {
     throw new Error("file buffer is required");
   }
@@ -1510,7 +1682,7 @@ async function addDataset({
       {
         customerId,
         ptrsId,
-        role,
+        role: normalisedRole,
         sourceName: sourceName || fileName || null,
         fileName: fileName || null,
         fileSize: Number.isFinite(fileSize)
@@ -2136,259 +2308,353 @@ async function createPtrs(params) {
 //   });
 // }
 
-// // Compose mapped rows for a ptrs, including join and column mapping logic
-// async function composeMappedRowsForPtrs({ customerId, ptrsId, limit = 50 }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
+// Compose mapped rows for a ptrs, including join and column mapping logic
+async function composeMappedRowsForPtrs({
+  customerId,
+  ptrsId,
+  limit = 50,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
 
-//   const mapRow = await getColumnMap({ customerId, ptrsId });
-//   const map = mapRow || {};
-//   const mappings = map.mappings || {};
-//   let joins = map.joins;
-//   if (typeof joins === "string") {
-//     try {
-//       joins = JSON.parse(joins);
-//     } catch {
-//       joins = null;
-//     }
-//   }
+  // Load column map (with joins + rowRules etc.)
+  const mapRow = await getColumnMap({ customerId, ptrsId, transaction });
+  const map = mapRow || {};
+  const mappings = map.mappings || {};
+  console.log("map.joins raw =", map.joins);
 
-//   let otherIndex = { map: new Map(), headers: [], rowsIndexed: 0 };
-//   let joinSpec = null;
+  // Normalise joins – we currently support joins where one side is "main"
+  let joins = map.joins;
+  if (typeof joins === "string") {
+    try {
+      joins = JSON.parse(joins);
+    } catch {
+      joins = null;
+    }
+  }
 
-//   if (Array.isArray(joins) && joins.length) {
-//     joinSpec = joins.find(
-//       (j) => j?.to?.role && j?.from?.role && j?.to?.column && j?.from?.column
-//     );
-//     if (joinSpec) {
-//       const rhsRole =
-//         joinSpec.to?.role === "main" ? joinSpec.from?.role : joinSpec.to?.role;
-//       const rhsCol =
-//         joinSpec.to?.role === "main"
-//           ? joinSpec.from?.column
-//           : joinSpec.to?.column;
-//       if (rhsRole && rhsCol) {
-//         otherIndex = await buildDatasetIndexByRole({
-//           customerId,
-//           ptrsId,
-//           role: String(rhsRole).toLowerCase(),
-//           keyColumn: rhsCol,
-//         });
-//       }
-//     }
-//   }
+  const normalisedJoins = [];
+  if (Array.isArray(joins)) {
+    for (const j of joins) {
+      if (!j || typeof j !== "object") continue;
+      const from = j.from || {};
+      const to = j.to || {};
 
-//   const mainRows = await db.PtrsImportRaw.findAll({
-//     where: { customerId, ptrsId },
-//     order: [["rowNo", "ASC"]],
-//     limit: Math.min(Number(limit) || 50, 500),
-//     attributes: ["rowNo", "data"],
-//     raw: true,
-//   });
+      const fromRole = (from.role || "").toLowerCase();
+      const toRole = (to.role || "").toLowerCase();
+      const fromCol = from.column;
+      const toCol = to.column;
 
-//   const composed = [];
-//   for (const r of mainRows) {
-//     const d = r.data || {};
-//     let srcRow = d;
-//     if (joinSpec && otherIndex.map.size) {
-//       const lhsCol =
-//         joinSpec.to?.role === "main"
-//           ? joinSpec.to?.column
-//           : joinSpec.from?.column;
-//       const key = normalizeJoinKeyValue(pickFromRowLoose(d, lhsCol));
-//       const joined = otherIndex.map.get(key);
-//       srcRow = mergeJoinedRow(d, joined);
-//     }
-//     const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
-//     out.row_no = r.rowNo;
-//     composed.push(out);
-//   }
+      if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
-//   const headers = Array.from(
-//     new Set(composed.flatMap((row) => Object.keys(row)))
-//   );
+      // Only support joins that involve the main dataset on one side
+      const isFromMain = fromRole === "main";
+      const isToMain = toRole === "main";
+      if (!isFromMain && !isToMain) continue;
 
-//   return { rows: composed, headers };
-// }
+      const mainSide = isFromMain ? from : to;
+      const otherSide = isFromMain ? to : from;
 
-// /**
-//  * Stage data for a ptrs. Reuses previewTransform pipeline to project/optionally filter, then
-//  * (when persist=true) writes rows into tbl_ptrs_stage_row and updates ptrs status.
-//  * Returns { sample, affectedCount, persistedCount? }.
-//  */
-// async function stagePtrs({
-//   customerId,
-//   ptrsId,
-//   steps = [],
-//   persist = false,
-//   limit = 50,
-//   userId,
-//   profileId = null,
-// }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
+      if (!otherSide.role || !otherSide.column) continue;
 
-//   const started = Date.now();
+      normalisedJoins.push({
+        mainColumn: mainSide.column,
+        otherRole: String(otherSide.role).toLowerCase(),
+        otherColumn: otherSide.column,
+      });
+    }
+  }
 
-//   // 1) Compose mapped rows for this ptrs (import + joins + column map)
-//   const { rows: baseRows } = await composeMappedRowsForPtrs({
-//     customerId,
-//     ptrsId,
-//     limit,
-//   });
+  console.log(
+    "[JOIN TRACE] composeMappedRowsForPtrs normalisedJoins",
+    normalisedJoins
+  );
 
-//   // 2) Apply row-level rules (if any) independently of preview
-//   let rows = baseRows;
-//   let rulesStats = null;
+  // Build indexes for each supporting dataset role referenced in joins
+  const roleIndexes = new Map();
+  for (const j of normalisedJoins) {
+    if (!j.otherRole || !j.otherColumn) continue;
+    if (roleIndexes.has(j.otherRole)) continue;
 
-//   try {
-//     let rowRules = null;
-//     try {
-//       const mapRow = await getColumnMap({ customerId, ptrsId });
-//       rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-//       if (typeof rowRules === "string") {
-//         try {
-//           rowRules = JSON.parse(rowRules);
-//         } catch {
-//           rowRules = null;
-//         }
-//       }
-//     } catch (_) {
-//       rowRules = null;
-//     }
+    const idx = await buildDatasetIndexByRole({
+      customerId,
+      ptrsId,
+      role: j.otherRole,
+      keyColumn: j.otherColumn,
+      transaction,
+    });
 
-//     const rulesResult = applyRules(
-//       rows,
-//       Array.isArray(rowRules) ? rowRules : []
-//     );
-//     rows = rulesResult.rows || rows;
-//     rulesStats = rulesResult.stats || null;
-//   } catch (err) {
-//     slog.warn("PTRS v2 stagePtrs: failed to apply row rules", {
-//       action: "PtrsV2StagePtrsApplyRules",
-//       customerId,
-//       ptrsId,
-//       error: err.message,
-//     });
-//   }
+    roleIndexes.set(
+      j.otherRole,
+      idx || { map: new Map(), headers: [], rowsIndexed: 0 }
+    );
+  }
 
-//   // 3) Persist into tbl_ptrs_stage_row if requested
-//   if (persist) {
-//     const basePayload = rows.map((r) => {
-//       const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
-//       const dataObj =
-//         r && typeof r === "object" && Object.keys(r).length
-//           ? r
-//           : { _warning: "⚠️ No mapped data for this row" };
+  // Read main rows
+  const mainRows = await db.PtrsImportRaw.findAll({
+    where: { customerId, ptrsId },
+    order: [["rowNo", "ASC"]],
+    limit: Math.min(Number(limit) || 50, 500),
+    attributes: ["rowNo", "data"],
+    raw: true,
+    transaction,
+  });
 
-//       return {
-//         customerId: String(customerId),
-//         ptrsId: String(ptrsId),
-//         rowNo: rowNoVal,
-//         data: dataObj,
-//         errors: null,
-//         standard: null,
-//         custom: null,
-//         meta: {
-//           _stage: "ptrs.v2.stagePtrs",
-//           at: new Date().toISOString(),
-//           rules: {
-//             applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
-//             exclude: !!r.exclude,
-//           },
-//         },
-//       };
-//     });
+  const composed = [];
 
-//     const isEmptyPlain = (v) =>
-//       v &&
-//       typeof v === "object" &&
-//       !Array.isArray(v) &&
-//       Object.keys(v).length === 0;
+  for (const r of mainRows) {
+    const base = r.data || {};
+    let srcRow = base;
 
-//     const insertWarning = (obj) => {
-//       if (!obj || typeof obj !== "object") return obj;
-//       for (const key of ["data", "errors", "standard", "custom", "meta"]) {
-//         if (isEmptyPlain(obj[key])) {
-//           obj[key] = {
-//             _warning: "⚠️ Empty JSONB payload — nothing to insert",
-//           };
-//         }
-//         if (typeof obj[key] === "undefined") {
-//           obj[key] = null;
-//         }
-//       }
-//       return obj;
-//     };
+    console.log("[JOIN TRACE] composeMappedRowsForPtrs main row start", {
+      rowNo: r.rowNo,
+      baseKeys: base ? Object.keys(base) : null,
+    });
 
-//     const safePayload = basePayload.map(insertWarning);
+    // Apply each join in turn, merging any matched supporting-row data
+    if (normalisedJoins.length && roleIndexes.size) {
+      for (const j of normalisedJoins) {
+        const idx = roleIndexes.get(j.otherRole);
+        if (!idx || !idx.map || !idx.map.size) {
+          console.log(
+            "[JOIN TRACE] composeMappedRowsForPtrs join skipped - empty index",
+            {
+              rowNo: r.rowNo,
+              join: j,
+              hasIndex: !!idx,
+              indexSize: idx && idx.map ? idx.map.size : 0,
+            }
+          );
+          continue;
+        }
 
-//     slog.info("PTRS v2 stagePtrs: preparing to insert", {
-//       action: "PtrsV2StagePtrsBatch",
-//       customerId,
-//       ptrsId,
-//       batchSize: safePayload.length,
-//       sampleRow: safeMeta(safePayload[0] || {}),
-//     });
+        const lhsVal = pickFromRowLoose(base, j.mainColumn);
+        const key = normalizeJoinKeyValue(lhsVal);
 
-//     const offenders = safePayload
-//       .filter((p) => {
-//         const hasWarn = Boolean(
-//           p?.data?._warning ||
-//             p?.errors?._warning ||
-//             p?.standard?._warning ||
-//             p?.custom?._warning ||
-//             p?.meta?._warning
-//         );
-//         const hasEmpty =
-//           isEmptyPlain(p?.data) ||
-//           isEmptyPlain(p?.errors) ||
-//           isEmptyPlain(p?.standard) ||
-//           isEmptyPlain(p?.custom) ||
-//           isEmptyPlain(p?.meta);
-//         return hasWarn || hasEmpty;
-//       })
-//       .slice(0, 3)
-//       .map((p) => ({
-//         rowNo: p.rowNo,
-//         dataKeys: p.data ? Object.keys(p.data) : null,
-//         hasWarning: Boolean(
-//           p?.data?._warning ||
-//             p?.errors?._warning ||
-//             p?.standard?._warning ||
-//             p?.custom?._warning ||
-//             p?.meta?._warning
-//         ),
-//       }));
+        console.log("[JOIN TRACE] composeMappedRowsForPtrs join lookup", {
+          rowNo: r.rowNo,
+          join: j,
+          lhsVal,
+          key,
+          hasKey: key ? idx.map.has(key) : false,
+        });
 
-//     if (offenders.length) {
-//       slog.warn("PTRS v2 stagePtrs: warning/empty JSONB rows detected", {
-//         action: "PtrsV2StagePtrsWarningRows",
-//         ptrsId,
-//         customerId,
-//         offenderCount: offenders.length,
-//         sample: safeMeta(offenders),
-//       });
-//     }
+        if (!key) continue;
 
-//     await db.PtrsStageRow.destroy({ where: { customerId, ptrsId } });
-//     if (safePayload.length) {
-//       await db.PtrsStageRow.bulkCreate(safePayload, {
-//         validate: false,
-//         returning: false,
-//       });
-//     }
-//   }
+        const joined = idx.map.get(key);
+        if (joined) {
+          console.log("[JOIN TRACE] composeMappedRowsForPtrs join hit", {
+            rowNo: r.rowNo,
+            join: j,
+            joinedKeys: Object.keys(joined),
+          });
+          srcRow = mergeJoinedRow(srcRow, joined);
+        } else {
+          console.log("[JOIN TRACE] composeMappedRowsForPtrs join miss", {
+            rowNo: r.rowNo,
+            join: j,
+          });
+        }
+      }
+    }
 
-//   const tookMs = Date.now() - started;
-//   return {
-//     rowsIn: rows.length,
-//     rowsOut: rows.length,
-//     tookMs,
-//     sample: rows[0] || null,
-//     stats: { rules: rulesStats },
-//   };
-// }
+    const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+    out.row_no = r.rowNo;
+
+    console.log("[JOIN TRACE] composeMappedRowsForPtrs mapped row", {
+      rowNo: r.rowNo,
+      outputKeys: Object.keys(out),
+    });
+
+    composed.push(out);
+  }
+
+  const headers = Array.from(
+    new Set(composed.flatMap((row) => Object.keys(row)))
+  );
+
+  return { rows: composed, headers };
+}
+
+/**
+ * Stage data for a ptrs. Reuses previewTransform pipeline to project/optionally filter, then
+ * (when persist=true) writes rows into tbl_ptrs_stage_row and updates ptrs status.
+ * Returns { sample, affectedCount, persistedCount? }.
+ */
+async function stagePtrs({
+  customerId,
+  ptrsId,
+  steps = [],
+  persist = false,
+  limit = 50,
+  userId,
+  profileId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const started = Date.now();
+
+  // 1) Compose mapped rows for this ptrs (import + joins + column map)
+  const { rows: baseRows } = await composeMappedRowsForPtrs({
+    customerId,
+    ptrsId,
+    limit,
+  });
+
+  // 2) Apply row-level rules (if any) independently of preview
+  let rows = baseRows;
+  let rulesStats = null;
+
+  try {
+    let rowRules = null;
+    try {
+      const mapRow = await getColumnMap({ customerId, ptrsId });
+      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
+      if (typeof rowRules === "string") {
+        try {
+          rowRules = JSON.parse(rowRules);
+        } catch {
+          rowRules = null;
+        }
+      }
+    } catch (_) {
+      rowRules = null;
+    }
+
+    const rulesResult = applyRules(
+      rows,
+      Array.isArray(rowRules) ? rowRules : []
+    );
+    rows = rulesResult.rows || rows;
+    rulesStats = rulesResult.stats || null;
+  } catch (err) {
+    slog.warn("PTRS v2 stagePtrs: failed to apply row rules", {
+      action: "PtrsV2StagePtrsApplyRules",
+      customerId,
+      ptrsId,
+      error: err.message,
+    });
+  }
+
+  // 3) Persist into tbl_ptrs_stage_row if requested
+  if (persist) {
+    const basePayload = rows.map((r) => {
+      const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
+      const dataObj =
+        r && typeof r === "object" && Object.keys(r).length
+          ? r
+          : { _warning: "⚠️ No mapped data for this row" };
+
+      return {
+        customerId: String(customerId),
+        ptrsId: String(ptrsId),
+        rowNo: rowNoVal,
+        data: dataObj,
+        errors: null,
+        standard: null,
+        custom: null,
+        meta: {
+          _stage: "ptrs.v2.stagePtrs",
+          at: new Date().toISOString(),
+          rules: {
+            applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
+            exclude: !!r.exclude,
+          },
+        },
+      };
+    });
+
+    const isEmptyPlain = (v) =>
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      Object.keys(v).length === 0;
+
+    const insertWarning = (obj) => {
+      if (!obj || typeof obj !== "object") return obj;
+      for (const key of ["data", "errors", "standard", "custom", "meta"]) {
+        if (isEmptyPlain(obj[key])) {
+          obj[key] = {
+            _warning: "⚠️ Empty JSONB payload — nothing to insert",
+          };
+        }
+        if (typeof obj[key] === "undefined") {
+          obj[key] = null;
+        }
+      }
+      return obj;
+    };
+
+    const safePayload = basePayload.map(insertWarning);
+
+    slog.info("PTRS v2 stagePtrs: preparing to insert", {
+      action: "PtrsV2StagePtrsBatch",
+      customerId,
+      ptrsId,
+      batchSize: safePayload.length,
+      sampleRow: safeMeta(safePayload[0] || {}),
+    });
+
+    const offenders = safePayload
+      .filter((p) => {
+        const hasWarn = Boolean(
+          p?.data?._warning ||
+            p?.errors?._warning ||
+            p?.standard?._warning ||
+            p?.custom?._warning ||
+            p?.meta?._warning
+        );
+        const hasEmpty =
+          isEmptyPlain(p?.data) ||
+          isEmptyPlain(p?.errors) ||
+          isEmptyPlain(p?.standard) ||
+          isEmptyPlain(p?.custom) ||
+          isEmptyPlain(p?.meta);
+        return hasWarn || hasEmpty;
+      })
+      .slice(0, 3)
+      .map((p) => ({
+        rowNo: p.rowNo,
+        dataKeys: p.data ? Object.keys(p.data) : null,
+        hasWarning: Boolean(
+          p?.data?._warning ||
+            p?.errors?._warning ||
+            p?.standard?._warning ||
+            p?.custom?._warning ||
+            p?.meta?._warning
+        ),
+      }));
+
+    if (offenders.length) {
+      slog.warn("PTRS v2 stagePtrs: warning/empty JSONB rows detected", {
+        action: "PtrsV2StagePtrsWarningRows",
+        ptrsId,
+        customerId,
+        offenderCount: offenders.length,
+        sample: safeMeta(offenders),
+      });
+    }
+
+    await db.PtrsStageRow.destroy({ where: { customerId, ptrsId } });
+    if (safePayload.length) {
+      await db.PtrsStageRow.bulkCreate(safePayload, {
+        validate: false,
+        returning: false,
+      });
+    }
+  }
+
+  const tookMs = Date.now() - started;
+  return {
+    rowsIn: rows.length,
+    rowsOut: rows.length,
+    tookMs,
+    sample: rows[0] || null,
+    stats: { rules: rulesStats },
+  };
+}
 
 /**
  * List ptrs for a tenant. Always returns full PTRS rows for the customer.
@@ -2473,23 +2739,18 @@ async function listPtrsWithMap({ customerId }) {
  * Returns a preview of staged data using the current column map and step pipeline,
  * but previews directly from the staged table using snake_case logical fields.
  */
-async function getStagePreview({
-  customerId,
-  ptrsId,
-  steps = [],
-  limit = 50,
-  profileId = null,
-}) {
-  const tx = await db.beginTransactionWithCustomerContext({ customerId });
-  try {
-    if (!customerId) throw new Error("customerId is required");
-    if (!ptrsId) throw new Error("ptrsId is required");
+async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
 
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
     const { rows: composed, headers } = await composeMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit,
-      transaction: tx,
+      transaction: t,
     });
 
     // Apply row rules (if configured) for preview purposes
@@ -2498,8 +2759,9 @@ async function getStagePreview({
       const mapRow = await getColumnMap({
         customerId,
         ptrsId,
-        transaction: tx,
+        transaction: t,
       });
+      console.log("mapRow: ", mapRow);
       rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
       if (typeof rowRules === "string") {
         try {
@@ -2508,6 +2770,7 @@ async function getStagePreview({
           rowRules = null;
         }
       }
+      console.log("rowRules: ", rowRules);
     } catch (_) {
       rowRules = null;
     }
@@ -2516,17 +2779,28 @@ async function getStagePreview({
       composed,
       Array.isArray(rowRules) ? rowRules : []
     );
+    console.log("rulesResult: ", rulesResult);
     const rowsAfterRules = rulesResult.rows || composed;
+    console.log("rowsAfterRules: ", rowsAfterRules);
     const rulesStats = rulesResult.stats || null;
 
-    await tx.commit();
+    await t.commit();
+    console.log("headers: ", headers);
+    console.log("rowsAfterRules: ", rowsAfterRules);
+    console.log("rules: ", rulesStats);
     return {
       headers,
       rows: rowsAfterRules,
       stats: { rules: rulesStats },
     };
   } catch (err) {
-    await tx.rollback();
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
     throw err;
   }
 }
@@ -2833,7 +3107,7 @@ module.exports = {
   getPtrs,
   updatePtrs,
   getStagePreview,
-  //   stagePtrs,
+  stagePtrs,
   listProfiles,
   //   getRulesPreview,
   //   applyRulesAndPersist,

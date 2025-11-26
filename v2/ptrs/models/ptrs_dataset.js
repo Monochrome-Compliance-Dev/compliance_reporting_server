@@ -39,7 +39,7 @@ function model(sequelize) {
     // Storage key / path (e.g. S3 key or local path)
     storageRef: {
       type: DataTypes.STRING(255),
-      allowNull: false,
+      allowNull: true,
     },
 
     // Optional: number of parsed rows in the dataset
