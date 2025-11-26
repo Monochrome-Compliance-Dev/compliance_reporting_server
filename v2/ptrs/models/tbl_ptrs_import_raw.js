@@ -35,7 +35,7 @@ function model(sequelize) {
     indexes: [
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },
-      { fields: ["customerId", "ptrsId"] },
+      { fields: ["customerId", "ptrsId", "rowNo"] },
     ],
   });
 

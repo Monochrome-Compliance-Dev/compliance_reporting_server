@@ -88,6 +88,7 @@ function model(sequelize) {
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },
       { fields: ["ptrsId", "role"] },
+      { fields: ["customerId", "ptrsId"] },
     ],
   });
 

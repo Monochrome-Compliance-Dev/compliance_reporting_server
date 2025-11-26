@@ -1061,8 +1061,8 @@ async function getStagePreview(req, res, next) {
 // }
 
 /**
- * GET /api/v2/ptrs?hasMap=true
- * Returns a list of ptrss for the tenant (optionally only those with a saved column map)
+ * GET /api/v2/ptrs
+ * Returns a list of ptrss for the tenant
  */
 async function listPtrs(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -1087,6 +1087,44 @@ async function listPtrs(req, res, next) {
       ip,
       device,
       action: "PtrsV2ListPtrs",
+      entity: "Ptrs",
+      entityId: null,
+      details: { count: Array.isArray(items) ? items.length : 0 },
+    });
+
+    return res.status(200).json({ status: "success", data: { items } });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/with-map
+ * Returns a list of ptrs for the tenant that have an associated column map.
+ */
+async function listPtrsWithMap(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const items = await ptrsService.listPtrsWithMap({
+      customerId,
+    });
+
+    const userId = req.auth?.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2ListPtrsWithMap",
       entity: "Ptrs",
       entityId: null,
       details: { count: Array.isArray(items) ? items.length : 0 },
@@ -1609,6 +1647,7 @@ module.exports = {
   //   rulesPreview,
   //   rulesApply,
   listPtrs,
+  listPtrsWithMap,
   addDataset,
   listDatasets,
   getDatasetSample,

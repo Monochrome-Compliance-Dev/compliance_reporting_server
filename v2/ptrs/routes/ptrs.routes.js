@@ -20,6 +20,7 @@ router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
 
 // List ptrs
 router.get("", requirePtrs, ptrsController.listPtrs);
+router.get("/with-map", requirePtrs, ptrsController.listPtrsWithMap);
 
 // Create a ptrs metadata record (returns ptrs id and metadata)
 router.post("", requirePtrs, ptrsController.createPtrs);
