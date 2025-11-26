@@ -1,8 +1,6 @@
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
-const fs = require("fs");
-const path = require("path");
 
 /**
  * GET /api/v2/ptrs/datasets/:datasetId/sample
@@ -855,108 +853,108 @@ async function saveMap(req, res, next) {
 //   }
 // }
 
-// /**
-//  * GET or POST /api/v2/ptrs/:id/stage/preview
-//  * Accepts steps + limit in body (POST) or as query (GET with steps as JSON string).
-//  * Returns: { sample: [], affectedCount: number }
-//  */
-// async function getStagePreview(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
+/**
+ * GET or POST /api/v2/ptrs/:id/stage/preview
+ * Accepts steps + limit in body (POST) or as query (GET with steps as JSON string).
+ * Returns: { sample: [], affectedCount: number }
+ */
+async function getStagePreview(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
 
-//   safeLog("[PTRS controller.getStagePreview] received", {
-//     customerId: req.effectiveCustomerId,
-//     ptrsId: req.params.id,
-//     body: req.body,
-//     query: req.query,
-//   });
+  safeLog("[PTRS controller.getStagePreview] received", {
+    customerId: req.effectiveCustomerId,
+    ptrsId: req.params.id,
+    body: req.body,
+    query: req.query,
+  });
 
-//   // Allow steps from body or query (query.steps can be a JSON string)
-//   let steps = req.body?.steps;
-//   if (!steps && req.query?.steps) {
-//     try {
-//       steps = JSON.parse(req.query.steps);
-//     } catch {
-//       steps = [];
-//     }
-//   }
-//   const limit = Math.min(
-//     Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
-//     500
-//   );
+  // Allow steps from body or query (query.steps can be a JSON string)
+  let steps = req.body?.steps;
+  if (!steps && req.query?.steps) {
+    try {
+      steps = JSON.parse(req.query.steps);
+    } catch {
+      steps = [];
+    }
+  }
+  const limit = Math.min(
+    Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
+    500
+  );
 
-//   const profileId = req.body?.profileId ?? req.query?.profileId ?? null;
+  const profileId = req.body?.profileId ?? req.query?.profileId ?? null;
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
-//     // Confirm the PTRS run exists and belongs to this tenant
-// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-// if (!ptrs) {
-//   return res
-//     .status(404)
-//     .json({ status: "error", message: "Ptrs not found" });
-// }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
 
-//     safeLog("[PTRS controller.getStagePreview] invoking service", {
-//       steps,
-//       limit,
-//       profileId,
-//     });
+    safeLog("[PTRS controller.getStagePreview] invoking service", {
+      steps,
+      limit,
+      profileId,
+    });
 
-//     const result = await ptrsService.getStagePreview({
-//       customerId,
-//       ptrsId,
-//       steps: Array.isArray(steps) ? steps : [],
-//       limit,
-//       profileId,
-//     });
+    const result = await ptrsService.getStagePreview({
+      customerId,
+      ptrsId,
+      steps: Array.isArray(steps) ? steps : [],
+      limit,
+      profileId,
+    });
 
-//     safeLog("[PTRS controller.getStagePreview] result", {
-//       headers: Array.isArray(result?.headers) ? result.headers.length : 0,
-//       rows: Array.isArray(result?.rows) ? result.rows.length : 0,
-//       headerSample:
-//         Array.isArray(result?.headers) && result.headers.length
-//           ? result.headers.slice(0, 10)
-//           : [],
-//       firstRowKeys:
-//         Array.isArray(result?.rows) && result.rows[0]
-//           ? Object.keys(result.rows[0])
-//           : [],
-//       firstRowSample:
-//         Array.isArray(result?.rows) && result.rows[0] ? result.rows[0] : null,
-//     });
+    safeLog("[PTRS controller.getStagePreview] result", {
+      headers: Array.isArray(result?.headers) ? result.headers.length : 0,
+      rows: Array.isArray(result?.rows) ? result.rows.length : 0,
+      headerSample:
+        Array.isArray(result?.headers) && result.headers.length
+          ? result.headers.slice(0, 10)
+          : [],
+      firstRowKeys:
+        Array.isArray(result?.rows) && result.rows[0]
+          ? Object.keys(result.rows[0])
+          : [],
+      firstRowSample:
+        Array.isArray(result?.rows) && result.rows[0] ? result.rows[0] : null,
+    });
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2StagePreview",
-//       entity: "PtrsStage",
-//       entityId: ptrsId,
-//       details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2StagePreview",
+      entity: "PtrsStage",
+      entityId: ptrsId,
+      details: { stepCount: Array.isArray(steps) ? steps.length : 0, limit },
+    });
 
-//     return res.status(200).json({ status: "success", data: result });
-//   } catch (error) {
-//     logger.logEvent("error", "Error getting PTRS v2 stage preview", {
-//       action: "PtrsV2StagePreview",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//     });
-//     return next(error);
-//   }
-// }
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error getting PTRS v2 stage preview", {
+      action: "PtrsV2StagePreview",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 
 // /**
 //  * GET /api/v2/ptrs/:id/rules/preview?limit=50
@@ -1265,42 +1263,14 @@ async function getBlueprint(req, res, next) {
     const userId = req.auth?.id || null;
     const ip = req.ip;
     const device = req.headers["user-agent"];
+    const profileIdRaw = req.query.profileId || "";
+    const profileId =
+      typeof profileIdRaw === "string" ? profileIdRaw.trim() : "";
 
-    const basePath = path.resolve(
-      __dirname,
-      "../config/ptrsCalculationBlueprint.json"
-    );
-    const rawBase = JSON.parse(fs.readFileSync(basePath, "utf8"));
-
-    const profileId = (req.query.profileId || "").trim();
-    let merged = rawBase;
-
-    if (profileId) {
-      const profilePath = path.resolve(
-        __dirname,
-        `../config/profiles/${profileId}.json`
-      );
-      if (fs.existsSync(profilePath)) {
-        const rawProfile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
-        // Shallow-merge known hook areas
-        merged = {
-          ...rawBase,
-          synonyms: {
-            ...(rawBase.synonyms || {}),
-            ...(rawProfile.synonyms || {}),
-          },
-          fallbacks: {
-            ...(rawBase.fallbacks || {}),
-            ...(rawProfile.fallbacks || {}),
-          },
-          rowRules: [
-            ...(rawBase.rowRules || []),
-            ...(rawProfile.rowRules || []),
-          ],
-          joins: { ...(rawBase.joins || {}), ...(rawProfile.joins || {}) },
-        };
-      }
-    }
+    const merged = await ptrsService.getBlueprint({
+      customerId,
+      profileId: profileId || null,
+    });
 
     await auditService.logEvent({
       customerId,
@@ -1309,7 +1279,7 @@ async function getBlueprint(req, res, next) {
       device,
       action: "PtrsV2GetBlueprint",
       entity: "PtrsBlueprint",
-      entityId: (profileId && String(profileId)) || "base",
+      entityId: profileId || "ptrsCalculationBlueprint",
       details: {
         hasProfile: !!profileId,
       },
@@ -1321,7 +1291,6 @@ async function getBlueprint(req, res, next) {
   }
 }
 
-// in v2/ptrs/controllers/ptrs.controller.js
 async function listProfiles(req, res, next) {
   try {
     const customerId = req.query.customerId || req.effectiveCustomerId;
@@ -1636,7 +1605,7 @@ module.exports = {
   saveMap,
   //   stagePtrs,
   //   preview,
-  //   getStagePreview,
+  getStagePreview,
   //   rulesPreview,
   //   rulesApply,
   listPtrs,

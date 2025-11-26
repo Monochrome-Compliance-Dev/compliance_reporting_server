@@ -1,6 +1,5 @@
 const db = require("@/db/database");
 const csv = require("fast-csv");
-const fs = require("fs");
 const path = require("path");
 const { Readable } = require("stream");
 
@@ -587,7 +586,6 @@ async function parseCsvMetaFromStream(stream) {
 async function getColumnMap({ customerId, ptrsId }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    console.log("getColumnMap");
     const map = await db.PtrsColumnMap.findOne({
       where: { customerId, ptrsId },
       transaction: t,
@@ -2471,55 +2469,67 @@ async function listPtrsWithMap({ customerId }) {
   }
 }
 
-// /**
-//  * Returns a preview of staged data using the current column map and step pipeline,
-//  * but previews directly from the staged table using snake_case logical fields.
-//  */
-// async function getStagePreview({
-//   customerId,
-//   ptrsId,
-//   steps = [],
-//   limit = 50,
-//   profileId = null,
-// }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
+/**
+ * Returns a preview of staged data using the current column map and step pipeline,
+ * but previews directly from the staged table using snake_case logical fields.
+ */
+async function getStagePreview({
+  customerId,
+  ptrsId,
+  steps = [],
+  limit = 50,
+  profileId = null,
+}) {
+  const tx = await db.beginTransactionWithCustomerContext({ customerId });
+  try {
+    if (!customerId) throw new Error("customerId is required");
+    if (!ptrsId) throw new Error("ptrsId is required");
 
-//   const { rows: composed, headers } = await composeMappedRowsForPtrs({
-//     customerId,
-//     ptrsId,
-//     limit,
-//   });
+    const { rows: composed, headers } = await composeMappedRowsForPtrs({
+      customerId,
+      ptrsId,
+      limit,
+      transaction: tx,
+    });
 
-//   // Apply row rules (if configured) for preview purposes
-//   let rowRules = null;
-//   try {
-//     const mapRow = await getColumnMap({ customerId, ptrsId });
-//     rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-//     if (typeof rowRules === "string") {
-//       try {
-//         rowRules = JSON.parse(rowRules);
-//       } catch {
-//         rowRules = null;
-//       }
-//     }
-//   } catch (_) {
-//     rowRules = null;
-//   }
+    // Apply row rules (if configured) for preview purposes
+    let rowRules = null;
+    try {
+      const mapRow = await getColumnMap({
+        customerId,
+        ptrsId,
+        transaction: tx,
+      });
+      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
+      if (typeof rowRules === "string") {
+        try {
+          rowRules = JSON.parse(rowRules);
+        } catch {
+          rowRules = null;
+        }
+      }
+    } catch (_) {
+      rowRules = null;
+    }
 
-//   const rulesResult = applyRules(
-//     composed,
-//     Array.isArray(rowRules) ? rowRules : []
-//   );
-//   const rowsAfterRules = rulesResult.rows || composed;
-//   const rulesStats = rulesResult.stats || null;
+    const rulesResult = applyRules(
+      composed,
+      Array.isArray(rowRules) ? rowRules : []
+    );
+    const rowsAfterRules = rulesResult.rows || composed;
+    const rulesStats = rulesResult.stats || null;
 
-//   return {
-//     headers,
-//     rows: rowsAfterRules,
-//     stats: { rules: rulesStats },
-//   };
-// }
+    await tx.commit();
+    return {
+      headers,
+      rows: rowsAfterRules,
+      stats: { rules: rulesStats },
+    };
+  } catch (err) {
+    await tx.rollback();
+    throw err;
+  }
+}
 
 // async function getRulesPreview({
 //   customerId,
@@ -2676,6 +2686,131 @@ async function listProfiles(customerId) {
 //   return { ok: true };
 // }
 
+function mergeBlueprintLayers(base, overlay) {
+  if (!overlay || typeof overlay !== "object") return base || {};
+  const out = { ...(base || {}) };
+
+  // Shallow-merge known hook areas
+  if (overlay.synonyms) {
+    out.synonyms = { ...(out.synonyms || {}), ...(overlay.synonyms || {}) };
+  }
+  if (overlay.fallbacks) {
+    out.fallbacks = { ...(out.fallbacks || {}), ...(overlay.fallbacks || {}) };
+  }
+  if (Array.isArray(overlay.rowRules)) {
+    out.rowRules = [...(out.rowRules || []), ...overlay.rowRules];
+  }
+  if (overlay.joins) {
+    out.joins = { ...(out.joins || {}), ...(overlay.joins || {}) };
+  }
+
+  // Allow overlays to replace other top-level keys if explicitly provided
+  for (const [key, value] of Object.entries(overlay)) {
+    if (["synonyms", "fallbacks", "rowRules", "joins"].includes(key)) continue;
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Load PTRS calculation blueprint from DB, optionally overlaying profile- and customer-level overrides.
+ *
+ * DB expectations:
+ * - Base blueprint row has id "ptrsCalculationBlueprint".
+ * - Profile-specific rows use id = profileId (e.g. "veolia").
+ * - Customer overrides live in tbl_ptrs_blueprint_override.
+ */
+async function getBlueprint({ customerId = null, profileId = null } = {}) {
+  // No customerId => no RLS txn needed; just read base + optional profile
+  if (!customerId) {
+    const baseRow = await db.PtrsBlueprint.findByPk(
+      "ptrsCalculationBlueprint",
+      { raw: true }
+    );
+
+    if (!baseRow || !baseRow.json) {
+      const err = new Error(
+        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint."
+      );
+      err.statusCode = 500;
+      throw err;
+    }
+
+    let merged = baseRow.json || {};
+
+    if (profileId) {
+      const profileRow = await db.PtrsBlueprint.findByPk(profileId, {
+        raw: true,
+      });
+      if (profileRow && profileRow.json) {
+        merged = mergeBlueprintLayers(merged, profileRow.json);
+      }
+    }
+
+    // No customer overrides without a customerId
+    return merged;
+  }
+
+  // 🔐 RLS-safe path: customer-scoped transaction
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // 1) Base blueprint (required)
+    const baseRow = await db.PtrsBlueprint.findByPk(
+      "ptrsCalculationBlueprint",
+      { raw: true, transaction: t }
+    );
+
+    if (!baseRow || !baseRow.json) {
+      const err = new Error(
+        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint."
+      );
+      err.statusCode = 500;
+      throw err;
+    }
+
+    let merged = baseRow.json || {};
+
+    // 2) Profile-level overlay (optional)
+    if (profileId) {
+      const profileRow = await db.PtrsBlueprint.findByPk(profileId, {
+        raw: true,
+        transaction: t,
+      });
+      if (profileRow && profileRow.json) {
+        merged = mergeBlueprintLayers(merged, profileRow.json);
+      }
+    }
+
+    // 3) Customer-level override (optional)
+    const overrideRow = await db.PtrsBlueprintOverride.findOne({
+      where: {
+        customerId,
+        profileId: profileId || null,
+      },
+      raw: true,
+      transaction: t,
+    });
+
+    if (overrideRow && overrideRow.json) {
+      merged = mergeBlueprintLayers(merged, overrideRow.json);
+    }
+
+    await t.commit();
+    return merged;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {} // best effort
+    }
+    throw err;
+  }
+}
+
 module.exports = {
   createPtrs,
   getUpload,
@@ -2684,6 +2819,7 @@ module.exports = {
   getUnifiedSample,
   getColumnMap,
   saveColumnMap,
+  getBlueprint,
   // getMap,
   //   saveMap,
   //   updateRulesOnly,
@@ -2696,7 +2832,7 @@ module.exports = {
   removeDataset,
   getPtrs,
   updatePtrs,
-  //   getStagePreview,
+  getStagePreview,
   //   stagePtrs,
   listProfiles,
   //   getRulesPreview,

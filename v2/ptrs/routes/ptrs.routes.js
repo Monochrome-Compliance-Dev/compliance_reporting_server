@@ -14,6 +14,13 @@ const requirePtrs = authorise({
 });
 
 // v2 PTRS routes
+
+// Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
+router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
+
+// List ptrs
+router.get("", requirePtrs, ptrsController.listPtrs);
+
 // Create a ptrs metadata record (returns ptrs id and metadata)
 router.post("", requirePtrs, ptrsController.createPtrs);
 
@@ -34,12 +41,8 @@ router.post(
 // // Stage normalized rows for a ptrs
 // router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
 
-// // Preview staged rows (read-only, small page)
-// router.get(
-//   "/:id/stage/preview",
-//   requirePtrs,
-//   ptrsController.getStagePreview
-// );
+// Preview staged rows (read-only, small page)
+router.get("/:id/stage/preview", requirePtrs, ptrsController.getStagePreview);
 
 // Peek at staged rows
 router.get("/:id/sample", requirePtrs, ptrsController.getSample);
@@ -80,12 +83,6 @@ router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
 // // Rules (get/save) — FE writes rules without resending mappings
 // router.get("/:id/rules", requirePtrs, ptrsController.getRules);
 // router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
-
-// List ptrs
-router.get("", requirePtrs, ptrsController.listPtrs);
-
-// Return the generic blueprint, optionally merged with a profile (e.g., ?profileId=veolia)
-router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
 
 // List all PTRS profiles for a customer
 // Profiles CRUD
