@@ -78,12 +78,12 @@ router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);
 
-// // Rules (preview/apply)
-// router.get("/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
-// router.post("/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
-// // Rules (get/save) — FE writes rules without resending mappings
-// router.get("/:id/rules", requirePtrs, ptrsController.getRules);
-// router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
+// Rules (preview/apply)
+router.get("/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
+router.post("/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
+// Rules (get/save) — FE writes rules without resending mappings
+router.get("/:id/rules", requirePtrs, ptrsController.getRules);
+router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
 
 // List all PTRS profiles for a customer
 // Profiles CRUD

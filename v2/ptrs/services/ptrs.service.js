@@ -842,103 +842,113 @@ async function saveColumnMap({
   }
 }
 
-// /** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
-// async function getMap({ customerId, ptrsId }) {
-//   const map = await getColumnMap({ customerId, ptrsId });
-//   if (!map) return null;
-//   const maybeParse = (v) => {
-//     if (v == null || typeof v !== "string") return v;
-//     try {
-//       return JSON.parse(v);
-//     } catch {
-//       return v;
-//     }
-//   };
-//   map.extras = maybeParse(map.extras);
-//   map.fallbacks = maybeParse(map.fallbacks);
-//   map.defaults = maybeParse(map.defaults);
-//   map.joins = maybeParse(map.joins);
-//   map.rowRules = maybeParse(map.rowRules);
-//   return map;
-// }
+/** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
+async function getMap({ customerId, ptrsId }) {
+  const map = await getColumnMap({ customerId, ptrsId });
+  if (!map) return null;
+  const maybeParse = (v) => {
+    if (v == null || typeof v !== "string") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  };
+  map.extras = maybeParse(map.extras);
+  map.fallbacks = maybeParse(map.fallbacks);
+  map.defaults = maybeParse(map.defaults);
+  map.joins = maybeParse(map.joins);
+  map.rowRules = maybeParse(map.rowRules);
+  return map;
+}
 
 // /** Controller-friendly wrapper: saveMap delegates to saveColumnMap */
 // async function saveMap(payload) {
 //   return saveColumnMap(payload);
 // }
 
-// /** Update only rules-related fields without touching mappings/defaults/joins */
-// async function updateRulesOnly({
-//   customerId,
-//   ptrsId,
-//   rowRules = [],
-//   crossRowRules = [],
-//   userId = null,
-// }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
+/** Update only rules-related fields without touching mappings/defaults/joins */
+async function updateRulesOnly({
+  customerId,
+  ptrsId,
+  rowRules = [],
+  crossRowRules = [],
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
 
-//   // Load existing column map row
-// will need beginTransactionWithCustomerContext
-//   const existing = await db.PtrsColumnMap.findOne({
-//     where: { customerId, ptrsId },
-//   });
+  // Load existing column map row
+  const existing = await db.PtrsColumnMap.findOne({
+    where: { customerId, ptrsId },
+  });
 
-//   // Helper to parse JSON/TEXT extras safely
-//   const parseMaybe = (v) => {
-//     if (v == null) return null;
-//     if (typeof v === "string") {
-//       try {
-//         return JSON.parse(v);
-//       } catch {
-//         return null;
-//       }
-//     }
-//     if (typeof v === "object") return v;
-//     return null;
-//   };
+  // Helper to parse JSON/TEXT extras safely
+  const parseMaybe = (v) => {
+    if (v == null) return null;
+    if (typeof v === "string") {
+      try {
+        return JSON.parse(v);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof v === "object") return v;
+    return null;
+  };
 
-//   if (!existing) {
-//     // Create a minimal row; keep other config fields null/untouched
-// will need beginTransactionWithCustomerContext
-//     const row = await db.PtrsColumnMap.create({
-//       customerId,
-//       ptrsId,
-//       // Some schemas set NOT NULL on mappings; use {} to be safe.
-//       mappings: {},
-//       extras: {
-//         __experimentalCrossRowRules: Array.isArray(crossRowRules)
-//           ? crossRowRules
-//           : [],
-//       },
-//       fallbacks: null,
-//       defaults: null,
-//       joins: null,
-//       rowRules: Array.isArray(rowRules) ? rowRules : [],
-//       createdBy: userId || null,
-//       updatedBy: userId || null,
-//     });
-//     return row.get({ plain: true });
-//   }
+  if (!existing) {
+    // 🔐 RLS-safe tenant-scoped creation
+    const t = await beginTransactionWithCustomerContext(customerId);
+    try {
+      const row = await db.PtrsColumnMap.create(
+        {
+          customerId,
+          ptrsId,
+          mappings: {},
+          extras: {
+            __experimentalCrossRowRules: Array.isArray(crossRowRules)
+              ? crossRowRules
+              : [],
+          },
+          fallbacks: null,
+          defaults: null,
+          joins: null,
+          rowRules: Array.isArray(rowRules) ? rowRules : [],
+          createdBy: userId || null,
+          updatedBy: userId || null,
+        },
+        { transaction: t }
+      );
 
-//   // Merge into existing.extras without clobbering other keys
-//   const prevExtras = parseMaybe(existing.extras) || {};
-//   const nextExtras = {
-//     ...prevExtras,
-//     __experimentalCrossRowRules: Array.isArray(crossRowRules)
-//       ? crossRowRules
-//       : [],
-//   };
+      await t.commit();
+      return row.get({ plain: true });
+    } catch (err) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+      throw err;
+    }
+  }
 
-//   await existing.update({
-//     // Only touch rules-related fields
-//     rowRules: Array.isArray(rowRules) ? rowRules : [],
-//     extras: nextExtras,
-//     updatedBy: userId || existing.updatedBy || existing.createdBy || null,
-//   });
+  // Merge into existing.extras without clobbering other keys
+  const prevExtras = parseMaybe(existing.extras) || {};
+  const nextExtras = {
+    ...prevExtras,
+    __experimentalCrossRowRules: Array.isArray(crossRowRules)
+      ? crossRowRules
+      : [],
+  };
 
-//   return existing.get({ plain: true });
-// }
+  await existing.update({
+    // Only touch rules-related fields
+    rowRules: Array.isArray(rowRules) ? rowRules : [],
+    extras: nextExtras,
+    updatedBy: userId || existing.updatedBy || existing.createdBy || null,
+  });
+
+  return existing.get({ plain: true });
+}
 
 /**
  * Return a small window of staged rows plus count and inferred headers.
@@ -2832,72 +2842,205 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
   }
 }
 
-// async function getRulesPreview({
-//   customerId,
-//   ptrsId,
-//   limit = 50,
-//   profileId = null,
-// }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
-//   const prev = await getStagePreview({
-//     customerId,
-//     ptrsId,
-//     steps: [],
-//     limit,
-//     profileId,
-//   });
-//   return {
-//     headers: prev.headers || [],
-//     rows: prev.rows || [],
-//     stats: prev.stats || null,
-//   };
-// }
+async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
 
-// async function applyRulesAndPersist({
-//   customerId,
-//   ptrsId,
-//   profileId = null,
-//   limit = 5000,
-// }) {
-//   if (!customerId) throw new Error("customerId is required");
-//   if (!ptrsId) throw new Error("ptrsId is required");
-//   const prev = await getStagePreview({
-//     customerId,
-//     ptrsId,
-//     steps: [],
-//     limit,
-//     profileId,
-//   });
-//   const rows = prev.rows || [];
+  const effectiveLimit = Math.min(Number(limit) || 50, 500);
 
-//   const payload = rows.map((r) => ({
-//     customerId,
-//     ptrsId,
-//     rowNo: r.row_no || r.rowNo || null,
-//     data:
-//       r && Object.keys(r || {}).length
-//         ? r
-//         : { _warning: "⚠️ No mapped data for this row" },
-//     meta: {
-//       rules: {
-//         applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
-//         exclude: !!r.exclude,
-//         at: new Date().toISOString(),
-//       },
-//     },
-//   }));
+  // 🔐 Ensure RLS context for any import/raw reads
+  const t = await beginTransactionWithCustomerContext(customerId);
 
-// will need beginTransactionWithCustomerContext
-//   await db.PtrsStageRow.destroy({ where: { customerId, ptrsId } });
-//   if (payload.length) {
-//     await db.PtrsStageRow.bulkCreate(payload, {
-//       validate: false,
-//       returning: false,
-//     });
-//   }
-//   return { ok: true, stats: prev.stats || null, persisted: payload.length };
-// }
+  try {
+    // 1) Compose mapped rows (main import + joins)
+    const { rows: baseRows, headers } = await composeMappedRowsForPtrs({
+      customerId,
+      ptrsId,
+      limit: effectiveLimit,
+      transaction: t,
+    });
+
+    // 2) Load row-level rules from the column map
+    let rowRules = null;
+    try {
+      const mapRow = await getColumnMap({ customerId, ptrsId });
+      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
+      if (typeof rowRules === "string") {
+        try {
+          rowRules = JSON.parse(rowRules);
+        } catch {
+          rowRules = null;
+        }
+      }
+    } catch (_) {
+      rowRules = null;
+    }
+
+    // 3) Apply rules in-memory
+    const rulesResult = applyRules(
+      baseRows,
+      Array.isArray(rowRules) ? rowRules : []
+    );
+
+    await t.commit();
+
+    return {
+      headers,
+      rows: rulesResult.rows || baseRows,
+      stats: { rules: rulesResult.stats || null },
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
+}
+
+async function applyRulesAndPersist({
+  customerId,
+  ptrsId,
+  profileId = null,
+  limit = 500,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const effectiveLimit = Math.min(Number(limit) || 500, 5000);
+  const started = Date.now();
+
+  // 🔐 RLS-safe tenant-scoped transaction for reading import + writing stage
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // 1) Load row-level rules from column map
+    let rowRules = null;
+    try {
+      const mapRow = await getColumnMap({ customerId, ptrsId });
+      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
+      if (typeof rowRules === "string") {
+        try {
+          rowRules = JSON.parse(rowRules);
+        } catch {
+          rowRules = null;
+        }
+      }
+    } catch (_) {
+      rowRules = null;
+    }
+
+    // 2) Compose mapped rows (main import + joins)
+    const { rows: baseRows } = await composeMappedRowsForPtrs({
+      customerId,
+      ptrsId,
+      limit: effectiveLimit,
+      transaction: t,
+    });
+
+    // 3) Apply rules
+    const rulesResult = applyRules(
+      baseRows,
+      Array.isArray(rowRules) ? rowRules : []
+    );
+    const rows = rulesResult.rows || baseRows;
+
+    // 4) Prepare payload for tbl_ptrs_stage_row (mirrors stagePtrs persist logic)
+    const basePayload = rows.map((r) => {
+      const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
+      const dataObj =
+        r && typeof r === "object" && Object.keys(r).length
+          ? r
+          : { _warning: "⚠️ No mapped data for this row" };
+
+      return {
+        customerId: String(customerId),
+        ptrsId: String(ptrsId),
+        rowNo: rowNoVal,
+        data: dataObj,
+        errors: null,
+        standard: null,
+        custom: null,
+        meta: {
+          _stage: "ptrs.v2.rulesApply",
+          at: new Date().toISOString(),
+          profileId: profileId || null,
+          rules: {
+            applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
+            exclude: !!r.exclude,
+          },
+        },
+      };
+    });
+
+    const isEmptyPlain = (v) =>
+      v &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      Object.keys(v).length === 0;
+
+    const insertWarning = (obj) => {
+      if (!obj || typeof obj !== "object") return obj;
+      for (const key of ["data", "errors", "standard", "custom", "meta"]) {
+        if (isEmptyPlain(obj[key])) {
+          obj[key] = {
+            _warning: "⚠️ Empty JSONB payload — nothing to insert",
+          };
+        }
+        if (typeof obj[key] === "undefined") {
+          obj[key] = null;
+        }
+      }
+      return obj;
+    };
+
+    const safePayload = basePayload.map(insertWarning);
+
+    slog.info("PTRS v2 applyRulesAndPersist: preparing to insert", {
+      action: "PtrsV2RulesApplyPersist",
+      customerId,
+      ptrsId,
+      batchSize: safePayload.length,
+      sampleRow: safeMeta(safePayload[0] || {}),
+    });
+
+    // 5) Clear previous stage rows for this run, then bulk insert
+    await db.PtrsStageRow.destroy({
+      where: { customerId, ptrsId },
+      transaction: t,
+    });
+
+    if (safePayload.length) {
+      await db.PtrsStageRow.bulkCreate(safePayload, {
+        validate: false,
+        returning: false,
+        transaction: t,
+      });
+    }
+
+    const tookMs = Date.now() - started;
+
+    await t.commit();
+
+    return {
+      persisted: safePayload.length,
+      tookMs,
+      stats: { rules: rulesResult.stats || null },
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
+}
 
 // in v2/ptrs/services/ptrs.service.js
 async function listProfiles(customerId) {
@@ -3129,9 +3272,9 @@ module.exports = {
   getColumnMap,
   saveColumnMap,
   getBlueprint,
-  // getMap,
+  getMap,
   //   saveMap,
-  //   updateRulesOnly,
+  updateRulesOnly,
   //   previewTransform,
   listPtrs,
   listPtrsWithMap,
@@ -3144,8 +3287,8 @@ module.exports = {
   getStagePreview,
   stagePtrs,
   listProfiles,
-  //   getRulesPreview,
-  //   applyRulesAndPersist,
+  getRulesPreview,
+  applyRulesAndPersist,
   //   // Profiles CRUD
   //   createProfile,
   //   getProfile,

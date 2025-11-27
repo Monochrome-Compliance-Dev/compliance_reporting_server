@@ -986,109 +986,113 @@ async function getStagePreview(req, res, next) {
   }
 }
 
-// /**
-//  * GET /api/v2/ptrs/:id/rules/preview?limit=50
-//  */
-// async function rulesPreview(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const limit = Math.min(parseInt(req.query.limit || "50", 10), 500);
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
-//     // Confirm the PTRS run exists and belongs to this tenant
-// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-// if (!ptrs) {
-//   return res
-//     .status(404)
-//     .json({ status: "error", message: "Ptrs not found" });
-// }
-//     const out = await ptrsService.getRulesPreview({ customerId, ptrsId, limit });
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2RulesPreview",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: {
-//         limit,
-//         returned: Array.isArray(out?.rows) ? out.rows.length : 0,
-//       },
-//     });
-//     return res.status(200).json({ status: "success", data: out });
-//   } catch (error) {
-//     logger.logEvent("error", "Error previewing PTRS v2 rules", {
-//       action: "PtrsV2RulesPreview",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//     });
-//     return next(error);
-//   }
-// }
+/**
+ * GET /api/v2/ptrs/:id/rules/preview?limit=50
+ */
+async function rulesPreview(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "50", 10), 500);
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+    const out = await ptrsService.getRulesPreview({
+      customerId,
+      ptrsId,
+      limit,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RulesPreview",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        limit,
+        returned: Array.isArray(out?.rows) ? out.rows.length : 0,
+      },
+    });
+    return res.status(200).json({ status: "success", data: out });
+  } catch (error) {
+    logger.logEvent("error", "Error previewing PTRS v2 rules", {
+      action: "PtrsV2RulesPreview",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 
-// /**
-//  * POST /api/v2/ptrs/:id/rules/apply
-//  * Body: { profileId? }
-//  */
-// async function rulesApply(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const profileId = req.body?.profileId || null;
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
-//     // Confirm the PTRS run exists and belongs to this tenant
-// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-// if (!ptrs) {
-//   return res
-//     .status(404)
-//     .json({ status: "error", message: "Ptrs not found" });
-// }
-//     const out = await ptrsService.applyRulesAndPersist({
-//       customerId,
-//       ptrsId,
-//       profileId,
-//     });
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2RulesApply",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: { persisted: out?.persisted ?? 0 },
-//     });
-//     return res.status(200).json({ status: "success", data: out });
-//   } catch (error) {
-//     logger.logEvent("error", "Error applying PTRS v2 rules", {
-//       action: "PtrsV2RulesApply",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//     });
-//     return next(error);
-//   }
-// }
+/**
+ * POST /api/v2/ptrs/:id/rules/apply
+ * Body: { profileId? }
+ */
+async function rulesApply(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const profileId = req.body?.profileId || null;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+    const out = await ptrsService.applyRulesAndPersist({
+      customerId,
+      ptrsId,
+      profileId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RulesApply",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: { persisted: out?.persisted ?? 0 },
+    });
+    return res.status(200).json({ status: "success", data: out });
+  } catch (error) {
+    logger.logEvent("error", "Error applying PTRS v2 rules", {
+      action: "PtrsV2RulesApply",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 
 /**
  * GET /api/v2/ptrs
@@ -1529,138 +1533,138 @@ async function listProfiles(req, res, next) {
 //   }
 // }
 
-// // GET /v2/ptrs/:id/rules
-// async function getRules(req, res, next) {
-//   try {
-//     const customerId = req.effectiveCustomerId;
-//     const userId = req.auth?.id;
-//     const ip = req.ip;
-//     const device = req.headers["user-agent"];
-//     const ptrsId = req.params.id;
+// GET /v2/ptrs/:id/rules
+async function getRules(req, res, next) {
+  try {
+    const customerId = req.effectiveCustomerId;
+    const userId = req.auth?.id;
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+    const ptrsId = req.params.id;
 
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     const map = await ptrsService.getMap({ ptrsId, customerId });
-//     const src = map?.map || map || {};
-//     const extras =
-//       typeof src.extras === "string"
-//         ? JSON.parse(src.extras)
-//         : src.extras || {};
-//     const rowRules =
-//       typeof src.rowRules === "string"
-//         ? JSON.parse(src.rowRules)
-//         : src.rowRules || [];
-//     const crossRowRules = extras?.__experimentalCrossRowRules || [];
+    const map = await ptrsService.getMap({ ptrsId, customerId });
+    const src = map?.map || map || {};
+    const extras =
+      typeof src.extras === "string"
+        ? JSON.parse(src.extras)
+        : src.extras || {};
+    const rowRules =
+      typeof src.rowRules === "string"
+        ? JSON.parse(src.rowRules)
+        : src.rowRules || [];
+    const crossRowRules = extras?.__experimentalCrossRowRules || [];
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2GetRules",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: {
-//         rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
-//         crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
-//       },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetRules",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
+        crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
+      },
+    });
 
-//     return res.json({ data: { rowRules, crossRowRules } });
-//   } catch (err) {
-//     return next(err);
-//   }
-// }
+    return res.json({ data: { rowRules, crossRowRules } });
+  } catch (err) {
+    return next(err);
+  }
+}
 
-// // POST /v2/ptrs/:id/rules
-// /**
-//  * POST /api/v2/ptrs/:id/rules
-//  * Body: { rowRules?: [], crossRowRules?: [] }
-//  * Persist only rules — do NOT overwrite mappings/defaults/joins.
-//  */
-// async function saveRules(req, res, next) {
-//   const customerId = req.effectiveCustomerId;
-//   const userId = req.auth?.id;
-//   const ip = req.ip;
-//   const device = req.headers["user-agent"];
-//   const ptrsId = req.params.id;
-//   const { rowRules = [], crossRowRules = [] } = req.body || {};
+// POST /v2/ptrs/:id/rules
+/**
+ * POST /api/v2/ptrs/:id/rules
+ * Body: { rowRules?: [], crossRowRules?: [] }
+ * Persist only rules — do NOT overwrite mappings/defaults/joins.
+ */
+async function saveRules(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const { rowRules = [], crossRowRules = [] } = req.body || {};
 
-//   try {
-//     if (!customerId) {
-//       return res
-//         .status(400)
-//         .json({ status: "error", message: "Customer ID missing" });
-//     }
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
 
-//     // Confirm the PTRS run exists and belongs to this tenant
-// const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-// if (!ptrs) {
-//   return res
-//     .status(404)
-//     .json({ status: "error", message: "Ptrs not found" });
-// }
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
 
-//     // Persist rules only
-//     const updated = await ptrsService.updateRulesOnly({
-//       customerId,
-//       ptrsId,
-//       rowRules: Array.isArray(rowRules) ? rowRules : [],
-//       crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
-//       userId,
-//     });
+    // Persist rules only
+    const updated = await ptrsService.updateRulesOnly({
+      customerId,
+      ptrsId,
+      rowRules: Array.isArray(rowRules) ? rowRules : [],
+      crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
+      userId,
+    });
 
-//     // Unwrap what we actually stored
-//     const extras =
-//       typeof updated.extras === "string"
-//         ? (() => {
-//             try {
-//               return JSON.parse(updated.extras);
-//             } catch {
-//               return {};
-//             }
-//           })()
-//         : updated.extras || {};
-//     const storedCross = (extras && extras.__experimentalCrossRowRules) || [];
+    // Unwrap what we actually stored
+    const extras =
+      typeof updated.extras === "string"
+        ? (() => {
+            try {
+              return JSON.parse(updated.extras);
+            } catch {
+              return {};
+            }
+          })()
+        : updated.extras || {};
+    const storedCross = (extras && extras.__experimentalCrossRowRules) || [];
 
-//     await auditService.logEvent({
-//       customerId,
-//       userId,
-//       ip,
-//       device,
-//       action: "PtrsV2SaveRules",
-//       entity: "PtrsUpload",
-//       entityId: ptrsId,
-//       details: {
-//         rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
-//         crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
-//       },
-//     });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2SaveRules",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
+        crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
+      },
+    });
 
-//     return res.status(200).json({
-//       status: "success",
-//       data: {
-//         rowRules: Array.isArray(updated.rowRules) ? updated.rowRules : [],
-//         crossRowRules: Array.isArray(storedCross) ? storedCross : [],
-//       },
-//     });
-//   } catch (error) {
-//     logger.logEvent("error", "Error saving PTRS v2 rules", {
-//       action: "PtrsV2SaveRules",
-//       ptrsId,
-//       customerId,
-//       userId,
-//       error: error.message,
-//       statusCode: error.statusCode || 500,
-//       timestamp: new Date().toISOString(),
-//     });
-//     return next(error);
-//   }
-// }
+    return res.status(200).json({
+      status: "success",
+      data: {
+        rowRules: Array.isArray(updated.rowRules) ? updated.rowRules : [],
+        crossRowRules: Array.isArray(storedCross) ? storedCross : [],
+      },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error saving PTRS v2 rules", {
+      action: "PtrsV2SaveRules",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
 
 module.exports = {
   createPtrs,
@@ -1674,8 +1678,8 @@ module.exports = {
   stagePtrs,
   //   preview,
   getStagePreview,
-  //   rulesPreview,
-  //   rulesApply,
+  rulesPreview,
+  rulesApply,
   listPtrs,
   listPtrsWithMap,
   addDataset,
@@ -1684,8 +1688,8 @@ module.exports = {
   removeDataset,
   getBlueprint,
   listProfiles,
-  //   getRules,
-  //   saveRules,
+  getRules,
+  saveRules,
   //   // Profiles CRUD
   //   createProfile,
   //   getProfile,
