@@ -30,6 +30,7 @@ function _svcReplacer() {
     return value;
   };
 }
+
 function safeMeta(meta) {
   try {
     return JSON.parse(JSON.stringify(meta, _svcReplacer()));
@@ -38,7 +39,7 @@ function safeMeta(meta) {
   }
 }
 
-export const slog = {
+const slog = {
   info: (msg, meta) => logger?.info?.(msg, safeMeta(meta)),
   warn: (msg, meta) => logger?.warn?.(msg, safeMeta(meta)),
   error: (msg, meta) => logger?.error?.(msg, safeMeta(meta)),
@@ -2565,11 +2566,11 @@ async function getBlueprint({ customerId = null, profileId = null } = {}) {
 }
 
 module.exports = {
+  slog,
   createPtrs,
   getUpload,
   importCsvStream,
   getUnifiedSample,
-  getColumnMap,
   getBlueprint,
   getMap,
   //   saveMap,
@@ -2577,7 +2578,6 @@ module.exports = {
   //   previewTransform,
   listPtrs,
   listPtrsWithMap,
-  getDatasetSample,
   getPtrs,
   updatePtrs,
   getStagePreview,

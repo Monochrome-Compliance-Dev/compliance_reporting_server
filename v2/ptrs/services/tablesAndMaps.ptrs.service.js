@@ -1,7 +1,7 @@
 const db = require("@/db/database");
 
 const { logger } = require("@/helpers/logger");
-const { slog } = require("@/v2/ptrs/services/ptrs.service");
+const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
