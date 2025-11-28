@@ -48,23 +48,6 @@ router.get("/:id/stage/preview", requirePtrs, ptrsController.getStagePreview);
 // Peek at staged rows
 router.get("/:id/sample", requirePtrs, ptrsController.getSample);
 
-// Column mapping (get/save)
-router.get("/:id/map", requirePtrs, ptrsController.getMap);
-router.post("/:id/map", requirePtrs, ptrsController.saveMap);
-
-// Datasets: upload/list/delete additional files for a ptrs (vendor master, terms, etc.)
-router.post(
-  "/:id/datasets",
-  requirePtrs,
-  upload.single("file"),
-  ptrsController.addDataset
-);
-router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
-router.delete(
-  "/:id/datasets/:datasetId",
-  requirePtrs,
-  ptrsController.removeDataset
-);
 // Dataset sample (used for per-dataset header examples in FE)
 router.get(
   "/datasets/:datasetId/sample",
@@ -73,7 +56,7 @@ router.get(
 );
 
 // Unified headers + examples across main and supporting datasets
-router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
+// router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
 
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);

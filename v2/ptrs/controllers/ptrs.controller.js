@@ -6,7 +6,7 @@ function safeMeta(meta) {
   try {
     return JSON.parse(JSON.stringify(meta, _svcReplacer()));
   } catch {
-    return { note: "unserializable meta" };
+    return { note: "unserialisable meta" };
   }
 }
 
@@ -102,6 +102,7 @@ function safeJson(obj, { maxLen = 5000 } = {}) {
     return `"[Unserializable: ${e.message}]"`;
   }
 }
+
 function safeLog(prefix, meta) {
   try {
     console.log(prefix, JSON.parse(safeJson(meta)));
@@ -511,229 +512,6 @@ async function getUnifiedSample(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 unified sample", {
       action: "PtrsV2GetUnifiedSample",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
- * GET /api/v2/ptrs/:id/map
- * Returns existing column map (if any) and inferred headers to assist UI mapping.
- */
-async function getMap(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    const map = await ptrsService.getColumnMap({ customerId, ptrsId });
-    // Normalize JSON-typed fields that might be persisted as TEXT
-    const maybeParse = (v) => {
-      if (v == null || typeof v !== "string") return v;
-      try {
-        return JSON.parse(v);
-      } catch {
-        return v;
-      }
-    };
-    if (map) {
-      map.extras = maybeParse(map.extras);
-      map.fallbacks = maybeParse(map.fallbacks);
-      map.defaults = maybeParse(map.defaults);
-      map.joins = maybeParse(map.joins);
-      map.rowRules = maybeParse(map.rowRules);
-    }
-    const { headers, total, headerMeta } = await ptrsService.getImportSample({
-      customerId,
-      ptrsId,
-      limit: 10,
-      offset: 0,
-    });
-
-    slog.info("getColumnMap", {
-      id: map?.id,
-      joinsType: typeof map?.joins,
-      joinsRaw: map?.joins,
-    });
-
-    safeLog("[PTRS controller.getMap] map + header meta", {
-      id: map?.id || null,
-      hasMap: !!map,
-      joinsType: typeof map?.joins,
-      joinsRaw: map?.joins,
-      mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
-      headersCount: Array.isArray(headers) ? headers.length : 0,
-      headerSample: Array.isArray(headers) ? headers.slice(0, 10) : [],
-      hasHeaderMeta: !!headerMeta,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2GetMap",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: { hasMap: !!map, total },
-    });
-
-    res.status(200).json({
-      status: "success",
-      data: { map, headers, headerMeta },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error fetching PTRS v2 map", {
-      action: "PtrsV2GetMap",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
- * POST /api/v2/ptrs/:id/map
- * Body:
- * {
- *   mappings: { "<sourceHeader>": { field: "<logical>", type: "<type>", fmt?: "<format>", alias?: "<string>" } },
- *   extras?: { "<sourceHeader>": "<alias|null>" },
- *   fallbacks?: { "<canonicalField>": ["Alt A","Alt B","RUN_DEFAULT:..."] },
- *   defaults?: { "payerEntityName"?: "...", "payerEntityAbn"?: "..." },
- *   joins?: any,
- *   rowRules?: any[],
- *   profileId?: string
- * }
- */
-async function saveMap(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const {
-    mappings,
-    extras = null,
-    fallbacks = null,
-    defaults = null,
-    joins = null,
-    rowRules = null,
-    profileId = null,
-  } = req.body || {};
-
-  slog.info(
-    "[PTRS v2 saveMap] body",
-    safeMeta({
-      ptrsId,
-      mappingsKeys: Object.keys(req.body.mappings || {}),
-      joins: req.body.joins,
-    })
-  );
-
-  try {
-    // Log incoming joins before validation
-    console.log("[PTRS v2 saveMap] incoming joins:", joins);
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-    if (!mappings || typeof mappings !== "object" || Array.isArray(mappings)) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "mappings object is required" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    // Best-effort validation: warn but don't block if headers slightly differ (case/space)
-    const { headers } = await ptrsService.getImportSample({
-      customerId,
-      ptrsId,
-      limit: 50,
-      offset: 0,
-    });
-    const norm = (s) =>
-      String(s || "")
-        .toLowerCase()
-        .replace(/\s+/g, "");
-    const headerSet = new Set((headers || []).map(norm));
-    const missing = Object.keys(mappings).filter(
-      (src) => !headerSet.has(norm(src))
-    );
-    if (missing.length) {
-      // Include a hint but allow save (front-end will reconcile via tolerant matching)
-      logger.info(
-        "PTRS v2 saveMap: some mapping headers not found exactly in inferred headers",
-        {
-          action: "PtrsV2SaveMap",
-          ptrsId,
-          customerId,
-          missing,
-        }
-      );
-    }
-
-    const saved = await ptrsService.saveColumnMap({
-      customerId,
-      ptrsId,
-      mappings,
-      extras,
-      fallbacks,
-      defaults,
-      joins,
-      rowRules,
-      profileId,
-      userId,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2SaveMap",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: { keys: Object.keys(mappings).length },
-    });
-
-    res.status(200).json({ status: "success", data: saved });
-  } catch (error) {
-    logger.logEvent("error", "Error saving PTRS v2 map", {
-      action: "PtrsV2SaveMap",
       ptrsId,
       customerId,
       userId,
@@ -1171,161 +949,6 @@ async function listPtrsWithMap(req, res, next) {
 }
 
 /**
- * POST /api/v2/ptrs/:id/datasets
- * Multipart (file) + fields: role, sourceName (optional)
- */
-async function addDataset(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const role = (req.body?.role || req.query?.role || "").trim();
-  const sourceName = req.body?.sourceName || req.query?.sourceName || null;
-  const file = req.file;
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-    if (!file || !file.buffer) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "File is required" });
-    }
-    if (!role) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "role is required" });
-    }
-
-    const created = await ptrsService.addDataset({
-      customerId,
-      ptrsId,
-      role,
-      sourceName,
-      fileName: file.originalname || null,
-      fileSize: file.size || null,
-      mimeType: file.mimetype || null,
-      buffer: file.buffer,
-      userId,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2AddDataset",
-      entity: "PtrsRawDataset",
-      entityId: created.id,
-      details: {
-        role,
-        fileName: created.fileName,
-        rowsCount: created.meta?.rowsCount || 0,
-      },
-    });
-
-    return res.status(201).json({ status: "success", data: created });
-  } catch (error) {
-    logger.logEvent("error", "Error adding PTRS v2 dataset", {
-      action: "PtrsV2AddDataset",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-    });
-    return next(error);
-  }
-}
-
-/**
- * GET /api/v2/ptrs/:id/datasets
- */
-async function listDatasets(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const ptrsId = req.params.id;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    const items = await ptrsService.listDatasets({ customerId, ptrsId });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2ListDatasets",
-      entity: "PtrsRawDataset",
-      entityId: ptrsId,
-      details: { count: Array.isArray(items) ? items.length : 0 },
-    });
-
-    return res.status(200).json({ status: "success", data: { items } });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-/**
- * DELETE /api/v2/ptrs/:id/datasets/:datasetId
- */
-async function removeDataset(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const datasetId = req.params.datasetId;
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-    const result = await ptrsService.removeDataset({
-      customerId,
-      ptrsId,
-      datasetId,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2RemoveDataset",
-      entity: "PtrsRawDataset",
-      entityId: datasetId,
-      details: { ok: result.ok === true },
-    });
-
-    return res.status(200).json({ status: "success", data: result });
-  } catch (error) {
-    logger.logEvent("error", "Error removing PTRS v2 dataset", {
-      action: "PtrsV2RemoveDataset",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-    });
-    return next(error);
-  }
-}
-
-/**
  * GET /api/v2/ptrs/blueprint?profileId=veolia
  * Returns the generic blueprint optionally merged with a customer/profile overlay.
  */
@@ -1673,8 +1296,6 @@ module.exports = {
   updatePtrs,
   getSample,
   getUnifiedSample,
-  getMap,
-  saveMap,
   stagePtrs,
   //   preview,
   getStagePreview,
@@ -1682,10 +1303,7 @@ module.exports = {
   rulesApply,
   listPtrs,
   listPtrsWithMap,
-  addDataset,
-  listDatasets,
   getDatasetSample,
-  removeDataset,
   getBlueprint,
   listProfiles,
   getRules,
