@@ -77,4 +77,15 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 // router.put("/profiles/:id", requirePtrs, ptrsController.updateProfile);
 // router.delete("/profiles/:id", requirePtrs, ptrsController.deleteProfile);
 
+// New sub routes
+const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
+const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
+
+// --- mount the new slices ---
+// datasets (supporting files)
+router.use("/", dataRoutes);
+
+// tables + map (mappings, joins, header meta)
+router.use("/", tablesAndmapsRoutes);
+
 module.exports = router;

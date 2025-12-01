@@ -9,8 +9,6 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
-const { Worker } = require("worker_threads");
-
 // --- Safe logging helpers for service layer ---
 function _svcReplacer() {
   const seen = new WeakSet();
