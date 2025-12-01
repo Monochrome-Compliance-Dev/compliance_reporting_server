@@ -8,6 +8,7 @@ const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const { getDatasetSample } = require("./data.ptrs.service");
 
 // --- Safe logging helpers for service layer ---
 function _svcReplacer() {
@@ -596,151 +597,6 @@ async function updateRulesOnly({
       } catch (_) {
         // ignore rollback errors
       }
-    }
-    throw err;
-  }
-}
-
-/**
- * Return unified headers and examples across main import + all supporting datasets.
- * Reuses getImportSample for main rows/headers and augments headerMeta with supporting datasets.
- */
-async function getUnifiedSample({
-  customerId,
-  ptrsId,
-  limit = 10,
-  offset = 0,
-}) {
-  const t = await beginTransactionWithCustomerContext(customerId);
-  try {
-    // Base = main only
-    const base = await getImportSample({ customerId, ptrsId, limit, offset });
-    const headerSet = new Set(base.headers || []);
-
-    // Make headerMeta mutable (sources as Set)
-    const headerMeta = {};
-    for (const [k, meta] of Object.entries(base.headerMeta || {})) {
-      headerMeta[k] = {
-        sources: new Set([...(meta.sources || [])]),
-        examples: { ...(meta.examples || {}) },
-      };
-    }
-
-    // Merge supporting dataset headers + examples
-    try {
-      const dsRows = await db.PtrsDataset.findAll({
-        where: { customerId, ptrsId },
-        attributes: ["id", "meta", "role"],
-        raw: true,
-        transaction: t,
-      });
-
-      if (Array.isArray(dsRows) && dsRows.length) {
-        const addHeaders = (arr, role) => {
-          for (const h of arr || []) {
-            if (h == null) continue;
-            const s = String(h).trim();
-            if (!s) continue;
-            headerSet.add(s);
-            headerMeta[s] = headerMeta[s] || {
-              sources: new Set(),
-              examples: {},
-            };
-            if (role) headerMeta[s].sources.add(role);
-          }
-        };
-
-        for (const ds of dsRows) {
-          const role = ds.role || "dataset";
-          const meta = ds.meta || {};
-          let dsHeaders = Array.isArray(meta.headers) ? meta.headers : null;
-          let sampleRows = null;
-          try {
-            const sample = await getDatasetSample({
-              customerId,
-              datasetId: ds.id,
-              limit: 5,
-              offset: 0,
-            });
-            dsHeaders =
-              dsHeaders && dsHeaders.length ? dsHeaders : sample.headers;
-            sampleRows = Array.isArray(sample.rows) ? sample.rows : [];
-          } catch (_) {}
-
-          addHeaders(dsHeaders, role);
-
-          if (sampleRows && sampleRows.length) {
-            for (const row of sampleRows) {
-              for (const [k, v] of Object.entries(row)) {
-                if (v != null && String(v).trim() !== "") {
-                  headerMeta[k] = headerMeta[k] || {
-                    sources: new Set(),
-                    examples: {},
-                  };
-                  if (headerMeta[k].examples[role] == null) {
-                    headerMeta[k].examples[role] = v;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      slog.warn(
-        "PTRS v2 getUnifiedSample: failed merging supporting datasets",
-        {
-          action: "PtrsV2GetUnifiedSampleMergeHeaders",
-          customerId,
-          ptrsId,
-          error: e.message,
-        }
-      );
-    }
-
-    // Finalise: convert Sets to arrays and pick a preferred example
-    const unifiedHeaders = Array.from(headerSet.values());
-    const finalizedHeaderMeta = {};
-    for (const key of Object.keys(headerMeta)) {
-      const meta = headerMeta[key];
-      const sources = Array.from(meta.sources || []);
-      let example = null;
-      if (meta.examples) {
-        if (meta.examples.main != null) example = meta.examples.main;
-        else {
-          const firstRole = Object.keys(meta.examples)[0];
-          if (firstRole) example = meta.examples[firstRole];
-        }
-      }
-      finalizedHeaderMeta[key] = {
-        sources,
-        examples: meta.examples || {},
-        example,
-      };
-    }
-
-    slog.info("PTRS v2 getUnifiedSample: done", {
-      action: "PtrsV2GetUnifiedSample",
-      customerId,
-      ptrsId,
-      rowsReturned: Array.isArray(base.rows) ? base.rows.length : 0,
-      total: base.total || 0,
-      unifiedHeadersCount: unifiedHeaders.length,
-      headerMetaKeys: Object.keys(finalizedHeaderMeta).length,
-    });
-
-    await t.commit();
-    return {
-      rows: base.rows || [],
-      total: base.total || 0,
-      headers: unifiedHeaders,
-      headerMeta: finalizedHeaderMeta,
-    };
-  } catch (err) {
-    if (!t.finished) {
-      try {
-        await t.rollback();
-      } catch (_) {}
     }
     throw err;
   }
@@ -2564,11 +2420,11 @@ async function getBlueprint({ customerId = null, profileId = null } = {}) {
 }
 
 module.exports = {
+  safeMeta,
   slog,
   createPtrs,
   getUpload,
   importCsvStream,
-  getUnifiedSample,
   getBlueprint,
   getMap,
   //   saveMap,

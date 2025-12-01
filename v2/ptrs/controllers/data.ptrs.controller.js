@@ -6,6 +6,7 @@ module.exports = {
   addDataset,
   listDatasets,
   removeDataset,
+  getDatasetSample,
 };
 
 /**
@@ -154,6 +155,61 @@ async function removeDataset(req, res, next) {
     logger.logEvent("error", "Error removing PTRS v2 dataset", {
       action: "PtrsV2RemoveDataset",
       ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/datasets/:datasetId/sample
+ * Query: limit, offset
+ */
+async function getDatasetSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const datasetId = req.params.datasetId;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const { headers, rows, total } = await ptrsService.getDatasetSample({
+      customerId,
+      datasetId,
+      limit,
+      offset,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetDatasetSample",
+      entity: "PtrsRawDataset",
+      entityId: datasetId,
+      details: { returned: rows.length, total, limit, offset },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { headers, rows, total, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 dataset sample", {
+      action: "PtrsV2GetDatasetSample",
+      datasetId,
       customerId,
       userId,
       error: error.message,

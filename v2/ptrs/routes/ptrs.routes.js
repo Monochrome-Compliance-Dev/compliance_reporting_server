@@ -45,19 +45,6 @@ router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
 // Preview staged rows (read-only, small page)
 router.get("/:id/stage/preview", requirePtrs, ptrsController.getStagePreview);
 
-// Peek at staged rows
-router.get("/:id/sample", requirePtrs, ptrsController.getSample);
-
-// Dataset sample (used for per-dataset header examples in FE)
-router.get(
-  "/datasets/:datasetId/sample",
-  requirePtrs,
-  ptrsController.getDatasetSample
-);
-
-// Unified headers + examples across main and supporting datasets
-// router.get("/:id/unified-sample", requirePtrs, ptrsController.getUnifiedSample);
-
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);
 

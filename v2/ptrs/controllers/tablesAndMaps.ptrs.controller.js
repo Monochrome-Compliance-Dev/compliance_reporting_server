@@ -1,12 +1,15 @@
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
-const { safeLog, safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
+const { safeLog } = require("@/v2/ptrs/controllers/ptrs.controller");
+const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
 const tmPtrsService = require("@/v2/ptrs/services/tablesAndMaps.ptrs.service");
 
 module.exports = {
   getMap,
   saveMap,
+  getSample,
+  getUnifiedSample,
 };
 
 /**
@@ -221,6 +224,136 @@ async function saveMap(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error saving PTRS v2 map", {
       action: "PtrsV2SaveMap",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/sample?limit=10&offset=0
+ * Returns a small window of staged rows + total count + inferred headers.
+ */
+async function getSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const { rows, total, headers, headerMeta } =
+      await tmPtrsService.getImportSample({
+        customerId,
+        ptrsId,
+        limit,
+        offset,
+      });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetSample",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: { limit, offset, returned: rows.length, total },
+    });
+
+    res.status(200).json({
+      status: "success",
+      data: { rows, total, headers, headerMeta, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 sample", {
+      action: "PtrsV2GetSample",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/unified-sample?limit=10&offset=0
+ * Returns a small window of main rows + unified headers/examples merged from all datasets.
+ */
+async function getUnifiedSample(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
+  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const { rows, total, headers, headerMeta } =
+      await ptrsService.getUnifiedSample({
+        customerId,
+        ptrsId,
+        limit,
+        offset,
+      });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetUnifiedSample",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: { limit, offset, returned: rows.length, total },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { rows, total, headers, headerMeta, limit, offset },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 unified sample", {
+      action: "PtrsV2GetUnifiedSample",
       ptrsId,
       customerId,
       userId,

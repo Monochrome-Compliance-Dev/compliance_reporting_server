@@ -26,4 +26,11 @@ router.delete(
   ptrsController.removeDataset
 );
 
+// Dataset sample (used for per-dataset header examples in FE)
+router.get(
+  "/datasets/:datasetId/sample",
+  requirePtrs,
+  ptrsController.getDatasetSample
+);
+
 module.exports = router;

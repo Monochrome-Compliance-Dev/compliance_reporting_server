@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const authorise = require("@/middleware/authorise");
-const ptrsController = require("@/v2/ptrs/controllers/tablesAndMaps.ptrs.controller");
+const tmController = require("@/v2/ptrs/controllers/tablesAndMaps.ptrs.controller");
 
 // Restrict to users who have the ptrs feature (same as v1)
 const requirePtrs = authorise({
@@ -11,7 +11,13 @@ const requirePtrs = authorise({
 });
 
 // Column mapping (get/save)
-router.get("/:id/map", requirePtrs, ptrsController.getMap);
-router.post("/:id/map", requirePtrs, ptrsController.saveMap);
+router.get("/:id/map", requirePtrs, tmController.getMap);
+router.post("/:id/map", requirePtrs, tmController.saveMap);
+
+// Peek at staged rows
+router.get("/:id/sample", requirePtrs, tmController.getSample);
+
+// Unified headers + examples across main and supporting datasets
+// router.get("/:id/unified-sample", requirePtrs, tmController.getUnifiedSample);
 
 module.exports = router;

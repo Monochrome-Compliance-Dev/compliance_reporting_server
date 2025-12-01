@@ -17,61 +17,6 @@ const slog = {
   debug: (msg, meta) => logger?.debug?.(msg, safeMeta(meta)),
 };
 
-/**
- * GET /api/v2/ptrs/datasets/:datasetId/sample
- * Query: limit, offset
- */
-async function getDatasetSample(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const datasetId = req.params.datasetId;
-  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
-  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    const { headers, rows, total } = await ptrsService.getDatasetSample({
-      customerId,
-      datasetId,
-      limit,
-      offset,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2GetDatasetSample",
-      entity: "PtrsRawDataset",
-      entityId: datasetId,
-      details: { returned: rows.length, total, limit, offset },
-    });
-
-    return res.status(200).json({
-      status: "success",
-      data: { headers, rows, total, limit, offset },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error fetching PTRS v2 dataset sample", {
-      action: "PtrsV2GetDatasetSample",
-      datasetId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-    });
-    return next(error);
-  }
-}
-
 // --- Safe logging helpers (avoid circular/Set/BigInt issues) ---
 function _safeReplacer() {
   const seen = new WeakSet();
@@ -382,136 +327,6 @@ async function updatePtrs(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error updating PTRS v2 record", {
       action: "PtrsV2UpdatePtrs",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
- * GET /api/v2/ptrs/:id/sample?limit=10&offset=0
- * Returns a small window of staged rows + total count + inferred headers.
- */
-async function getSample(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
-  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    const { rows, total, headers, headerMeta } =
-      await ptrsService.getImportSample({
-        customerId,
-        ptrsId,
-        limit,
-        offset,
-      });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2GetSample",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: { limit, offset, returned: rows.length, total },
-    });
-
-    res.status(200).json({
-      status: "success",
-      data: { rows, total, headers, headerMeta, limit, offset },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error fetching PTRS v2 sample", {
-      action: "PtrsV2GetSample",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
- * GET /api/v2/ptrs/:id/unified-sample?limit=10&offset=0
- * Returns a small window of main rows + unified headers/examples merged from all datasets.
- */
-async function getUnifiedSample(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
-  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    const { rows, total, headers, headerMeta } =
-      await ptrsService.getUnifiedSample({
-        customerId,
-        ptrsId,
-        limit,
-        offset,
-      });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2GetUnifiedSample",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: { limit, offset, returned: rows.length, total },
-    });
-
-    return res.status(200).json({
-      status: "success",
-      data: { rows, total, headers, headerMeta, limit, offset },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error fetching PTRS v2 unified sample", {
-      action: "PtrsV2GetUnifiedSample",
       ptrsId,
       customerId,
       userId,
@@ -1290,12 +1105,11 @@ async function saveRules(req, res, next) {
 }
 
 module.exports = {
+  safeLog,
   createPtrs,
   importCsv,
   getPtrs,
   updatePtrs,
-  getSample,
-  getUnifiedSample,
   stagePtrs,
   //   preview,
   getStagePreview,
@@ -1303,7 +1117,6 @@ module.exports = {
   rulesApply,
   listPtrs,
   listPtrsWithMap,
-  getDatasetSample,
   getBlueprint,
   listProfiles,
   getRules,
