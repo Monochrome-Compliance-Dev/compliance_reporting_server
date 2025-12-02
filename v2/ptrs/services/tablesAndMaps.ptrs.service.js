@@ -18,12 +18,33 @@ const {
 } = require("@/v2/ptrs/services/data.ptrs.service");
 
 module.exports = {
+  getMap,
   getColumnMap,
   getImportSample,
   saveColumnMap,
   composeMappedRowsForPtrs,
   // getUnifiedSample,
 };
+
+/** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
+async function getMap({ customerId, ptrsId }) {
+  const map = await getColumnMap({ customerId, ptrsId });
+  if (!map) return null;
+  const maybeParse = (v) => {
+    if (v == null || typeof v !== "string") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  };
+  map.extras = maybeParse(map.extras);
+  map.fallbacks = maybeParse(map.fallbacks);
+  map.defaults = maybeParse(map.defaults);
+  map.joins = maybeParse(map.joins);
+  map.rowRules = maybeParse(map.rowRules);
+  return map;
+}
 
 /** Get column map for a ptrs */
 async function getColumnMap({ customerId, ptrsId }) {

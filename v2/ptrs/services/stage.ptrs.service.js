@@ -4,7 +4,8 @@ const path = require("path");
 const { Readable } = require("stream");
 const fs = require("fs");
 
-const { applyRules, safeMeta, slog } = require("./ptrs.service");
+const { safeMeta, slog } = require("./ptrs.service");
+const { applyRules } = require("./rules.ptrs.service");
 const {
   composeMappedRowsForPtrs,
   getColumnMap,

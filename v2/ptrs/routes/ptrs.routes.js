@@ -42,13 +42,6 @@ router.post(
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);
 
-// Rules (preview/apply)
-router.get("/:id/rules/preview", requirePtrs, ptrsController.rulesPreview);
-router.post("/:id/rules/apply", requirePtrs, ptrsController.rulesApply);
-// Rules (get/save) — FE writes rules without resending mappings
-router.get("/:id/rules", requirePtrs, ptrsController.getRules);
-router.post("/:id/rules", requirePtrs, ptrsController.saveRules);
-
 // List all PTRS profiles for a customer
 // Profiles CRUD
 router.get("/profiles", requirePtrs, ptrsController.listProfiles);
@@ -62,6 +55,7 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
 const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
 const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
+const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -72,5 +66,8 @@ router.use("/", tablesAndmapsRoutes);
 
 // staging
 router.use("/", stageRoutes);
+
+// rules
+router.use("/", rulesRoutes);
 
 module.exports = router;
