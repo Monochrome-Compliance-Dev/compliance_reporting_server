@@ -39,12 +39,6 @@ router.post(
   ptrsController.importCsv
 );
 
-// Stage normalized rows for a ptrs
-router.post("/:id/stage", requirePtrs, ptrsController.stagePtrs);
-
-// Preview staged rows (read-only, small page)
-router.get("/:id/stage/preview", requirePtrs, ptrsController.getStagePreview);
-
 // // Preview transformed sample (no mutation)
 // router.post("/:id/preview", requirePtrs, ptrsController.preview);
 
@@ -67,6 +61,7 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 // New sub routes
 const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
 const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
+const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -74,5 +69,8 @@ router.use("/", dataRoutes);
 
 // tables + map (mappings, joins, header meta)
 router.use("/", tablesAndmapsRoutes);
+
+// staging
+router.use("/", stageRoutes);
 
 module.exports = router;

@@ -1,16 +1,27 @@
 const db = require("@/db/database");
 
 const { logger } = require("@/helpers/logger");
-const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
+const {
+  safeMeta,
+  slog,
+  mergeJoinedRow,
+  normalizeJoinKeyValue,
+  toSnake,
+} = require("@/v2/ptrs/services/ptrs.service");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const { getDatasetSample } = require("@/v2/ptrs/services/data.ptrs.service");
+const {
+  pickFromRowLoose,
+  buildDatasetIndexByRole,
+  getDatasetSample,
+} = require("@/v2/ptrs/services/data.ptrs.service");
 
 module.exports = {
   getColumnMap,
   getImportSample,
   saveColumnMap,
+  composeMappedRowsForPtrs,
   // getUnifiedSample,
 };
 
@@ -367,6 +378,182 @@ async function saveColumnMap({
   }
 }
 
+// Compose mapped rows for a ptrs, including join and column mapping logic
+async function composeMappedRowsForPtrs({
+  customerId,
+  ptrsId,
+  limit = 50,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  // Load column map (with joins + rowRules etc.)
+  const mapRow = await getColumnMap({ customerId, ptrsId, transaction });
+  const map = mapRow || {};
+  const mappings = map.mappings || {};
+  console.log("map.joins raw =", map.joins);
+
+  // Normalise joins – we currently support joins where one side is "main"
+  let joins = map.joins;
+  if (typeof joins === "string") {
+    try {
+      joins = JSON.parse(joins);
+    } catch {
+      joins = null;
+    }
+  }
+
+  const normalisedJoins = [];
+  if (Array.isArray(joins)) {
+    for (const j of joins) {
+      if (!j || typeof j !== "object") continue;
+      const from = j.from || {};
+      const to = j.to || {};
+
+      const fromRole = (from.role || "").toLowerCase();
+      const toRole = (to.role || "").toLowerCase();
+      const fromCol = from.column;
+      const toCol = to.column;
+
+      if (!fromRole || !toRole || !fromCol || !toCol) continue;
+
+      // Only support joins that involve the main dataset on one side
+      const isFromMain = fromRole === "main";
+      const isToMain = toRole === "main";
+      if (!isFromMain && !isToMain) continue;
+
+      const mainSide = isFromMain ? from : to;
+      const otherSide = isFromMain ? to : from;
+
+      if (!otherSide.role || !otherSide.column) continue;
+
+      normalisedJoins.push({
+        mainColumn: mainSide.column,
+        otherRole: String(otherSide.role).toLowerCase(),
+        otherColumn: otherSide.column,
+      });
+    }
+  }
+
+  console.log(
+    "[JOIN TRACE] composeMappedRowsForPtrs normalisedJoins",
+    normalisedJoins
+  );
+
+  // Build indexes for each supporting dataset role referenced in joins
+  const roleIndexes = new Map();
+  for (const j of normalisedJoins) {
+    if (!j.otherRole || !j.otherColumn) continue;
+    if (roleIndexes.has(j.otherRole)) continue;
+
+    const idx = await buildDatasetIndexByRole({
+      customerId,
+      ptrsId,
+      role: j.otherRole,
+      keyColumn: j.otherColumn,
+      transaction,
+    });
+
+    roleIndexes.set(
+      j.otherRole,
+      idx || { map: new Map(), headers: [], rowsIndexed: 0 }
+    );
+  }
+
+  // Read main rows
+  const findOpts = {
+    where: { customerId, ptrsId },
+    order: [["rowNo", "ASC"]],
+    attributes: ["rowNo", "data"],
+    raw: true,
+    transaction,
+  };
+
+  const numericLimit = Number(limit);
+  if (Number.isFinite(numericLimit) && numericLimit > 0) {
+    // For previews we still want a cap; for full rules-apply we will pass null
+    findOpts.limit = Math.min(numericLimit, 5000);
+  }
+
+  const mainRows = await db.PtrsImportRaw.findAll(findOpts);
+
+  const composed = [];
+
+  for (const r of mainRows) {
+    const base = r.data || {};
+    let srcRow = base;
+
+    console.log("[JOIN TRACE] composeMappedRowsForPtrs main row start", {
+      rowNo: r.rowNo,
+      baseKeys: base ? Object.keys(base) : null,
+    });
+
+    // Apply each join in turn, merging any matched supporting-row data
+    if (normalisedJoins.length && roleIndexes.size) {
+      for (const j of normalisedJoins) {
+        const idx = roleIndexes.get(j.otherRole);
+        if (!idx || !idx.map || !idx.map.size) {
+          console.log(
+            "[JOIN TRACE] composeMappedRowsForPtrs join skipped - empty index",
+            {
+              rowNo: r.rowNo,
+              join: j,
+              hasIndex: !!idx,
+              indexSize: idx && idx.map ? idx.map.size : 0,
+            }
+          );
+          continue;
+        }
+
+        const lhsVal = pickFromRowLoose(base, j.mainColumn);
+        const key = normalizeJoinKeyValue(lhsVal);
+
+        console.log("[JOIN TRACE] composeMappedRowsForPtrs join lookup", {
+          rowNo: r.rowNo,
+          join: j,
+          lhsVal,
+          key,
+          hasKey: key ? idx.map.has(key) : false,
+        });
+
+        if (!key) continue;
+
+        const joined = idx.map.get(key);
+        if (joined) {
+          console.log("[JOIN TRACE] composeMappedRowsForPtrs join hit", {
+            rowNo: r.rowNo,
+            join: j,
+            joinedKeys: Object.keys(joined),
+          });
+          srcRow = mergeJoinedRow(srcRow, joined);
+        } else {
+          console.log("[JOIN TRACE] composeMappedRowsForPtrs join miss", {
+            rowNo: r.rowNo,
+            join: j,
+          });
+        }
+      }
+    }
+
+    const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+    out.row_no = r.rowNo;
+
+    console.log("[JOIN TRACE] composeMappedRowsForPtrs mapped row", {
+      rowNo: r.rowNo,
+      outputKeys: Object.keys(out),
+    });
+
+    composed.push(out);
+  }
+
+  const headers = Array.from(
+    new Set(composed.flatMap((row) => Object.keys(row)))
+  );
+
+  return { rows: composed, headers };
+}
+
 // /**
 //  * Return unified headers and examples across main import + all supporting datasets.
 //  * Reuses getImportSample for main rows/headers and augments headerMeta with supporting datasets.
@@ -511,3 +698,35 @@ async function saveColumnMap({
 //     throw err;
 //   }
 // }
+
+function applyColumnMappingsToRow({ mappings, sourceRow }) {
+  console.log(
+    "[JOIN DEEP] applyColumnMappingsToRow START sourceRow keys=",
+    sourceRow ? Object.keys(sourceRow) : null
+  );
+  const out = {};
+  for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
+    if (!cfg) continue;
+    const target = cfg.field || cfg.target;
+    if (!target) continue;
+    let value;
+    if (Object.prototype.hasOwnProperty.call(cfg, "value")) {
+      value = cfg.value;
+    } else {
+      value = pickFromRowLoose(sourceRow, sourceHeader);
+    }
+    out[toSnake(target)] = value ?? null;
+  }
+  // Existing debug log retained for compatibility
+  console.log(
+    "[JOIN DEBUG] applyColumnMappingsToRow sourceRow keys=",
+    sourceRow ? Object.keys(sourceRow) : null,
+    "output keys=",
+    Object.keys(out)
+  );
+  console.log(
+    "[JOIN DEEP] applyColumnMappingsToRow END output keys=",
+    Object.keys(out)
+  );
+  return out;
+}

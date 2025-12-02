@@ -7,15 +7,18 @@ const fs = require("fs");
 const { Worker } = require("worker_threads");
 
 const { logger } = require("@/helpers/logger");
+const { normalizeJoinKeyValue, toSnake } = require("./ptrs.service");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
 module.exports = {
+  pickFromRowLoose,
   addDataset,
   listDatasets,
   removeDataset,
   getDatasetSample,
+  buildDatasetIndexByRole,
 };
 
 function looksLikeXlsx(buffer, mime) {
@@ -88,6 +91,63 @@ function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
     );
     worker.postMessage({ buffer: ab }, [ab]);
   });
+}
+
+function pickFromRowLoose(row, header) {
+  console.log(
+    "[JOIN DEEP] pickFromRowLoose START header=",
+    header,
+    "row keys=",
+    row ? Object.keys(row) : null
+  );
+  // Existing debug log retained for compatibility
+  console.log(
+    "[JOIN DEBUG] pickFromRowLoose header=",
+    header,
+    "row keys=",
+    row ? Object.keys(row) : null
+  );
+  if (!row || !header) return undefined;
+  for (const h of headerVariants(header)) {
+    if (row[h] != null) {
+      console.log(
+        "[JOIN DEEP] pickFromRowLoose MATCH key=",
+        h,
+        "value=",
+        row[h]
+      );
+      return row[h];
+    }
+    const kh = Object.keys(row).find(
+      (k) => String(k).toLowerCase() === String(h).toLowerCase()
+    );
+    if (kh && row[kh] != null) {
+      console.log(
+        "[JOIN DEEP] pickFromRowLoose MATCH key=",
+        kh || h,
+        "value=",
+        row[kh || h]
+      );
+      return row[kh];
+    }
+  }
+  console.log(
+    "[JOIN DEEP] pickFromRowLoose no match found for header=",
+    header
+  );
+  return undefined;
+}
+
+function headerVariants(key) {
+  console.log("[JOIN DEEP] headerVariants input:", key);
+  const original = String(key || "");
+  const snake = toSnake(original);
+  const underscored = original.replace(/\s+/g, "_");
+  const cased = original.toLowerCase();
+  const set = new Set([original, snake, underscored, cased]);
+  const result = Array.from(set.values());
+  console.log("[JOIN DEEP] headerVariants output:", result);
+  return result;
 }
 
 async function parseCsvMetaFromStream(stream) {
@@ -536,4 +596,117 @@ async function getDatasetSample({
   });
 
   return { headers, rows, total };
+}
+
+async function buildDatasetIndexByRole({
+  customerId,
+  ptrsId,
+  role,
+  keyColumn,
+}) {
+  console.log("[JOIN DEEP] buildDatasetIndexByRole START", {
+    customerId,
+    ptrsId,
+    role,
+    keyColumn,
+  });
+
+  // 🔐 Ensure RLS customer context is set for this lookup
+  const t = await beginTransactionWithCustomerContext(customerId);
+  let ds;
+  try {
+    ds = await db.PtrsDataset.findOne({
+      where: { customerId, ptrsId, role },
+      raw: true,
+      transaction: t,
+    });
+    await t.commit();
+  } catch (err) {
+    try {
+      await t.rollback();
+    } catch (_) {}
+    throw err;
+  }
+
+  if (!ds) {
+    console.log("[JOIN DEEP] buildDatasetIndexByRole NO DATASET", {
+      customerId,
+      ptrsId,
+      role,
+    });
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
+
+  const storageRef = ds.storageRef;
+  if (!storageRef || !fs.existsSync(storageRef)) {
+    console.log("[JOIN DEEP] buildDatasetIndexByRole MISSING FILE", {
+      customerId,
+      ptrsId,
+      role,
+      storageRef,
+      exists: storageRef ? fs.existsSync(storageRef) : false,
+    });
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
+
+  const index = new Map();
+  let headers = [];
+
+  await new Promise((resolve, reject) => {
+    let isFirst = true;
+    const stream = fs.createReadStream(storageRef);
+    const parser = csv
+      .parse({ headers: true, trim: true, ignoreEmpty: true })
+      .on("error", (err) => {
+        console.error(
+          "[JOIN DEEP] buildDatasetIndexByRole PARSE ERROR",
+          err.message
+        );
+        reject(err);
+      })
+      .on("data", (row) => {
+        if (isFirst) {
+          headers = Object.keys(row || {});
+          isFirst = false;
+        }
+        const rawKey = pickFromRowLoose(row, keyColumn);
+        const normKey = normalizeJoinKeyValue(rawKey);
+        console.log(
+          "[JOIN DEBUG] buildDatasetIndexByRole role=",
+          role,
+          "keyColumn=",
+          keyColumn,
+          "rawKey=",
+          rawKey,
+          "normKey=",
+          normKey
+        );
+        if (!index.has(normKey)) index.set(normKey, row);
+      })
+      .on("end", () => {
+        console.log(
+          "[JOIN DEEP] buildDatasetIndexByRole STREAM END",
+          "role=",
+          role,
+          "rowsIndexed=",
+          index.size
+        );
+        resolve();
+      });
+
+    stream.pipe(parser);
+  });
+
+  console.log(
+    "[JOIN DEBUG] buildDatasetIndexByRole complete role=",
+    role,
+    "rowsIndexed=",
+    index.size
+  );
+  console.log("[JOIN DEEP] buildDatasetIndexByRole END", {
+    rowsIndexed: index.size,
+    headers,
+  });
+
+  return { map: index, headers, rowsIndexed: index.size };
 }
