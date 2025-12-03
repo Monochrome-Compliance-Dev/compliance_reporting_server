@@ -62,22 +62,22 @@ async function getMap(req, res, next) {
       offset: 0,
     });
 
-    slog.info("getColumnMap", {
-      id: map?.id,
-      joinsType: typeof map?.joins,
-      joinsRaw: map?.joins,
-    });
+    // slog.info("getColumnMap", {
+    //   id: map?.id,
+    //   joinsType: typeof map?.joins,
+    //   joinsRaw: map?.joins,
+    // });
 
-    safeLog("[PTRS controller.getMap] map + header meta", {
-      id: map?.id || null,
-      hasMap: !!map,
-      joinsType: typeof map?.joins,
-      joinsRaw: map?.joins,
-      mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
-      headersCount: Array.isArray(headers) ? headers.length : 0,
-      headerSample: Array.isArray(headers) ? headers.slice(0, 10) : [],
-      hasHeaderMeta: !!headerMeta,
-    });
+    // safeLog("[PTRS controller.getMap] map + header meta", {
+    //   id: map?.id || null,
+    //   hasMap: !!map,
+    //   joinsType: typeof map?.joins,
+    //   joinsRaw: map?.joins,
+    //   mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
+    //   headersCount: Array.isArray(headers) ? headers.length : 0,
+    //   headerSample: Array.isArray(headers) ? headers.slice(0, 10) : [],
+    //   hasHeaderMeta: !!headerMeta,
+    // });
 
     await auditService.logEvent({
       customerId,

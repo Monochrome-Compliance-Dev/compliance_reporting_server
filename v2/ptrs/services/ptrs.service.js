@@ -280,7 +280,7 @@ async function updatePtrs({
       return ptrs.get({ plain: true });
     }
 
-    updates.updatedBy = userId || ptrs.updatedBy || ptrs.createdBy || null;
+    updates.updatedBy = userId || null;
 
     await ptrs.update(updates, { transaction: t });
     await t.commit();

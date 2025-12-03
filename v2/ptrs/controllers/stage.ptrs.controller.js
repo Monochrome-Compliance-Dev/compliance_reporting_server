@@ -105,12 +105,12 @@ async function getStagePreview(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
 
-  safeLog("[PTRS controller.getStagePreview] received", {
-    customerId: req.effectiveCustomerId,
-    ptrsId: req.params.id,
-    body: req.body,
-    query: req.query,
-  });
+  // safeLog("[PTRS controller.getStagePreview] received", {
+  //   customerId: req.effectiveCustomerId,
+  //   ptrsId: req.params.id,
+  //   body: req.body,
+  //   query: req.query,
+  // });
 
   const limit = Math.min(
     Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
@@ -133,10 +133,10 @@ async function getStagePreview(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    safeLog("[PTRS controller.getStagePreview] invoking service", {
-      limit,
-      profileId,
-    });
+    // safeLog("[PTRS controller.getStagePreview] invoking service", {
+    //   limit,
+    //   profileId,
+    // });
 
     const result = await stageService.getStagePreview({
       customerId,
@@ -144,20 +144,20 @@ async function getStagePreview(req, res, next) {
       limit,
     });
 
-    safeLog("[PTRS controller.getStagePreview] result", {
-      headers: Array.isArray(result?.headers) ? result.headers.length : 0,
-      rows: Array.isArray(result?.rows) ? result.rows.length : 0,
-      headerSample:
-        Array.isArray(result?.headers) && result.headers.length
-          ? result.headers.slice(0, 10)
-          : [],
-      firstRowKeys:
-        Array.isArray(result?.rows) && result.rows[0]
-          ? Object.keys(result.rows[0])
-          : [],
-      firstRowSample:
-        Array.isArray(result?.rows) && result.rows[0] ? result.rows[0] : null,
-    });
+    // safeLog("[PTRS controller.getStagePreview] result", {
+    //   headers: Array.isArray(result?.headers) ? result.headers.length : 0,
+    //   rows: Array.isArray(result?.rows) ? result.rows.length : 0,
+    //   headerSample:
+    //     Array.isArray(result?.headers) && result.headers.length
+    //       ? result.headers.slice(0, 10)
+    //       : [],
+    //   firstRowKeys:
+    //     Array.isArray(result?.rows) && result.rows[0]
+    //       ? Object.keys(result.rows[0])
+    //       : [],
+    //   firstRowSample:
+    //     Array.isArray(result?.rows) && result.rows[0] ? result.rows[0] : null,
+    // });
 
     await auditService.logEvent({
       customerId,

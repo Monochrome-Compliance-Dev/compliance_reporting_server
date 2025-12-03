@@ -3,7 +3,7 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const { slog, safeMeta } = require("./ptrs.service");
+const { slog, safeMeta, composeMappedRowsForPtrs } = require("./ptrs.service");
 
 module.exports = {
   applyRules,
@@ -25,7 +25,6 @@ function applyRules(rows, rules = []) {
   for (const row of rows) {
     let touched = false;
 
-    // Use whatever was previously persisted into data._appliedRules
     const existingApplied = Array.isArray(row._appliedRules)
       ? row._appliedRules.slice()
       : [];
@@ -34,7 +33,6 @@ function applyRules(rows, rules = []) {
     for (const rule of enabled) {
       const ruleKey = rule.id || rule.label || "rule";
 
-      // 🔒 Idempotency: if this rule has already been applied to this row, skip it
       if (appliedSet.has(ruleKey)) {
         continue;
       }
@@ -45,7 +43,6 @@ function applyRules(rows, rules = []) {
 
       const actions = Array.isArray(rule.then) ? rule.then : [];
       if (!actions.length) {
-        // No actions, but we still consider the rule "applied" to avoid re-hitting it
         appliedSet.add(ruleKey);
         continue;
       }
@@ -56,7 +53,6 @@ function applyRules(rows, rules = []) {
         touched = true;
       }
 
-      // Mark this rule as applied on this row so future runs can skip it
       appliedSet.add(ruleKey);
     }
 
@@ -70,13 +66,42 @@ function applyRules(rows, rules = []) {
   return { rows, stats };
 }
 
+// --- NEW: central helper to load row-level rules from PtrsRuleset ---
+async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
+  const rulesets = await db.PtrsRuleset.findAll({
+    where: { customerId, ptrsId },
+    transaction,
+    raw: true,
+  });
+
+  const rowRules = [];
+  for (const rs of rulesets || []) {
+    const def = rs.definition;
+    if (!def || typeof def !== "object") continue;
+    const type = def.type || rs.scope || "row";
+    if (type === "crossRow") continue; // BE only applies row-level rules
+    rowRules.push(def);
+  }
+
+  slog.info(
+    "PTRS v2 loadRowRulesForPtrs",
+    safeMeta({
+      customerId,
+      ptrsId,
+      rulesetCount: rulesets?.length || 0,
+      rowRules: rowRules.length,
+    })
+  );
+
+  return rowRules;
+}
+
 async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const effectiveLimit = Math.min(Number(limit) || 50, 500);
 
-  // 🔐 Ensure RLS context for any import/raw reads
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
@@ -88,27 +113,15 @@ async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
       transaction: t,
     });
 
-    // 2) Load row-level rules from the column map
-    let rowRules = null;
-    try {
-      const mapRow = await getColumnMap({ customerId, ptrsId });
-      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-      if (typeof rowRules === "string") {
-        try {
-          rowRules = JSON.parse(rowRules);
-        } catch {
-          rowRules = null;
-        }
-      }
-    } catch (_) {
-      rowRules = null;
-    }
+    // 2) Load row rules from tbl_ptrs_ruleset
+    const rowRules = await loadRowRulesForPtrs({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
 
     // 3) Apply rules in-memory
-    const rulesResult = applyRules(
-      baseRows,
-      Array.isArray(rowRules) ? rowRules : []
-    );
+    const rulesResult = applyRules(baseRows, rowRules);
 
     await t.commit();
 
@@ -129,22 +142,187 @@ async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
   }
 }
 
-function ensureRulesMeta(meta) {
-  const nextMeta = meta && typeof meta === "object" ? { ...meta } : {};
-  const rules =
-    nextMeta.rules && typeof nextMeta.rules === "object"
-      ? { ...nextMeta.rules }
-      : {};
+// function ensureRulesMeta(meta) {
+//   const nextMeta = meta && typeof meta === "object" ? { ...meta } : {};
+//   const rules =
+//     nextMeta.rules && typeof nextMeta.rules === "object"
+//       ? { ...nextMeta.rules }
+//       : {};
 
-  const applied = Array.isArray(rules.applied) ? [...rules.applied] : [];
+//   const applied = Array.isArray(rules.applied) ? [...rules.applied] : [];
 
-  rules.applied = applied;
-  if (typeof rules.exclude !== "boolean") {
-    rules.exclude = false;
+//   rules.applied = applied;
+//   if (typeof rules.exclude !== "boolean") {
+//     rules.exclude = false;
+//   }
+
+//   nextMeta.rules = rules;
+//   return nextMeta;
+// }
+
+/** Update only rules-related fields, now in tbl_ptrs_ruleset */
+async function updateRulesOnly({
+  customerId,
+  ptrsId,
+  profileId = null,
+  rowRules = [],
+  crossRowRules = [],
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // Blow away any existing rulesets for this run
+    await db.PtrsRuleset.destroy({
+      where: { customerId, ptrsId },
+      transaction: t,
+    });
+
+    const payloads = [];
+
+    if (Array.isArray(rowRules)) {
+      for (const rule of rowRules) {
+        const def = { ...rule, type: rule.type || "row" };
+        payloads.push({
+          customerId,
+          profileId: profileId || null,
+          ptrsId,
+          scope: "row",
+          name: def.label || null,
+          description: def.description || null,
+          isDefaultForProfile: false,
+          definition: def,
+          createdBy: userId || null,
+          updatedBy: userId || null,
+        });
+      }
+    }
+
+    if (Array.isArray(crossRowRules)) {
+      for (const rule of crossRowRules) {
+        const def = { ...rule, type: rule.type || "crossRow" };
+        payloads.push({
+          customerId,
+          profileId: profileId || null,
+          ptrsId,
+          scope: "crossRow",
+          name: def.label || null,
+          description: def.description || null,
+          isDefaultForProfile: false,
+          definition: def,
+          createdBy: userId || null,
+          updatedBy: userId || null,
+        });
+      }
+    }
+
+    if (payloads.length) {
+      await db.PtrsRuleset.bulkCreate(payloads, {
+        transaction: t,
+        validate: false,
+        returning: false,
+      });
+    }
+
+    await t.commit();
+
+    return {
+      rowRules: Array.isArray(rowRules) ? rowRules : [],
+      crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
   }
+}
 
-  nextMeta.rules = rules;
-  return nextMeta;
+/** Get rules for a ptrs run from tbl_ptrs_ruleset */
+async function getRules({ customerId, ptrsId }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const rulesets = await db.PtrsRuleset.findAll({
+      where: { customerId, ptrsId },
+      transaction: t,
+      raw: true,
+    });
+    await t.commit();
+
+    const rowRules = [];
+    const crossRowRules = [];
+
+    for (const rs of rulesets || []) {
+      const def = rs.definition;
+      if (!def || typeof def !== "object") continue;
+      const type = def.type || rs.scope || "row";
+      if (type === "crossRow") {
+        crossRowRules.push(def);
+      } else {
+        rowRules.push(def);
+      }
+    }
+
+    slog.info(
+      "PTRS v2 getRules: loaded rulesets",
+      safeMeta({
+        customerId,
+        ptrsId,
+        total: rulesets?.length || 0,
+        rowRules: rowRules.length,
+        crossRowRules: crossRowRules.length,
+      })
+    );
+
+    return { rowRules, crossRowRules };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/** Get rulesets for a profile/customer (sources for import) */
+async function getProfileRules({ customerId, profileId = null }) {
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const where = { customerId };
+    if (profileId) where.profileId = profileId;
+
+    const rulesets = await db.PtrsRuleset.findAll({
+      where,
+      transaction: t,
+      raw: true,
+    });
+
+    await t.commit();
+
+    slog.info(
+      "PTRS v2 getProfileRules: loaded profile rulesets",
+      safeMeta({
+        customerId,
+        profileId: profileId || null,
+        count: rulesets?.length || 0,
+      })
+    );
+
+    return rulesets || [];
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
 }
 
 async function applyRulesAndPersist({
@@ -208,21 +386,12 @@ async function applyRulesAndPersist({
   // ------------------------------------------------------------
 
   try {
-    // 1) Load row-level rules from column map
-    let rowRules = null;
-    try {
-      const mapRow = await getColumnMap({ customerId, ptrsId, transaction: t });
-      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-      if (typeof rowRules === "string") {
-        try {
-          rowRules = JSON.parse(rowRules);
-        } catch {
-          rowRules = null;
-        }
-      }
-    } catch (_) {
-      rowRules = null;
-    }
+    // 1) Load row-level rules from tbl_ptrs_ruleset
+    const rowRules = await loadRowRulesForPtrs({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
 
     // 2) Compose mapped rows (main import + joins)
     const { rows: baseRows } = await composeMappedRowsForPtrs({
@@ -241,10 +410,7 @@ async function applyRulesAndPersist({
     });
 
     // 3) Apply rules
-    const rulesResult = applyRules(
-      baseRows,
-      Array.isArray(rowRules) ? rowRules : []
-    );
+    const rulesResult = applyRules(baseRows, rowRules);
     const rows = rulesResult.rows || baseRows;
 
     slog.info("PTRS v2 applyRulesAndPersist: rules applied", {
@@ -352,175 +518,6 @@ async function applyRulesAndPersist({
       } catch (_) {
         // ignore rollback errors
       }
-    }
-    throw err;
-  }
-}
-
-/** Update only rules-related fields without touching mappings/defaults/joins */
-async function updateRulesOnly({
-  customerId,
-  ptrsId,
-  rowRules = [],
-  crossRowRules = [],
-  userId = null,
-}) {
-  if (!customerId) throw new Error("customerId is required");
-  if (!ptrsId) throw new Error("ptrsId is required");
-
-  // Helper to parse JSON/TEXT extras safely
-  const parseMaybe = (v) => {
-    if (v == null) return null;
-    if (typeof v === "string") {
-      try {
-        return JSON.parse(v);
-      } catch {
-        return null;
-      }
-    }
-    if (typeof v === "object") return v;
-    return null;
-  };
-
-  // 1) Load existing map via the RLS-safe accessor
-  //    This is the same thing controller.getMap/FE mapping step relies on.
-  const existing = await getColumnMap({ customerId, ptrsId });
-
-  // 2) Tenant-scoped transaction for the write
-  const t = await beginTransactionWithCustomerContext(customerId);
-
-  try {
-    // --- CASE 1: no existing map row at all -> create minimal row ---
-    if (!existing) {
-      const row = await db.PtrsColumnMap.create(
-        {
-          customerId,
-          ptrsId,
-          // Keep mappings empty but valid
-          mappings: {},
-          extras: {
-            __experimentalCrossRowRules: Array.isArray(crossRowRules)
-              ? crossRowRules
-              : [],
-          },
-          fallbacks: null,
-          defaults: null,
-          joins: null,
-          rowRules: Array.isArray(rowRules) ? rowRules : [],
-          createdBy: userId || null,
-          updatedBy: userId || null,
-        },
-        { transaction: t }
-      );
-
-      await t.commit();
-      return row.get({ plain: true });
-    }
-
-    // --- CASE 2: map exists -> merge rules into the SAME row ---
-
-    const prevExtras = parseMaybe(existing.extras) || {};
-    const nextExtras = {
-      ...prevExtras,
-      __experimentalCrossRowRules: Array.isArray(crossRowRules)
-        ? crossRowRules
-        : [],
-    };
-
-    await db.PtrsColumnMap.update(
-      {
-        // Only touch rules-related fields
-        rowRules: Array.isArray(rowRules) ? rowRules : [],
-        extras: nextExtras,
-        updatedBy: userId || existing.updatedBy || existing.createdBy || null,
-      },
-      {
-        where: {
-          id: existing.id,
-          customerId,
-          ptrsId,
-        },
-        transaction: t,
-      }
-    );
-
-    await t.commit();
-
-    // Return a plain-ish merged view
-    return {
-      ...existing,
-      rowRules: Array.isArray(rowRules) ? rowRules : [],
-      extras: nextExtras,
-    };
-  } catch (err) {
-    if (!t.finished) {
-      try {
-        await t.rollback();
-      } catch (_) {
-        // ignore rollback errors
-      }
-    }
-    throw err;
-  }
-}
-
-/** Get rules for a ptrs */
-async function getRules({ customerId, ptrsId }) {
-  const t = await beginTransactionWithCustomerContext(customerId);
-  try {
-    // table name for rules may change
-    const rules = await db.PtrsColumnMap.findOne({
-      where: { customerId, ptrsId },
-      transaction: t,
-      raw: true,
-    });
-    await t.commit();
-    slog.info(
-      "PTRS v2 getRules: loaded rules",
-      safeMeta({
-        customerId,
-        ptrsId,
-        id: rules?.id || null,
-        hasRowRules: !!(rules && rules.rowRules),
-      })
-    );
-    return rules || null;
-  } catch (err) {
-    if (!t.finished) {
-      try {
-        await t.rollback();
-      } catch (_) {}
-    }
-    throw err;
-  }
-}
-
-/** Get rules for a profile */
-async function getProfileRules({ customerId, profileId }) {
-  const t = await beginTransactionWithCustomerContext(customerId);
-  try {
-    // table name for rules may change
-    const rules = await db.PtrsColumnMap.findOne({
-      where: { customerId, id: profileId },
-      transaction: t,
-      raw: true,
-    });
-    await t.commit();
-    slog.info(
-      "PTRS v2 getProfileRules: loaded profile rules",
-      safeMeta({
-        customerId,
-        profileId,
-        id: rules?.id || null,
-        hasRowRules: !!(rules && rules.rowRules),
-      })
-    );
-    return rules || null;
-  } catch (err) {
-    if (!t.finished) {
-      try {
-        await t.rollback();
-      } catch (_) {}
     }
     throw err;
   }

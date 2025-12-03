@@ -53,6 +53,16 @@ CREATE POLICY tbl_ptrs_column_map_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_column_map FORCE ROW LEVEL SECURITY;
 
+-- PTRS Rulesets (rule definitions per PTRS/profile)
+ALTER TABLE tbl_ptrs_ruleset ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_ruleset_rls_policy ON tbl_ptrs_ruleset;
+CREATE POLICY tbl_ptrs_ruleset_rls_policy
+  ON tbl_ptrs_ruleset
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_ruleset FORCE ROW LEVEL SECURITY;
+
 -- PTRS Uploads (PTRS header / upload metadata)
 ALTER TABLE tbl_ptrs_upload ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_ptrs_upload_rls_policy ON tbl_ptrs_upload;

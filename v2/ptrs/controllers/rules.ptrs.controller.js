@@ -122,8 +122,8 @@ async function rulesApply(req, res, next) {
 // POST /v2/ptrs/:id/rules
 /**
  * POST /api/v2/ptrs/:id/rules
- * Body: { rowRules?: [], crossRowRules?: [] }
- * Persist only rules — do NOT overwrite mappings/defaults/joins.
+ * Body: { ???? }
+ * Persist only rules — do NOT overwrite mappings/defaults/joins???
  */
 async function saveRules(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -148,27 +148,17 @@ async function saveRules(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    // Persist rules only
-    const updated = await rulesService.updateRulesOnly({
+    const profileId = ptrs.profileId || null;
+
+    // Persist rules only into tbl_ptrs_ruleset
+    await rulesService.updateRulesOnly({
       customerId,
       ptrsId,
+      profileId,
       rowRules: Array.isArray(rowRules) ? rowRules : [],
       crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
       userId,
     });
-
-    // Unwrap what we actually stored
-    const extras =
-      typeof updated.extras === "string"
-        ? (() => {
-            try {
-              return JSON.parse(updated.extras);
-            } catch {
-              return {};
-            }
-          })()
-        : updated.extras || {};
-    const storedCross = (extras && extras.__experimentalCrossRowRules) || [];
 
     await auditService.logEvent({
       customerId,
@@ -187,8 +177,8 @@ async function saveRules(req, res, next) {
     return res.status(200).json({
       status: "success",
       data: {
-        rowRules: Array.isArray(updated.rowRules) ? updated.rowRules : [],
-        crossRowRules: Array.isArray(storedCross) ? storedCross : [],
+        rowRules: Array.isArray(rowRules) ? rowRules : [],
+        crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
       },
     });
   } catch (error) {
@@ -207,7 +197,7 @@ async function saveRules(req, res, next) {
 
 /**
  * GET /api/v2/ptrs/:id/rules
- * Returns row-level rules and cross-row rules for the given PTRS run.
+ * Returns row-level rules and cross-row rules for the given PTRS run.???
  */
 async function getRules(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -223,7 +213,6 @@ async function getRules(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    // Confirm the PTRS run exists and belongs to this tenant
     const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
     if (!ptrs) {
       return res
@@ -231,30 +220,10 @@ async function getRules(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const rulesRow = await rulesService.getRules({ customerId, ptrsId });
-
-    // Helper to parse JSON/TEXT safely
-    const parseMaybe = (v) => {
-      if (v == null) return null;
-      if (typeof v === "string") {
-        try {
-          return JSON.parse(v);
-        } catch {
-          return null;
-        }
-      }
-      if (typeof v === "object") return v;
-      return null;
-    };
-
-    const rowRules = Array.isArray(rulesRow?.rowRules)
-      ? rulesRow.rowRules
-      : parseMaybe(rulesRow?.rowRules) || [];
-
-    const extras = parseMaybe(rulesRow?.extras) || {};
-    const crossRowRules = Array.isArray(extras.__experimentalCrossRowRules)
-      ? extras.__experimentalCrossRowRules
-      : [];
+    const { rowRules, crossRowRules } = await rulesService.getRules({
+      customerId,
+      ptrsId,
+    });
 
     await auditService.logEvent({
       customerId,
@@ -265,14 +234,14 @@ async function getRules(req, res, next) {
       entity: "PtrsUpload",
       entityId: ptrsId,
       details: {
-        rowRules: rowRules.length,
-        crossRowRules: crossRowRules.length,
+        rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
+        crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
       },
     });
 
     return res.status(200).json({
       status: "success",
-      data: { rowRules, crossRowRules },
+      data: { rowRules: rowRules || [], crossRowRules: crossRowRules || [] },
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 rules", {
@@ -287,17 +256,20 @@ async function getRules(req, res, next) {
     return next(error);
   }
 }
-
 /**
  * GET /api/v2/ptrs/id/rules/sources
  * Returns a list of previous saved rules under the same profile
+ */
+/**
+ * GET /api/v2/ptrs/:id/rules/sources
+ * Returns a list of previous saved rulesets under the same profile
  */
 async function getProfileRules(req, res, next) {
   const customerId = req.effectiveCustomerId;
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
-  const profileId = req.params.profileId;
+  const ptrsId = req.params.id;
 
   try {
     if (!customerId) {
@@ -306,7 +278,19 @@ async function getProfileRules(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const rules = await rulesService.getProfileRules({ customerId, profileId });
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const profileId = ptrs.profileId || null;
+
+    const rulesets = await rulesService.getProfileRules({
+      customerId,
+      profileId,
+    });
 
     await auditService.logEvent({
       customerId,
@@ -315,28 +299,19 @@ async function getProfileRules(req, res, next) {
       device,
       action: "PtrsV2GetProfileRules",
       entity: "PtrsUpload",
-      entityId: profileId,
+      entityId: ptrsId,
       details: {
-        rowRules: Array.isArray(rules?.rowRules) ? rules.rowRules.length : 0,
-        crossRowRules: Array.isArray(rules?.crossRowRules)
-          ? rules.crossRowRules.length
-          : 0,
+        count: Array.isArray(rulesets) ? rulesets.length : 0,
       },
     });
 
     return res.status(200).json({
       status: "success",
-      data: {
-        rowRules: Array.isArray(rules?.rowRules) ? rules.rowRules : [],
-        crossRowRules: Array.isArray(rules?.crossRowRules)
-          ? rules.crossRowRules
-          : [],
-      },
+      data: Array.isArray(rulesets) ? rulesets : [],
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS profile rules", {
       action: "PtrsV2GetProfileRules",
-      profileId,
       customerId,
       userId,
       error: error.message,
