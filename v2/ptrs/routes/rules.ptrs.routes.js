@@ -20,4 +20,11 @@ router.post("/:id/rules", requirePtrs, rulesController.saveRules);
 // return any rules used at a profile level
 router.get("/:id/rules/sources", requirePtrs, rulesController.getProfileRules);
 
+// sandbox route for previewing SQL statements against a PTRS upload
+router.post(
+  "/:id/rules/sandbox/preview",
+  requirePtrs,
+  rulesController.rulesSandboxPreview
+);
+
 module.exports = router;

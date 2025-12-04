@@ -22,6 +22,7 @@ module.exports = {
   getColumnMap,
   getImportSample,
   saveColumnMap,
+  buildMappedDatasetForPtrs,
   composeMappedRowsForPtrs,
   // getUnifiedSample,
 };
@@ -389,6 +390,102 @@ async function saveColumnMap({
 
     await t.commit();
     return row.get({ plain: true });
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+// Build and persist the mapped + joined dataset for a ptrs run into PtrsMappedRow
+async function buildMappedDatasetForPtrs({
+  customerId,
+  ptrsId,
+  actorId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    slog.info(
+      "PTRS v2 buildMappedDatasetForPtrs: begin",
+      safeMeta({
+        customerId,
+        ptrsId,
+      })
+    );
+
+    // Compose the fully mapped + joined rows for this ptrs run.
+    // We intentionally pass limit: null here so the composer decides how much to load
+    // (typically the full dataset for this run).
+    const { rows, headers } = await composeMappedRowsForPtrs({
+      customerId,
+      ptrsId,
+      limit: null,
+      transaction: t,
+    });
+
+    const total = Array.isArray(rows) ? rows.length : 0;
+
+    // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot
+    await db.PtrsMappedRow.destroy({
+      where: { customerId, ptrsId },
+      transaction: t,
+    });
+
+    if (!total) {
+      slog.info(
+        "PTRS v2 buildMappedDatasetForPtrs: no rows composed, nothing persisted",
+        safeMeta({ customerId, ptrsId })
+      );
+      await t.commit();
+      return { count: 0, headers: headers || [] };
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const payload = rows.map((row, index) => ({
+      customerId,
+      ptrsId,
+      // Prefer an explicit row_no from the composer if present; otherwise fallback to index
+      rowNo:
+        typeof row.row_no === "number" && Number.isFinite(row.row_no)
+          ? row.row_no
+          : index + 1,
+      data: row,
+      meta: {
+        stage: "ptrs.v2.mapped",
+        builtAt: nowIso,
+        builtBy: actorId || null,
+      },
+    }));
+
+    await db.PtrsMappedRow.bulkCreate(payload, {
+      transaction: t,
+      validate: false,
+    });
+
+    slog.info(
+      "PTRS v2 buildMappedDatasetForPtrs: persisted mapped rows",
+      safeMeta({
+        customerId,
+        ptrsId,
+        rowsPersisted: total,
+        headersCount: Array.isArray(headers) ? headers.length : 0,
+      })
+    );
+
+    await t.commit();
+
+    return {
+      count: total,
+      headers: headers || [],
+    };
   } catch (err) {
     if (!t.finished) {
       try {

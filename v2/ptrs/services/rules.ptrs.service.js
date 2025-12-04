@@ -3,7 +3,8 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const { slog, safeMeta, composeMappedRowsForPtrs } = require("./ptrs.service");
+const { slog, safeMeta } = require("./ptrs.service");
+const { composeMappedRowsForPtrs } = require("./tablesAndMaps.ptrs.service");
 
 module.exports = {
   applyRules,
@@ -12,6 +13,7 @@ module.exports = {
   updateRulesOnly,
   getRules,
   getProfileRules,
+  sandboxRulesPreview,
 };
 
 function applyRules(rows, rules = []) {
@@ -129,6 +131,121 @@ async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
       headers,
       rows: rulesResult.rows || baseRows,
       stats: { rules: rulesResult.stats || null },
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {
+        // ignore rollback errors
+      }
+    }
+    throw err;
+  }
+}
+
+function applySandboxFilter(rows, { field, op, value }) {
+  if (!field || !op) return rows;
+  const val = String(value ?? "").trim();
+  if (!val && !["is_null", "not_null"].includes(op)) return rows;
+
+  const toNum = (v) => {
+    const n = Number(String(v).replace(/[, ]+/g, ""));
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  return rows.filter((row) => {
+    const raw = row[field];
+    const s = raw == null ? "" : String(raw);
+
+    switch (op) {
+      case "eq":
+        return s === val;
+      case "neq":
+        return s !== val;
+      case "gt":
+        return toNum(raw) > toNum(val);
+      case "gte":
+        return toNum(raw) >= toNum(val);
+      case "lt":
+        return toNum(raw) < toNum(val);
+      case "lte":
+        return toNum(raw) <= toNum(val);
+      case "in": {
+        const parts = val
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean);
+        return parts.includes(s);
+      }
+      case "nin": {
+        const parts = val
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean);
+        return !parts.includes(s);
+      }
+      case "is_null":
+        return raw == null || s === "";
+      case "not_null":
+        return raw != null && s !== "";
+      default:
+        return true;
+    }
+  });
+}
+
+function applySandboxFilters(rows, filters) {
+  if (!Array.isArray(filters) || !filters.length) return rows;
+  return filters.reduce((current, f) => applySandboxFilter(current, f), rows);
+}
+
+async function sandboxRulesPreview({
+  customerId,
+  ptrsId,
+  filters = [],
+  limit = 50,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const effectiveLimit = Math.min(Number(limit) || 50, 500);
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // Compose mapped rows for the full dataset (no limit) so counts match Excel
+    const { rows: baseRows, headers } = await composeMappedRowsForPtrs({
+      customerId,
+      ptrsId,
+      limit: null,
+      transaction: t,
+    });
+
+    const filteredRows = applySandboxFilters(baseRows, filters);
+    const limitedRows = filteredRows.slice(0, effectiveLimit);
+
+    slog.info(
+      "PTRS v2 sandboxRulesPreview",
+      safeMeta({
+        customerId,
+        ptrsId,
+        totalRows: baseRows.length,
+        filters: Array.isArray(filters) ? filters.length : 0,
+        totalMatching: filteredRows.length,
+        returned: limitedRows.length,
+      })
+    );
+
+    await t.commit();
+
+    return {
+      headers,
+      rows: limitedRows,
+      stats: {
+        totalMatching: filteredRows.length,
+        returned: limitedRows.length,
+      },
     };
   } catch (err) {
     if (!t.finished) {

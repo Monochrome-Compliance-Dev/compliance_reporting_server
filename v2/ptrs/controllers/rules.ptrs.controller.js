@@ -9,6 +9,7 @@ module.exports = {
   getRules,
   saveRules,
   getProfileRules,
+  rulesSandboxPreview,
 };
 
 /**
@@ -56,6 +57,74 @@ async function rulesPreview(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error previewing PTRS v2 rules", {
       action: "PtrsV2RulesPreview",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/:id/rules/sandbox/preview
+ * Body: { filters?: Array<{ field, op, value }>, limit?: number }
+ */
+async function rulesSandboxPreview(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  const filters = Array.isArray(req.body?.filters) ? req.body.filters : [];
+  const limit = Math.min(
+    parseInt(req.body?.limit != null ? String(req.body.limit) : "50", 10),
+    500
+  );
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const out = await rulesService.sandboxRulesPreview({
+      customerId,
+      ptrsId,
+      filters,
+      limit,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2RulesSandboxPreview",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        filters: filters.length,
+        limit,
+        returned: Array.isArray(out?.rows) ? out.rows.length : 0,
+      },
+    });
+
+    return res.status(200).json({ status: "success", data: out });
+  } catch (error) {
+    logger.logEvent("error", "Error previewing PTRS v2 sandbox rules", {
+      action: "PtrsV2RulesSandboxPreview",
       ptrsId,
       customerId,
       userId,

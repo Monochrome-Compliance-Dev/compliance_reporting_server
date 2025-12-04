@@ -10,6 +10,7 @@ module.exports = {
   saveMap,
   getSample,
   getUnifiedSample,
+  buildMappedDataset,
 };
 
 /**
@@ -224,6 +225,89 @@ async function saveMap(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error saving PTRS v2 map", {
       action: "PtrsV2SaveMap",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/:id/map/build-mapped
+ * Builds and persists the mapped + joined dataset into PtrsMappedRow for this PTRS run.
+ */
+async function buildMappedDataset(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    // Confirm the PTRS run exists and belongs to this tenant
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    slog.info(
+      "[PTRS v2 buildMappedDataset] begin",
+      safeMeta({ customerId, ptrsId, userId })
+    );
+
+    const result = await tmPtrsService.buildMappedDatasetForPtrs({
+      customerId,
+      ptrsId,
+      actorId: userId || null,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2BuildMappedDataset",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        rowsPersisted: result?.count || 0,
+        headersCount: Array.isArray(result?.headers)
+          ? result.headers.length
+          : 0,
+      },
+    });
+
+    slog.info(
+      "[PTRS v2 buildMappedDataset] complete",
+      safeMeta({
+        customerId,
+        ptrsId,
+        rowsPersisted: result?.count || 0,
+      })
+    );
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        count: result?.count || 0,
+        headers: result?.headers || [],
+      },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error building PTRS v2 mapped dataset", {
+      action: "PtrsV2BuildMappedDataset",
       ptrsId,
       customerId,
       userId,
