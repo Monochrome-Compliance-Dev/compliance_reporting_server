@@ -80,38 +80,18 @@ function toSnake(str) {
 
 // ----- JOIN HELPERS (file-backed datasets) -----
 function normalizeJoinKeyValue(v) {
-  console.log("[JOIN DEEP] normalizeJoinKeyValue called with:", v);
   if (v == null) return "";
   const out = String(v).trim().toUpperCase();
   // Existing debug log retained for compatibility
-  console.log(
-    "[JOIN DEBUG] normalizeJoinKeyValue input:",
-    v,
-    "output:",
-    String(v == null ? "" : String(v).trim().toUpperCase())
-  );
-  console.log("[JOIN DEEP] normalizeJoinKeyValue returning:", out);
   return out;
 }
 
 function mergeJoinedRow(mainRowData, joinedRow) {
-  console.log("[JOIN TRACE] mergeJoinedRow called", {
-    mainKeys: mainRowData ? Object.keys(mainRowData) : null,
-    joinedKeys: joinedRow ? Object.keys(joinedRow) : null,
-  });
-
   if (!joinedRow) {
-    console.log(
-      "[JOIN TRACE] mergeJoinedRow: no joined row, returning mainRowData"
-    );
     return mainRowData;
   }
 
   const merged = { ...joinedRow, ...mainRowData };
-
-  console.log("[JOIN TRACE] mergeJoinedRow result keys", {
-    mergedKeys: Object.keys(merged),
-  });
 
   return merged;
 }

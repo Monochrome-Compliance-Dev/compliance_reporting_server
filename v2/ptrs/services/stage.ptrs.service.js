@@ -7,7 +7,7 @@ const fs = require("fs");
 const { safeMeta, slog } = require("./ptrs.service");
 const { applyRules } = require("./rules.ptrs.service");
 const {
-  composeMappedRowsForPtrs,
+  loadMappedRowsForPtrs,
   getColumnMap,
 } = require("./tablesAndMaps.ptrs.service");
 const { logger } = require("@/helpers/logger");
@@ -43,7 +43,7 @@ async function stagePtrs({
 
   try {
     // 1) Compose mapped rows for this ptrs (import + joins + column map)
-    const { rows: baseRows } = await composeMappedRowsForPtrs({
+    const { rows: baseRows } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit,
@@ -225,7 +225,7 @@ async function stagePtrs({
 
 /**
  * Returns a preview of staged data using the current column map and step pipeline,
- * but previews directly from the staged table using snake_case logical fields.
+ * but previews directly from the derived combined table using snake_case logical fields.
  */
 async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -234,7 +234,7 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    const { rows: composed, headers } = await composeMappedRowsForPtrs({
+    const { rows: composed, headers } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit,

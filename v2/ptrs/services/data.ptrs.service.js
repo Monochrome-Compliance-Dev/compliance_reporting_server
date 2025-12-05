@@ -21,6 +21,8 @@ module.exports = {
   buildDatasetIndexByRole,
 };
 
+// TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
+
 function looksLikeXlsx(buffer, mime) {
   if (mime && /spreadsheetml|ms-excel/i.test(mime)) return true;
   if (!buffer || buffer.length < 4) return false;
@@ -94,60 +96,28 @@ function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
 }
 
 function pickFromRowLoose(row, header) {
-  console.log(
-    "[JOIN DEEP] pickFromRowLoose START header=",
-    header,
-    "row keys=",
-    row ? Object.keys(row) : null
-  );
-  // Existing debug log retained for compatibility
-  console.log(
-    "[JOIN DEBUG] pickFromRowLoose header=",
-    header,
-    "row keys=",
-    row ? Object.keys(row) : null
-  );
   if (!row || !header) return undefined;
   for (const h of headerVariants(header)) {
     if (row[h] != null) {
-      console.log(
-        "[JOIN DEEP] pickFromRowLoose MATCH key=",
-        h,
-        "value=",
-        row[h]
-      );
       return row[h];
     }
     const kh = Object.keys(row).find(
       (k) => String(k).toLowerCase() === String(h).toLowerCase()
     );
     if (kh && row[kh] != null) {
-      console.log(
-        "[JOIN DEEP] pickFromRowLoose MATCH key=",
-        kh || h,
-        "value=",
-        row[kh || h]
-      );
       return row[kh];
     }
   }
-  console.log(
-    "[JOIN DEEP] pickFromRowLoose no match found for header=",
-    header
-  );
   return undefined;
 }
 
 function headerVariants(key) {
-  console.log("[JOIN DEEP] headerVariants input:", key);
   const original = String(key || "");
   const snake = toSnake(original);
   const underscored = original.replace(/\s+/g, "_");
   const cased = original.toLowerCase();
   const set = new Set([original, snake, underscored, cased]);
-  const result = Array.from(set.values());
-  console.log("[JOIN DEEP] headerVariants output:", result);
-  return result;
+  return Array.from(set.values());
 }
 
 async function parseCsvMetaFromStream(stream) {
@@ -604,13 +574,6 @@ async function buildDatasetIndexByRole({
   role,
   keyColumn,
 }) {
-  console.log("[JOIN DEEP] buildDatasetIndexByRole START", {
-    customerId,
-    ptrsId,
-    role,
-    keyColumn,
-  });
-
   // 🔐 Ensure RLS customer context is set for this lookup
   const t = await beginTransactionWithCustomerContext(customerId);
   let ds;
@@ -629,23 +592,11 @@ async function buildDatasetIndexByRole({
   }
 
   if (!ds) {
-    console.log("[JOIN DEEP] buildDatasetIndexByRole NO DATASET", {
-      customerId,
-      ptrsId,
-      role,
-    });
     return { map: new Map(), headers: [], rowsIndexed: 0 };
   }
 
   const storageRef = ds.storageRef;
   if (!storageRef || !fs.existsSync(storageRef)) {
-    console.log("[JOIN DEEP] buildDatasetIndexByRole MISSING FILE", {
-      customerId,
-      ptrsId,
-      role,
-      storageRef,
-      exists: storageRef ? fs.existsSync(storageRef) : false,
-    });
     return { map: new Map(), headers: [], rowsIndexed: 0 };
   }
 
@@ -658,10 +609,7 @@ async function buildDatasetIndexByRole({
     const parser = csv
       .parse({ headers: true, trim: true, ignoreEmpty: true })
       .on("error", (err) => {
-        console.error(
-          "[JOIN DEEP] buildDatasetIndexByRole PARSE ERROR",
-          err.message
-        );
+        console.error("buildDatasetIndexByRole PARSE ERROR", err.message);
         reject(err);
       })
       .on("data", (row) => {
@@ -671,41 +619,13 @@ async function buildDatasetIndexByRole({
         }
         const rawKey = pickFromRowLoose(row, keyColumn);
         const normKey = normalizeJoinKeyValue(rawKey);
-        console.log(
-          "[JOIN DEBUG] buildDatasetIndexByRole role=",
-          role,
-          "keyColumn=",
-          keyColumn,
-          "rawKey=",
-          rawKey,
-          "normKey=",
-          normKey
-        );
         if (!index.has(normKey)) index.set(normKey, row);
       })
       .on("end", () => {
-        console.log(
-          "[JOIN DEEP] buildDatasetIndexByRole STREAM END",
-          "role=",
-          role,
-          "rowsIndexed=",
-          index.size
-        );
         resolve();
       });
 
     stream.pipe(parser);
-  });
-
-  console.log(
-    "[JOIN DEBUG] buildDatasetIndexByRole complete role=",
-    role,
-    "rowsIndexed=",
-    index.size
-  );
-  console.log("[JOIN DEEP] buildDatasetIndexByRole END", {
-    rowsIndexed: index.size,
-    headers,
   });
 
   return { map: index, headers, rowsIndexed: index.size };

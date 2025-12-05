@@ -24,8 +24,47 @@ module.exports = {
   saveColumnMap,
   buildMappedDatasetForPtrs,
   composeMappedRowsForPtrs,
+  loadMappedRowsForPtrs,
   // getUnifiedSample,
 };
+
+async function loadMappedRowsForPtrs({
+  customerId,
+  ptrsId,
+  limit = 50,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const findOpts = {
+    where: { customerId, ptrsId },
+    order: [["rowNo", "ASC"]],
+    attributes: ["rowNo", "data"],
+    raw: true,
+    transaction,
+  };
+
+  const numericLimit = Number(limit);
+  if (Number.isFinite(numericLimit) && numericLimit > 0) {
+    findOpts.limit = numericLimit;
+  }
+
+  const rows = await db.PtrsMappedRow.findAll(findOpts);
+
+  const composed = rows.map((r) => {
+    const base = r.data || {};
+    // ensure row_no is present for downstream logic
+    return { ...base, row_no: r.rowNo };
+  });
+
+  // Simple header inference from the mapped rows
+  const headers = Array.from(
+    new Set(composed.flatMap((row) => Object.keys(row)))
+  );
+
+  return { rows: composed, headers };
+}
 
 /** Controller-friendly wrapper: getMap (normalises JSON-ish fields) */
 async function getMap({ customerId, ptrsId }) {
@@ -554,11 +593,6 @@ async function composeMappedRowsForPtrs({
     }
   }
 
-  console.log(
-    "[JOIN TRACE] composeMappedRowsForPtrs normalisedJoins",
-    normalisedJoins
-  );
-
   // Build indexes for each supporting dataset role referenced in joins
   const roleIndexes = new Map();
   for (const j of normalisedJoins) {
@@ -602,65 +636,29 @@ async function composeMappedRowsForPtrs({
     const base = r.data || {};
     let srcRow = base;
 
-    console.log("[JOIN TRACE] composeMappedRowsForPtrs main row start", {
-      rowNo: r.rowNo,
-      baseKeys: base ? Object.keys(base) : null,
-    });
-
     // Apply each join in turn, merging any matched supporting-row data
     if (normalisedJoins.length && roleIndexes.size) {
       for (const j of normalisedJoins) {
         const idx = roleIndexes.get(j.otherRole);
         if (!idx || !idx.map || !idx.map.size) {
-          console.log(
-            "[JOIN TRACE] composeMappedRowsForPtrs join skipped - empty index",
-            {
-              rowNo: r.rowNo,
-              join: j,
-              hasIndex: !!idx,
-              indexSize: idx && idx.map ? idx.map.size : 0,
-            }
-          );
           continue;
         }
 
         const lhsVal = pickFromRowLoose(base, j.mainColumn);
         const key = normalizeJoinKeyValue(lhsVal);
 
-        console.log("[JOIN TRACE] composeMappedRowsForPtrs join lookup", {
-          rowNo: r.rowNo,
-          join: j,
-          lhsVal,
-          key,
-          hasKey: key ? idx.map.has(key) : false,
-        });
-
         if (!key) continue;
 
         const joined = idx.map.get(key);
         if (joined) {
-          console.log("[JOIN TRACE] composeMappedRowsForPtrs join hit", {
-            rowNo: r.rowNo,
-            join: j,
-            joinedKeys: Object.keys(joined),
-          });
           srcRow = mergeJoinedRow(srcRow, joined);
         } else {
-          console.log("[JOIN TRACE] composeMappedRowsForPtrs join miss", {
-            rowNo: r.rowNo,
-            join: j,
-          });
         }
       }
     }
 
     const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
     out.row_no = r.rowNo;
-
-    console.log("[JOIN TRACE] composeMappedRowsForPtrs mapped row", {
-      rowNo: r.rowNo,
-      outputKeys: Object.keys(out),
-    });
 
     composed.push(out);
   }
@@ -818,10 +816,6 @@ async function composeMappedRowsForPtrs({
 // }
 
 function applyColumnMappingsToRow({ mappings, sourceRow }) {
-  console.log(
-    "[JOIN DEEP] applyColumnMappingsToRow START sourceRow keys=",
-    sourceRow ? Object.keys(sourceRow) : null
-  );
   const out = {};
   for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
     if (!cfg) continue;
@@ -835,16 +829,5 @@ function applyColumnMappingsToRow({ mappings, sourceRow }) {
     }
     out[toSnake(target)] = value ?? null;
   }
-  // Existing debug log retained for compatibility
-  console.log(
-    "[JOIN DEBUG] applyColumnMappingsToRow sourceRow keys=",
-    sourceRow ? Object.keys(sourceRow) : null,
-    "output keys=",
-    Object.keys(out)
-  );
-  console.log(
-    "[JOIN DEEP] applyColumnMappingsToRow END output keys=",
-    Object.keys(out)
-  );
   return out;
 }

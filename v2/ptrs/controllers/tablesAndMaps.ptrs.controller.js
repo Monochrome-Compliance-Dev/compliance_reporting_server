@@ -13,6 +13,8 @@ module.exports = {
   buildMappedDataset,
 };
 
+// TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
+
 /**
  * GET /api/v2/ptrs/:id/map
  * Returns existing column map (if any) and inferred headers to assist UI mapping.

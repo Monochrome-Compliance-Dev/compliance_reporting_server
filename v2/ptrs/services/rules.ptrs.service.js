@@ -4,7 +4,7 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { slog, safeMeta } = require("./ptrs.service");
-const { composeMappedRowsForPtrs } = require("./tablesAndMaps.ptrs.service");
+const { loadMappedRowsForPtrs } = require("./tablesAndMaps.ptrs.service");
 
 module.exports = {
   applyRules,
@@ -108,7 +108,7 @@ async function getRulesPreview({ customerId, ptrsId, limit = 50 }) {
 
   try {
     // 1) Compose mapped rows (main import + joins)
-    const { rows: baseRows, headers } = await composeMappedRowsForPtrs({
+    const { rows: baseRows, headers } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit: effectiveLimit,
@@ -215,7 +215,7 @@ async function sandboxRulesPreview({
 
   try {
     // Compose mapped rows for the full dataset (no limit) so counts match Excel
-    const { rows: baseRows, headers } = await composeMappedRowsForPtrs({
+    const { rows: baseRows, headers } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit: null,
@@ -452,7 +452,7 @@ async function applyRulesAndPersist({
   if (!ptrsId) throw new Error("ptrsId is required");
 
   // If limit is provided (for diagnostics), respect it with a sane cap.
-  // If null/undefined, we pass null through, which composeMappedRowsForPtrs
+  // If null/undefined, we pass null through, which loadMappedRowsForPtrs
   // interprets as "no limit" (full dataset).
   const effectiveLimit =
     limit == null || typeof limit === "undefined"
@@ -511,7 +511,7 @@ async function applyRulesAndPersist({
     });
 
     // 2) Compose mapped rows (main import + joins)
-    const { rows: baseRows } = await composeMappedRowsForPtrs({
+    const { rows: baseRows } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       // null => no limit, process full dataset; otherwise use capped preview limit
