@@ -34,6 +34,12 @@ function model(sequelize) {
       allowNull: true,
     },
 
+    // Custom made fields
+    customFields: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+
     // Explicit default values for mapped fields (e.g. default doc types, ABN source)
     defaults: {
       type: DataTypes.JSONB,

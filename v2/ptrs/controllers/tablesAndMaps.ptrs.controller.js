@@ -57,6 +57,7 @@ async function getMap(req, res, next) {
       map.defaults = maybeParse(map.defaults);
       map.joins = maybeParse(map.joins);
       map.rowRules = maybeParse(map.rowRules);
+      map.customFields = maybeParse(map.customFields);
     }
     const { headers, total, headerMeta } = await tmPtrsService.getImportSample({
       customerId,
@@ -138,6 +139,7 @@ async function saveMap(req, res, next) {
     joins = null,
     rowRules = null,
     profileId = null,
+    customFields = null,
   } = req.body || {};
 
   slog.info(
@@ -209,6 +211,7 @@ async function saveMap(req, res, next) {
       joins,
       rowRules,
       profileId,
+      customFields,
       userId,
     });
 

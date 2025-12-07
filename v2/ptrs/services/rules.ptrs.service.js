@@ -214,23 +214,31 @@ async function sandboxRulesPreview({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Compose mapped rows for the full dataset (no limit) so counts match Excel
-    const { rows: baseRows, headers } = await loadMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      limit: null,
+    // Load staged rows from tbl_ptrs_stage_row as the canonical dataset
+    const stageRows = await db.PtrsStageRow.findAll({
+      where: { customerId, ptrsId },
       transaction: t,
+      raw: true,
+    });
+
+    // Flatten JSONB data for preview; assume "data" holds the mapped row
+    const baseRows = (stageRows || []).map((r) => {
+      const data =
+        r && typeof r.data === "object" && r.data !== null ? r.data : {};
+      return data;
     });
 
     const filteredRows = applySandboxFilters(baseRows, filters);
     const limitedRows = filteredRows.slice(0, effectiveLimit);
+
+    const headers = baseRows.length > 0 ? Object.keys(baseRows[0]) : [];
 
     slog.info(
       "PTRS v2 sandboxRulesPreview",
       safeMeta({
         customerId,
         ptrsId,
-        totalRows: baseRows.length,
+        stageRows: stageRows.length,
         filters: Array.isArray(filters) ? filters.length : 0,
         totalMatching: filteredRows.length,
         returned: limitedRows.length,

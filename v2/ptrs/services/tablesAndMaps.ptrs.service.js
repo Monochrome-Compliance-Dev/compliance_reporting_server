@@ -83,6 +83,7 @@ async function getMap({ customerId, ptrsId }) {
   map.defaults = maybeParse(map.defaults);
   map.joins = maybeParse(map.joins);
   map.rowRules = maybeParse(map.rowRules);
+  map.customFields = maybeParse(map.customFields);
   return map;
 }
 
@@ -379,6 +380,7 @@ async function saveColumnMap({
   joins = null,
   rowRules = null,
   profileId = null,
+  customFields = null,
   userId,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -401,6 +403,7 @@ async function saveColumnMap({
       joins,
       rowRules,
       profileId,
+      customFields,
     };
 
     if (existing) {

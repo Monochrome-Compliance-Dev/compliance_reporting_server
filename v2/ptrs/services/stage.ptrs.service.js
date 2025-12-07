@@ -31,7 +31,7 @@ async function stagePtrs({
   ptrsId,
   steps = [],
   persist = false,
-  limit = 50,
+  limit = null,
   userId,
   profileId = null,
 }) {
@@ -46,7 +46,7 @@ async function stagePtrs({
     const { rows: baseRows } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
-      limit,
+      limit: null,
       transaction: t,
     });
 
@@ -224,8 +224,11 @@ async function stagePtrs({
 }
 
 /**
- * Returns a preview of staged data using the current column map and step pipeline,
- * but previews directly from the derived combined table using snake_case logical fields.
+ * Returns a preview of staged data using the persisted staging table
+ * (tbl_ptrs_stage_row). We:
+ *  - read a limited page of rows for preview
+ *  - get a full count for this ptrsId
+ * so the FE can show "20 of 208,811 rows".
  */
 async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -234,58 +237,49 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    const { rows: composed, headers } = await loadMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      limit,
-      transaction: t,
-    });
+    const where = { customerId, ptrsId };
 
-    // Apply row rules (if configured) for preview purposes
-    let rowRules = null;
-    try {
-      const mapRow = await getColumnMap({
-        customerId,
-        ptrsId,
+    // Pull a preview page and a full count in parallel
+    const [rowsRaw, totalRows] = await Promise.all([
+      db.PtrsStageRow.findAll({
+        where,
+        order: [["rowNo", "ASC"]],
+        limit,
         transaction: t,
-      });
-      console.log("mapRow: ", mapRow);
-      rowRules = mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-      if (typeof rowRules === "string") {
-        try {
-          rowRules = JSON.parse(rowRules);
-        } catch {
-          rowRules = null;
-        }
-      }
-      console.log("rowRules: ", rowRules);
-    } catch (_) {
-      rowRules = null;
-    }
-
-    const rulesResult = applyRules(
-      composed,
-      Array.isArray(rowRules) ? rowRules : []
-    );
-    console.log("rulesResult: ", rulesResult);
-    const rowsAfterRules = rulesResult.rows || composed;
-    console.log("rowsAfterRules: ", rowsAfterRules);
-    const rulesStats = rulesResult.stats || null;
+      }),
+      db.PtrsStageRow.count({ where, transaction: t }),
+    ]);
 
     await t.commit();
-    console.log("headers: ", headers);
-    console.log("rowsAfterRules: ", rowsAfterRules);
-    console.log("rules: ", rulesStats);
+
+    const rows = rowsRaw.map((r) =>
+      typeof r.toJSON === "function" ? r.toJSON() : r
+    );
+
+    // Derive headers from the first row's data payload
+    let headers = [];
+    if (rows.length) {
+      const first = rows[0];
+      const dataObj =
+        first && first.data && typeof first.data === "object"
+          ? first.data
+          : null;
+      if (dataObj) {
+        headers = Object.keys(dataObj);
+      }
+    }
+
     return {
       headers,
-      rows: rowsAfterRules,
-      stats: { rules: rulesStats },
+      rows,
+      totalRows,
+      stats: null,
     };
   } catch (err) {
     if (!t.finished) {
       try {
         await t.rollback();
-      } catch (_) {
+      } catch {
         // ignore rollback errors
       }
     }
