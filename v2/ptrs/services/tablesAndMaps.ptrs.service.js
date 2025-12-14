@@ -52,8 +52,31 @@ async function loadMappedRowsForPtrs({
 
   const rows = await db.PtrsMappedRow.findAll(findOpts);
 
+  if (logger && logger.info) {
+    slog.info(
+      "PTRS v2 loadMappedRowsForPtrs: loaded mapped rows",
+      safeMeta({
+        customerId,
+        ptrsId,
+        requestedLimit: limit,
+        rowsCount: Array.isArray(rows) ? rows.length : 0,
+      })
+    );
+  }
+
   const composed = rows.map((r) => {
-    const base = r.data || {};
+    let base = r.data || {};
+    // If data was accidentally stored as a JSON string, try to parse it defensively
+    if (typeof base === "string") {
+      try {
+        const parsed = JSON.parse(base);
+        if (parsed && typeof parsed === "object") {
+          base = parsed;
+        }
+      } catch (_) {
+        // leave base as-is if parsing fails
+      }
+    }
     // ensure row_no is present for downstream logic
     return { ...base, row_no: r.rowNo };
   });
@@ -62,6 +85,18 @@ async function loadMappedRowsForPtrs({
   const headers = Array.from(
     new Set(composed.flatMap((row) => Object.keys(row)))
   );
+
+  if (logger && logger.debug && composed.length) {
+    slog.debug(
+      "PTRS v2 loadMappedRowsForPtrs: sample composed row",
+      safeMeta({
+        customerId,
+        ptrsId,
+        sampleRowKeys: Object.keys(composed[0] || {}),
+        headersCount: headers.length,
+      })
+    );
+  }
 
   return { rows: composed, headers };
 }
@@ -88,15 +123,16 @@ async function getMap({ customerId, ptrsId }) {
 }
 
 /** Get column map for a ptrs */
-async function getColumnMap({ customerId, ptrsId }) {
-  const t = await beginTransactionWithCustomerContext(customerId);
+async function getColumnMap({ customerId, ptrsId, transaction = null }) {
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const isExternalTx = !!transaction;
   try {
     const map = await db.PtrsColumnMap.findOne({
       where: { customerId, ptrsId },
       transaction: t,
       raw: true,
     });
-    await t.commit();
     slog.info(
       "PTRS v2 getColumnMap: loaded map",
       safeMeta({
@@ -108,11 +144,20 @@ async function getColumnMap({ customerId, ptrsId }) {
         hasJoins: !!(map && map.joins),
         hasRowRules: !!(map && map.rowRules),
         mappingsKeys: map?.mappings ? Object.keys(map.mappings) : [],
+        // 🔍 new bits
+        hasCustomFields: !!(map && map.customFields),
+        customFieldsType:
+          map && map.customFields ? typeof map.customFields : null,
+        hasJoinsField: !!(map && map.joins),
+        joinsType: map && map.joins ? typeof map.joins : null,
       })
     );
+    if (!isExternalTx && !t.finished) {
+      await t.commit();
+    }
     return map || null;
   } catch (err) {
-    if (!t.finished) {
+    if (!isExternalTx && !t.finished) {
       try {
         await t.rollback();
       } catch (_) {}
@@ -395,16 +440,48 @@ async function saveColumnMap({
       transaction: t,
     });
 
+    const resolveField = (incoming, existingValue) =>
+      typeof incoming === "undefined" ? existingValue : incoming;
+
+    // Special handling for joins:
+    // - Joins saved via the JoinsDesigner are sent as an object (e.g. { conditions: [...] })
+    // - Calls that don't intend to touch joins (e.g. MapPanel) currently send a bare []
+    //   due to controller defaults. Treat that bare [] as "no change", not "clear joins".
+    let nextJoins;
+    if (Array.isArray(joins)) {
+      // If the UI really wants to clear joins, it should send an explicit object,
+      // e.g. { conditions: [] }. A naked [] here is treated as "no joins payload".
+      nextJoins = existing ? existing.joins : null;
+    } else {
+      nextJoins = resolveField(joins, existing ? existing.joins : null);
+    }
+
     const payload = {
-      mappings,
-      extras,
-      fallbacks,
-      defaults,
-      joins,
-      rowRules,
-      profileId,
-      customFields,
+      mappings: resolveField(mappings, existing?.mappings || null),
+      extras: resolveField(extras, existing?.extras || null),
+      fallbacks: resolveField(fallbacks, existing?.fallbacks || null),
+      defaults: resolveField(defaults, existing?.defaults || null),
+      joins: nextJoins,
+      rowRules: resolveField(rowRules, existing?.rowRules || null),
+      profileId: resolveField(profileId, existing?.profileId || null),
+      customFields: resolveField(customFields, existing?.customFields || null),
     };
+
+    slog.info(
+      "PTRS v2 saveColumnMap: upserting map",
+      safeMeta({
+        customerId,
+        ptrsId,
+        hasMappings: !!payload.mappings,
+        hasJoins: !!payload.joins,
+        hasCustomFields: !!payload.customFields,
+        mappingsType: payload.mappings ? typeof payload.mappings : null,
+        joinsType: payload.joins ? typeof payload.joins : null,
+        customFieldsType: payload.customFields
+          ? typeof payload.customFields
+          : null,
+      })
+    );
 
     if (existing) {
       await existing.update(
@@ -552,9 +629,19 @@ async function composeMappedRowsForPtrs({
   const mapRow = await getColumnMap({ customerId, ptrsId, transaction });
   const map = mapRow || {};
   const mappings = map.mappings || {};
-  console.log("map.joins raw =", map.joins);
+  if (logger && logger.debug) {
+    slog.debug(
+      "PTRS v2 composeMappedRowsForPtrs: raw joins",
+      safeMeta({
+        customerId,
+        ptrsId,
+        hasJoins: !!map.joins,
+        joinsType: map.joins ? typeof map.joins : null,
+      })
+    );
+  }
 
-  // Normalise joins – we currently support joins where one side is "main"
+  // Normalise joins – support both legacy (array) and new object with conditions array
   let joins = map.joins;
   if (typeof joins === "string") {
     try {
@@ -564,36 +651,79 @@ async function composeMappedRowsForPtrs({
     }
   }
 
-  const normalisedJoins = [];
+  // Derive joinsArray for uniform handling
+  let joinsArray = [];
   if (Array.isArray(joins)) {
-    for (const j of joins) {
-      if (!j || typeof j !== "object") continue;
-      const from = j.from || {};
-      const to = j.to || {};
+    joinsArray = joins;
+  } else if (joins && Array.isArray(joins.conditions)) {
+    joinsArray = joins.conditions;
+  } else {
+    joinsArray = [];
+  }
 
-      const fromRole = (from.role || "").toLowerCase();
-      const toRole = (to.role || "").toLowerCase();
-      const fromCol = from.column;
-      const toCol = to.column;
+  const normalisedJoins = [];
+  for (const j of joinsArray) {
+    if (!j || typeof j !== "object") continue;
+    const from = j.from || {};
+    const to = j.to || {};
 
-      if (!fromRole || !toRole || !fromCol || !toCol) continue;
+    const fromRole = (from.role || "").toLowerCase();
+    const toRole = (to.role || "").toLowerCase();
+    const fromCol = from.column;
+    const toCol = to.column;
 
-      // Only support joins that involve the main dataset on one side
-      const isFromMain = fromRole === "main";
-      const isToMain = toRole === "main";
-      if (!isFromMain && !isToMain) continue;
+    if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
-      const mainSide = isFromMain ? from : to;
-      const otherSide = isFromMain ? to : from;
+    // Only support joins that involve the main dataset on one side
+    const isFromMain = fromRole === "main";
+    const isToMain = toRole === "main";
+    if (!isFromMain && !isToMain) continue;
 
-      if (!otherSide.role || !otherSide.column) continue;
+    const mainSide = isFromMain ? from : to;
+    const otherSide = isFromMain ? to : from;
 
-      normalisedJoins.push({
-        mainColumn: mainSide.column,
-        otherRole: String(otherSide.role).toLowerCase(),
-        otherColumn: otherSide.column,
-      });
+    if (!otherSide.role || !otherSide.column) continue;
+
+    normalisedJoins.push({
+      mainColumn: mainSide.column,
+      otherRole: String(otherSide.role).toLowerCase(),
+      otherColumn: otherSide.column,
+    });
+  }
+
+  // Defensive log for debugging joins, if logger.info is available
+  if (logger && logger.info) {
+    slog.info(
+      "PTRS v2 composeMappedRowsForPtrs: normalised joins",
+      safeMeta({ customerId, ptrsId, joinsCount: normalisedJoins.length })
+    );
+  }
+
+  // --- Normalise customFields (like joins)
+  let customFields = map.customFields;
+  if (typeof customFields === "string") {
+    try {
+      customFields = JSON.parse(customFields);
+    } catch {
+      customFields = null;
     }
+  }
+  if (!Array.isArray(customFields)) {
+    customFields = [];
+  }
+
+  if (logger && logger.info) {
+    slog.info(
+      "PTRS v2 composeMappedRowsForPtrs: custom fields normalised",
+      safeMeta({
+        customerId,
+        ptrsId,
+        customFieldsCount: Array.isArray(customFields)
+          ? customFields.length
+          : 0,
+        customFieldsType: customFields ? typeof customFields : null,
+      })
+    );
   }
 
   // Build indexes for each supporting dataset role referenced in joins
@@ -616,6 +746,28 @@ async function composeMappedRowsForPtrs({
     );
   }
 
+  if (logger && logger.info) {
+    const rolesMeta = [];
+    for (const [role, idx] of roleIndexes.entries()) {
+      rolesMeta.push({
+        role,
+        rowsIndexed:
+          idx && typeof idx.rowsIndexed === "number"
+            ? idx.rowsIndexed
+            : idx && idx.map && idx.map.size
+              ? idx.map.size
+              : 0,
+        headersCount: Array.isArray(idx && idx.headers)
+          ? idx.headers.length
+          : 0,
+      });
+    }
+    slog.info(
+      "PTRS v2 composeMappedRowsForPtrs: role indexes built",
+      safeMeta({ customerId, ptrsId, rolesMeta })
+    );
+  }
+
   // Read main rows
   const findOpts = {
     where: { customerId, ptrsId },
@@ -635,6 +787,9 @@ async function composeMappedRowsForPtrs({
 
   const composed = [];
 
+  let loggedFirst = false;
+  let loggedJoinProbe = false;
+
   for (const r of mainRows) {
     const base = r.data || {};
     let srcRow = base;
@@ -650,18 +805,80 @@ async function composeMappedRowsForPtrs({
         const lhsVal = pickFromRowLoose(base, j.mainColumn);
         const key = normalizeJoinKeyValue(lhsVal);
 
-        if (!key) continue;
+        if (!key) {
+          if (!loggedJoinProbe && logger && logger.debug) {
+            loggedJoinProbe = true;
+            slog.debug(
+              "PTRS v2 composeMappedRowsForPtrs: join probe (no key)",
+              safeMeta({
+                customerId,
+                ptrsId,
+                join: j,
+                rawValue: lhsVal,
+                normalisedKey: key,
+              })
+            );
+          }
+          continue;
+        }
 
         const joined = idx.map.get(key);
         if (joined) {
           srcRow = mergeJoinedRow(srcRow, joined);
-        } else {
+          if (!loggedJoinProbe && logger && logger.debug) {
+            loggedJoinProbe = true;
+            slog.debug(
+              "PTRS v2 composeMappedRowsForPtrs: join probe (matched)",
+              safeMeta({
+                customerId,
+                ptrsId,
+                join: j,
+                rawValue: lhsVal,
+                normalisedKey: key,
+                joinedKeys: Object.keys(joined || {}),
+              })
+            );
+          }
+        } else if (!loggedJoinProbe && logger && logger.debug) {
+          loggedJoinProbe = true;
+          slog.debug(
+            "PTRS v2 composeMappedRowsForPtrs: join probe (no match)",
+            safeMeta({
+              customerId,
+              ptrsId,
+              join: j,
+              rawValue: lhsVal,
+              normalisedKey: key,
+            })
+          );
         }
       }
     }
 
-    const out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+    let out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+    // Apply custom fields at this point, so mapped dataset includes them
+    if (Array.isArray(customFields) && customFields.length) {
+      out = applyCustomFields({
+        row: out,
+        rawRow: srcRow,
+        customFields,
+      });
+    }
     out.row_no = r.rowNo;
+
+    if (!loggedFirst && logger && logger.debug) {
+      loggedFirst = true;
+      slog.debug(
+        "PTRS v2 composeMappedRowsForPtrs: sample composed row",
+        safeMeta({
+          customerId,
+          ptrsId,
+          sampleRowKeys: Object.keys(out || {}),
+          hasCustomFieldsApplied:
+            Array.isArray(customFields) && customFields.length > 0,
+        })
+      );
+    }
 
     composed.push(out);
   }
@@ -832,5 +1049,62 @@ function applyColumnMappingsToRow({ mappings, sourceRow }) {
     }
     out[toSnake(target)] = value ?? null;
   }
+  return out;
+}
+
+/**
+ * Apply custom fields logic to a mapped row.
+ * @param {Object} param0
+ * @param {Object} param0.row - The mapped row (already mapped).
+ * @param {Object} param0.rawRow - The full source row (joined+input).
+ * @param {Array} param0.customFields - Array of custom field configs.
+ * @returns {Object} - New row with custom fields applied.
+ */
+/**
+ * Apply custom fields logic to a mapped row.
+ * @param {Object} param0
+ * @param {Object} param0.row - The mapped row (already mapped).
+ * @param {Object} param0.rawRow - The full source row (joined+input).
+ * @param {Array} param0.customFields - Array of custom field configs.
+ * @returns {Object} - New row with custom fields applied.
+ */
+function applyCustomFields({ row, rawRow, customFields }) {
+  const out = { ...row };
+  if (!Array.isArray(customFields)) return out;
+
+  for (const cf of customFields) {
+    if (!cf || typeof cf !== "object") continue;
+
+    const key = cf.key || cf.field;
+    if (!key) continue;
+
+    const type = cf.type || "concat";
+
+    if (type === "concat") {
+      const segments = Array.isArray(cf.segments) ? cf.segments : [];
+      const parts = [];
+
+      for (const segment of segments) {
+        if (!segment || typeof segment !== "object") continue;
+
+        if (segment.kind === "literal") {
+          if (segment.value !== null && segment.value !== undefined) {
+            parts.push(String(segment.value));
+          }
+        } else if (segment.kind === "field") {
+          const value = pickFromRowLoose(rawRow, segment.name);
+          if (value !== null && value !== undefined) {
+            parts.push(String(value));
+          }
+        }
+      }
+
+      // Use snake_case for the final column name to match the rest of the mapped schema
+      out[toSnake(key)] = parts.join("");
+    }
+
+    // Other custom field types can be added here in future (e.g. arithmetic, case transforms, etc.)
+  }
+
   return out;
 }

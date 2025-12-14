@@ -59,6 +59,23 @@ async function getMap(req, res, next) {
       map.rowRules = maybeParse(map.rowRules);
       map.customFields = maybeParse(map.customFields);
     }
+
+    // Derive normalised joinsArray and customFieldsArray without mutating map
+    let joinsArray = [];
+    if (map && map.joins) {
+      if (Array.isArray(map.joins)) {
+        joinsArray = map.joins;
+      } else if (
+        typeof map.joins === "object" &&
+        Array.isArray(map.joins.conditions)
+      ) {
+        joinsArray = map.joins.conditions;
+      }
+    }
+    let customFieldsArray = [];
+    if (map && Array.isArray(map.customFields)) {
+      customFieldsArray = map.customFields;
+    }
     const { headers, total, headerMeta } = await tmPtrsService.getImportSample({
       customerId,
       ptrsId,
@@ -96,7 +113,13 @@ async function getMap(req, res, next) {
 
     res.status(200).json({
       status: "success",
-      data: { map, headers, headerMeta },
+      data: {
+        map,
+        headers,
+        headerMeta,
+        joins: joinsArray,
+        customFields: customFieldsArray,
+      },
     });
   } catch (error) {
     logger.logEvent("error", "Error fetching PTRS v2 map", {

@@ -256,18 +256,34 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
       typeof r.toJSON === "function" ? r.toJSON() : r
     );
 
-    // Derive headers from the first row's data payload
-    let headers = [];
-    if (rows.length) {
-      const first = rows[0];
-      const dataObj =
-        first && first.data && typeof first.data === "object"
-          ? first.data
-          : null;
-      if (dataObj) {
-        headers = Object.keys(dataObj);
+    // Derive headers from all rows' JSONB payloads (data/standard/custom)
+    const headerSet = new Set();
+
+    const materialiseObj = (value) => {
+      if (!value) return null;
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value);
+          return parsed && typeof parsed === "object" ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+      if (typeof value === "object") return value;
+      return null;
+    };
+
+    for (const row of rows) {
+      if (!row) continue;
+      const buckets = [row.data, row.standard, row.custom];
+      for (const bucket of buckets) {
+        const obj = materialiseObj(bucket);
+        if (!obj) continue;
+        Object.keys(obj).forEach((k) => headerSet.add(k));
       }
     }
+
+    const headers = Array.from(headerSet);
 
     return {
       headers,
