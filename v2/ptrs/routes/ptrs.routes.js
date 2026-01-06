@@ -31,6 +31,23 @@ router.get("/:id", requirePtrs, ptrsController.getPtrs);
 // Update currentStep when user progresses through steps
 router.put("/:id", requirePtrs, ptrsController.updatePtrs);
 
+// Execution runs (tracking step runs + hashes)
+router.post(
+  "/:id/execution-runs",
+  requirePtrs,
+  ptrsController.createExecutionRun
+);
+router.get(
+  "/:id/execution-runs/latest",
+  requirePtrs,
+  ptrsController.getLatestExecutionRun
+);
+router.patch(
+  "/execution-runs/:executionRunId",
+  requirePtrs,
+  ptrsController.updateExecutionRun
+);
+
 // Upload the CSV for a ptrs (multipart or text/csv)
 router.post(
   "/:id/import",

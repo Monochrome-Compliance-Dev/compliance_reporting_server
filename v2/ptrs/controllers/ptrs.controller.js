@@ -338,6 +338,111 @@ async function updatePtrs(req, res, next) {
   }
 }
 
+/**
+ * POST /api/v2/ptrs/:id/execution-runs
+ */
+async function createExecutionRun(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const ptrsId = req.params.id;
+  const userId = req.auth?.id;
+
+  try {
+    const { step, status, startedAt } = req.body || {};
+    // Never trust FE-provided hashes. Hashes are computed server-side at execution time.
+    const inputHash = null;
+
+    const run = await ptrsService.createExecutionRun({
+      customerId,
+      ptrsId,
+      step,
+      inputHash,
+      status,
+      startedAt,
+      createdBy: userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+      action: "PtrsV2CreateExecutionRun",
+      entity: "PtrsExecutionRun",
+      entityId: run?.id || null,
+      details: { ptrsId, step, status: status || null },
+    });
+
+    return res.status(201).json({ status: "success", data: run });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/execution-runs/latest?step=stage
+ */
+async function getLatestExecutionRun(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const ptrsId = req.params.id;
+  const { step } = req.query;
+
+  try {
+    const run = await ptrsService.getLatestExecutionRun({
+      customerId,
+      ptrsId,
+      step,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId: req.auth?.id,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+      action: "PtrsV2GetLatestExecutionRun",
+      entity: "PtrsExecutionRun",
+      entityId: run?.id || null,
+      details: { ptrsId, step: step || null, found: !!run },
+    });
+
+    return res.status(200).json({ status: "success", data: run });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * PATCH /api/v2/ptrs/execution-runs/:executionRunId
+ */
+async function updateExecutionRun(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const executionRunId = req.params.executionRunId;
+  const userId = req.auth?.id;
+
+  try {
+    const run = await ptrsService.updateExecutionRun({
+      customerId,
+      executionRunId,
+      ...req.body,
+      updatedBy: userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+      action: "PtrsV2UpdateExecutionRun",
+      entity: "PtrsExecutionRun",
+      entityId: run?.id || executionRunId,
+      details: { ptrsId: run?.ptrsId || null, status: run?.status || null },
+    });
+
+    return res.status(200).json({ status: "success", data: run });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 // /**
 //  * POST /api/v2/ptrs/:id/preview
 //  * Body: {
@@ -694,6 +799,9 @@ module.exports = {
   importCsv,
   getPtrs,
   updatePtrs,
+  createExecutionRun,
+  getLatestExecutionRun,
+  updateExecutionRun,
   //   preview,
   listPtrs,
   listPtrsWithMap,

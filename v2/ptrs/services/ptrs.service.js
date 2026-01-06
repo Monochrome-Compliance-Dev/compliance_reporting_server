@@ -2,6 +2,7 @@ const db = require("@/db/database");
 const csv = require("fast-csv");
 const { Readable } = require("stream");
 const fs = require("fs");
+const crypto = require("crypto");
 
 const { logger } = require("@/helpers/logger");
 const {
@@ -56,6 +57,39 @@ function toSnake(str) {
       .replace(/^_+|_+$/g, "")
       .replace(/_{2,}/g, "_")
   );
+}
+
+/**
+ * Build a stable SHA-256 hash from an arbitrary JS value.
+ * - Uses deterministic key ordering to avoid hash drift
+ * - Intended for execution/input fingerprinting (NOT passwords)
+ */
+function buildStableInputHash(input) {
+  const seen = new WeakSet();
+
+  const stableStringify = (value) => {
+    if (value === null || typeof value !== "object") {
+      return JSON.stringify(value);
+    }
+
+    if (seen.has(value)) {
+      return '"[Circular]"';
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      return "[" + value.map((v) => stableStringify(v)).join(",") + "]";
+    }
+
+    const keys = Object.keys(value).sort();
+    const entries = keys.map(
+      (k) => JSON.stringify(k) + ":" + stableStringify(value[k])
+    );
+    return "{" + entries.join(",") + "}";
+  };
+
+  const canonical = stableStringify(input);
+  return crypto.createHash("sha256").update(canonical).digest("hex");
 }
 
 // // Build tolerant JSONB extract that tries snake_case, original, and underscored variants
@@ -268,6 +302,142 @@ async function updatePtrs({
     return ptrs.get({ plain: true });
   } catch (err) {
     await t.rollback();
+    throw err;
+  }
+}
+
+/**
+ * Create a PTRS execution run (tenant-scoped)
+ * If `transaction` is supplied, it will be used (and NOT committed/rolled back here).
+ */
+async function createExecutionRun({
+  customerId,
+  ptrsId,
+  step,
+  inputHash = null,
+  status = "pending",
+  startedAt = null,
+  createdBy = null,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!step) throw new Error("step is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const ownsTx = !transaction;
+
+  try {
+    const row = await db.PtrsExecutionRun.create(
+      {
+        customerId,
+        ptrsId,
+        step,
+        inputHash,
+        status,
+        startedAt,
+        createdBy,
+        updatedBy: createdBy,
+      },
+      { transaction: t }
+    );
+
+    if (ownsTx) await t.commit();
+    return row.get({ plain: true });
+  } catch (err) {
+    if (ownsTx && !t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+/**
+ * Fetch the most recent execution run for a PTRS + step
+ * If `transaction` is supplied, it will be used (and NOT committed/rolled back here).
+ */
+async function getLatestExecutionRun({
+  customerId,
+  ptrsId,
+  step,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!step) throw new Error("step is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const ownsTx = !transaction;
+
+  try {
+    const row = await db.PtrsExecutionRun.findOne({
+      where: { customerId, ptrsId, step },
+      order: [
+        ["startedAt", "DESC"],
+        ["id", "DESC"],
+      ],
+      raw: true,
+      transaction: t,
+    });
+
+    if (ownsTx) await t.commit();
+    return row || null;
+  } catch (err) {
+    if (ownsTx && !t.finished) await t.rollback();
+    throw err;
+  }
+}
+
+/**
+ * Update an execution run (status, metrics, completion)
+ * If `transaction` is supplied, it will be used (and NOT committed/rolled back here).
+ */
+async function updateExecutionRun({
+  customerId,
+  executionRunId,
+  status,
+  finishedAt,
+  rowsIn,
+  rowsOut,
+  stats,
+  errorMessage,
+  updatedBy = null,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!executionRunId) throw new Error("executionRunId is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const ownsTx = !transaction;
+
+  try {
+    const row = await db.PtrsExecutionRun.findOne({
+      where: { id: executionRunId, customerId },
+      transaction: t,
+    });
+
+    if (!row) {
+      const e = new Error("Execution run not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const patch = {};
+    if (status != null) patch.status = status;
+    if (finishedAt != null) patch.finishedAt = finishedAt;
+    if (rowsIn != null) patch.rowsIn = rowsIn;
+    if (rowsOut != null) patch.rowsOut = rowsOut;
+    if (stats != null) patch.stats = stats;
+    if (errorMessage != null) patch.errorMessage = errorMessage;
+    if (updatedBy != null) patch.updatedBy = updatedBy;
+
+    await row.update(patch, { transaction: t });
+
+    if (ownsTx) await t.commit();
+    return row.get({ plain: true });
+  } catch (err) {
+    if (ownsTx && !t.finished) await t.rollback();
     throw err;
   }
 }
@@ -1280,6 +1450,7 @@ module.exports = {
   safeMeta,
   slog,
   toSnake,
+  buildStableInputHash,
   mergeJoinedRow,
   normalizeJoinKeyValue,
   createPtrs,
@@ -1292,6 +1463,9 @@ module.exports = {
   listPtrsWithMap,
   getPtrs,
   updatePtrs,
+  createExecutionRun,
+  getLatestExecutionRun,
+  updateExecutionRun,
   listProfiles,
   //   // Profiles CRUD
   //   createProfile,

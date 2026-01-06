@@ -4,7 +4,15 @@ const path = require("path");
 const { Readable } = require("stream");
 const fs = require("fs");
 
-const { safeMeta, slog } = require("./ptrs.service");
+const {
+  safeMeta,
+  slog,
+  buildStableInputHash,
+  createExecutionRun,
+  getLatestExecutionRun,
+  updateExecutionRun,
+} = require("./ptrs.service");
+
 const { applyRules } = require("./rules.ptrs.service");
 const {
   loadMappedRowsForPtrs,
@@ -35,6 +43,9 @@ async function stagePtrs({
   userId,
   profileId = null,
 }) {
+  let executionRun = null;
+  let inputHash = null;
+
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
@@ -42,12 +53,133 @@ async function stagePtrs({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    // --- Execution run tracking (only for persist runs) ---
+    let executionRun = null;
+    let inputHash = null;
+
+    if (persist) {
+      // Hash inputs that materially affect staging.
+      // We intentionally hash metadata/config, not full row data.
+      const [mapRow, rawCount, rawMaxUpdatedAt, datasets] = await Promise.all([
+        getColumnMap({ customerId, ptrsId, transaction: t }),
+        db.PtrsImportRaw.count({
+          where: { customerId, ptrsId },
+          transaction: t,
+        }),
+        db.PtrsImportRaw.max("updatedAt", {
+          where: { customerId, ptrsId },
+          transaction: t,
+        }),
+        db.PtrsRawDataset
+          ? db.PtrsRawDataset.findAll({
+              where: { customerId, ptrsId },
+              attributes: ["id", "role", "updatedAt"],
+              order: [
+                ["role", "ASC"],
+                ["updatedAt", "DESC"],
+              ],
+              transaction: t,
+              raw: true,
+            })
+          : Promise.resolve([]),
+      ]);
+
+      inputHash = buildStableInputHash({
+        ptrsId,
+        customerId,
+        profileId: profileId || null,
+        map: mapRow
+          ? {
+              id: mapRow.id || null,
+              updatedAt: mapRow.updatedAt || null,
+              mappings: mapRow.mappings || null,
+              joins: mapRow.joins || null,
+              customFields: mapRow.customFields || null,
+              rowRules: mapRow.rowRules || null,
+            }
+          : null,
+        importRaw: {
+          rowCount: rawCount || 0,
+          maxUpdatedAt: rawMaxUpdatedAt || null,
+        },
+        datasets: Array.isArray(datasets)
+          ? datasets.map((d) => ({
+              id: d.id,
+              role: d.role,
+              updatedAt: d.updatedAt || null,
+            }))
+          : [],
+      });
+
+      const previous = await getLatestExecutionRun({
+        customerId,
+        ptrsId,
+        step: "stage",
+        transaction: t,
+      });
+
+      slog.info("PTRS v2 stagePtrs: execution input hash", {
+        action: "PtrsV2StagePtrsInputHash",
+        customerId,
+        ptrsId,
+        profileId: profileId || null,
+        inputHash,
+        previousHash: previous?.inputHash || null,
+        rawCount: rawCount || 0,
+        datasetsCount: Array.isArray(datasets) ? datasets.length : 0,
+      });
+
+      try {
+        if (persist) {
+          executionRun = await db.PtrsExecutionRun.create(
+            {
+              customerId,
+              ptrsId,
+              step: "stage",
+              inputHash: inputHash || null,
+              status: "running",
+              startedAt: new Date(),
+              finishedAt: null,
+              createdBy: userId || null,
+              updatedBy: userId || null,
+            },
+            { transaction: t } // use your txn var name
+          );
+        }
+      } catch (e) {
+        logger?.warn?.("stagePtrs: failed to create execution run", {
+          customerId,
+          ptrsId,
+          error: e?.message,
+        });
+      }
+
+      executionRun = await createExecutionRun({
+        customerId,
+        ptrsId,
+        step: "stage",
+        inputHash,
+        status: "running",
+        startedAt: new Date(),
+        createdBy: userId || null,
+        transaction: t,
+      });
+    }
+
     // 1) Compose mapped rows for this ptrs (import + joins + column map)
     const { rows: baseRows } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit: null,
       transaction: t,
+    });
+
+    slog.info("PTRS v2 stagePtrs: loaded mapped rows", {
+      action: "PtrsV2StagePtrsLoadedMappedRows",
+      customerId,
+      ptrsId,
+      rowsCount: Array.isArray(baseRows) ? baseRows.length : 0,
+      sampleRowKeys: baseRows && baseRows[0] ? Object.keys(baseRows[0]) : null,
     });
 
     // 2) Apply row-level rules (if any) independently of preview
@@ -90,9 +222,13 @@ async function stagePtrs({
     }
 
     // 3) Persist into tbl_ptrs_stage_row if requested
+    let persistedCount = null;
     if (persist) {
       const basePayload = rows.map((r) => {
         const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
+
+        // Persist the full resolved row into JSONB `data`.
+        // NOTE: tbl_ptrs_stage_row only has: customerId, ptrsId, rowNo, data, errors, meta (+ timestamps)
         const dataObj =
           r && typeof r === "object" && Object.keys(r).length
             ? r
@@ -104,14 +240,12 @@ async function stagePtrs({
           rowNo: rowNoVal,
           data: dataObj,
           errors: null,
-          standard: null,
-          custom: null,
           meta: {
             _stage: "ptrs.v2.stagePtrs",
             at: new Date().toISOString(),
             rules: {
-              applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
-              exclude: !!r.exclude,
+              applied: Array.isArray(r?._appliedRules) ? r._appliedRules : [],
+              exclude: !!r?.exclude,
             },
           },
         };
@@ -125,7 +259,7 @@ async function stagePtrs({
 
       const insertWarning = (obj) => {
         if (!obj || typeof obj !== "object") return obj;
-        for (const key of ["data", "errors", "standard", "custom", "meta"]) {
+        for (const key of ["data", "errors", "meta"]) {
           if (isEmptyPlain(obj[key])) {
             obj[key] = {
               _warning: "⚠️ Empty JSONB payload — nothing to insert",
@@ -151,17 +285,11 @@ async function stagePtrs({
       const offenders = safePayload
         .filter((p) => {
           const hasWarn = Boolean(
-            p?.data?._warning ||
-              p?.errors?._warning ||
-              p?.standard?._warning ||
-              p?.custom?._warning ||
-              p?.meta?._warning
+            p?.data?._warning || p?.errors?._warning || p?.meta?._warning
           );
           const hasEmpty =
             isEmptyPlain(p?.data) ||
             isEmptyPlain(p?.errors) ||
-            isEmptyPlain(p?.standard) ||
-            isEmptyPlain(p?.custom) ||
             isEmptyPlain(p?.meta);
           return hasWarn || hasEmpty;
         })
@@ -170,11 +298,7 @@ async function stagePtrs({
           rowNo: p.rowNo,
           dataKeys: p.data ? Object.keys(p.data) : null,
           hasWarning: Boolean(
-            p?.data?._warning ||
-              p?.errors?._warning ||
-              p?.standard?._warning ||
-              p?.custom?._warning ||
-              p?.meta?._warning
+            p?.data?._warning || p?.errors?._warning || p?.meta?._warning
           ),
         }));
 
@@ -192,26 +316,101 @@ async function stagePtrs({
         where: { customerId, ptrsId },
         transaction: t,
       });
+
       if (safePayload.length) {
-        await db.PtrsStageRow.bulkCreate(safePayload, {
-          validate: false,
-          returning: false,
-          transaction: t,
-        });
+        try {
+          await db.PtrsStageRow.bulkCreate(safePayload, {
+            validate: false,
+            returning: false,
+            transaction: t,
+          });
+        } catch (e) {
+          // If RLS blocks inserts, or the model/table are out of sync, we want this to be unmistakable.
+          slog.error("PTRS v2 stagePtrs: bulkCreate failed", {
+            action: "PtrsV2StagePtrsBulkCreateFailed",
+            customerId,
+            ptrsId,
+            error: e?.message,
+          });
+          throw e;
+        }
       }
+
+      persistedCount = await db.PtrsStageRow.count({
+        where: { customerId, ptrsId },
+        transaction: t,
+      });
+
+      slog.info("PTRS v2 stagePtrs: persistence check", {
+        action: "PtrsV2StagePtrsPersistedCount",
+        customerId,
+        ptrsId,
+        attempted: safePayload.length,
+        persistedCount,
+      });
     }
 
     const tookMs = Date.now() - started;
+    // Ensure persistedCount is calculated before commit
+    if (!persist) {
+      persistedCount = null;
+    }
+
+    if (executionRun?.id) {
+      try {
+        await updateExecutionRun({
+          customerId,
+          executionRunId: executionRun.id,
+          status: "completed",
+          finishedAt: new Date(),
+          rowsIn: rows.length,
+          rowsOut: rows.length,
+          stats: { rules: rulesStats },
+          errorMessage: null,
+          updatedBy: userId || null,
+          transaction: t,
+        });
+      } catch (e) {
+        slog.warn(
+          "PTRS v2 stagePtrs: failed to update execution run (non-fatal)",
+          {
+            action: "PtrsV2StagePtrsUpdateExecutionRunFailed",
+            customerId,
+            ptrsId,
+            executionRunId: executionRun.id,
+            error: e?.message,
+          }
+        );
+      }
+    }
+
     await t.commit();
 
     return {
       rowsIn: rows.length,
       rowsOut: rows.length,
+      persistedCount,
       tookMs,
       sample: rows[0] || null,
       stats: { rules: rulesStats },
     };
   } catch (err) {
+    if (executionRun?.id) {
+      try {
+        await updateExecutionRun({
+          customerId,
+          executionRunId: executionRun.id,
+          status: "failed",
+          finishedAt: new Date(),
+          errorMessage: err?.message || "Stage failed",
+          updatedBy: userId || null,
+          transaction: t,
+        });
+      } catch (e) {
+        // best-effort only
+      }
+    }
+
     if (!t.finished) {
       try {
         await t.rollback();
@@ -275,7 +474,7 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
 
     for (const row of rows) {
       if (!row) continue;
-      const buckets = [row.data, row.standard, row.custom];
+      const buckets = [row.data];
       for (const bucket of buckets) {
         const obj = materialiseObj(bucket);
         if (!obj) continue;
