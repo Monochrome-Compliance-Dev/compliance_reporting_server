@@ -91,7 +91,42 @@ CREATE POLICY tbl_ptrs_stage_row_rls_policy
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+
 ALTER TABLE tbl_ptrs_stage_row FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- PTRS SBI Check tables: RLS policies
+-- =============================
+
+-- SBI Uploads (evidence anchors)
+ALTER TABLE tbl_ptrs_sbi_upload ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_sbi_upload_rls_policy ON tbl_ptrs_sbi_upload;
+CREATE POLICY tbl_ptrs_sbi_upload_rls_policy
+  ON tbl_ptrs_sbi_upload
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_sbi_upload FORCE ROW LEVEL SECURITY;
+
+-- SBI Results (ABN → outcome per upload)
+ALTER TABLE tbl_ptrs_sbi_result ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_sbi_result_rls_policy ON tbl_ptrs_sbi_result;
+CREATE POLICY tbl_ptrs_sbi_result_rls_policy
+  ON tbl_ptrs_sbi_result
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_sbi_result FORCE ROW LEVEL SECURITY;
+
+-- SBI Row Changes (row-level traceability)
+ALTER TABLE tbl_ptrs_sbi_row_change ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_sbi_row_change_rls_policy ON tbl_ptrs_sbi_row_change;
+CREATE POLICY tbl_ptrs_sbi_row_change_rls_policy
+  ON tbl_ptrs_sbi_row_change
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_sbi_row_change FORCE ROW LEVEL SECURITY;
 
 -- TCP error rows (per-tenant)
 ALTER TABLE tbl_tcp_error ENABLE ROW LEVEL SECURITY;
