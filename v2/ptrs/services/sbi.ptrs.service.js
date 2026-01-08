@@ -8,6 +8,7 @@ const {
 module.exports = {
   importResults,
   getStatus,
+  exportAbnCsv,
 };
 
 const OUTCOME_SMALL = "Small business for payment times reporting";
@@ -142,6 +143,64 @@ async function getStatus({ customerId, ptrsId }) {
           }
         : null,
     };
+  } catch (err) {
+    try {
+      await t.rollback();
+    } catch (_) {
+      // ignore
+    }
+    throw err;
+  }
+}
+
+async function exportAbnCsv({ customerId, ptrsId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    // Ensure ptrs exists for tenant
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, customerId },
+      transaction: t,
+    });
+
+    if (!ptrs) {
+      const e = new Error("Ptrs not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const stageRows = await db.PtrsStageRow.findAll({
+      where: { customerId, ptrsId },
+      raw: false,
+      transaction: t,
+    });
+
+    const abns = new Set();
+
+    for (const r of stageRows) {
+      if (isExcludedRow(r)) continue;
+
+      const payeeAbn = normalizeAbn(r?.data?.payee_entity_abn);
+      if (!payeeAbn) continue;
+      if (!isProbablyAbn(payeeAbn)) continue;
+
+      abns.add(payeeAbn);
+    }
+
+    // Deterministic ordering
+    const ordered = Array.from(abns).sort();
+
+    // SBI tool typically expects headers Year, ABN, Outcome in the *response* file.
+    // For the *export* file, MVP is a single ABN column.
+    const lines = ["ABN", ...ordered];
+    const csvText = `${lines.join("\n")}\n`;
+
+    await t.commit();
+
+    return csvText;
   } catch (err) {
     try {
       await t.rollback();

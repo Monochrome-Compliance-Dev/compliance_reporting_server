@@ -27,4 +27,6 @@ router.post(
 
 router.get("/:id/sbi/status", requirePtrs, sbiController.getSbiStatus);
 
+router.get("/:id/sbi/export", requirePtrs, sbiController.exportSbiAbns);
+
 module.exports = router;

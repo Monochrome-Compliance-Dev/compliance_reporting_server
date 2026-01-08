@@ -5,6 +5,7 @@ const sbiService = require("@/v2/ptrs/services/sbi.ptrs.service");
 module.exports = {
   importSbiResults,
   getSbiStatus,
+  exportSbiAbns,
 };
 
 /**
@@ -114,6 +115,65 @@ async function getSbiStatus(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error fetching SBI status (PTRS v2)", {
       action: "PtrsV2SbiStatus",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/sbi/export
+ * Returns a CSV containing the unique payee ABNs for the current staged dataset.
+ */
+async function exportSbiAbns(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const csvText = await sbiService.exportAbnCsv({
+      customerId,
+      ptrsId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2SbiExport",
+      entity: "Ptrs",
+      entityId: ptrsId,
+      details: {
+        bytes: Buffer.byteLength(csvText || "", "utf8"),
+      },
+    });
+
+    const safeId = String(ptrsId || "ptrs").replace(/[^a-zA-Z0-9_-]/g, "");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="sbi_export_${safeId}.csv"`
+    );
+
+    return res.status(200).send(csvText);
+  } catch (error) {
+    logger.logEvent("error", "Error exporting SBI ABNs (PTRS v2)", {
+      action: "PtrsV2SbiExport",
       ptrsId,
       customerId,
       userId,
