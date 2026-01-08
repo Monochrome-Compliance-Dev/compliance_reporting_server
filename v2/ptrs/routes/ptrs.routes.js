@@ -73,8 +73,8 @@ const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
 const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
 const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
 const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
-const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
 const sbiRoutes = require("@/v2/ptrs/routes/sbi.ptrs.routes");
+const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -89,10 +89,10 @@ router.use("/", stageRoutes);
 // rules
 router.use("/", rulesRoutes);
 
-// validate
-router.use("/", validateRoutes);
-
 // sbi
 router.use("/", sbiRoutes);
+
+// validate
+router.use("/", validateRoutes);
 
 module.exports = router;

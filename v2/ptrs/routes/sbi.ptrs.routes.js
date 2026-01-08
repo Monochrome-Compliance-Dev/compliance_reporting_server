@@ -29,4 +29,8 @@ router.get("/:id/sbi/status", requirePtrs, sbiController.getSbiStatus);
 
 router.get("/:id/sbi/export", requirePtrs, sbiController.exportSbiAbns);
 
+// SBI Validate (validates that SBI results were applied correctly to stage rows)
+router.post("/:id/sbi/validate", requirePtrs, sbiController.runSbiValidate);
+router.get("/:id/sbi/validate", requirePtrs, sbiController.getSbiValidate);
+
 module.exports = router;

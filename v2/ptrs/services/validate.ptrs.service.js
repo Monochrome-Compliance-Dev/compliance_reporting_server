@@ -8,8 +8,14 @@ module.exports = {
   getValidate,
 };
 
-const OUTCOME_SMALL = "Small business for payment times reporting";
-const OUTCOME_NOT_SMALL = "Not a small business for payment times reporting";
+// -------------------------
+// Helpers
+// -------------------------
+
+function isExcludedRow(stageRow) {
+  const meta = stageRow?.meta || {};
+  return meta?.rules?.exclude === true;
+}
 
 function normalizeAbn(value) {
   if (value == null) return "";
@@ -17,13 +23,52 @@ function normalizeAbn(value) {
 }
 
 function isProbablyAbn(abn) {
-  // MVP: SBI tool outcome already handles invalids; we only need a basic sanity check
   return typeof abn === "string" && /^\d{11}$/.test(abn);
 }
 
-function isExcludedRow(stageRow) {
-  const meta = stageRow?.meta || {};
-  return meta?.rules?.exclude === true;
+function parseAusDate(value) {
+  // Expecting dd/mm/yyyy (common in uploaded CSVs). Returns Date or null.
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (!m) return null;
+
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) {
+    return null;
+  }
+
+  // JS Date months are 0-based
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+
+  // Validate round-trip to avoid things like 32/13/2024 coercing
+  if (
+    d.getUTCFullYear() !== yyyy ||
+    d.getUTCMonth() !== mm - 1 ||
+    d.getUTCDate() !== dd
+  ) {
+    return null;
+  }
+
+  return d;
+}
+
+function parseMoney(value) {
+  // Handles "-11,183.65" and "11183.65" etc. Returns number or null.
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const cleaned = s.replace(/,/g, "");
+  const n = Number(cleaned);
+
+  if (!Number.isFinite(n)) return null;
+  return n;
 }
 
 function toIssue(stageRow, code, message, extra = {}) {
@@ -32,62 +77,35 @@ function toIssue(stageRow, code, message, extra = {}) {
     rowNo: stageRow.rowNo,
     code,
     message,
-    payeeAbn: normalizeAbn(stageRow?.data?.payee_entity_abn || ""),
     ...extra,
   };
 }
 
-async function getLatestSbiUpload({ customerId, ptrsId, transaction }) {
-  // Prefer most recent upload with a usable status
-  const row = await db.PtrsSbiUpload.findOne({
-    where: {
-      customerId,
-      ptrsId,
-      status: ["APPLIED", "APPLIED_WITH_WARNINGS"],
-    },
-    order: [["createdAt", "DESC"]],
-    raw: true,
-    transaction,
-  });
+function makeRowKey(data) {
+  // MVP duplicate heuristic: prefer vlookup if present; else composite key.
+  const vlookup = data?.vlookup ? String(data.vlookup).trim() : "";
+  if (vlookup) return `vlookup:${vlookup}`;
 
-  return row;
+  const companyCode = data?.company_code
+    ? String(data.company_code).trim()
+    : "";
+  const supplier = normalizeAbn(data?.payee_entity_abn);
+  const ref = data?.invoice_reference_number
+    ? String(data.invoice_reference_number).trim()
+    : "";
+  const invoiceDate = data?.invoice_issue_date
+    ? String(data.invoice_issue_date).trim()
+    : "";
+  const amount = data?.payment_amount ? String(data.payment_amount).trim() : "";
+
+  return `cc:${companyCode}|abn:${supplier}|ref:${ref}|inv:${invoiceDate}|amt:${amount}`;
 }
 
-async function loadSbiMap({ customerId, ptrsId, sbiUploadId, transaction }) {
-  const rows = await db.PtrsSbiResult.findAll({
-    where: { customerId, ptrsId, sbiUploadId },
-    raw: true,
-    transaction,
-  });
-
-  const map = new Map();
-  const invalid = new Set();
-
-  for (const r of rows) {
-    const abn = normalizeAbn(r.abn);
-    if (!abn) continue;
-
-    const outcome = String(r.outcome || "").trim();
-    const isValidAbn = r.isValidAbn !== false;
-
-    map.set(abn, { outcome, isValidAbn });
-
-    if (!isValidAbn || /not recognised as a valid abn/i.test(outcome)) {
-      invalid.add(abn);
-    }
-  }
-
-  return { map, invalid, totalResults: rows.length };
-}
-
-function expectedSmallBusinessFromOutcome(outcome) {
-  if (outcome === OUTCOME_SMALL) return true;
-  if (outcome === OUTCOME_NOT_SMALL) return false;
-  return null;
-}
+// -------------------------
+// Service entry points
+// -------------------------
 
 async function validate({ customerId, ptrsId, userId = null }) {
-  // POST version: no persistence yet, but we keep it distinct for future.
   return computeValidate({ customerId, ptrsId, userId, mode: "run" });
 }
 
@@ -102,7 +120,6 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Ensure ptrs exists for tenant
     const ptrs = await db.Ptrs.findOne({
       where: { id: ptrsId, customerId },
       transaction: t,
@@ -114,52 +131,6 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       throw e;
     }
 
-    const latestSbi = await getLatestSbiUpload({
-      customerId,
-      ptrsId,
-      transaction: t,
-    });
-
-    const blockers = [];
-    const warnings = [];
-
-    // Gate: SBI must have run successfully before Validate
-    if (!latestSbi) {
-      blockers.push({
-        code: "SBI_MISSING",
-        message:
-          "SBI Check has not been applied for this PTRS run. Upload SBI results before validating.",
-      });
-
-      await t.commit();
-
-      return {
-        status: "BLOCKED",
-        ptrsId,
-        mode,
-        sbi: { required: true, latestUploadId: null },
-        counts: {
-          totalRows: 0,
-          excludedRows: 0,
-          blockers: blockers.length,
-          warnings: warnings.length,
-        },
-        blockers,
-        warnings,
-      };
-    }
-
-    const {
-      map: sbiMap,
-      invalid: invalidAbns,
-      totalResults,
-    } = await loadSbiMap({
-      customerId,
-      ptrsId,
-      sbiUploadId: latestSbi.id,
-      transaction: t,
-    });
-
     const stageRows = await db.PtrsStageRow.findAll({
       where: { customerId, ptrsId },
       order: [["rowNo", "ASC"]],
@@ -169,12 +140,33 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
 
     const LIMIT = 200;
 
+    const blockers = [];
+    const warnings = [];
+
     let excludedRows = 0;
+
     let missingPayeeAbnCount = 0;
     let invalidPayeeAbnCount = 0;
-    let abnMissingFromSbiResultsCount = 0;
-    let sbiOutcomeMismatchCount = 0;
-    let sbiEvidenceMismatchCount = 0;
+
+    let missingPayerAbnCount = 0;
+    let invalidPayerAbnCount = 0;
+
+    let missingInvoiceDateCount = 0;
+    let invalidInvoiceDateCount = 0;
+
+    let missingPaymentDateCount = 0;
+    let invalidPaymentDateCount = 0;
+
+    let paymentBeforeInvoiceCount = 0;
+
+    let missingPaymentAmountCount = 0;
+    let invalidPaymentAmountCount = 0;
+
+    let duplicatesSuspectedCount = 0;
+
+    let smallBusinessUnknownCount = 0;
+
+    const seenKeys = new Map(); // key -> firstRowNo
 
     for (const r of stageRows) {
       if (isExcludedRow(r)) {
@@ -182,118 +174,208 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
         continue;
       }
 
-      const payeeAbn = normalizeAbn(r?.data?.payee_entity_abn);
+      const data = r?.data || {};
 
+      // ---- Payee ABN ----
+      const payeeAbn = normalizeAbn(data?.payee_entity_abn);
       if (!payeeAbn) {
         missingPayeeAbnCount += 1;
         if (blockers.length < LIMIT) {
           blockers.push(
-            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn")
+            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn", {
+              field: "payee_entity_abn",
+            })
           );
         }
-        continue;
-      }
-
-      if (!isProbablyAbn(payeeAbn)) {
+      } else if (!isProbablyAbn(payeeAbn)) {
         invalidPayeeAbnCount += 1;
         if (blockers.length < LIMIT) {
           blockers.push(
             toIssue(
               r,
               "PAYEE_ABN_INVALID",
-              "payee_entity_abn is not a valid 11-digit ABN"
-            )
-          );
-        }
-        continue;
-      }
-
-      // If SBI tool explicitly says this ABN is invalid and we have it in the dataset, block.
-      if (invalidAbns.has(payeeAbn)) {
-        if (blockers.length < LIMIT) {
-          const outcome = sbiMap.get(payeeAbn)?.outcome || null;
-          blockers.push(
-            toIssue(
-              r,
-              "SBI_INVALID_ABN",
-              "SBI results indicate this ABN is invalid/unrecognised",
+              "payee_entity_abn is not a valid 11-digit ABN",
               {
-                outcome,
+                field: "payee_entity_abn",
+                value: data?.payee_entity_abn,
               }
             )
           );
         }
-        continue;
       }
 
-      const sbi = sbiMap.get(payeeAbn);
-      if (!sbi) {
-        // The SBI export should be generated from the dataset, so missing matches are suspicious.
-        abnMissingFromSbiResultsCount += 1;
+      // ---- Payer ABN (if present in dataset, treat as required for report grouping) ----
+      const payerAbn = normalizeAbn(data?.payer_entity_abn);
+      if (!payerAbn) {
+        missingPayerAbnCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(r, "PAYER_ABN_MISSING", "Missing payer_entity_abn", {
+              field: "payer_entity_abn",
+            })
+          );
+        }
+      } else if (!isProbablyAbn(payerAbn)) {
+        invalidPayerAbnCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYER_ABN_INVALID",
+              "payer_entity_abn is not a valid 11-digit ABN",
+              {
+                field: "payer_entity_abn",
+                value: data?.payer_entity_abn,
+              }
+            )
+          );
+        }
+      }
+
+      // ---- Dates ----
+      const invoiceDateRaw = data?.invoice_issue_date;
+      const paymentDateRaw = data?.payment_date;
+
+      const invoiceDate = parseAusDate(invoiceDateRaw);
+      const paymentDate = parseAusDate(paymentDateRaw);
+
+      if (!invoiceDateRaw) {
+        missingInvoiceDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(r, "INVOICE_DATE_MISSING", "Missing invoice_issue_date", {
+              field: "invoice_issue_date",
+            })
+          );
+        }
+      } else if (!invoiceDate) {
+        invalidInvoiceDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "INVOICE_DATE_INVALID",
+              "invoice_issue_date is not a valid dd/mm/yyyy date",
+              {
+                field: "invoice_issue_date",
+                value: invoiceDateRaw,
+              }
+            )
+          );
+        }
+      }
+
+      if (!paymentDateRaw) {
+        missingPaymentDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(r, "PAYMENT_DATE_MISSING", "Missing payment_date", {
+              field: "payment_date",
+            })
+          );
+        }
+      } else if (!paymentDate) {
+        invalidPaymentDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_DATE_INVALID",
+              "payment_date is not a valid dd/mm/yyyy date",
+              {
+                field: "payment_date",
+                value: paymentDateRaw,
+              }
+            )
+          );
+        }
+      }
+
+      if (invoiceDate && paymentDate) {
+        if (paymentDate.getTime() < invoiceDate.getTime()) {
+          paymentBeforeInvoiceCount += 1;
+          if (warnings.length < LIMIT) {
+            warnings.push(
+              toIssue(
+                r,
+                "PAYMENT_BEFORE_INVOICE",
+                "payment_date is earlier than invoice_issue_date (check for credit notes/adjustments)",
+                {
+                  invoice_issue_date: invoiceDateRaw,
+                  payment_date: paymentDateRaw,
+                }
+              )
+            );
+          }
+        }
+      }
+
+      // ---- Amounts ----
+      const paymentAmountRaw = data?.payment_amount;
+      const paymentAmount = parseMoney(paymentAmountRaw);
+
+      if (paymentAmountRaw == null || String(paymentAmountRaw).trim() === "") {
+        missingPaymentAmountCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(r, "PAYMENT_AMOUNT_MISSING", "Missing payment_amount", {
+              field: "payment_amount",
+            })
+          );
+        }
+      } else if (paymentAmount == null) {
+        invalidPaymentAmountCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_AMOUNT_INVALID",
+              "payment_amount is not a valid number",
+              {
+                field: "payment_amount",
+                value: paymentAmountRaw,
+              }
+            )
+          );
+        }
+      }
+
+      // ---- Duplicates (heuristic) ----
+      const key = makeRowKey(data);
+      if (seenKeys.has(key)) {
+        duplicatesSuspectedCount += 1;
+        const firstRowNo = seenKeys.get(key);
         if (warnings.length < LIMIT) {
           warnings.push(
             toIssue(
               r,
-              "SBI_NO_MATCH",
-              "No SBI outcome found for this payee ABN (possible mismatched SBI file)"
-            )
-          );
-        }
-        continue;
-      }
-
-      const expected = expectedSmallBusinessFromOutcome(sbi.outcome);
-      if (expected == null) {
-        // Unknown outcome text = treat as blocker (we can't interpret)
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "SBI_UNKNOWN_OUTCOME", "SBI outcome is not recognised", {
-              outcome: sbi.outcome,
-            })
-          );
-        }
-        continue;
-      }
-
-      const actual = r?.data?.is_small_business;
-      const evidenceId = r?.data?.small_business_evidence_id;
-
-      // If the ABN was in SBI results, we expect the row to carry evidence id.
-      if (evidenceId !== latestSbi.id) {
-        sbiEvidenceMismatchCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "SBI_EVIDENCE_MISSING",
-              "Row is missing the expected small business evidence id for the latest SBI upload",
+              "DUPLICATE_SUSPECTED",
+              "Duplicate-suspected row based on key heuristic",
               {
-                expectedEvidenceId: latestSbi.id,
-                actualEvidenceId: evidenceId || null,
+                duplicateOfRowNo: firstRowNo,
+                key,
               }
             )
           );
         }
-        continue;
+      } else {
+        seenKeys.set(key, r.rowNo);
       }
 
-      if (actual !== expected) {
-        sbiOutcomeMismatchCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
+      // ---- Small business status completeness (post-SBI, this should usually be set) ----
+      // Treat as warning only for MVP; we can tighten later.
+      if (data?.is_small_business == null) {
+        smallBusinessUnknownCount += 1;
+        if (warnings.length < LIMIT) {
+          warnings.push(
             toIssue(
               r,
-              "SBI_FLAG_MISMATCH",
-              "Row small business flag does not match the SBI outcome",
-              {
-                outcome: sbi.outcome,
-                expected,
-                actual: actual == null ? null : !!actual,
-              }
+              "SMALL_BUSINESS_UNKNOWN",
+              "Small business status is missing (post-SBI this should normally be set)",
+              { field: "is_small_business" }
             )
           );
         }
-        continue;
       }
     }
 
@@ -310,12 +392,6 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       status,
       ptrsId,
       mode,
-      sbi: {
-        required: true,
-        latestUploadId: latestSbi.id,
-        uploadStatus: latestSbi.status,
-        totalResults,
-      },
       counts: {
         totalRows: stageRows.length,
         excludedRows,
@@ -323,9 +399,17 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
         warnings: warnings.length,
         missingPayeeAbnCount,
         invalidPayeeAbnCount,
-        abnMissingFromSbiResultsCount,
-        sbiEvidenceMismatchCount,
-        sbiOutcomeMismatchCount,
+        missingPayerAbnCount,
+        invalidPayerAbnCount,
+        missingInvoiceDateCount,
+        invalidInvoiceDateCount,
+        missingPaymentDateCount,
+        invalidPaymentDateCount,
+        paymentBeforeInvoiceCount,
+        missingPaymentAmountCount,
+        invalidPaymentAmountCount,
+        duplicatesSuspectedCount,
+        smallBusinessUnknownCount,
       },
       blockers,
       warnings,

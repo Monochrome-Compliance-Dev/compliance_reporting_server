@@ -6,7 +6,120 @@ module.exports = {
   importSbiResults,
   getSbiStatus,
   exportSbiAbns,
+  runSbiValidate,
+  getSbiValidate,
 };
+/**
+ * POST /api/v2/ptrs/:id/sbi/validate
+ * Validates that the latest SBI upload was applied correctly to stage rows.
+ */
+async function runSbiValidate(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const result = await sbiService.validateAppliedSbi({
+      customerId,
+      ptrsId,
+      userId,
+      mode: "run",
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2SbiValidate",
+      entity: "Ptrs",
+      entityId: ptrsId,
+      details: {
+        validateStatus: result.status,
+        blockers: result.counts?.blockers || 0,
+        warnings: result.counts?.warnings || 0,
+        totalRows: result.counts?.totalRows || 0,
+        sbiUploadId: result?.sbi?.latestUploadId || null,
+      },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error validating SBI application (PTRS v2)", {
+      action: "PtrsV2SbiValidate",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/sbi/validate
+ * Computes and returns SBI validation summary without side effects.
+ */
+async function getSbiValidate(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const result = await sbiService.validateAppliedSbi({
+      customerId,
+      ptrsId,
+      userId,
+      mode: "read",
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetSbiValidate",
+      entity: "Ptrs",
+      entityId: ptrsId,
+      details: {
+        validateStatus: result.status,
+        blockers: result.counts?.blockers || 0,
+        warnings: result.counts?.warnings || 0,
+        totalRows: result.counts?.totalRows || 0,
+        sbiUploadId: result?.sbi?.latestUploadId || null,
+      },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching SBI validate summary (PTRS v2)", {
+      action: "PtrsV2GetSbiValidate",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
 
 /**
  * POST /api/v2/ptrs/:id/sbi/import
