@@ -1,8 +1,5 @@
 const db = require("@/db/database");
-const csv = require("fast-csv");
-const path = require("path");
-const { Readable } = require("stream");
-const fs = require("fs");
+const { pickFromRowLoose } = require("./data.ptrs.service");
 
 const {
   safeMeta,
@@ -27,6 +24,55 @@ module.exports = {
   stagePtrs,
   getStagePreview,
 };
+
+function normaliseFieldMapRows(fieldMapRows) {
+  if (!Array.isArray(fieldMapRows)) return [];
+  return fieldMapRows
+    .filter((r) => r && typeof r === "object")
+    .map((r) => ({
+      canonicalField: r.canonicalField,
+      sourceRole: r.sourceRole,
+      sourceColumn: r.sourceColumn,
+      transformType: r.transformType,
+      transformConfig: r.transformConfig,
+    }))
+    .filter((r) => r.canonicalField && r.sourceRole);
+}
+
+function applyFieldMapToRow(row, fieldMap) {
+  // Preserve internal/meta fields we rely on
+  const out = {};
+  if (row && typeof row === "object") {
+    for (const [k, v] of Object.entries(row)) {
+      if (k === "row_no" || k === "rowNo" || k.startsWith("_")) {
+        out[k] = v;
+      }
+    }
+  }
+
+  if (!row || typeof row !== "object") return out;
+
+  for (const m of fieldMap) {
+    const key = m.canonicalField;
+
+    // Prefer explicit sourceColumn; fall back to canonicalField name.
+    const header = m.sourceColumn || key;
+
+    // Loose pick (handles case/spacing/snake variants)
+    const val = pickFromRowLoose(row, header);
+
+    // Keep key present even if missing (null), so metrics/reporting can detect gaps.
+    out[key] = val != null ? val : null;
+  }
+
+  return out;
+}
+
+function applyFieldMapToRows(rows, fieldMap) {
+  if (!Array.isArray(rows) || !rows.length) return rows || [];
+  if (!Array.isArray(fieldMap) || !fieldMap.length) return rows;
+  return rows.map((r) => applyFieldMapToRow(r, fieldMap));
+}
 
 /**
  * Stage data for a ptrs. Reuses previewTransform pipeline to project/optionally filter, then
@@ -65,7 +111,14 @@ async function stagePtrs({
     if (persist) {
       // Hash inputs that materially affect staging.
       // We intentionally hash metadata/config, not full row data.
-      const [mapRow, rawCount, rawMaxUpdatedAt, datasets] = await Promise.all([
+      const [
+        mapRow,
+        rawCount,
+        rawMaxUpdatedAt,
+        datasets,
+        fieldMapUpdatedAt,
+        fieldMapCount,
+      ] = await Promise.all([
         getColumnMap({ customerId, ptrsId, transaction: t }),
         db.PtrsImportRaw.count({
           where: { customerId, ptrsId },
@@ -87,6 +140,18 @@ async function stagePtrs({
               raw: true,
             })
           : Promise.resolve([]),
+        db.PtrsFieldMap
+          ? db.PtrsFieldMap.max("updatedAt", {
+              where: { customerId, ptrsId, profileId },
+              transaction: t,
+            })
+          : Promise.resolve(null),
+        db.PtrsFieldMap
+          ? db.PtrsFieldMap.count({
+              where: { customerId, ptrsId, profileId },
+              transaction: t,
+            })
+          : Promise.resolve(0),
       ]);
 
       inputHash = buildStableInputHash({
@@ -103,6 +168,11 @@ async function stagePtrs({
               rowRules: mapRow.rowRules || null,
             }
           : null,
+        fieldMap: {
+          profileId: profileId || null,
+          count: Number(fieldMapCount) || 0,
+          maxUpdatedAt: fieldMapUpdatedAt || null,
+        },
         importRaw: {
           rowCount: rawCount || 0,
           maxUpdatedAt: rawMaxUpdatedAt || null,
@@ -155,16 +225,33 @@ async function stagePtrs({
       transaction: t,
     });
 
+    // Canonical field mapping: if a profile-scoped field map exists, project rows to canonical fields.
+    let fieldMap = [];
+    if (profileId && db.PtrsFieldMap) {
+      const fmRows = await db.PtrsFieldMap.findAll({
+        where: { customerId, ptrsId, profileId },
+        order: [["canonicalField", "ASC"]],
+        transaction: t,
+        raw: true,
+      });
+      fieldMap = normaliseFieldMapRows(fmRows);
+    }
+
+    const projectedRows = applyFieldMapToRows(baseRows, fieldMap);
+
     slog.info("PTRS v2 stagePtrs: loaded mapped rows", {
       action: "PtrsV2StagePtrsLoadedMappedRows",
       customerId,
       ptrsId,
-      rowsCount: Array.isArray(baseRows) ? baseRows.length : 0,
-      sampleRowKeys: baseRows && baseRows[0] ? Object.keys(baseRows[0]) : null,
+      rowsCount: Array.isArray(projectedRows) ? projectedRows.length : 0,
+      sampleRowKeys:
+        projectedRows && projectedRows[0]
+          ? Object.keys(projectedRows[0])
+          : null,
     });
 
     // 2) Apply row-level rules (if any) independently of preview
-    let rows = baseRows;
+    let rows = projectedRows;
     let rulesStats = null;
 
     try {
@@ -410,12 +497,18 @@ async function stagePtrs({
  *  - get a full count for this ptrsId
  * so the FE can show "20 of 208,811 rows".
  */
-async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
+async function getStagePreview({
+  customerId,
+  ptrsId,
+  limit = 50,
+  profileId = null,
+}) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
+  let canon = [];
   try {
     const where = { customerId, ptrsId };
 
@@ -429,8 +522,6 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
       }),
       db.PtrsStageRow.count({ where, transaction: t }),
     ]);
-
-    await t.commit();
 
     const rows = rowsRaw.map((r) =>
       typeof r.toJSON === "function" ? r.toJSON() : r
@@ -453,6 +544,29 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
       return null;
     };
 
+    // If a field map exists for this profile, prefer its canonical fields as the primary header list.
+    if (profileId && db.PtrsFieldMap) {
+      try {
+        const fm = await db.PtrsFieldMap.findAll({
+          where: { customerId, ptrsId, profileId },
+          attributes: ["canonicalField"],
+          order: [["canonicalField", "ASC"]],
+          transaction: t,
+          raw: true,
+        });
+
+        canon = Array.isArray(fm)
+          ? fm.map((r) => r.canonicalField).filter(Boolean)
+          : [];
+
+        if (canon.length) {
+          canon.forEach((k) => headerSet.add(k));
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
+
     for (const row of rows) {
       if (!row) continue;
       const buckets = [row.data];
@@ -463,7 +577,21 @@ async function getStagePreview({ customerId, ptrsId, limit = 50 }) {
       }
     }
 
-    const headers = Array.from(headerSet);
+    // Remove the post-row field map header block (now handled above)
+
+    // Order headers: canonical fields first (if present), then discovered fields
+    let headers;
+    if (canon.length) {
+      const canonSet = new Set(canon);
+      headers = [
+        ...canon.filter((h) => headerSet.has(h)),
+        ...Array.from(headerSet).filter((h) => !canonSet.has(h)),
+      ];
+    } else {
+      headers = Array.from(headerSet);
+    }
+
+    await t.commit();
 
     return {
       headers,

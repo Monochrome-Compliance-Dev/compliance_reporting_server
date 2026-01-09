@@ -204,6 +204,19 @@ async function initialise() {
   }
 
   // Setup model relationships
+  // --- PTRS v2 relationships (New World) ---
+  // Profile ↔ Canonical Field Map
+  if (db.PtrsProfile && db.PtrsFieldMap) {
+    db.PtrsProfile.hasMany(db.PtrsFieldMap, {
+      foreignKey: "profileId",
+      sourceKey: "id",
+      onDelete: "CASCADE",
+    });
+    db.PtrsFieldMap.belongsTo(db.PtrsProfile, {
+      foreignKey: "profileId",
+      targetKey: "id",
+    });
+  }
   if (db.User && db.RefreshToken) {
     db.User.hasMany(db.RefreshToken, {
       foreignKey: "userId",

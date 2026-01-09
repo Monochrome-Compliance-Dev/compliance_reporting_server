@@ -1,4 +1,5 @@
 const db = require("@/db/database");
+const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -51,10 +52,14 @@ function parseMoney(value) {
   if (value == null) return null;
   const s = String(value).trim();
   if (!s) return null;
+
+  // Values can arrive with accounting sign conventions (e.g. negatives for payments).
+  // For PTRS value-based metrics we treat payments as magnitudes.
   const cleaned = s.replace(/,/g, "");
   const n = Number(cleaned);
   if (!Number.isFinite(n)) return null;
-  return n;
+
+  return Math.abs(n);
 }
 
 function toIsoDateOnly(d) {
@@ -330,6 +335,12 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     let missingDatesCount = 0;
     let missingAmountCount = 0;
 
+    // Debug signals for SB trade credit % (value-based)
+    let rawNegativeAmountCount = 0;
+    let rawPositiveAmountCount = 0;
+    let rawZeroAmountCount = 0;
+    const amountSample = [];
+
     for (const r of stageRows) {
       if (isExcludedRow(r)) continue;
 
@@ -337,8 +348,29 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
       const invoiceDate = parseAusDate(data?.invoice_issue_date);
       const paymentDate = parseAusDate(data?.payment_date);
-      const amount = parseMoney(data?.payment_amount);
       const isSmallBusiness = data?.is_small_business;
+      const amount = parseMoney(data?.payment_amount);
+      // Debug: capture raw sign distribution and a few samples
+      const rawAmt = data?.payment_amount;
+
+      if (rawAmt != null && amountSample.length < 8) {
+        amountSample.push({
+          rowNo: r.rowNo,
+          raw: String(rawAmt),
+          parsedAbs: amount,
+          isSmallBusiness,
+        });
+      }
+
+      if (rawAmt != null) {
+        const cleanedRaw = String(rawAmt).trim().replace(/,/g, "");
+        const rawNum = Number(cleanedRaw);
+        if (Number.isFinite(rawNum)) {
+          if (rawNum < 0) rawNegativeAmountCount += 1;
+          else if (rawNum > 0) rawPositiveAmountCount += 1;
+          else rawZeroAmountCount += 1;
+        }
+      }
 
       totalCount += 1;
       if (amount != null) totalValue += amount;
@@ -430,6 +462,28 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     const sbTradeCreditPaymentsPct =
       totalValue > 0 ? (sbValue / totalValue) * 100 : null;
+    // logger.logEvent("info", "PTRS v2 metrics debug: SB trade credit %", {
+    //   action: "PtrsV2MetricsSbTradeCreditDebug",
+    //   ptrsId,
+    //   customerId,
+    //   totals: {
+    //     totalCount,
+    //     sbCount,
+    //     totalValue,
+    //     sbValue,
+    //     missingAmountCount,
+    //   },
+    //   rawAmountSigns: {
+    //     rawNegativeAmountCount,
+    //     rawPositiveAmountCount,
+    //     rawZeroAmountCount,
+    //   },
+    //   computed: {
+    //     sbTradeCreditPaymentsPct,
+    //     rounded: round2(sbTradeCreditPaymentsPct),
+    //   },
+    //   samples: amountSample,
+    // });
 
     // Peppol: we don’t have a reliable field yet.
     const peppolEnabledSbProcurementPct = null;

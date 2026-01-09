@@ -142,6 +142,7 @@ async function getStagePreview(req, res, next) {
       customerId,
       ptrsId,
       limit,
+      profileId,
     });
 
     // safeLog("[PTRS controller.getStagePreview] result", {

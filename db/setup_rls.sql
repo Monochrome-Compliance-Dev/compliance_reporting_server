@@ -53,6 +53,16 @@ CREATE POLICY tbl_ptrs_column_map_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_column_map FORCE ROW LEVEL SECURITY;
 
+-- PTRS Field Map (canonical field mappings; profile-scoped)
+ALTER TABLE tbl_ptrs_field_map ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_field_map_rls_policy ON tbl_ptrs_field_map;
+CREATE POLICY tbl_ptrs_field_map_rls_policy
+  ON tbl_ptrs_field_map
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_field_map FORCE ROW LEVEL SECURITY;
+
 -- PTRS Rulesets (rule definitions per PTRS/profile)
 ALTER TABLE tbl_ptrs_ruleset ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_ptrs_ruleset_rls_policy ON tbl_ptrs_ruleset;

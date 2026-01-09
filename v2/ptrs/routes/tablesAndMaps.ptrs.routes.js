@@ -26,4 +26,8 @@ router.get("/:id/sample", requirePtrs, tmController.getSample);
 // Unified headers + examples across main and supporting datasets
 // router.get("/:id/unified-sample", requirePtrs, tmController.getUnifiedSample);
 
+// Canonical field mapping (profile-scoped)
+router.get("/:id/field-map", requirePtrs, tmController.getFieldMap);
+router.post("/:id/field-map", requirePtrs, tmController.saveFieldMap);
+
 module.exports = router;

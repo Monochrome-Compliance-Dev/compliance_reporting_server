@@ -11,6 +11,8 @@ module.exports = {
   getSample,
   getUnifiedSample,
   buildMappedDataset,
+  getFieldMap,
+  saveFieldMap,
 };
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
@@ -253,6 +255,162 @@ async function saveMap(req, res, next) {
   } catch (error) {
     logger.logEvent("error", "Error saving PTRS v2 map", {
       action: "PtrsV2SaveMap",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/field-map?profileId=...
+ * Returns profile-scoped canonical field mappings.
+ */
+async function getFieldMap(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+  const profileId = req.query.profileId || null;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!profileId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "profileId is required" });
+    }
+
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const fieldMap = await tmPtrsService.getFieldMap({
+      customerId,
+      ptrsId,
+      profileId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2GetFieldMap",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        profileId,
+        count: Array.isArray(fieldMap) ? fieldMap.length : 0,
+      },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { fieldMap },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 field map", {
+      action: "PtrsV2GetFieldMap",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/:id/field-map
+ * Body:
+ * {
+ *   profileId: string,
+ *   fieldMap: Array<{
+ *     canonicalField: string,
+ *     sourceRole: string,
+ *     sourceColumn?: string,
+ *     transformType?: string,
+ *     transformConfig?: object,
+ *     meta?: object
+ *   }>
+ * }
+ */
+async function saveFieldMap(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  const { profileId = null, fieldMap = null } = req.body || {};
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!profileId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "profileId is required" });
+    }
+    if (!Array.isArray(fieldMap)) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "fieldMap array is required" });
+    }
+
+    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
+    if (!ptrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Ptrs not found" });
+    }
+
+    const saved = await tmPtrsService.saveFieldMap({
+      customerId,
+      ptrsId,
+      profileId,
+      fieldMap,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2SaveFieldMap",
+      entity: "PtrsUpload",
+      entityId: ptrsId,
+      details: {
+        profileId,
+        count: Array.isArray(saved) ? saved.length : 0,
+      },
+    });
+
+    return res
+      .status(200)
+      .json({ status: "success", data: { fieldMap: saved } });
+  } catch (error) {
+    logger.logEvent("error", "Error saving PTRS v2 field map", {
+      action: "PtrsV2SaveFieldMap",
       ptrsId,
       customerId,
       userId,

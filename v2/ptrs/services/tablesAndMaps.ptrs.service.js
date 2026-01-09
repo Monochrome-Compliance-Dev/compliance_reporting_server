@@ -16,6 +16,7 @@ const {
   buildDatasetIndexByRole,
   getDatasetSample,
 } = require("@/v2/ptrs/services/data.ptrs.service");
+const { Op } = require("sequelize");
 
 module.exports = {
   getMap,
@@ -26,6 +27,8 @@ module.exports = {
   composeMappedRowsForPtrs,
   loadMappedRowsForPtrs,
   // getUnifiedSample,
+  getFieldMap,
+  saveFieldMap,
 };
 
 async function loadMappedRowsForPtrs({
@@ -158,6 +161,115 @@ async function getColumnMap({ customerId, ptrsId, transaction = null }) {
     return map || null;
   } catch (err) {
     if (!isExternalTx && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/**
+ * Return profile-scoped canonical field mappings for a ptrs run.
+ */
+async function getFieldMap({
+  customerId,
+  ptrsId,
+  profileId,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!profileId) throw new Error("profileId is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const isExternalTx = !!transaction;
+
+  try {
+    const rows = await db.PtrsFieldMap.findAll({
+      where: { customerId, ptrsId, profileId },
+      order: [["canonicalField", "ASC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    if (!isExternalTx && !t.finished) {
+      await t.commit();
+    }
+
+    return rows || [];
+  } catch (err) {
+    if (!isExternalTx && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/**
+ * Replace all profile-scoped canonical field mappings for a ptrs run.
+ * We do a simple "replace" (delete then bulk insert) to avoid half-updated sets.
+ */
+async function saveFieldMap({
+  customerId,
+  ptrsId,
+  profileId,
+  fieldMap,
+  userId,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!Array.isArray(fieldMap)) throw new Error("fieldMap array is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    await db.PtrsFieldMap.destroy({
+      where: { customerId, ptrsId, profileId },
+      transaction: t,
+    });
+
+    const actor = userId || null;
+
+    const payload = fieldMap
+      .filter((r) => r && typeof r === "object")
+      .map((r) => ({
+        customerId,
+        ptrsId,
+        profileId,
+        canonicalField: r.canonicalField,
+        sourceRole: r.sourceRole,
+        sourceColumn: r.sourceColumn ?? null,
+        transformType: r.transformType ?? null,
+        transformConfig: r.transformConfig ?? null,
+        meta: r.meta ?? null,
+        createdBy: actor,
+        updatedBy: actor,
+      }))
+      .filter((r) => r.canonicalField && r.sourceRole);
+
+    if (payload.length) {
+      await db.PtrsFieldMap.bulkCreate(payload, {
+        transaction: t,
+        validate: true,
+      });
+    }
+
+    const rows = await db.PtrsFieldMap.findAll({
+      where: { customerId, ptrsId, profileId },
+      order: [["canonicalField", "ASC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    await t.commit();
+    return rows || [];
+  } catch (err) {
+    if (!t.finished) {
       try {
         await t.rollback();
       } catch (_) {}
@@ -629,6 +741,39 @@ async function composeMappedRowsForPtrs({
   const mapRow = await getColumnMap({ customerId, ptrsId, transaction });
   const map = mapRow || {};
   const mappings = map.mappings || {};
+
+  // Canonical field map is profile-scoped. We use the profileId saved on the column map.
+  const profileId = map.profileId || null;
+  let fieldMapRows = [];
+  try {
+    if (profileId) {
+      fieldMapRows = await getFieldMap({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction,
+      });
+    }
+  } catch (e) {
+    // Non-fatal for MVP: fall back to non-canonical output
+    slog.warn(
+      "PTRS v2 composeMappedRowsForPtrs: failed to load field map",
+      safeMeta({ customerId, ptrsId, profileId, error: e.message })
+    );
+    fieldMapRows = [];
+  }
+
+  if (logger && logger.info) {
+    slog.info(
+      "PTRS v2 composeMappedRowsForPtrs: field map loaded",
+      safeMeta({
+        customerId,
+        ptrsId,
+        profileId,
+        fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
+      })
+    );
+  }
   if (logger && logger.debug) {
     slog.debug(
       "PTRS v2 composeMappedRowsForPtrs: raw joins",
@@ -724,6 +869,317 @@ async function composeMappedRowsForPtrs({
         customFieldsType: customFields ? typeof customFields : null,
       })
     );
+  }
+
+  // ---------------- Payment terms (effective-dated) enrichment ----------------
+  // We treat payment terms changes as a supporting dataset with an effective-from date.
+  // If present, we resolve the payment term code AS-OF the invoice issue date per row.
+
+  const parseDateLoose = (v) => {
+    if (v == null) return null;
+    if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
+
+    const s = String(v).trim();
+    if (!s) return null;
+
+    // ISO-ish
+    const iso = new Date(s);
+    if (!Number.isNaN(iso.getTime())) return iso;
+
+    // AU format: dd/mm/yyyy
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (m) {
+      const dd = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      let yyyy = parseInt(m[3], 10);
+      if (yyyy < 100) yyyy += 2000;
+      const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+      if (!Number.isNaN(d.getTime())) return d;
+    }
+
+    return null;
+  };
+
+  const getPaymentTermsDataset = async () => {
+    const roles = ["payment_terms", "payment_terms_changes", "paymentterms"];
+    try {
+      const ds = await db.PtrsDataset.findOne({
+        where: {
+          customerId,
+          ptrsId,
+          role: { [Op.in]: roles },
+        },
+        attributes: ["id", "role"],
+        raw: true,
+        transaction,
+      });
+      return ds || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadPaymentTermsHistoryIndex = async (datasetId) => {
+    // Returns Map<key, [{ from: Date, to: Date|null, term: string|null }]>
+    // Key is (company_code|supplier/vendor)
+
+    const history = new Map();
+
+    const RowModel =
+      db.PtrsDatasetRow ||
+      db.PtrsDatasetData ||
+      db.PtrsDatasetDatum ||
+      db.PtrsDatasetRecord ||
+      null;
+
+    if (!RowModel) {
+      throw new Error(
+        "Dataset row model not available (expected PtrsDatasetRow/PtrsDatasetData); cannot load payment terms dataset rows"
+      );
+    }
+
+    // Some schemas use datasetId, others ptrsDatasetId
+    const where = { customerId, datasetId };
+    if (RowModel.rawAttributes && RowModel.rawAttributes.ptrsDatasetId) {
+      delete where.datasetId;
+      where.ptrsDatasetId = datasetId;
+    }
+
+    const dsRows = await RowModel.findAll({
+      where,
+      order: [["rowNo", "ASC"]],
+      attributes: ["data"],
+      raw: true,
+      transaction,
+    });
+
+    const pickAny = (row, names) => {
+      for (const n of names) {
+        const v = pickFromRowLoose(row, n);
+        if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+      }
+      return null;
+    };
+
+    const supplierNames = [
+      "Supplier",
+      "supplier",
+      "Vendor",
+      "vendor",
+      "Vendor Account",
+      "Vendor Account No",
+      "Vendor Account: Name 1",
+      "Vendor Account: Number",
+    ];
+
+    const companyNames = ["Company Code", "company_code", "Company", "company"];
+
+    const fromNames = [
+      "Effective From",
+      "effective_from",
+      "Valid From",
+      "valid_from",
+      "From",
+      "from",
+      "Start Date",
+      "start_date",
+    ];
+
+    const termNames = [
+      "Payment terms",
+      "payment_terms",
+      "Payment Terms",
+      "payment_term",
+      "Terms",
+      "terms",
+      "Term",
+      "term",
+    ];
+
+    const addEntry = (key, entry) => {
+      if (!history.has(key)) history.set(key, []);
+      history.get(key).push(entry);
+    };
+
+    for (const r of dsRows || []) {
+      let d = r?.data || {};
+      if (typeof d === "string") {
+        try {
+          d = JSON.parse(d);
+        } catch {
+          d = {};
+        }
+      }
+
+      const supplier = pickAny(d, supplierNames);
+      const company = pickAny(d, companyNames);
+      const effFromRaw = pickAny(d, fromNames);
+      const term = pickAny(d, termNames);
+
+      const fromDate = parseDateLoose(effFromRaw);
+      if (!fromDate) continue;
+
+      const k = normalizeJoinKeyValue(`${company ?? ""}|${supplier ?? ""}`);
+      if (!k) continue;
+
+      addEntry(k, {
+        from: fromDate,
+        to: null,
+        term: term == null ? null : String(term).trim(),
+      });
+    }
+
+    // Sort and set window end dates
+    for (const [k, arr] of history.entries()) {
+      arr.sort((a, b) => a.from.getTime() - b.from.getTime());
+      for (let i = 0; i < arr.length; i++) {
+        const next = arr[i + 1];
+        arr[i].to = next ? next.from : null;
+      }
+    }
+
+    return history;
+  };
+
+  const resolveEffectivePaymentTerm = ({ historyIndex, row }) => {
+    if (!historyIndex || !historyIndex.size) return null;
+
+    const supplier =
+      pickFromRowLoose(row, "Supplier") ??
+      pickFromRowLoose(row, "Vendor") ??
+      pickFromRowLoose(row, "Vendor Account") ??
+      pickFromRowLoose(row, "Vendor Account No") ??
+      pickFromRowLoose(row, "Vendor Account: Name 1") ??
+      null;
+
+    const company =
+      pickFromRowLoose(row, "Company Code") ??
+      pickFromRowLoose(row, "company_code") ??
+      null;
+
+    const invDateRaw =
+      pickFromRowLoose(row, "invoice_issue_date") ??
+      pickFromRowLoose(row, "Invoice Issue Date") ??
+      pickFromRowLoose(row, "Document Date") ??
+      null;
+
+    const invDate = parseDateLoose(invDateRaw);
+    if (!invDate) return null;
+
+    const k = normalizeJoinKeyValue(`${company ?? ""}|${supplier ?? ""}`);
+    if (!k) return null;
+
+    const windows = historyIndex.get(k);
+    if (!Array.isArray(windows) || !windows.length) return null;
+
+    const t = invDate.getTime();
+
+    let chosen = null;
+    for (const w of windows) {
+      const fromT = w.from.getTime();
+      const toT = w.to ? w.to.getTime() : null;
+      if (t >= fromT && (toT == null || t < toT)) {
+        chosen = w;
+      }
+    }
+
+    return chosen ? chosen.term : null;
+  };
+
+  // Helper functions for canonical projection
+
+  const _toNum = (v) => {
+    if (v == null || v === "") return null;
+    // Handle things like "-11,183.65" or "$1,234".
+    const s = String(v)
+      .replace(/\$/g, "")
+      .replace(/[\s,]+/g, "")
+      .trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const applyTransform = ({ value, transformType, transformConfig }) => {
+    const tt = (transformType || "").toString().trim().toLowerCase();
+    if (!tt) return value;
+
+    // MVP: support absolute numeric amounts (payments/invoices)
+    if (tt === "abs" || tt === "absolute" || tt === "absolute_numeric") {
+      const n = _toNum(value);
+      return n == null ? null : Math.abs(n);
+    }
+
+    // Trim strings
+    if (tt === "trim") {
+      return value == null ? null : String(value).trim();
+    }
+
+    // Date normalisation (returns YYYY-MM-DD)
+    if (tt === "date" || tt === "date_yyyy_mm_dd") {
+      const d = parseDateLoose(value);
+      if (!d) return null;
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    // Unknown transform: leave as-is for MVP
+    return value;
+  };
+
+  const resolveCanonicalValue = ({
+    sourceRole,
+    sourceColumn,
+    srcRow,
+    outRow,
+  }) => {
+    const role = (sourceRole || "").toString().trim().toLowerCase();
+    const col = sourceColumn;
+    if (!col) return null;
+
+    // Custom values live on the already-mapped row
+    if (
+      role === "custom" ||
+      role === "customfield" ||
+      role === "customfields"
+    ) {
+      return (
+        pickFromRowLoose(outRow, col) ?? pickFromRowLoose(outRow, toSnake(col))
+      );
+    }
+
+    // For MVP we treat all non-custom roles as reading from the merged source row.
+    return pickFromRowLoose(srcRow, col);
+  };
+
+  // Build payment terms history index once (if a suitable dataset exists)
+  let paymentTermsHistoryIndex = null;
+  try {
+    const paymentDs = await getPaymentTermsDataset();
+    if (paymentDs && paymentDs.id) {
+      paymentTermsHistoryIndex = await loadPaymentTermsHistoryIndex(
+        paymentDs.id
+      );
+      slog.info(
+        "PTRS v2 composeMappedRowsForPtrs: payment terms history index built",
+        safeMeta({
+          customerId,
+          ptrsId,
+          role: paymentDs.role || null,
+          keysCount: paymentTermsHistoryIndex
+            ? paymentTermsHistoryIndex.size
+            : 0,
+        })
+      );
+    }
+  } catch (e) {
+    slog.warn(
+      "PTRS v2 composeMappedRowsForPtrs: payment terms history index failed",
+      safeMeta({ customerId, ptrsId, error: e.message })
+    );
+    paymentTermsHistoryIndex = null;
   }
 
   // Build indexes for each supporting dataset role referenced in joins
@@ -855,6 +1311,31 @@ async function composeMappedRowsForPtrs({
       }
     }
 
+    const rawPaymentTerms = pickFromRowLoose(srcRow, "Payment terms");
+
+    const effectivePaymentTerms = resolveEffectivePaymentTerm({
+      historyIndex: paymentTermsHistoryIndex,
+      row: srcRow,
+    });
+
+    if (
+      effectivePaymentTerms != null &&
+      String(effectivePaymentTerms).trim() !== ""
+    ) {
+      srcRow = {
+        ...srcRow,
+        "Payment terms": effectivePaymentTerms,
+        __ptrs_payment_terms_raw: rawPaymentTerms ?? null,
+        __ptrs_payment_terms_effective: effectivePaymentTerms,
+      };
+    } else {
+      srcRow = {
+        ...srcRow,
+        __ptrs_payment_terms_raw: rawPaymentTerms ?? null,
+        __ptrs_payment_terms_effective: rawPaymentTerms ?? null,
+      };
+    }
+
     let out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
     // Apply custom fields at this point, so mapped dataset includes them
     if (Array.isArray(customFields) && customFields.length) {
@@ -865,6 +1346,40 @@ async function composeMappedRowsForPtrs({
       });
     }
     out.row_no = r.rowNo;
+
+    out.invoice_payment_terms_raw = srcRow.__ptrs_payment_terms_raw;
+    out.invoice_payment_terms_effective = srcRow.__ptrs_payment_terms_effective;
+
+    // ---------------- Canonical projection ----------------
+    // Project canonical fields onto the mapped row using the profile-scoped field map.
+    // We MERGE (non-breaking) so existing mapped keys remain available during MVP.
+    if (Array.isArray(fieldMapRows) && fieldMapRows.length) {
+      const canonicalOut = {};
+      for (const fm of fieldMapRows) {
+        if (!fm || typeof fm !== "object") continue;
+        const canonicalKey = toSnake(fm.canonicalField);
+        if (!canonicalKey) continue;
+
+        const rawValue = resolveCanonicalValue({
+          sourceRole: fm.sourceRole,
+          sourceColumn: fm.sourceColumn,
+          srcRow,
+          outRow: out,
+        });
+
+        const transformed = applyTransform({
+          value: rawValue,
+          transformType: fm.transformType,
+          transformConfig: fm.transformConfig,
+        });
+
+        // Always set the key (even null) so downstream headers are stable
+        canonicalOut[canonicalKey] = transformed == null ? null : transformed;
+      }
+
+      // Canonical values win if there is a collision.
+      out = { ...out, ...canonicalOut };
+    }
 
     if (!loggedFirst && logger && logger.debug) {
       loggedFirst = true;
