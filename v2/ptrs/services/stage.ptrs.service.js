@@ -49,13 +49,18 @@ async function stagePtrs({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
+  // Persist runs must be attributable to a profile.
+  if (persist && !profileId) {
+    const e = new Error("profileId is required when persist=true");
+    e.statusCode = 400;
+    throw e;
+  }
+
   const started = Date.now();
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
     // --- Execution run tracking (only for persist runs) ---
-    let executionRun = null;
-    let inputHash = null;
 
     if (persist) {
       // Hash inputs that materially affect staging.
@@ -129,34 +134,10 @@ async function stagePtrs({
         datasetsCount: Array.isArray(datasets) ? datasets.length : 0,
       });
 
-      try {
-        if (persist) {
-          executionRun = await db.PtrsExecutionRun.create(
-            {
-              customerId,
-              ptrsId,
-              step: "stage",
-              inputHash: inputHash || null,
-              status: "running",
-              startedAt: new Date(),
-              finishedAt: null,
-              createdBy: userId || null,
-              updatedBy: userId || null,
-            },
-            { transaction: t } // use your txn var name
-          );
-        }
-      } catch (e) {
-        logger?.warn?.("stagePtrs: failed to create execution run", {
-          customerId,
-          ptrsId,
-          error: e?.message,
-        });
-      }
-
       executionRun = await createExecutionRun({
         customerId,
         ptrsId,
+        profileId,
         step: "stage",
         inputHash,
         status: "running",
@@ -361,7 +342,7 @@ async function stagePtrs({
         await updateExecutionRun({
           customerId,
           executionRunId: executionRun.id,
-          status: "completed",
+          status: "success",
           finishedAt: new Date(),
           rowsIn: rows.length,
           rowsOut: rows.length,

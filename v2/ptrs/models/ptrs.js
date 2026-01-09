@@ -47,6 +47,11 @@ function model(sequelize) {
       type: DataTypes.JSONB,
       allowNull: true,
     },
+    reportPreviewDraft: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: {},
+    },
     createdBy: {
       type: DataTypes.STRING(10),
       allowNull: true,

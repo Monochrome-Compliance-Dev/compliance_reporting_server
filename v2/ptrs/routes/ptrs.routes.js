@@ -75,6 +75,7 @@ const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
 const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
 const sbiRoutes = require("@/v2/ptrs/routes/sbi.ptrs.routes");
 const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
+const metricsRoutes = require("@/v2/ptrs/routes/metrics.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -94,5 +95,8 @@ router.use("/", sbiRoutes);
 
 // validate
 router.use("/", validateRoutes);
+
+// metrics
+router.use("/", metricsRoutes);
 
 module.exports = router;

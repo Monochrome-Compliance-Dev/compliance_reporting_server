@@ -309,12 +309,15 @@ async function updatePtrs({
 /**
  * Create a PTRS execution run (tenant-scoped)
  * If `transaction` is supplied, it will be used (and NOT committed/rolled back here).
+ *
+ * NOTE: Strict by design — execution runs require profileId + inputHash.
  */
 async function createExecutionRun({
   customerId,
   ptrsId,
+  profileId,
   step,
-  inputHash = null,
+  inputHash,
   status = "pending",
   startedAt = null,
   createdBy = null,
@@ -322,7 +325,9 @@ async function createExecutionRun({
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+  if (!profileId) throw new Error("profileId is required");
   if (!step) throw new Error("step is required");
+  if (!inputHash) throw new Error("inputHash is required");
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
@@ -333,10 +338,11 @@ async function createExecutionRun({
       {
         customerId,
         ptrsId,
+        profileId,
         step,
         inputHash,
         status,
-        startedAt,
+        startedAt: startedAt || new Date(),
         createdBy,
         updatedBy: createdBy,
       },
