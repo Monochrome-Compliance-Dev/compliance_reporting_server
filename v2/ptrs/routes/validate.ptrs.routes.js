@@ -13,4 +13,11 @@ const requirePtrs = authorise({
 router.post("/:id/validate", requirePtrs, validateController.runValidate);
 router.get("/:id/validate", requirePtrs, validateController.getValidate);
 
+// Validate summary (aggregated view to drive Validate UI)
+router.get(
+  "/:id/validate/summary",
+  requirePtrs,
+  validateController.getValidateSummary
+);
+
 module.exports = router;

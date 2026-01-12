@@ -4,6 +4,10 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
+const {
+  PTRS_CANONICAL_CONTRACT,
+} = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
+
 module.exports = {
   getMetrics,
   updateMetricsDraft,
@@ -14,61 +18,10 @@ module.exports = {
 // -------------------------
 
 function isExcludedRow(stageRow) {
+  const data = stageRow?.data || {};
+  if (data?.exclude_from_metrics === true) return true;
   const meta = stageRow?.meta || {};
   return meta?.rules?.exclude === true;
-}
-
-function parseAusDate(value) {
-  // Expecting dd/mm/yyyy. Returns Date (UTC) or null.
-  if (value == null) return null;
-  const s = String(value).trim();
-  if (!s) return null;
-
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (!m) return null;
-
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
-
-  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) {
-    return null;
-  }
-
-  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-
-  if (
-    d.getUTCFullYear() !== yyyy ||
-    d.getUTCMonth() !== mm - 1 ||
-    d.getUTCDate() !== dd
-  ) {
-    return null;
-  }
-
-  return d;
-}
-
-function parseMoney(value) {
-  if (value == null) return null;
-  const s = String(value).trim();
-  if (!s) return null;
-
-  // Values can arrive with accounting sign conventions (e.g. negatives for payments).
-  // For PTRS value-based metrics we treat payments as magnitudes.
-  const cleaned = s.replace(/,/g, "");
-  const n = Number(cleaned);
-  if (!Number.isFinite(n)) return null;
-
-  return Math.abs(n);
-}
-
-function toIsoDateOnly(d) {
-  if (!(d instanceof Date)) return null;
-  // d is UTC-based above
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 function clampPct(value) {
@@ -121,44 +74,6 @@ function modeInt(values) {
   }
 
   return best;
-}
-
-function getTermDays(data) {
-  // Best-effort: support a few likely field names.
-  const candidates = [
-    data?.payment_term_days,
-    data?.payment_terms_days,
-    data?.payment_terms,
-    data?.term_days,
-    data?.agreed_payment_term_days,
-  ];
-
-  for (const c of candidates) {
-    if (c == null) continue;
-    const s = String(c).trim();
-    if (!s) continue;
-    const n = Number(s);
-    if (Number.isFinite(n) && n >= 0) return Math.round(n);
-
-    // Try extracting first integer (e.g. "30 days")
-    const m = /(\d+)/.exec(s);
-    if (m) {
-      const n2 = Number(m[1]);
-      if (Number.isFinite(n2) && n2 >= 0) return Math.round(n2);
-    }
-  }
-
-  return null;
-}
-
-function computePaymentDays(invoiceDate, paymentDate) {
-  if (!(invoiceDate instanceof Date) || !(paymentDate instanceof Date))
-    return null;
-  const ms = paymentDate.getTime() - invoiceDate.getTime();
-  const days = ms / (1000 * 60 * 60 * 24);
-  if (!Number.isFinite(days)) return null;
-  // Payment days should be whole-number days for reporting.
-  return Math.round(days);
 }
 
 function makeMissingInputs(declarations) {
@@ -299,8 +214,8 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     const basedOnRows = [];
 
-    let minInvoiceDate = null;
-    let maxInvoiceDate = null;
+    // Track total number of non-excluded staged rows considered for metrics gating
+    let stageRowCount = 0;
 
     // Totals across all non-excluded rows
     let totalCount = 0;
@@ -334,59 +249,51 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     let missingSbFlagCount = 0;
     let missingDatesCount = 0;
     let missingAmountCount = 0;
-
-    // Debug signals for SB trade credit % (value-based)
-    let rawNegativeAmountCount = 0;
-    let rawPositiveAmountCount = 0;
-    let rawZeroAmountCount = 0;
-    const amountSample = [];
+    // Track missing canonical flags for trade credit gating
+    let missingTradeCreditFlagCount = 0;
+    let missingExcludedTradeCreditFlagCount = 0;
 
     for (const r of stageRows) {
       if (isExcludedRow(r)) continue;
 
       const data = r?.data || {};
 
-      const invoiceDate = parseAusDate(data?.invoice_issue_date);
-      const paymentDate = parseAusDate(data?.payment_date);
+      // Increment total staged row count for all non-excluded rows
+      stageRowCount += 1;
+
+      // Canonical-only inputs
+      const tradeCredit = data?.trade_credit_payment === true;
+      const excludedTradeCredit = data?.excluded_trade_credit_payment === true;
       const isSmallBusiness = data?.is_small_business;
-      const amount = parseMoney(data?.payment_amount);
-      // Debug: capture raw sign distribution and a few samples
-      const rawAmt = data?.payment_amount;
 
-      if (rawAmt != null && amountSample.length < 8) {
-        amountSample.push({
-          rowNo: r.rowNo,
-          raw: String(rawAmt),
-          parsedAbs: amount,
-          isSmallBusiness,
-        });
+      // Check for missing canonical trade credit flags (must be explicit booleans)
+      const tradeCreditRaw = data?.trade_credit_payment;
+      const excludedTradeCreditRaw = data?.excluded_trade_credit_payment;
+
+      if (tradeCreditRaw !== true && tradeCreditRaw !== false) {
+        missingTradeCreditFlagCount += 1;
       }
 
-      if (rawAmt != null) {
-        const cleanedRaw = String(rawAmt).trim().replace(/,/g, "");
-        const rawNum = Number(cleanedRaw);
-        if (Number.isFinite(rawNum)) {
-          if (rawNum < 0) rawNegativeAmountCount += 1;
-          else if (rawNum > 0) rawPositiveAmountCount += 1;
-          else rawZeroAmountCount += 1;
-        }
+      if (excludedTradeCreditRaw !== true && excludedTradeCreditRaw !== false) {
+        missingExcludedTradeCreditFlagCount += 1;
       }
+
+      // Totals are based on trade credit rows only
+      if (!tradeCredit || excludedTradeCredit) {
+        continue;
+      }
+
+      const amountRaw = data?.payment_amount;
+      const amount =
+        amountRaw == null || amountRaw === "" ? null : Number(amountRaw);
 
       totalCount += 1;
-      if (amount != null) totalValue += amount;
-      else missingAmountCount += 1;
 
-      if (invoiceDate) {
-        const ts = invoiceDate.getTime();
-        if (!minInvoiceDate || ts < minInvoiceDate.getTime())
-          minInvoiceDate = invoiceDate;
-        if (!maxInvoiceDate || ts > maxInvoiceDate.getTime())
-          maxInvoiceDate = invoiceDate;
+      if (amount == null || !Number.isFinite(amount)) {
+        missingAmountCount += 1;
+      } else {
+        totalValue += Math.abs(amount);
       }
-
-      const termDays = getTermDays(data);
-      if (termDays != null) termDaysAll.push(termDays);
-      else missingTermDaysCount += 1;
 
       if (isSmallBusiness == null) {
         missingSbFlagCount += 1;
@@ -395,73 +302,166 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       // Only compute SB metrics when SB flag is true.
       if (isSmallBusiness === true) {
         sbCount += 1;
-        if (amount != null) sbValue += amount;
+        if (amount != null && Number.isFinite(amount))
+          sbValue += Math.abs(amount);
 
-        if (!invoiceDate || !paymentDate) {
-          missingDatesCount += 1;
+        const paymentTimeDaysRaw = data?.payment_time_days;
+        const paymentTimeDays =
+          paymentTimeDaysRaw == null || paymentTimeDaysRaw === ""
+            ? null
+            : Number(paymentTimeDaysRaw);
+
+        const termDaysRaw = data?.payment_term_days;
+        const termDays =
+          termDaysRaw == null || termDaysRaw === ""
+            ? null
+            : Number(termDaysRaw);
+
+        if (termDays == null || !Number.isFinite(termDays)) {
+          missingTermDaysCount += 1;
+        } else {
+          termDaysAll.push(Math.round(termDays));
         }
 
-        const paymentDays = computePaymentDays(invoiceDate, paymentDate);
-        if (paymentDays != null) {
-          sbPaymentDays.push(paymentDays);
+        if (paymentTimeDays == null || !Number.isFinite(paymentTimeDays)) {
+          missingDatesCount += 1;
+        } else {
+          const pt = Math.max(0, Math.round(paymentTimeDays));
+          sbPaymentDays.push(pt);
 
-          if (paymentDays <= 30) {
+          if (pt <= 30) {
             sbBand0to30Count += 1;
-            if (amount != null) sbBand0to30Value += amount;
-          } else if (paymentDays <= 60) {
+            if (amount != null && Number.isFinite(amount))
+              sbBand0to30Value += Math.abs(amount);
+          } else if (pt <= 60) {
             sbBand31to60Count += 1;
-            if (amount != null) sbBand31to60Value += amount;
+            if (amount != null && Number.isFinite(amount))
+              sbBand31to60Value += Math.abs(amount);
           } else {
             sbBandOver60Count += 1;
-            if (amount != null) sbBandOver60Value += amount;
+            if (amount != null && Number.isFinite(amount))
+              sbBandOver60Value += Math.abs(amount);
+          }
+
+          if (termDays != null && Number.isFinite(termDays)) {
+            sbWithinTermsKnownCount += 1;
+            if (pt <= Math.round(termDays)) sbWithinTermsYesCount += 1;
           }
         }
-
-        if (termDays != null && paymentDays != null) {
-          sbWithinTermsKnownCount += 1;
-          if (paymentDays <= termDays) sbWithinTermsYesCount += 1;
-        }
       }
+    }
 
-      basedOnRows.push(r);
+    // Canonical-mode quality gate (non-blocking navigation):
+    const canonicalQuality = {
+      blocked: false,
+      missing: [],
+    };
+
+    // Add missing trade credit flag counts (block gating)
+    if (missingTradeCreditFlagCount > 0)
+      canonicalQuality.missing.push({
+        field: "trade_credit_payment",
+        count: missingTradeCreditFlagCount,
+      });
+
+    if (missingExcludedTradeCreditFlagCount > 0)
+      canonicalQuality.missing.push({
+        field: "excluded_trade_credit_payment",
+        count: missingExcludedTradeCreditFlagCount,
+      });
+
+    // For SB metrics, require: is_small_business, payment_time_days, payment_term_days, payment_amount
+    if (missingSbFlagCount > 0)
+      canonicalQuality.missing.push({
+        field: "is_small_business",
+        count: missingSbFlagCount,
+      });
+    if (missingDatesCount > 0)
+      canonicalQuality.missing.push({
+        field: "payment_time_days",
+        count: missingDatesCount,
+      });
+    if (missingTermDaysCount > 0)
+      canonicalQuality.missing.push({
+        field: "payment_term_days",
+        count: missingTermDaysCount,
+      });
+    if (missingAmountCount > 0)
+      canonicalQuality.missing.push({
+        field: "payment_amount",
+        count: missingAmountCount,
+      });
+
+    // Block if any canonical requirements are missing and we have rows that should be measurable.
+    // - If there are staged rows but none qualify as trade credit, the most likely cause is that
+    //   trade_credit_payment / excluded_trade_credit_payment weren't mapped.
+    if (stageRowCount > 0 && totalCount === 0) {
+      canonicalQuality.blocked = true;
+    }
+
+    if (canonicalQuality.missing.length > 0) {
+      // Block if there are SB rows expected (sbCount > 0) OR trade credit rows are absent (handled above).
+      if (sbCount > 0) canonicalQuality.blocked = true;
     }
 
     const sortedSbDays = sbPaymentDays.slice().sort((a, b) => a - b);
 
     const avgDays =
-      sortedSbDays.length > 0
+      !canonicalQuality.blocked && sortedSbDays.length > 0
         ? sortedSbDays.reduce((acc, x) => acc + x, 0) / sortedSbDays.length
         : null;
 
     const medianDays =
-      sortedSbDays.length > 0 ? percentile(sortedSbDays, 0.5) : null;
+      !canonicalQuality.blocked && sortedSbDays.length > 0
+        ? percentile(sortedSbDays, 0.5)
+        : null;
 
     const p80Days =
-      sortedSbDays.length > 0 ? percentile(sortedSbDays, 0.8) : null;
+      !canonicalQuality.blocked && sortedSbDays.length > 0
+        ? percentile(sortedSbDays, 0.8)
+        : null;
 
     const p95Days =
-      sortedSbDays.length > 0 ? percentile(sortedSbDays, 0.95) : null;
+      !canonicalQuality.blocked && sortedSbDays.length > 0
+        ? percentile(sortedSbDays, 0.95)
+        : null;
 
-    const commonTermMode = modeInt(termDaysAll);
-    const termMin = termDaysAll.length ? Math.min(...termDaysAll) : null;
-    const termMax = termDaysAll.length ? Math.max(...termDaysAll) : null;
+    const commonTermMode = !canonicalQuality.blocked
+      ? modeInt(termDaysAll)
+      : null;
+    const termMin =
+      !canonicalQuality.blocked && termDaysAll.length
+        ? Math.min(...termDaysAll)
+        : null;
+    const termMax =
+      !canonicalQuality.blocked && termDaysAll.length
+        ? Math.max(...termDaysAll)
+        : null;
 
     const sbWithinTermsPct =
-      sbWithinTermsKnownCount > 0
+      !canonicalQuality.blocked && sbWithinTermsKnownCount > 0
         ? (sbWithinTermsYesCount / sbWithinTermsKnownCount) * 100
         : null;
 
     const payments0to30Pct =
-      sbCount > 0 ? (sbBand0to30Count / sbCount) * 100 : null;
+      !canonicalQuality.blocked && sbCount > 0
+        ? (sbBand0to30Count / sbCount) * 100
+        : null;
 
     const payments31to60Pct =
-      sbCount > 0 ? (sbBand31to60Count / sbCount) * 100 : null;
+      !canonicalQuality.blocked && sbCount > 0
+        ? (sbBand31to60Count / sbCount) * 100
+        : null;
 
     const paymentsOver60Pct =
-      sbCount > 0 ? (sbBandOver60Count / sbCount) * 100 : null;
+      !canonicalQuality.blocked && sbCount > 0
+        ? (sbBandOver60Count / sbCount) * 100
+        : null;
 
     const sbTradeCreditPaymentsPct =
-      totalValue > 0 ? (sbValue / totalValue) * 100 : null;
+      !canonicalQuality.blocked && totalValue > 0
+        ? (sbValue / totalValue) * 100
+        : null;
     // logger.logEvent("info", "PTRS v2 metrics debug: SB trade credit %", {
     //   action: "PtrsV2MetricsSbTradeCreditDebug",
     //   ptrsId,
@@ -548,13 +548,11 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     const quality = {
       mode,
+      stageRowCount,
       basedOnRowCount: totalCount,
       sbRowCount: sbCount,
-      actualInvoiceDateRange: {
-        min: minInvoiceDate ? toIsoDateOnly(minInvoiceDate) : null,
-        max: maxInvoiceDate ? toIsoDateOnly(maxInvoiceDate) : null,
-      },
       missingInputs: makeMissingInputs(declarations),
+      canonical: canonicalQuality,
       notes: [],
       dataSignals: {
         missingTermDaysCount,
@@ -579,6 +577,12 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     if (peppolEnabledSbProcurementPct == null) {
       quality.notes.push(
         "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null)."
+      );
+    }
+
+    if (canonicalQuality.blocked) {
+      quality.notes.push(
+        "Metrics are blocked until required canonical fields are populated (see quality.canonical.missing). In particular, ensure trade_credit_payment and excluded_trade_credit_payment are mapped so the system knows which rows belong to the trade credit population."
       );
     }
 

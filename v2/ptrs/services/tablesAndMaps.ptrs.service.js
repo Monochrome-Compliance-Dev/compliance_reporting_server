@@ -16,6 +16,8 @@ const {
   buildDatasetIndexByRole,
   getDatasetSample,
 } = require("@/v2/ptrs/services/data.ptrs.service");
+
+const { normalizeAmountLike } = require("@/helpers/amountNormaliser");
 const { Op } = require("sequelize");
 
 module.exports = {
@@ -30,6 +32,202 @@ module.exports = {
   getFieldMap,
   saveFieldMap,
 };
+
+const {
+  PTRS_CANONICAL_CONTRACT,
+} = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
+
+const CANONICAL_FIELDS = Object.keys(PTRS_CANONICAL_CONTRACT?.fields || {});
+
+function toIsoDateOnlyUtc(d) {
+  if (!(d instanceof Date)) return null;
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function parseDateFlexible(value) {
+  if (value == null) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // dd/mm/yyyy
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3]);
+    if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy))
+      return null;
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+    if (
+      d.getUTCFullYear() !== yyyy ||
+      d.getUTCMonth() !== mm - 1 ||
+      d.getUTCDate() !== dd
+    )
+      return null;
+    return d;
+  }
+
+  // ISO-ish
+  const iso = new Date(s);
+  if (!Number.isNaN(iso.getTime())) return iso;
+
+  return null;
+}
+
+function diffDaysClamped(startDate, endDate) {
+  if (!(startDate instanceof Date) || !(endDate instanceof Date)) return null;
+  const ms = endDate.getTime() - startDate.getTime();
+  const days = ms / (1000 * 60 * 60 * 24);
+  if (!Number.isFinite(days)) return null;
+  // Regulator examples treat negatives as 0 in practice
+  return Math.max(0, Math.round(days));
+}
+
+function computePaymentTimeReference(data) {
+  // Regulator logic (worked example):
+  // - If invoice dates exist: use the shorter-of issue/receipt (i.e., choose the later date -> smaller diff to payment)
+  // - Else fallback to notice_for_payment_issue_date
+  // - Else fallback to supply_date
+  const issue = parseDateFlexible(data?.invoice_issue_date);
+  const receipt = parseDateFlexible(data?.invoice_receipt_date);
+
+  if (issue && receipt) {
+    const chosen = issue.getTime() >= receipt.getTime() ? issue : receipt;
+    return {
+      date: chosen,
+      kind: chosen === issue ? "invoice_issue" : "invoice_receipt",
+    };
+  }
+
+  if (issue) return { date: issue, kind: "invoice_issue" };
+  if (receipt) return { date: receipt, kind: "invoice_receipt" };
+
+  const notice = parseDateFlexible(data?.notice_for_payment_issue_date);
+  if (notice) return { date: notice, kind: "notice" };
+
+  const supply = parseDateFlexible(data?.supply_date);
+  if (supply) return { date: supply, kind: "supply" };
+
+  return { date: null, kind: null };
+}
+
+function ensureCanonicalRowShape(row) {
+  const out = { ...(row || {}) };
+
+  // Ensure all canonical keys exist (null if missing)
+  for (const k of CANONICAL_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = null;
+  }
+
+  // Ensure invoice_reference_number exists by the end of pipeline. If missing, generate deterministic surrogate.
+  if (!out.invoice_reference_number) {
+    const parts = [
+      out.payee_entity_abn || "",
+      out.payer_entity_abn || "",
+      out.payment_date || "",
+      out.payment_amount != null ? String(out.payment_amount) : "",
+      out.supply_date || "",
+      out.notice_for_payment_issue_date || "",
+      out.invoice_issue_date || "",
+      out.invoice_receipt_date || "",
+      out.row_no != null ? String(out.row_no) : "",
+    ].map((x) => String(x).trim());
+
+    // Lightweight deterministic hash without importing crypto here
+    const base = parts.join("|");
+    let h = 0;
+    for (let i = 0; i < base.length; i += 1) {
+      h = (h * 31 + base.charCodeAt(i)) >>> 0;
+    }
+    out.invoice_reference_number = `sys:${h.toString(16)}`;
+  }
+
+  // MVP assumption: all records are trade credit agreements unless explicitly mapped otherwise.
+  // This makes the trade credit population deterministic and unblocks metrics without field guessing.
+  if (out.trade_credit_payment !== true && out.trade_credit_payment !== false) {
+    out.trade_credit_payment = true;
+  }
+
+  // Unless explicitly flagged, rows are not excluded from trade credit totals.
+  if (
+    out.excluded_trade_credit_payment !== true &&
+    out.excluded_trade_credit_payment !== false
+  ) {
+    out.excluded_trade_credit_payment = false;
+  }
+
+  // Surface raw/effective payment term code into the canonical `payment_term` for UI + downstream.
+  // Deterministic projection only (no synonyms / guessing across fields).
+  // Priority:
+  //  1) existing canonical payment_term
+  //  2) effective term resolved earlier in the pipeline (invoice_payment_terms_effective)
+  //  3) mapped/raw invoice terms (invoice_payment_terms)
+  if (out.payment_term == null || String(out.payment_term).trim() === "") {
+    const eff = out.invoice_payment_terms_effective;
+    const inv = out.invoice_payment_terms;
+    if (eff != null && String(eff).trim() !== "")
+      out.payment_term = String(eff).trim();
+    else if (inv != null && String(inv).trim() !== "")
+      out.payment_term = String(inv).trim();
+  }
+
+  // Normalise canonical amount fields while preserving original sign.
+  // Metrics uses Math.abs() where needed, but rules may rely on the sign (e.g. discounts).
+  if (out.payment_amount != null && out.payment_amount !== "") {
+    const norm = normalizeAmountLike(out.payment_amount);
+    out.payment_amount = norm == null ? null : norm;
+  }
+
+  // Optional: keep invoice_amount consistent when present.
+  if (out.invoice_amount != null && out.invoice_amount !== "") {
+    const norm = normalizeAmountLike(out.invoice_amount);
+    out.invoice_amount = norm == null ? null : norm;
+  }
+
+  // Normalise payment_term_days when provided (e.g. "0010" -> 10).
+  if (out.payment_term_days != null && out.payment_term_days !== "") {
+    const n = Number(String(out.payment_term_days).trim());
+    out.payment_term_days = Number.isFinite(n) ? Math.round(n) : null;
+  }
+
+  // Derive payment_time_reference_* and payment_time_days
+  const ref = computePaymentTimeReference(out);
+  if (ref.date) {
+    out.payment_time_reference_date =
+      out.payment_time_reference_date || toIsoDateOnlyUtc(ref.date);
+    out.payment_time_reference_kind =
+      out.payment_time_reference_kind || ref.kind;
+
+    const paymentDate = parseDateFlexible(out.payment_date);
+    const days = diffDaysClamped(ref.date, paymentDate);
+    if (days != null)
+      out.payment_time_days =
+        out.payment_time_days != null ? out.payment_time_days : days;
+  }
+
+  // Normalise date fields to ISO yyyy-mm-dd where possible (keeps UI & metrics consistent)
+  const dateKeys = [
+    "supply_date",
+    "payment_date",
+    "notice_for_payment_issue_date",
+    "invoice_issue_date",
+    "invoice_receipt_date",
+    "invoice_due_date",
+    "payment_time_reference_date",
+  ];
+
+  for (const k of dateKeys) {
+    const d = parseDateFlexible(out[k]);
+    if (d) out[k] = toIsoDateOnlyUtc(d);
+  }
+
+  return out;
+}
 
 async function loadMappedRowsForPtrs({
   customerId,
@@ -81,7 +279,8 @@ async function loadMappedRowsForPtrs({
       }
     }
     // ensure row_no is present for downstream logic
-    return { ...base, row_no: r.rowNo };
+    const withRowNo = { ...base, row_no: r.rowNo };
+    return ensureCanonicalRowShape(withRowNo);
   });
 
   // Simple header inference from the mapped rows
@@ -661,7 +860,17 @@ async function buildMappedDatasetForPtrs({
       transaction: t,
     });
 
-    const total = Array.isArray(rows) ? rows.length : 0;
+    // Ensure canonical defaults/transforms are applied BEFORE persisting mapped rows.
+    // Stage reads from tbl_ptrs_mapped_row, so this is the correct place to guarantee
+    // trade credit flags + amount normalisation are present end-to-end.
+    const canonicalRows = (rows || []).map((r) => ensureCanonicalRowShape(r));
+
+    // Recompute headers from canonical rows to reflect any injected canonical keys.
+    const canonicalHeaders = Array.from(
+      new Set(canonicalRows.flatMap((row) => Object.keys(row || {})))
+    );
+
+    const total = Array.isArray(canonicalRows) ? canonicalRows.length : 0;
 
     // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot
     await db.PtrsMappedRow.destroy({
@@ -675,12 +884,12 @@ async function buildMappedDatasetForPtrs({
         safeMeta({ customerId, ptrsId })
       );
       await t.commit();
-      return { count: 0, headers: headers || [] };
+      return { count: 0, headers: canonicalHeaders || [] };
     }
 
     const nowIso = new Date().toISOString();
 
-    const payload = rows.map((row, index) => ({
+    const payload = canonicalRows.map((row, index) => ({
       customerId,
       ptrsId,
       // Prefer an explicit row_no from the composer if present; otherwise fallback to index
@@ -707,7 +916,9 @@ async function buildMappedDatasetForPtrs({
         customerId,
         ptrsId,
         rowsPersisted: total,
-        headersCount: Array.isArray(headers) ? headers.length : 0,
+        headersCount: Array.isArray(canonicalHeaders)
+          ? canonicalHeaders.length
+          : 0,
       })
     );
 
@@ -715,7 +926,7 @@ async function buildMappedDatasetForPtrs({
 
     return {
       count: total,
-      headers: headers || [],
+      headers: canonicalHeaders || [],
     };
   } catch (err) {
     if (!t.finished) {
@@ -1135,23 +1346,26 @@ async function composeMappedRowsForPtrs({
     srcRow,
     outRow,
   }) => {
-    const role = (sourceRole || "").toString().trim().toLowerCase();
     const col = sourceColumn;
     if (!col) return null;
 
-    // Custom values live on the already-mapped row
-    if (
-      role === "custom" ||
-      role === "customfield" ||
-      role === "customfields"
-    ) {
-      return (
-        pickFromRowLoose(outRow, col) ?? pickFromRowLoose(outRow, toSnake(col))
-      );
-    }
+    const colSnake = toSnake(col);
 
-    // For MVP we treat all non-custom roles as reading from the merged source row.
-    return pickFromRowLoose(srcRow, col);
+    // Deterministic key lookup only: exact key, then its snake_case form.
+    // Prefer already-mapped output row first (because mappings are stored in snake_case),
+    // then fall back to merged source row.
+
+    const fromOut =
+      pickFromRowLoose(outRow, col) ??
+      (colSnake ? pickFromRowLoose(outRow, colSnake) : null);
+
+    if (fromOut != null && String(fromOut).trim() !== "") return fromOut;
+
+    const fromSrc =
+      pickFromRowLoose(srcRow, col) ??
+      (colSnake ? pickFromRowLoose(srcRow, colSnake) : null);
+
+    return fromSrc;
   };
 
   // Build payment terms history index once (if a suitable dataset exists)

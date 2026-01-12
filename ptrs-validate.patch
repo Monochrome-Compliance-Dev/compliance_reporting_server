@@ -1,0 +1,472 @@
+diff --git a/v2/ptrs/services/stage.ptrs.service.js b/v2/ptrs/services/stage.ptrs.service.js
+index 9f2d3a1..b7c9f44 100644
+--- a/v2/ptrs/services/stage.ptrs.service.js
++++ b/v2/ptrs/services/stage.ptrs.service.js
+@@ -19,6 +19,7 @@ module.exports = {
+   stagePtrs,
+   getStagePreview,
++  getValidateSummary,
+ };
+@@ -330,6 +331,360 @@ async function getStagePreview({
+   }
+ }
+ 
++async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
++  if (!customerId) throw new Error("customerId is required");
++  if (!ptrsId) throw new Error("ptrsId is required");
++
++  const t = await beginTransactionWithCustomerContext(customerId);
++
++  try {
++    const baseWhere = `"customerId" = :customerId AND "ptrsId" = :ptrsId`;
++
++    // Exclusion logic: canonical exclude flag OR rule meta flag
++    const excludedExpr = `(
++      COALESCE((data->>'exclude_from_metrics')::boolean, false) = true
++      OR COALESCE((meta->'rules'->>'exclude')::boolean, false) = true
++    )`;
++
++    // Included trade credit population: not excluded, trade credit true, excluded_trade_credit_payment not true
++    const tradeCreditIncludedExpr = `(
++      NOT ${excludedExpr}
++      AND COALESCE((data->>'trade_credit_payment')::boolean, false) = true
++      AND COALESCE((data->>'excluded_trade_credit_payment')::boolean, false) = false
++    )`;
++
++    // Trade credit excluded (for reporting visibility): not excluded, trade credit true, but excluded_trade_credit_payment true
++    const tradeCreditExcludedExpr = `(
++      NOT ${excludedExpr}
++      AND COALESCE((data->>'trade_credit_payment')::boolean, false) = true
++      AND COALESCE((data->>'excluded_trade_credit_payment')::boolean, false) = true
++    )`;
++
++    const [countsRow] = await db.sequelize.query(
++      `
++      SELECT
++        COUNT(*)::int AS "stageRowCount",
++        SUM(CASE WHEN ${excludedExpr} THEN 1 ELSE 0 END)::int AS "excludedRowCount",
++        SUM(CASE WHEN NOT ${excludedExpr} THEN 1 ELSE 0 END)::int AS "includedRowCount",
++
++        SUM(CASE WHEN ${tradeCreditIncludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditIncludedCount",
++        SUM(CASE WHEN ${tradeCreditExcludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditExcludedCount",
++
++        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = true THEN 1 ELSE 0 END)::int AS "sbTrueCount",
++        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = false THEN 1 ELSE 0 END)::int AS "sbFalseCount",
++        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND (data->>'is_small_business') IS NULL THEN 1 ELSE 0 END)::int AS "sbUnknownCount"
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere}
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const stageRowCount = Number(countsRow?.stageRowCount) || 0;
++    const excludedRowCount = Number(countsRow?.excludedRowCount) || 0;
++    const includedRowCount = Number(countsRow?.includedRowCount) || 0;
++    const tradeCreditIncludedCount = Number(countsRow?.tradeCreditIncludedCount) || 0;
++    const tradeCreditExcludedCount = Number(countsRow?.tradeCreditExcludedCount) || 0;
++    const sbTrueCount = Number(countsRow?.sbTrueCount) || 0;
++    const sbFalseCount = Number(countsRow?.sbFalseCount) || 0;
++    const sbUnknownCount = Number(countsRow?.sbUnknownCount) || 0;
++
++    // Payment time breakdown by reference kind
++    const byKindRows = await db.sequelize.query(
++      `
++      SELECT
++        CASE
++          WHEN (data->>'payment_time_reference_kind') IS NULL OR (data->>'payment_time_reference_kind') = '' THEN 'missing'
++          ELSE (data->>'payment_time_reference_kind')
++        END AS kind,
++        COUNT(*)::int AS count
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
++      GROUP BY 1
++      ORDER BY 1
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const kindsWanted = ["invoice_issue", "invoice_receipt", "notice", "supply", "missing"];
++    const kindCountMap = new Map(kindsWanted.map((k) => [k, 0]));
++    for (const r of byKindRows || []) {
++      const k = String(r.kind || "missing");
++      if (!kindCountMap.has(k)) continue;
++      kindCountMap.set(k, Number(r.count) || 0);
++    }
++
++    const paymentTimeByReferenceKind = Array.from(kindCountMap.entries()).map(
++      ([kind, count]) => ({ kind, count })
++    );
++
++    const [missingTimeRow] = await db.sequelize.query(
++      `
++      SELECT
++        SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date,
++        SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_reference_date,
++        SUM(CASE WHEN ((data->>'payment_date') IS NULL OR (data->>'payment_date') = '') AND ((data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '') THEN 1 ELSE 0 END)::int AS missing_both
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const missingPaymentDate = Number(missingTimeRow?.missing_payment_date) || 0;
++    const missingReferenceDate = Number(missingTimeRow?.missing_reference_date) || 0;
++    const missingBoth = Number(missingTimeRow?.missing_both) || 0;
++
++    const paymentTimeExamples = await db.sequelize.query(
++      `
++      SELECT
++        data->>'invoice_reference_number' AS invoice_reference_number,
++        data->>'payment_date' AS payment_date,
++        data->>'payment_time_reference_date' AS payment_time_reference_date,
++        data->>'payment_time_reference_kind' AS payment_time_reference_kind,
++        (data->>'payment_time_days')::int AS payment_time_days
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
++      ORDER BY "rowNo" ASC
++      LIMIT 5
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    // Payment terms dedupe table
++    const paymentTermsRows = await db.sequelize.query(
++      `
++      SELECT
++        CASE
++          WHEN (data->>'payment_term') IS NULL OR (data->>'payment_term') = '' THEN '(blank)'
++          ELSE (data->>'payment_term')
++        END AS payment_term_raw,
++        NULLIF((data->>'payment_term_days'), '')::int AS payment_term_days,
++        CASE
++          WHEN (data->>'payment_term') IS NULL OR (data->>'payment_term') = '' THEN 'missing'
++          WHEN (data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '' THEN 'unmapped'
++          WHEN (data->>'payment_term_source') IS NOT NULL AND (data->>'payment_term_source') <> '' THEN (data->>'payment_term_source')
++          ELSE 'unknown'
++        END AS payment_term_source,
++        COUNT(*)::int AS count
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
++      GROUP BY 1,2,3
++      ORDER BY 4 DESC, 1 ASC
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const unmappedRawRows = await db.sequelize.query(
++      `
++      SELECT
++        (data->>'payment_term') AS raw,
++        COUNT(*)::int AS count
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere}
++        AND ${tradeCreditIncludedExpr}
++        AND (data->>'payment_term') IS NOT NULL
++        AND (data->>'payment_term') <> ''
++        AND ((data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '')
++      GROUP BY 1
++      ORDER BY 2 DESC, 1 ASC
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const unmappedRawValues = (unmappedRawRows || [])
++      .map((r) => String(r.raw))
++      .filter((v) => v != null && v.trim() !== "");
++    const unmappedCount = (unmappedRawRows || []).reduce(
++      (acc, r) => acc + (Number(r.count) || 0),
++      0
++    );
++
++    // Canonical missing counts within the trade credit included population
++    const [missingCanonRow] = await db.sequelize.query(
++      `
++      SELECT
++        SUM(CASE WHEN (data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '' THEN 1 ELSE 0 END)::int AS missing_payment_term_days,
++        SUM(CASE WHEN (data->>'is_small_business') IS NULL OR (data->>'is_small_business') = '' THEN 1 ELSE 0 END)::int AS missing_is_small_business,
++        SUM(CASE WHEN (data->>'payment_time_days') IS NULL OR (data->>'payment_time_days') = '' THEN 1 ELSE 0 END)::int AS missing_payment_time_days,
++        SUM(CASE WHEN (data->>'payment_amount') IS NULL OR (data->>'payment_amount') = '' THEN 1 ELSE 0 END)::int AS missing_payment_amount,
++        SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_time_reference_date,
++        SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date
++      FROM tbl_ptrs_stage_row
++      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
++      `,
++      {
++        transaction: t,
++        replacements: { customerId, ptrsId },
++        type: db.sequelize.QueryTypes.SELECT,
++      }
++    );
++
++    const missingByField = [];
++    const pushMissing = (field, count) => {
++      const n = Number(count) || 0;
++      if (n > 0) missingByField.push({ field, count: n });
++    };
++
++    pushMissing("payment_term_days", missingCanonRow?.missing_payment_term_days);
++    pushMissing("is_small_business", missingCanonRow?.missing_is_small_business);
++    pushMissing("payment_time_days", missingCanonRow?.missing_payment_time_days);
++    pushMissing("payment_amount", missingCanonRow?.missing_payment_amount);
++    pushMissing(
++      "payment_time_reference_date",
++      missingCanonRow?.missing_payment_time_reference_date
++    );
++    pushMissing("payment_date", missingCanonRow?.missing_payment_date);
++
++    const paymentTimeMissingTotal = missingPaymentDate + missingReferenceDate + missingBoth;
++    const paymentTimeStatus = paymentTimeMissingTotal > 0 ? "fail" : "pass";
++
++    const missingTermDays = Number(missingCanonRow?.missing_payment_term_days) || 0;
++    const paymentTermsStatus = missingTermDays > 0 ? "fail" : "pass";
++
++    const smallBusinessStatus = sbUnknownCount > 0 ? "warn" : "pass";
++
++    let metricsReadyStatus = "pass";
++    if (paymentTimeStatus === "fail" || paymentTermsStatus === "fail") {
++      metricsReadyStatus = "fail";
++    } else if (smallBusinessStatus === "warn") {
++      metricsReadyStatus = "warn";
++    }
++
++    const meta = {
++      ptrsId,
++      profileId: profileId || null,
++      generatedAt: new Date().toISOString(),
++      mode: "read",
++    };
++
++    const summary = {
++      stage: {
++        stageRowCount,
++        excludedRowCount,
++        includedRowCount,
++      },
++      population: {
++        tradeCreditIncludedCount,
++        tradeCreditExcludedCount,
++        smallBusinessTrueCount: sbTrueCount,
++        smallBusinessFalseCount: sbFalseCount,
++        smallBusinessUnknownCount: sbUnknownCount,
++      },
++    };
++
++    const gates = {
++      paymentTime: {
++        status: paymentTimeStatus,
++        missingCount: paymentTimeMissingTotal,
++        missingFields:
++          paymentTimeStatus === "fail"
++            ? ["payment_date", "payment_time_reference_date"]
++            : [],
++        message:
++          paymentTimeStatus === "fail"
++            ? "Payment time is missing required date inputs for some included trade credit rows."
++            : "Payment time is available for all included trade credit rows.",
++      },
++      paymentTerms: {
++        status: paymentTermsStatus,
++        missingCount: missingTermDays,
++        missingFields: paymentTermsStatus === "fail" ? ["payment_term_days"] : [],
++        message:
++          paymentTermsStatus === "fail"
++            ? "Payment term days are missing for some included trade credit rows."
++            : "Payment term days are available for all included trade credit rows.",
++      },
++      smallBusiness: {
++        status: smallBusinessStatus,
++        missingCount: sbUnknownCount,
++        missingFields: smallBusinessStatus === "warn" ? ["is_small_business"] : [],
++        message:
++          smallBusinessStatus === "warn"
++            ? "Small business status is missing; SB-only metrics will be unavailable until SBI results are applied."
++            : "Small business status is available for all included trade credit rows.",
++      },
++      metricsReady: {
++        status: metricsReadyStatus,
++        message:
++          metricsReadyStatus === "fail"
++            ? "Metrics are blocked until required canonical fields are populated."
++            : metricsReadyStatus === "warn"
++              ? "Metrics can run, but SB-only metrics may be incomplete until SBI is applied."
++              : "Metrics are ready.",
++      },
++    };
++
++    const sections = {
++      paymentTime: {
++        byReferenceKind: paymentTimeByReferenceKind,
++        missing: {
++          count: paymentTimeMissingTotal,
++          reasons: [
++            { reason: "missing_payment_date", count: missingPaymentDate },
++            { reason: "missing_reference_date", count: missingReferenceDate },
++            { reason: "missing_both", count: missingBoth },
++          ],
++        },
++        examples: Array.isArray(paymentTimeExamples) ? paymentTimeExamples : [],
++      },
++      paymentTerms: {
++        rows: Array.isArray(paymentTermsRows) ? paymentTermsRows : [],
++        unmapped: {
++          rawValues: unmappedRawValues,
++          count: unmappedCount,
++        },
++      },
++      smallBusiness: {
++        counts: {
++          true: sbTrueCount,
++          false: sbFalseCount,
++          unknown: sbUnknownCount,
++        },
++        notes: [
++          "Small business status is required for SB-only metrics. Upload SBI results to populate is_small_business.",
++        ],
++      },
++      canonical: {
++        missingByField,
++        populationDefinition: {
++          includedRule:
++            "trade_credit_payment===true && excluded_trade_credit_payment!==true && exclude_from_metrics!==true (and meta.rules.exclude!==true)",
++        },
++      },
++    };
++
++    const actions = {
++      downloads: [
++        {
++          key: "unmapped_payment_terms",
++          label: "Download unmapped payment terms (CSV)",
++          enabled: unmappedCount > 0,
++          count: unmappedCount,
++        },
++        {
++          key: "rows_missing_payment_time_reference",
++          label: "Download rows missing payment time reference (CSV)",
++          enabled: missingReferenceDate > 0 || missingBoth > 0,
++          count: (missingReferenceDate || 0) + (missingBoth || 0),
++        },
++      ],
++    };
++
++    await t.commit();
++
++    return { meta, summary, gates, sections, actions };
++  } catch (err) {
++    if (!t.finished) {
++      try {
++        await t.rollback();
++      } catch (_) {
++        // ignore
++      }
++    }
++    throw err;
++  }
++}
++
+diff --git a/v2/ptrs/controllers/stage.ptrs.controller.js b/v2/ptrs/controllers/stage.ptrs.controller.js
+index 3c2b5b1..7f8fd4a 100644
+--- a/v2/ptrs/controllers/stage.ptrs.controller.js
++++ b/v2/ptrs/controllers/stage.ptrs.controller.js
+@@ -9,6 +9,7 @@ module.exports = {
+   stagePtrs,
+   getStagePreview,
++  getValidateSummary,
+ };
+ 
+ /**
+@@ -162,3 +163,57 @@ async function getStagePreview(req, res, next) {
+     return next(error);
+   }
+ }
++
++/**
++ * GET /api/v2/ptrs/:id/validate
++ * Returns Validate summary payload (SQL-aggregated) to drive the Validate UI.
++ */
++async function getValidateSummary(req, res, next) {
++  const customerId = req.effectiveCustomerId;
++  const userId = req.auth?.id;
++  const ip = req.ip;
++  const device = req.headers["user-agent"];
++  const ptrsId = req.params.id;
++
++  const profileId = req.query?.profileId ?? req.body?.profileId ?? null;
++
++  try {
++    if (!customerId) {
++      return res
++        .status(400)
++        .json({ status: "error", message: "Customer ID missing" });
++    }
++
++    const result = await stageService.getValidateSummary({
++      customerId,
++      ptrsId,
++      profileId,
++    });
++
++    await auditService.logEvent({
++      customerId,
++      userId,
++      ip,
++      device,
++      action: "PtrsV2ValidateSummary",
++      entity: "PtrsValidate",
++      entityId: ptrsId,
++      details: {
++        stageRowCount: result?.summary?.stage?.stageRowCount || 0,
++        tradeCreditIncludedCount:
++          result?.summary?.population?.tradeCreditIncludedCount || 0,
++      },
++    });
++
++    return res.status(200).json({ status: "success", data: result });
++  } catch (error) {
++    logger.logEvent("error", "Error fetching PTRS v2 validate summary", {
++      action: "PtrsV2ValidateSummary",
++      ptrsId,
++      customerId,
++      userId,
++      error: error.message,
++      statusCode: error.statusCode || 500,
++    });
++    return next(error);
++  }
++}
+diff --git a/v2/ptrs/routes/stage.ptrs.routes.js b/v2/ptrs/routes/stage.ptrs.routes.js
+index 0c8b0b8..6c0cb9f 100644
+--- a/v2/ptrs/routes/stage.ptrs.routes.js
++++ b/v2/ptrs/routes/stage.ptrs.routes.js
+@@ -21,4 +21,7 @@ router.post("/:id/stage", requirePtrs, stageController.stagePtrs);
+ // Preview staged rows (read-only, small page)
+ router.get("/:id/stage/preview", requirePtrs, stageController.getStagePreview);
+ 
++// Validate summary (aggregated view to drive Validate UI)
++router.get("/:id/validate", requirePtrs, stageController.getValidateSummary);
++
+ module.exports = router;

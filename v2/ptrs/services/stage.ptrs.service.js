@@ -1,5 +1,4 @@
 const db = require("@/db/database");
-const { pickFromRowLoose } = require("./data.ptrs.service");
 
 const {
   safeMeta,
@@ -24,55 +23,6 @@ module.exports = {
   stagePtrs,
   getStagePreview,
 };
-
-function normaliseFieldMapRows(fieldMapRows) {
-  if (!Array.isArray(fieldMapRows)) return [];
-  return fieldMapRows
-    .filter((r) => r && typeof r === "object")
-    .map((r) => ({
-      canonicalField: r.canonicalField,
-      sourceRole: r.sourceRole,
-      sourceColumn: r.sourceColumn,
-      transformType: r.transformType,
-      transformConfig: r.transformConfig,
-    }))
-    .filter((r) => r.canonicalField && r.sourceRole);
-}
-
-function applyFieldMapToRow(row, fieldMap) {
-  // Preserve internal/meta fields we rely on
-  const out = {};
-  if (row && typeof row === "object") {
-    for (const [k, v] of Object.entries(row)) {
-      if (k === "row_no" || k === "rowNo" || k.startsWith("_")) {
-        out[k] = v;
-      }
-    }
-  }
-
-  if (!row || typeof row !== "object") return out;
-
-  for (const m of fieldMap) {
-    const key = m.canonicalField;
-
-    // Prefer explicit sourceColumn; fall back to canonicalField name.
-    const header = m.sourceColumn || key;
-
-    // Loose pick (handles case/spacing/snake variants)
-    const val = pickFromRowLoose(row, header);
-
-    // Keep key present even if missing (null), so metrics/reporting can detect gaps.
-    out[key] = val != null ? val : null;
-  }
-
-  return out;
-}
-
-function applyFieldMapToRows(rows, fieldMap) {
-  if (!Array.isArray(rows) || !rows.length) return rows || [];
-  if (!Array.isArray(fieldMap) || !fieldMap.length) return rows;
-  return rows.map((r) => applyFieldMapToRow(r, fieldMap));
-}
 
 /**
  * Stage data for a ptrs. Reuses previewTransform pipeline to project/optionally filter, then
@@ -225,33 +175,20 @@ async function stagePtrs({
       transaction: t,
     });
 
-    // Canonical field mapping: if a profile-scoped field map exists, project rows to canonical fields.
-    let fieldMap = [];
-    if (profileId && db.PtrsFieldMap) {
-      const fmRows = await db.PtrsFieldMap.findAll({
-        where: { customerId, ptrsId, profileId },
-        order: [["canonicalField", "ASC"]],
-        transaction: t,
-        raw: true,
-      });
-      fieldMap = normaliseFieldMapRows(fmRows);
-    }
-
-    const projectedRows = applyFieldMapToRows(baseRows, fieldMap);
+    // Canonical fields are already materialised on mapped rows before staging.
+    // Staging must not re-project/guess fields.
+    const rows = baseRows;
 
     slog.info("PTRS v2 stagePtrs: loaded mapped rows", {
       action: "PtrsV2StagePtrsLoadedMappedRows",
       customerId,
       ptrsId,
-      rowsCount: Array.isArray(projectedRows) ? projectedRows.length : 0,
-      sampleRowKeys:
-        projectedRows && projectedRows[0]
-          ? Object.keys(projectedRows[0])
-          : null,
+      rowsCount: Array.isArray(rows) ? rows.length : 0,
+      sampleRowKeys: rows && rows[0] ? Object.keys(rows[0]) : null,
     });
 
     // 2) Apply row-level rules (if any) independently of preview
-    let rows = projectedRows;
+    let stagedRows = rows;
     let rulesStats = null;
 
     try {
@@ -275,10 +212,10 @@ async function stagePtrs({
       }
 
       const rulesResult = applyRules(
-        rows,
+        stagedRows,
         Array.isArray(rowRules) ? rowRules : []
       );
-      rows = rulesResult.rows || rows;
+      stagedRows = rulesResult.rows || stagedRows;
       rulesStats = rulesResult.stats || null;
     } catch (err) {
       slog.warn("PTRS v2 stagePtrs: failed to apply row rules", {
@@ -292,15 +229,34 @@ async function stagePtrs({
     // 3) Persist into tbl_ptrs_stage_row if requested
     let persistedCount = null;
     if (persist) {
-      const basePayload = rows.map((r) => {
+      const basePayload = stagedRows.map((r) => {
         const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
 
         // Persist the full resolved row into JSONB `data`.
         // NOTE: tbl_ptrs_stage_row only has: customerId, ptrsId, rowNo, data, errors, meta (+ timestamps)
-        const dataObj =
+        const dataObjBase =
           r && typeof r === "object" && Object.keys(r).length
             ? r
             : { _warning: "⚠️ No mapped data for this row" };
+
+        // If the rules engine excluded the row, persist canonical exclusion fields.
+        const shouldExclude = !!r?.exclude;
+        const excludeComment =
+          Array.isArray(r?._warnings) && r._warnings.length
+            ? String(r._warnings[0])
+            : shouldExclude
+              ? "Excluded by rule"
+              : null;
+
+        const dataObj = shouldExclude
+          ? {
+              ...dataObjBase,
+              exclude_from_metrics: true,
+              exclude_comment: excludeComment,
+              exclude_set_at: new Date().toISOString(),
+              exclude_set_by: userId || null,
+            }
+          : dataObjBase;
 
         return {
           customerId: String(customerId),
@@ -314,6 +270,7 @@ async function stagePtrs({
             rules: {
               applied: Array.isArray(r?._appliedRules) ? r._appliedRules : [],
               exclude: !!r?.exclude,
+              exclude_comment: dataObj?.exclude_comment || null,
             },
           },
         };
@@ -431,8 +388,8 @@ async function stagePtrs({
           executionRunId: executionRun.id,
           status: "success",
           finishedAt: new Date(),
-          rowsIn: rows.length,
-          rowsOut: rows.length,
+          rowsIn: stagedRows.length,
+          rowsOut: stagedRows.length,
           stats: { rules: rulesStats },
           errorMessage: null,
           updatedBy: userId || null,
@@ -455,11 +412,11 @@ async function stagePtrs({
     await t.commit();
 
     return {
-      rowsIn: rows.length,
-      rowsOut: rows.length,
+      rowsIn: stagedRows.length,
+      rowsOut: stagedRows.length,
       persistedCount,
       tookMs,
-      sample: rows[0] || null,
+      sample: stagedRows[0] || null,
       stats: { rules: rulesStats },
     };
   } catch (err) {
