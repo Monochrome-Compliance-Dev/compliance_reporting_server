@@ -28,12 +28,42 @@ function isProbablyAbn(abn) {
 }
 
 function parseAusDate(value) {
-  // Expecting dd/mm/yyyy (common in uploaded CSVs). Returns Date or null.
+  // Accept canonical ISO (yyyy-mm-dd) and legacy AU format (dd/mm/yyyy).
+  // Returns a Date (UTC midnight) or null.
   if (value == null) return null;
   const s = String(value).trim();
   if (!s) return null;
 
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+  // ISO: yyyy-mm-dd (canonical stage format)
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) {
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
+
+    if (
+      !Number.isFinite(dd) ||
+      !Number.isFinite(mm) ||
+      !Number.isFinite(yyyy)
+    ) {
+      return null;
+    }
+
+    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+
+    if (
+      d.getUTCFullYear() !== yyyy ||
+      d.getUTCMonth() !== mm - 1 ||
+      d.getUTCDate() !== dd
+    ) {
+      return null;
+    }
+
+    return d;
+  }
+
+  // AU: dd/mm/yyyy (common in uploaded CSVs)
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
   if (!m) return null;
 
   const dd = Number(m[1]);
@@ -256,7 +286,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
             toIssue(
               r,
               "INVOICE_DATE_INVALID",
-              "invoice_issue_date is not a valid dd/mm/yyyy date",
+              "invoice_issue_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
               {
                 field: "invoice_issue_date",
                 value: invoiceDateRaw,
@@ -282,7 +312,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
             toIssue(
               r,
               "PAYMENT_DATE_INVALID",
-              "payment_date is not a valid dd/mm/yyyy date",
+              "payment_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
               {
                 field: "payment_date",
                 value: paymentDateRaw,

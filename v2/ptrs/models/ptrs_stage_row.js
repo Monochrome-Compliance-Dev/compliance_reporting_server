@@ -39,7 +39,7 @@ function model(sequelize) {
   const PtrsStageRow = sequelize.define("PtrsStageRow", attributes, {
     tableName: "tbl_ptrs_stage_row",
     timestamps: true,
-    paranoid: false,
+    paranoid: true,
     indexes: [
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },

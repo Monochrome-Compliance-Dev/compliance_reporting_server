@@ -19,6 +19,8 @@ router.post(
   requirePtrs,
   tmController.buildMappedDataset
 );
+// Find compatible maps for this PTRS run
+router.get("/compatible-maps", requirePtrs, tmController.listPtrsWithMap);
 
 // Peek at staged rows
 router.get("/:id/sample", requirePtrs, tmController.getSample);

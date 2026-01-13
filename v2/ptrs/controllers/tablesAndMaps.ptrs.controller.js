@@ -13,6 +13,7 @@ module.exports = {
   buildMappedDataset,
   getFieldMap,
   saveFieldMap,
+  listPtrsWithMap,
 };
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
@@ -631,6 +632,42 @@ async function getUnifiedSample(req, res, next) {
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/compatible-maps
+ * Returns PTRS runs that have a saved column map, including mapMeta for compatibility filtering.
+ */
+async function listPtrsWithMap(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    const items = await tmPtrsService.listCompatibleMaps({ customerId });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2ListCompatibleMaps",
+      entity: "Ptrs",
+      entityId: null,
+      details: { count: Array.isArray(items) ? items.length : 0 },
+    });
+
+    return res.status(200).json({ status: "success", data: { items } });
+  } catch (error) {
     return next(error);
   }
 }

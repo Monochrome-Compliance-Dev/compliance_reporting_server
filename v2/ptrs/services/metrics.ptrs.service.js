@@ -299,6 +299,19 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
         missingSbFlagCount += 1;
       }
 
+      // Term days are an all-rows metric input (common term / forecast term), not SB-only.
+      const termDaysRawAll = data?.payment_term_days;
+      const termDaysAllRow =
+        termDaysRawAll == null || termDaysRawAll === ""
+          ? null
+          : Number(termDaysRawAll);
+
+      if (termDaysAllRow == null || !Number.isFinite(termDaysAllRow)) {
+        missingTermDaysCount += 1;
+      } else {
+        termDaysAll.push(Math.round(termDaysAllRow));
+      }
+
       // Only compute SB metrics when SB flag is true.
       if (isSmallBusiness === true) {
         sbCount += 1;
@@ -310,18 +323,6 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
           paymentTimeDaysRaw == null || paymentTimeDaysRaw === ""
             ? null
             : Number(paymentTimeDaysRaw);
-
-        const termDaysRaw = data?.payment_term_days;
-        const termDays =
-          termDaysRaw == null || termDaysRaw === ""
-            ? null
-            : Number(termDaysRaw);
-
-        if (termDays == null || !Number.isFinite(termDays)) {
-          missingTermDaysCount += 1;
-        } else {
-          termDaysAll.push(Math.round(termDays));
-        }
 
         if (paymentTimeDays == null || !Number.isFinite(paymentTimeDays)) {
           missingDatesCount += 1;
@@ -343,65 +344,80 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
               sbBandOver60Value += Math.abs(amount);
           }
 
-          if (termDays != null && Number.isFinite(termDays)) {
+          if (termDaysAllRow != null && Number.isFinite(termDaysAllRow)) {
             sbWithinTermsKnownCount += 1;
-            if (pt <= Math.round(termDays)) sbWithinTermsYesCount += 1;
+            if (pt <= Math.round(termDaysAllRow)) sbWithinTermsYesCount += 1;
           }
         }
       }
     }
 
-    // Canonical-mode quality gate (non-blocking navigation):
+    // Canonical-mode quality gate
+    // IMPORTANT:
+    // - We only *block* metrics when we can't even define the trade credit population.
+    // - Missing term days / SB flag / etc should degrade specific metrics, not blank everything.
     const canonicalQuality = {
       blocked: false,
       missing: [],
     };
 
-    // Add missing trade credit flag counts (block gating)
-    if (missingTradeCreditFlagCount > 0)
+    // Trade credit population definition requires these booleans to be explicit.
+    if (missingTradeCreditFlagCount > 0) {
       canonicalQuality.missing.push({
         field: "trade_credit_payment",
         count: missingTradeCreditFlagCount,
       });
+    }
 
-    if (missingExcludedTradeCreditFlagCount > 0)
+    if (missingExcludedTradeCreditFlagCount > 0) {
       canonicalQuality.missing.push({
         field: "excluded_trade_credit_payment",
         count: missingExcludedTradeCreditFlagCount,
       });
+    }
 
-    // For SB metrics, require: is_small_business, payment_time_days, payment_term_days, payment_amount
-    if (missingSbFlagCount > 0)
+    // SB metrics quality signals (do NOT block)
+    if (missingSbFlagCount > 0) {
       canonicalQuality.missing.push({
         field: "is_small_business",
         count: missingSbFlagCount,
       });
-    if (missingDatesCount > 0)
-      canonicalQuality.missing.push({
-        field: "payment_time_days",
-        count: missingDatesCount,
-      });
-    if (missingTermDaysCount > 0)
+    }
+
+    // Term days quality signal (do NOT block) – we can still compute payment-time stats without it.
+    if (missingTermDaysCount > 0) {
       canonicalQuality.missing.push({
         field: "payment_term_days",
         count: missingTermDaysCount,
       });
-    if (missingAmountCount > 0)
+    }
+
+    // Payment time quality signal (do NOT block) – affected metrics will be null if we have no SB payment days.
+    if (missingDatesCount > 0) {
+      canonicalQuality.missing.push({
+        field: "payment_time_days",
+        count: missingDatesCount,
+      });
+    }
+
+    // Amount quality signal (do NOT block) – percentage-of-value metrics will be null if totalValue is 0.
+    if (missingAmountCount > 0) {
       canonicalQuality.missing.push({
         field: "payment_amount",
         count: missingAmountCount,
       });
-
-    // Block if any canonical requirements are missing and we have rows that should be measurable.
-    // - If there are staged rows but none qualify as trade credit, the most likely cause is that
-    //   trade_credit_payment / excluded_trade_credit_payment weren't mapped.
-    if (stageRowCount > 0 && totalCount === 0) {
-      canonicalQuality.blocked = true;
     }
 
-    if (canonicalQuality.missing.length > 0) {
-      // Block if there are SB rows expected (sbCount > 0) OR trade credit rows are absent (handled above).
-      if (sbCount > 0) canonicalQuality.blocked = true;
+    // Block ONLY if we cannot define the trade credit population.
+    // This happens when:
+    // - the canonical booleans are not explicit for some rows, OR
+    // - we have staged rows, but zero rows qualify as trade credit (likely unmapped flags).
+    if (
+      missingTradeCreditFlagCount > 0 ||
+      missingExcludedTradeCreditFlagCount > 0 ||
+      (stageRowCount > 0 && totalCount === 0)
+    ) {
+      canonicalQuality.blocked = true;
     }
 
     const sortedSbDays = sbPaymentDays.slice().sort((a, b) => a - b);
@@ -582,7 +598,7 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     if (canonicalQuality.blocked) {
       quality.notes.push(
-        "Metrics are blocked until required canonical fields are populated (see quality.canonical.missing). In particular, ensure trade_credit_payment and excluded_trade_credit_payment are mapped so the system knows which rows belong to the trade credit population."
+        "Metrics are blocked because the trade credit population cannot be reliably determined (see quality.canonical.missing). Ensure trade_credit_payment and excluded_trade_credit_payment are explicitly mapped so the system knows which rows belong to the trade credit population."
       );
     }
 

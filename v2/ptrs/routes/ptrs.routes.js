@@ -20,16 +20,9 @@ router.get("/blueprint", requirePtrs, ptrsController.getBlueprint);
 
 // List ptrs
 router.get("", requirePtrs, ptrsController.listPtrs);
-router.get("/with-map", requirePtrs, ptrsController.listPtrsWithMap);
 
 // Create a ptrs metadata record (returns ptrs id and metadata)
 router.post("", requirePtrs, ptrsController.createPtrs);
-
-// Read a single ptrs by id
-router.get("/:id", requirePtrs, ptrsController.getPtrs);
-
-// Update currentStep when user progresses through steps
-router.put("/:id", requirePtrs, ptrsController.updatePtrs);
 
 // Execution runs (tracking step runs + hashes)
 router.post(
@@ -98,5 +91,11 @@ router.use("/", validateRoutes);
 
 // metrics
 router.use("/", metricsRoutes);
+
+// Read a single ptrs by id
+router.get("/:id", requirePtrs, ptrsController.getPtrs);
+
+// Update currentStep when user progresses through steps
+router.put("/:id", requirePtrs, ptrsController.updatePtrs);
 
 module.exports = router;

@@ -18,7 +18,66 @@ const {
 } = require("@/v2/ptrs/services/data.ptrs.service");
 
 const { normalizeAmountLike } = require("@/helpers/amountNormaliser");
+
 const { Op } = require("sequelize");
+
+// --- Map compatibility helpers ---
+function normHeaderKey(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+function buildMapMetaFromMappings(mappings) {
+  const m =
+    mappings && typeof mappings === "object" && !Array.isArray(mappings)
+      ? mappings
+      : {};
+  const sourceHeaders = Object.keys(m);
+  const sourceHeadersNorm = sourceHeaders.map(normHeaderKey).filter(Boolean);
+
+  const targets = Array.from(
+    new Set(
+      Object.values(m)
+        .map((cfg) => cfg?.field)
+        .filter((v) => v != null && String(v).trim() !== "")
+        .map((v) => String(v).trim())
+    )
+  );
+
+  return {
+    version: 1,
+    sourceHeaders,
+    sourceHeadersNorm,
+    targets,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function safeParseJsonObject(v) {
+  if (v == null) return null;
+  if (typeof v === "object" && !Array.isArray(v)) return v;
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function extractMapMetaFromExtras(extras) {
+  const obj = safeParseJsonObject(extras) || {};
+  const meta = obj?.mapMeta;
+  if (!meta || typeof meta !== "object") return null;
+  // No shims: only accept the current version.
+  if (meta.version !== 1) return null;
+  return meta;
+}
 
 module.exports = {
   getMap,
@@ -31,6 +90,7 @@ module.exports = {
   // getUnifiedSample,
   getFieldMap,
   saveFieldMap,
+  listCompatibleMaps,
 };
 
 const {
@@ -360,6 +420,60 @@ async function getColumnMap({ customerId, ptrsId, transaction = null }) {
     return map || null;
   } catch (err) {
     if (!isExternalTx && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/**
+ * List PTRS runs that have a saved column map, including mapMeta extracted from map.extras.
+ * Used by the FE to show compatible maps without N+1 getMap calls.
+ */
+async function listCompatibleMaps({ customerId }) {
+  if (!customerId) throw new Error("customerId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const maps = await db.PtrsColumnMap.findAll({
+      where: { customerId },
+      attributes: ["ptrsId", "extras"],
+      raw: true,
+      transaction: t,
+    });
+
+    const ptrsIds = maps.map((m) => m.ptrsId).filter(Boolean);
+    if (!ptrsIds.length) {
+      await t.commit();
+      return [];
+    }
+
+    const metaByPtrsId = new Map();
+    for (const m of maps) {
+      metaByPtrsId.set(m.ptrsId, extractMapMetaFromExtras(m.extras));
+    }
+
+    const ptrsRows = await db.Ptrs.findAll({
+      where: { customerId, id: { [Op.in]: ptrsIds } },
+      order: [
+        ["updatedAt", "DESC"],
+        ["createdAt", "DESC"],
+      ],
+      raw: true,
+      transaction: t,
+    });
+
+    const items = (ptrsRows || []).map((r) => ({
+      ...r,
+      mapMeta: metaByPtrsId.get(r.id) || null,
+    }));
+
+    await t.commit();
+    return items;
+  } catch (err) {
+    if (!t.finished) {
       try {
         await t.rollback();
       } catch (_) {}
@@ -777,6 +891,20 @@ async function saveColumnMap({
       profileId: resolveField(profileId, existing?.profileId || null),
       customFields: resolveField(customFields, existing?.customFields || null),
     };
+
+    // --- Persist compatibility metadata on every save (authoritative server-side) ---
+    // Store in extras.mapMeta so the UI can list compatible maps without N+1 getMap calls.
+    const existingExtrasObj = safeParseJsonObject(existing?.extras) || {};
+    const incomingExtrasObj = safeParseJsonObject(payload.extras) || {};
+
+    const nextExtras = {
+      ...existingExtrasObj,
+      ...incomingExtrasObj,
+    };
+
+    nextExtras.mapMeta = buildMapMetaFromMappings(payload.mappings);
+
+    payload.extras = nextExtras;
 
     slog.info(
       "PTRS v2 saveColumnMap: upserting map",
