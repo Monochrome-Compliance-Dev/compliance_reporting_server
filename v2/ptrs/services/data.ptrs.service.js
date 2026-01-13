@@ -19,7 +19,18 @@ module.exports = {
   removeDataset,
   getDatasetSample,
   buildDatasetIndexByRole,
+  importPaymentTermChangesFromDataset,
+  listPaymentTermChanges,
 };
+
+const PAYMENT_TERM_CHANGE_ROLES = new Set([
+  "paymenttermchanges",
+  "paymenttermchange",
+  "payment_term_changes",
+  "payment_term_change",
+  "payment-term-changes",
+  "payment-term-change",
+]);
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
 
@@ -334,8 +345,80 @@ async function addDataset({
       { transaction: t }
     );
 
+    // Commit the dataset upload first; the subsequent import runs its own txn.
     await t.commit();
-    return row.get({ plain: true });
+
+    const plain = row.get({ plain: true });
+
+    // If this dataset is a payment-term-change file, immediately import it into
+    // tbl_ptrs_payment_term_change so Stage can apply it deterministically.
+    // We fail loudly here because a silent import failure will cause confusing metrics later.
+    if (PAYMENT_TERM_CHANGE_ROLES.has(normalisedRole)) {
+      const importResult = await importPaymentTermChangesFromDataset({
+        customerId,
+        ptrsId,
+        datasetId: plain.id,
+        userId: userId || null,
+      });
+
+      // Persist import stats onto the dataset meta for audit/debug.
+      const t2 = await beginTransactionWithCustomerContext(customerId);
+      try {
+        const ds = await db.PtrsDataset.findOne({
+          where: { id: plain.id, customerId, ptrsId },
+          transaction: t2,
+        });
+
+        if (ds) {
+          const currentMeta = ds.get("meta") || {};
+          await ds.update(
+            {
+              meta: {
+                ...currentMeta,
+                paymentTermChangesImport: {
+                  at: new Date().toISOString(),
+                  datasetId: plain.id,
+                  stats: importResult?.stats || null,
+                },
+              },
+              updatedBy: userId || ds.get("updatedBy") || null,
+            },
+            { transaction: t2 }
+          );
+        }
+
+        await t2.commit();
+      } catch (e) {
+        try {
+          await t2.rollback();
+        } catch (_) {}
+        // Non-fatal: import is already done; meta update is best-effort.
+        logger?.warn?.(
+          "PTRS v2 addDataset: imported payment term changes but failed to update meta",
+          {
+            action: "PtrsV2AddDatasetPaymentTermChangeMetaUpdateFailed",
+            customerId,
+            ptrsId,
+            datasetId: plain.id,
+            error: e?.message,
+          }
+        );
+      }
+
+      return {
+        ...plain,
+        meta: {
+          ...(plain.meta || {}),
+          paymentTermChangesImport: {
+            at: new Date().toISOString(),
+            datasetId: plain.id,
+            stats: importResult?.stats || null,
+          },
+        },
+      };
+    }
+
+    return plain;
   } catch (err) {
     try {
       await t.rollback();
@@ -629,4 +712,265 @@ async function buildDatasetIndexByRole({
   });
 
   return { map: index, headers, rowsIndexed: index.size };
+}
+
+function parseAuDateTimeDMY(dateStr, timeStr) {
+  // Expected: date = DD/MM/YYYY, time = HH:MM:SS
+  const d = String(dateStr || "").trim();
+  const t = String(timeStr || "").trim();
+  if (!d) return null;
+
+  const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = Number(m[3]);
+
+  let hh = 0;
+  let mm = 0;
+  let ss = 0;
+  if (t) {
+    const tm = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (tm) {
+      hh = Number(tm[1]);
+      mm = Number(tm[2]);
+      ss = Number(tm[3] || 0);
+    }
+  }
+
+  // JS Date uses local time when using numeric ctor
+  const dt = new Date(year, month - 1, day, hh, mm, ss, 0);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+async function listPaymentTermChanges({
+  customerId,
+  profileId,
+  companyCode = null,
+  limit = 200,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!profileId) throw new Error("profileId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const where = { customerId, profileId };
+    if (companyCode) where.companyCode = String(companyCode);
+
+    const rows = await db.PtrsPaymentTermChange.findAll({
+      where,
+      order: [
+        ["companyCode", "ASC"],
+        ["changedAt", "DESC"],
+      ],
+      limit: Math.min(Number(limit) || 200, 1000),
+      raw: true,
+      transaction: t,
+    });
+
+    await t.commit();
+    return rows;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/**
+ * Import effective-dated payment term changes from an uploaded dataset (stored as CSV) into
+ * tbl_ptrs_payment_term_change.
+ *
+ * Expected headers (loose match):
+ * - Date, Time, Supplier, Changed By, Field Name, Company Code, Purch. organization, New value, Old value
+ */
+async function importPaymentTermChangesFromDataset({
+  customerId,
+  ptrsId,
+  profileId = null,
+  datasetId,
+  userId = null,
+  fieldNameFilter = "Payt terms",
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+
+  // If profileId not provided, resolve from ptrs.
+  const t0 = await beginTransactionWithCustomerContext(customerId);
+  let resolvedProfileId = profileId;
+  let dataset;
+  try {
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, customerId },
+      raw: true,
+      transaction: t0,
+    });
+    if (!ptrs) {
+      const e = new Error("Ptrs not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    if (!resolvedProfileId) resolvedProfileId = ptrs.profileId;
+
+    if (!resolvedProfileId) {
+      const e = new Error(
+        "profileId is required (and could not be resolved from ptrs)"
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    dataset = await db.PtrsDataset.findOne({
+      where: { id: datasetId, customerId, ptrsId },
+      raw: true,
+      transaction: t0,
+    });
+
+    if (!dataset) {
+      const e = new Error("Dataset not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await t0.commit();
+  } catch (err) {
+    try {
+      await t0.rollback();
+    } catch (_) {}
+    throw err;
+  }
+
+  const storageRef = dataset.storageRef;
+  if (!storageRef || !fs.existsSync(storageRef)) {
+    const e = new Error("Dataset file missing");
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const rowsToInsert = [];
+  const stats = {
+    parsed: 0,
+    inserted: 0,
+    skipped: 0,
+    skippedMissingCompanyCode: 0,
+    skippedMissingNewValue: 0,
+    skippedMissingDate: 0,
+    skippedFieldNameMismatch: 0,
+  };
+
+  // Parse CSV rows
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(storageRef);
+    const parser = csv
+      .parse({ headers: true, trim: true, ignoreEmpty: true })
+      .on("error", reject)
+      .on("data", (row) => {
+        stats.parsed += 1;
+
+        const fieldName = pickFromRowLoose(row, "Field Name");
+        if (
+          fieldNameFilter &&
+          fieldName &&
+          String(fieldName).trim().toLowerCase() !==
+            String(fieldNameFilter).trim().toLowerCase()
+        ) {
+          stats.skipped += 1;
+          stats.skippedFieldNameMismatch += 1;
+          return;
+        }
+
+        const dateStr = pickFromRowLoose(row, "Date");
+        const timeStr = pickFromRowLoose(row, "Time");
+        const changedAt = parseAuDateTimeDMY(dateStr, timeStr);
+        if (!changedAt) {
+          stats.skipped += 1;
+          stats.skippedMissingDate += 1;
+          return;
+        }
+
+        const companyCode = pickFromRowLoose(row, "Company Code");
+        if (!companyCode) {
+          stats.skipped += 1;
+          stats.skippedMissingCompanyCode += 1;
+          return;
+        }
+
+        const newRaw = pickFromRowLoose(row, "New value");
+        if (newRaw == null || String(newRaw).trim() === "") {
+          stats.skipped += 1;
+          stats.skippedMissingNewValue += 1;
+          return;
+        }
+
+        const supplier = pickFromRowLoose(row, "Supplier");
+        const changedBy = pickFromRowLoose(row, "Changed By");
+        const purchOrganisation = pickFromRowLoose(row, "Purch. organization");
+        const oldRaw = pickFromRowLoose(row, "Old value");
+
+        rowsToInsert.push({
+          customerId,
+          profileId: resolvedProfileId,
+          changedAt,
+          supplier: supplier != null ? String(supplier) : null,
+          changedBy: changedBy != null ? String(changedBy) : null,
+          fieldName: fieldName != null ? String(fieldName) : null,
+          companyCode: String(companyCode),
+          purchOrganisation:
+            purchOrganisation != null ? String(purchOrganisation) : null,
+          newRaw: String(newRaw),
+          oldRaw:
+            oldRaw != null && String(oldRaw).trim() !== ""
+              ? String(oldRaw)
+              : null,
+          note: "Imported from dataset " + datasetId,
+          createdBy: userId || null,
+          updatedBy: userId || null,
+        });
+      })
+      .on("end", () => resolve());
+
+    stream.pipe(parser);
+  });
+
+  if (!rowsToInsert.length) {
+    return {
+      ok: true,
+      profileId: resolvedProfileId,
+      datasetId,
+      stats: { ...stats, inserted: 0 },
+    };
+  }
+
+  // Persist in one transaction.
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    await db.PtrsPaymentTermChange.bulkCreate(rowsToInsert, {
+      transaction: t,
+      validate: true,
+      returning: false,
+    });
+
+    await t.commit();
+
+    stats.inserted = rowsToInsert.length;
+    return {
+      ok: true,
+      profileId: resolvedProfileId,
+      datasetId,
+      stats,
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
 }

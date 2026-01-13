@@ -25,6 +25,123 @@ module.exports = {
   getStagePreview,
 };
 
+// --- Payment time (regulator-aligned) helpers ---
+function parseISODateOnly(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  // Accept YYYY-MM-DD or full ISO; we only care about the date portion.
+  const datePart = s.includes("T") ? s.split("T")[0] : s;
+  const m = /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
+  if (!m) return null;
+
+  const [y, mo, d] = datePart.split("-").map((x) => Number(x));
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d))
+    return null;
+
+  // Use UTC midnight to avoid DST/local-time drift.
+  const ms = Date.UTC(y, mo - 1, d);
+  if (!Number.isFinite(ms)) return null;
+  return { y, mo, d, ms, iso: datePart };
+}
+
+function diffDaysUTC(later, earlier) {
+  if (!later || !earlier) return null;
+  const ms = later.ms - earlier.ms;
+  if (!Number.isFinite(ms)) return null;
+  // Exact whole days because both are UTC midnight.
+  return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function isRctiYes(value) {
+  if (value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  return s === "yes" || s === "y" || s === "true";
+}
+
+function computePaymentTimeRegulator(row) {
+  // Implements the regulator worked-example logic (Excel DAYS + inclusive +1 when > 0):
+  // 1) If RCTI == Yes: DAYS(payment_date, invoice_issue_date)
+  // 2) Else if invoice_issue_date blank AND notice_for_payment_issue_date blank:
+  //      DAYS(payment_date, supply_date)
+  // 3) Else if invoice_issue_date blank:
+  //      DAYS(payment_date, notice_for_payment_issue_date)
+  // 4) Else:
+  //      MIN(DAYS(payment_date, invoice_issue_date), DAYS(payment_date, invoice_receipt_date))
+  // 5) Final: IF(Calc<=0, 0, Calc+1)
+
+  if (!row || typeof row !== "object")
+    return { days: null, referenceDate: null, referenceKind: null };
+
+  const payment = parseISODateOnly(row.payment_date);
+  if (!payment) return { days: null, referenceDate: null, referenceKind: null };
+
+  const issue = parseISODateOnly(row.invoice_issue_date);
+  const receipt = parseISODateOnly(row.invoice_receipt_date);
+  const notice = parseISODateOnly(row.notice_for_payment_issue_date);
+  const supply = parseISODateOnly(row.supply_date);
+
+  const rcti = isRctiYes(row.rcti);
+
+  let calc = null;
+  let ref = null;
+
+  if (rcti) {
+    // Prefer invoice issue date for RCTI path.
+    if (!issue) return { days: null, referenceDate: null, referenceKind: null };
+    calc = diffDaysUTC(payment, issue);
+    ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
+  } else if (!issue && !notice) {
+    // Both issue and notice missing -> use supply date.
+    if (!supply)
+      return { days: null, referenceDate: null, referenceKind: null };
+    calc = diffDaysUTC(payment, supply);
+    ref = { referenceDate: supply.iso, referenceKind: "supply" };
+  } else if (!issue) {
+    // Issue missing -> use notice for payment terms issue date.
+    if (!notice)
+      return { days: null, referenceDate: null, referenceKind: null };
+    calc = diffDaysUTC(payment, notice);
+    ref = { referenceDate: notice.iso, referenceKind: "notice_for_payment" };
+  } else {
+    // Issue present -> choose MIN of days vs issue and receipt.
+    const dIssue = diffDaysUTC(payment, issue);
+    const dReceipt = receipt ? diffDaysUTC(payment, receipt) : null;
+
+    // If receipt is missing/invalid, fall back to issue.
+    if (dReceipt == null || !Number.isFinite(dReceipt)) {
+      calc = dIssue;
+      ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
+    } else {
+      // MIN days => reference date closest to payment date.
+      if (dIssue == null || !Number.isFinite(dIssue)) {
+        calc = dReceipt;
+        ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
+      } else if (dIssue <= dReceipt) {
+        calc = dIssue;
+        ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
+      } else {
+        calc = dReceipt;
+        ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
+      }
+    }
+  }
+
+  if (calc == null || !Number.isFinite(calc)) {
+    return { days: null, referenceDate: null, referenceKind: null };
+  }
+
+  // Regulator: inclusive counting (+1) for positive values; clamp non-positive to 0.
+  const days = calc <= 0 ? 0 : calc + 1;
+
+  return {
+    days,
+    referenceDate: ref?.referenceDate || null,
+    referenceKind: ref?.referenceKind || null,
+  };
+}
+
 // --- Payment term mapping helpers ---
 async function loadPaymentTermMap({ customerId, profileId, transaction }) {
   if (!customerId || !profileId) return new Map();
@@ -269,6 +386,10 @@ async function stagePtrs({
         datasets,
         fieldMapUpdatedAt,
         fieldMapCount,
+        paymentTermMapUpdatedAt,
+        paymentTermMapCount,
+        paymentTermChangeUpdatedAt,
+        paymentTermChangeCount,
       ] = await Promise.all([
         getColumnMap({ customerId, ptrsId, transaction: t }),
         db.PtrsImportRaw.count({
@@ -279,8 +400,9 @@ async function stagePtrs({
           where: { customerId, ptrsId },
           transaction: t,
         }),
-        db.PtrsRawDataset
-          ? db.PtrsRawDataset.findAll({
+        // v2 datasets (tbl_ptrs_dataset)
+        db.PtrsDataset
+          ? db.PtrsDataset.findAll({
               where: { customerId, ptrsId },
               attributes: ["id", "role", "updatedAt"],
               order: [
@@ -303,6 +425,77 @@ async function stagePtrs({
               transaction: t,
             })
           : Promise.resolve(0),
+        // Payment term map affects staged canonical fields
+        (async () => {
+          const rows = await db.sequelize.query(
+            `
+            SELECT MAX("updatedAt") AS "maxUpdatedAt"
+            FROM "tbl_ptrs_payment_term_map"
+            WHERE "customerId" = :customerId
+              AND "profileId" = :profileId
+              AND "deletedAt" IS NULL
+            `,
+            {
+              type: QueryTypes.SELECT,
+              replacements: { customerId, profileId },
+              transaction: t,
+            }
+          );
+          return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
+        })(),
+        (async () => {
+          const rows = await db.sequelize.query(
+            `
+            SELECT COUNT(1)::int AS "count"
+            FROM "tbl_ptrs_payment_term_map"
+            WHERE "customerId" = :customerId
+              AND "profileId" = :profileId
+              AND "deletedAt" IS NULL
+            `,
+            {
+              type: QueryTypes.SELECT,
+              replacements: { customerId, profileId },
+              transaction: t,
+            }
+          );
+          return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
+        })(),
+
+        // Effective-dated term changes affect staging outcomes
+        (async () => {
+          const rows = await db.sequelize.query(
+            `
+            SELECT MAX("updatedAt") AS "maxUpdatedAt"
+            FROM "tbl_ptrs_payment_term_change"
+            WHERE "customerId" = :customerId
+              AND "profileId" = :profileId
+              AND "deletedAt" IS NULL
+            `,
+            {
+              type: QueryTypes.SELECT,
+              replacements: { customerId, profileId },
+              transaction: t,
+            }
+          );
+          return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
+        })(),
+        (async () => {
+          const rows = await db.sequelize.query(
+            `
+            SELECT COUNT(1)::int AS "count"
+            FROM "tbl_ptrs_payment_term_change"
+            WHERE "customerId" = :customerId
+              AND "profileId" = :profileId
+              AND "deletedAt" IS NULL
+            `,
+            {
+              type: QueryTypes.SELECT,
+              replacements: { customerId, profileId },
+              transaction: t,
+            }
+          );
+          return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
+        })(),
       ]);
 
       inputHash = buildStableInputHash({
@@ -335,6 +528,16 @@ async function stagePtrs({
               updatedAt: d.updatedAt || null,
             }))
           : [],
+        paymentTermMap: {
+          profileId: profileId || null,
+          count: Number(paymentTermMapCount) || 0,
+          maxUpdatedAt: paymentTermMapUpdatedAt || null,
+        },
+        paymentTermChanges: {
+          profileId: profileId || null,
+          count: Number(paymentTermChangeCount) || 0,
+          maxUpdatedAt: paymentTermChangeUpdatedAt || null,
+        },
       });
 
       const previous = await getLatestExecutionRun({
@@ -353,6 +556,10 @@ async function stagePtrs({
         previousHash: previous?.inputHash || null,
         rawCount: rawCount || 0,
         datasetsCount: Array.isArray(datasets) ? datasets.length : 0,
+        paymentTermMapCount: Number(paymentTermMapCount) || 0,
+        paymentTermMapUpdatedAt: paymentTermMapUpdatedAt || null,
+        paymentTermChangeCount: Number(paymentTermChangeCount) || 0,
+        paymentTermChangeUpdatedAt: paymentTermChangeUpdatedAt || null,
       });
 
       executionRun = await createExecutionRun({
@@ -471,6 +678,43 @@ async function stagePtrs({
         customerId,
         ptrsId,
         profileId: profileId || null,
+        error: err?.message,
+      });
+    }
+
+    // 2c) Derive payment_time_days according to regulator worked-example logic
+    // We do this in staging so Metrics can remain dumb and deterministic.
+    try {
+      for (const r of stagedRows) {
+        if (!r || typeof r !== "object") continue;
+
+        const res = computePaymentTimeRegulator(r);
+        if (res?.days == null) {
+          // Leave existing value (if any), but surface as a stage error if missing.
+          if (r.payment_time_days == null) {
+            if (!Array.isArray(r._stageErrors)) r._stageErrors = [];
+            r._stageErrors.push({
+              code: "PAYMENT_TIME_UNDERIVED",
+              message:
+                "Payment time could not be derived using regulator rules (missing required date fields)",
+              field: "payment_time_days",
+              value: null,
+            });
+          }
+          continue;
+        }
+
+        r.payment_time_days = res.days;
+        if (res.referenceDate)
+          r.payment_time_reference_date = res.referenceDate;
+        if (res.referenceKind)
+          r.payment_time_reference_kind = res.referenceKind;
+      }
+    } catch (err) {
+      slog.warn("PTRS v2 stagePtrs: failed to derive payment_time_days", {
+        action: "PtrsV2StagePtrsPaymentTimeDerivationFailed",
+        customerId,
+        ptrsId,
         error: err?.message,
       });
     }

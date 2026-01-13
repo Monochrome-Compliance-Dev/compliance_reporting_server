@@ -10,8 +10,23 @@ const requirePtrs = authorise({
 });
 
 // Validate
+
 router.post("/:id/validate", requirePtrs, validateController.runValidate);
 router.get("/:id/validate", requirePtrs, validateController.getValidate);
+
+// Stage row exclusion (MVP data quality escape hatch)
+router.post(
+  "/:id/stage-rows/:stageRowId/exclude",
+  requirePtrs,
+  validateController.setStageRowExclusion
+);
+
+// Fetch a single staged row (for Validate UI inspection)
+router.get(
+  "/:id/stage-rows/:stageRowId",
+  requirePtrs,
+  validateController.getStageRow
+);
 
 // Validate summary (aggregated view to drive Validate UI)
 router.get(

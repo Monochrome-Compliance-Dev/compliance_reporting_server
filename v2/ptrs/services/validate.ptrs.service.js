@@ -7,6 +7,8 @@ module.exports = {
   validate,
   getValidate,
   getValidateSummary,
+  setStageRowExclusion,
+  getStageRow,
 };
 
 // -------------------------
@@ -14,6 +16,9 @@ module.exports = {
 // -------------------------
 
 function isExcludedRow(stageRow) {
+  const data = stageRow?.data || {};
+  if (data?.exclude_from_metrics === true) return true;
+
   const meta = stageRow?.meta || {};
   return meta?.rules?.exclude === true;
 }
@@ -862,6 +867,133 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       } catch (_) {
         // ignore
       }
+    }
+    throw err;
+  }
+}
+
+async function setStageRowExclusion({
+  customerId,
+  ptrsId,
+  stageRowId,
+  exclude,
+  comment = null,
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!stageRowId) throw new Error("stageRowId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const row = await db.PtrsStageRow.findOne({
+      where: { id: stageRowId, customerId, ptrsId },
+      transaction: t,
+    });
+
+    if (!row) {
+      const e = new Error("Stage row not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const nextData = { ...(row.data || {}) };
+    const nextMeta = { ...(row.meta || {}) };
+
+    // Canonical exclusion fields used by staging/metrics.
+    nextData.exclude_from_metrics = exclude === true;
+    nextData.exclude_set_at =
+      exclude === true ? new Date().toISOString() : null;
+    nextData.exclude_set_by = exclude === true ? userId || null : null;
+    nextData.exclude_comment =
+      exclude === true
+        ? comment && String(comment).trim()
+          ? String(comment).trim()
+          : "Excluded by user"
+        : null;
+
+    // Legacy/compat flag used by some older helpers.
+    nextMeta.rules = { ...(nextMeta.rules || {}) };
+    nextMeta.rules.exclude = exclude === true;
+    nextMeta.rules.exclude_comment = nextData.exclude_comment;
+
+    // Minimal audit trail in meta (append-only)
+    const ev = {
+      at: new Date().toISOString(),
+      by: userId || null,
+      exclude: exclude === true,
+      comment: nextData.exclude_comment || null,
+    };
+
+    const hist = Array.isArray(nextMeta.exclusions) ? nextMeta.exclusions : [];
+    nextMeta.exclusions = hist.concat([ev]).slice(-25); // keep last 25
+
+    row.data = nextData;
+    row.meta = nextMeta;
+
+    await row.save({ transaction: t });
+
+    await t.commit();
+
+    return {
+      stageRowId,
+      ptrsId,
+      excluded: exclude === true,
+      comment: nextData.exclude_comment,
+    };
+  } catch (err) {
+    try {
+      await t.rollback();
+    } catch (_) {
+      // ignore
+    }
+    throw err;
+  }
+}
+
+/**
+ * Fetch a single staged row by id within the customer + ptrs scope.
+ * Used by Validate UI to show the exact offending record.
+ */
+async function getStageRow({ customerId, ptrsId, stageRowId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!stageRowId) throw new Error("stageRowId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const row = await db.PtrsStageRow.findOne({
+      where: { id: stageRowId, customerId, ptrsId },
+      transaction: t,
+    });
+
+    if (!row) {
+      const e = new Error("Stage row not found");
+      e.statusCode = 404;
+      throw e;
+    }
+
+    await t.commit();
+
+    return {
+      id: row.id,
+      customerId: row.customerId,
+      ptrsId: row.ptrsId,
+      rowNo: row.rowNo,
+      data: row.data || {},
+      errors: row.errors || null,
+      meta: row.meta || {},
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      deletedAt: row.deletedAt || null,
+    };
+  } catch (err) {
+    try {
+      await t.rollback();
+    } catch (_) {
+      // ignore
     }
     throw err;
   }

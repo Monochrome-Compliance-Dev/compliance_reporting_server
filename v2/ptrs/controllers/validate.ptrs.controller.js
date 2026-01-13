@@ -6,6 +6,8 @@ module.exports = {
   runValidate,
   getValidate,
   getValidateSummary,
+  setStageRowExclusion,
+  getStageRow,
 };
 
 /**
@@ -162,6 +164,121 @@ async function getValidateSummary(req, res, next) {
     logger.logEvent("error", "Error getting PTRS v2 validate summary", {
       action: "PtrsV2ValidateSummary",
       ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * POST /api/v2/ptrs/:id/stage-rows/:stageRowId/exclude
+ * Soft-excludes (or un-excludes) a single staged row from validation + metrics.
+ * Body: { exclude: boolean, comment?: string }
+ */
+async function setStageRowExclusion(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+
+  const ptrsId = req.params.id;
+  const stageRowId = req.params.stageRowId;
+
+  const excludeRaw = req.body?.exclude;
+  const exclude = excludeRaw === true || excludeRaw === "true";
+  const comment = req.body?.comment != null ? String(req.body.comment) : null;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    if (!ptrsId || !stageRowId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Missing ptrsId or stageRowId" });
+    }
+
+    const result = await validateService.setStageRowExclusion({
+      customerId,
+      ptrsId,
+      stageRowId,
+      exclude,
+      comment,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2StageRowExclusion",
+      entity: "PtrsStageRow",
+      entityId: stageRowId,
+      details: {
+        ptrsId,
+        exclude,
+        comment: comment || null,
+      },
+    });
+
+    return res.status(200).json({ status: "success", data: result });
+  } catch (error) {
+    logger.logEvent("error", "Error updating PTRS v2 stage row exclusion", {
+      action: "PtrsV2StageRowExclusion",
+      ptrsId,
+      stageRowId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/stage-rows/:stageRowId
+ * Returns a single staged row for inspection in the Validate UI.
+ */
+async function getStageRow(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ptrsId = req.params.id;
+  const stageRowId = req.params.stageRowId;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    if (!ptrsId || !stageRowId) {
+      return res.status(400).json({
+        status: "error",
+        message: "Missing ptrsId or stageRowId",
+      });
+    }
+
+    const row = await validateService.getStageRow({
+      customerId,
+      ptrsId,
+      stageRowId,
+    });
+
+    return res.status(200).json({ status: "success", data: row });
+  } catch (error) {
+    logger.logEvent("error", "Error fetching PTRS v2 stage row", {
+      action: "PtrsV2GetStageRow",
+      ptrsId,
+      stageRowId,
       customerId,
       userId,
       error: error.message,
