@@ -30,7 +30,32 @@ const PAYMENT_TERM_CHANGE_ROLES = new Set([
   "payment_term_change",
   "payment-term-changes",
   "payment-term-change",
+
+  // FE currently sends this role (do not rely on filename parsing)
+  "termschanges",
+  "termchanges",
 ]);
+
+function isPaymentTermChangeRole(role) {
+  const r = String(role || "")
+    .trim()
+    .toLowerCase();
+  if (!r) return false;
+  if (PAYMENT_TERM_CHANGE_ROLES.has(r)) return true;
+
+  // Allow minor variations without having to keep extending the set.
+  // Example: "terms_changes", "payment_terms_changes", "payment-term-change-file" etc.
+  const compact = r.replace(/[^a-z0-9]/g, "");
+  return compact.includes("term") && compact.includes("change");
+}
+
+function modelHasField(model, field) {
+  try {
+    return Boolean(model?.rawAttributes && model.rawAttributes[field]);
+  } catch {
+    return false;
+  }
+}
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
 
@@ -265,6 +290,7 @@ async function addDataset({
       e.statusCode = 404;
       throw e;
     }
+    const ptrsProfileId = ptrs?.profileId || ptrs?.profile_id || null;
 
     // Normalise to CSV if an Excel file is uploaded
     let workBuffer = buffer;
@@ -350,16 +376,64 @@ async function addDataset({
 
     const plain = row.get({ plain: true });
 
+    // Log info about the dataset and whether it will trigger term changes import
+    logger?.info?.("PTRS v2 addDataset: uploaded dataset", {
+      action: "PtrsV2AddDataset",
+      customerId,
+      ptrsId,
+      datasetId: plain.id,
+      role: normalisedRole,
+      willImportPaymentTermChanges: isPaymentTermChangeRole(normalisedRole),
+    });
+
     // If this dataset is a payment-term-change file, immediately import it into
     // tbl_ptrs_payment_term_change so Stage can apply it deterministically.
     // We fail loudly here because a silent import failure will cause confusing metrics later.
-    if (PAYMENT_TERM_CHANGE_ROLES.has(normalisedRole)) {
-      const importResult = await importPaymentTermChangesFromDataset({
-        customerId,
-        ptrsId,
-        datasetId: plain.id,
-        userId: userId || null,
-      });
+    if (isPaymentTermChangeRole(normalisedRole)) {
+      if (!ptrsProfileId) {
+        const e = new Error(
+          "PTRS profileId is missing; cannot import payment term changes without a profileId"
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      logger?.info?.(
+        "PTRS v2 addDataset: starting payment term changes import",
+        {
+          action: "PtrsV2AddDatasetPaymentTermChangeImportStart",
+          customerId,
+          ptrsId,
+          datasetId: plain.id,
+          role: normalisedRole,
+          profileId: ptrsProfileId,
+        }
+      );
+
+      let importResult;
+      try {
+        importResult = await importPaymentTermChangesFromDataset({
+          customerId,
+          ptrsId,
+          profileId: ptrsProfileId,
+          datasetId: plain.id,
+          userId: userId || null,
+        });
+      } catch (e) {
+        logger?.error?.(
+          "PTRS v2 addDataset: payment term changes import failed",
+          {
+            action: "PtrsV2AddDatasetPaymentTermChangeImportFailed",
+            customerId,
+            ptrsId,
+            datasetId: plain.id,
+            role: normalisedRole,
+            profileId: ptrsProfileId,
+            error: e?.message,
+          }
+        );
+        throw e;
+      }
 
       // Persist import stats onto the dataset meta for audit/debug.
       const t2 = await beginTransactionWithCustomerContext(customerId);
@@ -715,33 +789,163 @@ async function buildDatasetIndexByRole({
 }
 
 function parseAuDateTimeDMY(dateStr, timeStr) {
-  // Expected: date = DD/MM/YYYY, time = HH:MM:SS
-  const d = String(dateStr || "").trim();
-  const t = String(timeStr || "").trim();
-  if (!d) return null;
+  // Accept a few common exports:
+  // - DD/MM/YYYY (+ optional Time column)
+  // - DD/MM/YY and MM/DD/YY (some XLSX->CSV conversions output US-style)
+  // - DD-MM-YYYY
+  // - YYYY-MM-DD
+  // - Date column containing both date+time
+  // - Excel serial numbers (days), including fractional time
 
-  const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return null;
-  const day = Number(m[1]);
-  const month = Number(m[2]);
-  const year = Number(m[3]);
+  const rawDate = dateStr == null ? "" : String(dateStr).trim();
+  const rawTime = timeStr == null ? "" : String(timeStr).trim();
+  if (!rawDate) return null;
 
-  let hh = 0;
-  let mm = 0;
-  let ss = 0;
-  if (t) {
-    const tm = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-    if (tm) {
-      hh = Number(tm[1]);
-      mm = Number(tm[2]);
-      ss = Number(tm[3] || 0);
+  // Excel serial date (common after XLSX conversion). Supports fractional day for time.
+  if (/^\d+(\.\d+)?$/.test(rawDate)) {
+    const n = Number(rawDate);
+    if (Number.isFinite(n) && n > 0) {
+      // Excel epoch: 1899-12-30; 25569 = 1970-01-01
+      const ms = Math.round((n - 25569) * 86400 * 1000);
+      const dt = new Date(ms);
+      if (!Number.isNaN(dt.getTime())) return dt;
     }
   }
 
-  // JS Date uses local time when using numeric ctor
-  const dt = new Date(year, month - 1, day, hh, mm, ss, 0);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt;
+  // If date cell already contains time, split it.
+  let dPart = rawDate;
+  let tPart = rawTime;
+  if (!tPart && /\d{1,2}:\d{2}/.test(rawDate)) {
+    const parts = rawDate.split(/\s+/);
+    if (parts.length >= 2) {
+      dPart = parts[0];
+      tPart = parts.slice(1).join(" ");
+    }
+  }
+
+  // Parse time.
+  // Supports:
+  // - 24h: HH:MM or HH:MM:SS
+  // - 12h: H:MM(:SS) AM/PM
+  // - Excel time serial fraction (0.x)
+  let hh = 0;
+  let mm = 0;
+  let ss = 0;
+
+  const parseTime = (val) => {
+    if (val == null) return null;
+    const s = String(val).trim();
+    if (!s) return null;
+
+    // Excel time as fraction of a day
+    if (/^0?\.\d+$/.test(s) || /^\d+(\.\d+)?$/.test(s)) {
+      const n = Number(s);
+      // A pure integer here is probably not a time, so only treat values between 0 and 1 as time-of-day.
+      if (Number.isFinite(n) && n >= 0 && n < 1) {
+        const totalSeconds = Math.round(n * 86400);
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const sec = totalSeconds % 60;
+        return { hh: h, mm: m, ss: sec };
+      }
+    }
+
+    // 12-hour time with AM/PM
+    let m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+    if (m) {
+      let h = Number(m[1]);
+      const mins = Number(m[2]);
+      const secs = Number(m[3] || 0);
+      const mer = String(m[4]).toUpperCase();
+      if (mer === "AM") {
+        if (h === 12) h = 0;
+      } else if (mer === "PM") {
+        if (h !== 12) h += 12;
+      }
+      return { hh: h, mm: mins, ss: secs };
+    }
+
+    // 24-hour time
+    m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (m) {
+      return { hh: Number(m[1]), mm: Number(m[2]), ss: Number(m[3] || 0) };
+    }
+
+    return null;
+  };
+
+  const parsedTime = parseTime(tPart);
+  if (parsedTime) {
+    hh = parsedTime.hh;
+    mm = parsedTime.mm;
+    ss = parsedTime.ss;
+  }
+
+  // Date parsers
+  const tryDMY4 = (sep) => {
+    const m = String(dPart).match(
+      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{4})$`)
+    );
+    if (!m) return null;
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    const year = Number(m[3]);
+    const dt = new Date(year, month - 1, day, hh, mm, ss, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+
+  const tryDMY2orMDY2 = (sep) => {
+    const m = String(dPart).match(
+      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{2})$`)
+    );
+    if (!m) return null;
+
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    const yy = Number(m[3]);
+
+    // Two-digit year: assume 2000-2099 for now (safe for this dataset).
+    const year = 2000 + yy;
+
+    // Disambiguate DD/MM/YY vs MM/DD/YY.
+    // If one side is >12, it's unambiguous.
+    // Otherwise default to DMY (AU) to avoid silently flipping Australian dates.
+    let day;
+    let month;
+    if (a > 12 && b <= 12) {
+      day = a;
+      month = b;
+    } else if (b > 12 && a <= 12) {
+      // US-style
+      month = a;
+      day = b;
+    } else {
+      // ambiguous (e.g., 01/02/24) -> assume AU DMY
+      day = a;
+      month = b;
+    }
+
+    const dt = new Date(year, month - 1, day, hh, mm, ss, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+
+  const tryYMD = () => {
+    const m = String(dPart).match(/^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$/);
+    if (!m) return null;
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    const dt = new Date(year, month - 1, day, hh, mm, ss, 0);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+
+  return (
+    tryDMY4("/") ||
+    tryDMY4("-") ||
+    tryDMY2orMDY2("/") ||
+    tryDMY2orMDY2("-") ||
+    tryYMD()
+  );
 }
 
 async function listPaymentTermChanges({
@@ -799,6 +1003,14 @@ async function importPaymentTermChangesFromDataset({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!datasetId) throw new Error("datasetId is required");
+
+  logger?.info?.("PTRS v2 importPaymentTermChangesFromDataset: starting", {
+    action: "PtrsV2ImportPaymentTermChangesFromDataset",
+    customerId,
+    ptrsId,
+    datasetId,
+    profileId: profileId || null,
+  });
 
   // If profileId not provided, resolve from ptrs.
   const t0 = await beginTransactionWithCustomerContext(customerId);
@@ -873,16 +1085,37 @@ async function importPaymentTermChangesFromDataset({
       .on("data", (row) => {
         stats.parsed += 1;
 
+        // Log raw CSV row keys for the first parsed row only
+        if (stats.parsed === 1) {
+          logger?.warn?.(
+            "PTRS v2 importPaymentTermChangesFromDataset: first row keys",
+            {
+              action: "PtrsV2ImportPaymentTermChangesFromDatasetRowKeys",
+              datasetId,
+              ptrsId,
+              profileId: resolvedProfileId,
+              keys: Object.keys(row),
+              sample: row,
+            }
+          );
+        }
+
         const fieldName = pickFromRowLoose(row, "Field Name");
-        if (
-          fieldNameFilter &&
-          fieldName &&
-          String(fieldName).trim().toLowerCase() !==
-            String(fieldNameFilter).trim().toLowerCase()
-        ) {
-          stats.skipped += 1;
-          stats.skippedFieldNameMismatch += 1;
-          return;
+        if (fieldNameFilter && fieldName) {
+          const lhs = String(fieldName)
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "");
+          const rhs = String(fieldNameFilter)
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "");
+
+          if (lhs !== rhs) {
+            stats.skipped += 1;
+            stats.skippedFieldNameMismatch += 1;
+            return;
+          }
         }
 
         const dateStr = pickFromRowLoose(row, "Date");
@@ -913,7 +1146,7 @@ async function importPaymentTermChangesFromDataset({
         const purchOrganisation = pickFromRowLoose(row, "Purch. organization");
         const oldRaw = pickFromRowLoose(row, "Old value");
 
-        rowsToInsert.push({
+        const rec = {
           customerId,
           profileId: resolvedProfileId,
           changedAt,
@@ -931,7 +1164,16 @@ async function importPaymentTermChangesFromDataset({
           note: "Imported from dataset " + datasetId,
           createdBy: userId || null,
           updatedBy: userId || null,
-        });
+        };
+
+        if (modelHasField(db.PtrsPaymentTermChange, "ptrsId")) {
+          rec.ptrsId = ptrsId;
+        }
+        if (modelHasField(db.PtrsPaymentTermChange, "datasetId")) {
+          rec.datasetId = datasetId;
+        }
+
+        rowsToInsert.push(rec);
       })
       .on("end", () => resolve());
 
@@ -939,6 +1181,18 @@ async function importPaymentTermChangesFromDataset({
   });
 
   if (!rowsToInsert.length) {
+    logger?.warn?.(
+      "PTRS v2 importPaymentTermChangesFromDataset: nothing to insert (all rows skipped or filtered)",
+      {
+        action: "PtrsV2ImportPaymentTermChangesFromDatasetNoRows",
+        customerId,
+        ptrsId,
+        datasetId,
+        profileId: resolvedProfileId,
+        stats,
+      }
+    );
+
     return {
       ok: true,
       profileId: resolvedProfileId,
@@ -946,6 +1200,21 @@ async function importPaymentTermChangesFromDataset({
       stats: { ...stats, inserted: 0 },
     };
   }
+
+  logger?.info?.("PTRS v2 importPaymentTermChangesFromDataset: parsed", {
+    action: "PtrsV2ImportPaymentTermChangesFromDatasetParsed",
+    customerId,
+    ptrsId,
+    datasetId,
+    profileId: resolvedProfileId,
+    parsed: stats.parsed,
+    toInsert: rowsToInsert.length,
+    skipped: stats.skipped,
+    skippedMissingCompanyCode: stats.skippedMissingCompanyCode,
+    skippedMissingNewValue: stats.skippedMissingNewValue,
+    skippedMissingDate: stats.skippedMissingDate,
+    skippedFieldNameMismatch: stats.skippedFieldNameMismatch,
+  });
 
   // Persist in one transaction.
   const t = await beginTransactionWithCustomerContext(customerId);
@@ -957,6 +1226,15 @@ async function importPaymentTermChangesFromDataset({
     });
 
     await t.commit();
+
+    logger?.info?.("PTRS v2 importPaymentTermChangesFromDataset: completed", {
+      action: "PtrsV2ImportPaymentTermChangesFromDatasetCompleted",
+      customerId,
+      ptrsId,
+      datasetId,
+      profileId: resolvedProfileId,
+      inserted: rowsToInsert.length,
+    });
 
     stats.inserted = rowsToInsert.length;
     return {
@@ -971,6 +1249,14 @@ async function importPaymentTermChangesFromDataset({
         await t.rollback();
       } catch (_) {}
     }
+    logger?.error?.("PTRS v2 importPaymentTermChangesFromDataset: failed", {
+      action: "PtrsV2ImportPaymentTermChangesFromDatasetFailed",
+      customerId,
+      ptrsId,
+      datasetId,
+      profileId: resolvedProfileId,
+      error: err?.message,
+    });
     throw err;
   }
 }

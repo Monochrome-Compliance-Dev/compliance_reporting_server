@@ -40,7 +40,11 @@ function buildMapMetaFromMappings(mappings) {
   const targets = Array.from(
     new Set(
       Object.values(m)
-        .map((cfg) => cfg?.field)
+        .map((cfg) => {
+          if (cfg == null) return null;
+          if (typeof cfg === "string") return cfg;
+          return cfg?.field || null;
+        })
         .filter((v) => v != null && String(v).trim() !== "")
         .map((v) => String(v).trim())
     )
