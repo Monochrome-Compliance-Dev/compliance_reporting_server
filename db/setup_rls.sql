@@ -102,7 +102,42 @@ CREATE POLICY tbl_ptrs_stage_row_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 
+
 ALTER TABLE tbl_ptrs_stage_row FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- PTRS v2 Xero cache tables: RLS policies
+-- =============================
+
+-- Xero Contact cache
+ALTER TABLE tbl_ptrs_xero_contact ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_xero_contact_rls_policy ON tbl_ptrs_xero_contact;
+CREATE POLICY tbl_xero_contact_rls_policy
+  ON tbl_ptrs_xero_contact
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_xero_contact FORCE ROW LEVEL SECURITY;
+
+-- Xero Invoice cache
+ALTER TABLE tbl_ptrs_xero_invoice ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_xero_invoice_rls_policy ON tbl_ptrs_xero_invoice;
+CREATE POLICY tbl_xero_invoice_rls_policy
+  ON tbl_ptrs_xero_invoice
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_xero_invoice FORCE ROW LEVEL SECURITY;
+
+-- Xero Payment cache
+ALTER TABLE tbl_ptrs_xero_payment ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_xero_payment_rls_policy ON tbl_ptrs_xero_payment;
+CREATE POLICY tbl_xero_payment_rls_policy
+  ON tbl_ptrs_xero_payment
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_xero_payment FORCE ROW LEVEL SECURITY;
 
 -- =============================
 -- PTRS SBI Check tables: RLS policies

@@ -203,6 +203,40 @@ async function initialise() {
     });
   }
 
+  // --- Load PTRS v2 Xero cache models (non-*.model.js, via explicit requires) ---
+  // These live under v2/ptrs/xero/models and are intentionally not part of the generic *.model.js loader.
+  // Only define them if they are not already present (avoids clobbering any existing Xero models loaded elsewhere).
+  try {
+    const defineXeroContact = require("@/v2/ptrs/xero/models/xeroContact.model");
+    const defineXeroInvoice = require("@/v2/ptrs/xero/models/xeroInvoice.model");
+    const defineXeroPayment = require("@/v2/ptrs/xero/models/xeroPayment.model");
+
+    const ensureModel = (factory) => {
+      if (typeof factory !== "function") return null;
+      const model = factory(sequelize);
+      const key = toPascal(model.name);
+      if (!db[key]) {
+        db[key] = model;
+      }
+      return model;
+    };
+
+    ensureModel(defineXeroContact);
+    ensureModel(defineXeroInvoice);
+    ensureModel(defineXeroPayment);
+
+    logger.logEvent("info", "PTRS v2 Xero cache models initialised", {
+      action: "DatabaseInit",
+      models: ["PtrsXeroContact", "PtrsXeroInvoice", "PtrsXeroPayment"],
+    });
+  } catch (err) {
+    logger.logEvent("error", "Failed to initialise PTRS v2 Xero cache models", {
+      action: "DatabaseInit",
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+
   // Setup model relationships
   // --- PTRS v2 relationships (New World) ---
   // Profile ↔ Canonical Field Map
@@ -303,6 +337,31 @@ async function initialise() {
       onDelete: "CASCADE",
     });
     db.XeroContact.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
+
+  // PTRS v2 Xero cache relationships (avoid collision with legacy v1 Xero models)
+  if (db.Customer && db.PtrsXeroInvoice) {
+    db.Customer.hasMany(db.PtrsXeroInvoice, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.PtrsXeroInvoice.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
+
+  if (db.Customer && db.PtrsXeroPayment) {
+    db.Customer.hasMany(db.PtrsXeroPayment, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.PtrsXeroPayment.belongsTo(db.Customer, { foreignKey: "customerId" });
+  }
+
+  if (db.Customer && db.PtrsXeroContact) {
+    db.Customer.hasMany(db.PtrsXeroContact, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.PtrsXeroContact.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
   // Xero Organisation relationship
