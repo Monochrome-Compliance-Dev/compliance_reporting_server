@@ -92,6 +92,10 @@ router.use("/", validateRoutes);
 // metrics
 router.use("/", metricsRoutes);
 
+// xero
+const xeroRoutes = require("@/v2/ptrs/xero/xero.routes");
+router.use("/:id/xero", xeroRoutes);
+
 // Read a single ptrs by id
 router.get("/:id", requirePtrs, ptrsController.getPtrs);
 

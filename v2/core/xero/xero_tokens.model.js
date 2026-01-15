@@ -1,0 +1,73 @@
+const { DataTypes } = require("sequelize");
+
+// This model definition function expects a sequelize instance and returns the model
+function defineXeroTokenModel(sequelize) {
+  const XeroToken = sequelize.define(
+    "XeroToken",
+    {
+      id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true,
+      },
+      access_token: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
+      refresh_token: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
+      scope: {
+        type: DataTypes.TEXT,
+        allowNull: false,
+      },
+      expires: {
+        type: DataTypes.DATE,
+        allowNull: false,
+      },
+      created: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW,
+      },
+      createdByIp: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      revoked: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      revokedByIp: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      replacedByToken: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
+      customerId: {
+        type: DataTypes.STRING(10),
+        allowNull: false,
+        references: {
+          model: "tbl_customer",
+          key: "id",
+        },
+      },
+      tenantId: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+    },
+    {
+      tableName: "xero_tokens",
+      timestamps: false,
+      paranoid: false,
+    }
+  );
+
+  return XeroToken;
+}
+
+module.exports = defineXeroTokenModel;
