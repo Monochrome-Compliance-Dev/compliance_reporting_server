@@ -12,8 +12,15 @@ const {
 
 const XERO_TOKEN_URL =
   process.env.XERO_TOKEN_URL || "https://identity.xero.com/connect/token";
+const XERO_AUTHORIZE_URL =
+  process.env.XERO_AUTHORIZE_URL ||
+  "https://login.xero.com/identity/connect/authorize";
 
 module.exports = {
+  buildAuthUrl,
+  exchangeAuthCodeForToken,
+  listConnections,
+  computeExpiresFromToken,
   getDefaultTenantForCustomer,
   getReportingPeriodForPtrs,
   getValidAccessTokenForTenant,
@@ -25,6 +32,116 @@ module.exports = {
 // -----------------------------------------------------------------------------
 // Public API
 // -----------------------------------------------------------------------------
+
+function requireEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(`${name} is required`);
+  return v;
+}
+
+/**
+ * Build the Xero OAuth2 authorisation URL for redirecting the user.
+ */
+function buildAuthUrl({ state, redirectUri }) {
+  const clientId =
+    process.env.XERO_CLIENT_ID ||
+    process.env.XERO_OAUTH_CLIENT_ID ||
+    process.env.XERO_CLIENTID ||
+    null;
+
+  if (!clientId) {
+    throw new Error("Xero client ID missing (XERO_CLIENT_ID)");
+  }
+  if (!redirectUri) {
+    throw new Error("redirectUri is required");
+  }
+
+  const scope =
+    process.env.XERO_SCOPES ||
+    "offline_access accounting.contacts accounting.transactions accounting.settings";
+
+  const params = new URLSearchParams();
+  params.set("response_type", "code");
+  params.set("client_id", clientId);
+  params.set("redirect_uri", redirectUri);
+  params.set("scope", scope);
+  if (state) params.set("state", state);
+
+  // Force consent so we reliably get refresh_token during dev/test.
+  params.set("prompt", "consent");
+
+  return `${XERO_AUTHORIZE_URL}?${params.toString()}`;
+}
+
+/**
+ * Exchange an auth code for tokens.
+ */
+async function exchangeAuthCodeForToken({ code, redirectUri }) {
+  if (!code) throw new Error("code is required");
+
+  const clientId =
+    process.env.XERO_CLIENT_ID ||
+    process.env.XERO_OAUTH_CLIENT_ID ||
+    process.env.XERO_CLIENTID ||
+    null;
+
+  const clientSecret =
+    process.env.XERO_CLIENT_SECRET ||
+    process.env.XERO_OAUTH_CLIENT_SECRET ||
+    process.env.XERO_CLIENTSECRET ||
+    null;
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "Xero client credentials missing (XERO_CLIENT_ID / XERO_CLIENT_SECRET)"
+    );
+  }
+
+  const ru = redirectUri || requireEnv("XERO_REDIRECT_URI");
+
+  const params = new URLSearchParams();
+  params.set("grant_type", "authorization_code");
+  params.set("code", code);
+  params.set("redirect_uri", ru);
+
+  const res = await axios.post(XERO_TOKEN_URL, params.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    auth: { username: clientId, password: clientSecret },
+    timeout: 30000,
+  });
+
+  return res.data || {};
+}
+
+/**
+ * List Xero connections (tenants) available for the authorised user.
+ * Uses the special Connections endpoint on api.xero.com.
+ */
+async function listConnections({ accessToken }) {
+  if (!accessToken) throw new Error("accessToken is required");
+
+  const res = await axios.get("https://api.xero.com/connections", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+    },
+    timeout: 30000,
+  });
+
+  const data = Array.isArray(res.data) ? res.data : [];
+  return data.map((c) => ({
+    tenantId: c.tenantId,
+    tenantName: c.tenantName || c.tenantId,
+  }));
+}
+
+/**
+ * Compute token expiry timestamp from an OAuth token response.
+ */
+function computeExpiresFromToken(token) {
+  const expiresIn = Number(token?.expires_in || 0);
+  return new Date(Date.now() + Math.max(expiresIn, 0) * 1000);
+}
 
 async function getDefaultTenantForCustomer(customerId) {
   const XeroToken = getXeroTokenModel();

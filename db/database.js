@@ -210,6 +210,8 @@ async function initialise() {
     const defineXeroContact = require("@/v2/ptrs/xero/models/xeroContact.model");
     const defineXeroInvoice = require("@/v2/ptrs/xero/models/xeroInvoice.model");
     const defineXeroPayment = require("@/v2/ptrs/xero/models/xeroPayment.model");
+    const defineXeroBankTransaction = require("@/v2/ptrs/xero/models/xeroBankTransactions.model");
+    const defineXeroOrganisation = require("@/v2/ptrs/xero/models/xeroOrganisation.model");
 
     const ensureModel = (factory) => {
       if (typeof factory !== "function") return null;
@@ -224,10 +226,18 @@ async function initialise() {
     ensureModel(defineXeroContact);
     ensureModel(defineXeroInvoice);
     ensureModel(defineXeroPayment);
+    ensureModel(defineXeroBankTransaction);
+    ensureModel(defineXeroOrganisation);
 
     logger.logEvent("info", "PTRS v2 Xero cache models initialised", {
       action: "DatabaseInit",
-      models: ["PtrsXeroContact", "PtrsXeroInvoice", "PtrsXeroPayment"],
+      models: [
+        "PtrsXeroContact",
+        "PtrsXeroInvoice",
+        "PtrsXeroPayment",
+        "PtrsXeroBankTransaction",
+        "PtrsXeroOrganisation",
+      ],
     });
   } catch (err) {
     logger.logEvent("error", "Failed to initialise PTRS v2 Xero cache models", {
@@ -364,13 +374,25 @@ async function initialise() {
     db.PtrsXeroContact.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
-  // Xero Organisation relationship
-  if (db.Customer && db.XeroOrganisation) {
-    db.Customer.hasMany(db.XeroOrganisation, {
+  if (db.Customer && db.PtrsXeroBankTransaction) {
+    db.Customer.hasMany(db.PtrsXeroBankTransaction, {
       foreignKey: "customerId",
       onDelete: "CASCADE",
     });
-    db.XeroOrganisation.belongsTo(db.Customer, { foreignKey: "customerId" });
+    db.PtrsXeroBankTransaction.belongsTo(db.Customer, {
+      foreignKey: "customerId",
+    });
+  }
+
+  // PTRS v2 Xero Organisation cache relationship
+  if (db.Customer && db.PtrsXeroOrganisation) {
+    db.Customer.hasMany(db.PtrsXeroOrganisation, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.PtrsXeroOrganisation.belongsTo(db.Customer, {
+      foreignKey: "customerId",
+    });
   }
 
   // TCP csv upload error relationship

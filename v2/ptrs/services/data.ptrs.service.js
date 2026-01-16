@@ -21,6 +21,7 @@ module.exports = {
   buildDatasetIndexByRole,
   importPaymentTermChangesFromDataset,
   listPaymentTermChanges,
+  upsertMainDatasetFromRaw,
 };
 
 const PAYMENT_TERM_CHANGE_ROLES = new Set([
@@ -54,6 +55,101 @@ function modelHasField(model, field) {
     return Boolean(model?.rawAttributes && model.rawAttributes[field]);
   } catch {
     return false;
+  }
+}
+
+function pickModelFields(model, candidate) {
+  if (!model?.rawAttributes) return { ...candidate };
+  const allowed = new Set(Object.keys(model.rawAttributes));
+  const out = {};
+  for (const [k, v] of Object.entries(candidate || {})) {
+    if (allowed.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Ensure a PTRS run has a \"main\" dataset row in tbl_ptrs_dataset when raw rows exist.
+ * This is required for the standard Step 2 FE flow (datasets list) to work for non-file ingests like Xero.
+ */
+async function upsertMainDatasetFromRaw({
+  customerId,
+  ptrsId,
+  source = "raw",
+  userId = null,
+  meta = {},
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const rawCount = await db.PtrsImportRaw.count({
+      where: { customerId, ptrsId },
+      transaction: t,
+    });
+
+    if (!rawCount || rawCount <= 0) {
+      await t.commit();
+      return { ok: true, rowsCount: 0, dataset: null };
+    }
+
+    const candidate = {
+      customerId,
+      ptrsId,
+      role: "main",
+      sourceName:
+        source === "xero"
+          ? "Xero import"
+          : source === "csv"
+            ? "CSV upload"
+            : "Main input",
+      fileName: null,
+      fileSize: null,
+      mimeType: null,
+      storageRef: null,
+      rowsCount: rawCount,
+      status: "uploaded",
+      meta: {
+        ...(meta || {}),
+        source,
+        rowsCount: rawCount,
+        updatedAt: new Date().toISOString(),
+      },
+      createdBy: userId || null,
+      updatedBy: userId || null,
+    };
+
+    const rowToWrite = pickModelFields(db.PtrsDataset, candidate);
+
+    const existing = await db.PtrsDataset.findOne({
+      where: { customerId, ptrsId, role: "main" },
+      transaction: t,
+      raw: false,
+    });
+
+    let saved;
+    if (existing) {
+      saved = await existing.update(rowToWrite, { transaction: t });
+    } else {
+      saved = await db.PtrsDataset.create(rowToWrite, { transaction: t });
+    }
+
+    await t.commit();
+
+    return {
+      ok: true,
+      rowsCount: rawCount,
+      dataset: saved?.get ? saved.get({ plain: true }) : saved,
+    };
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
   }
 }
 
@@ -524,6 +620,63 @@ async function listDatasets({ customerId, ptrsId }) {
       raw: true,
       transaction: t,
     });
+
+    const hasMain = rows.some(
+      (r) =>
+        String(r.role || "")
+          .trim()
+          .toLowerCase() === "main"
+    );
+
+    if (!hasMain) {
+      const rawCount = await db.PtrsImportRaw.count({
+        where: { customerId, ptrsId },
+        transaction: t,
+      });
+
+      if (rawCount > 0) {
+        const candidate = {
+          customerId,
+          ptrsId,
+          role: "main",
+          sourceName: "Main input",
+          fileName: null,
+          fileSize: null,
+          mimeType: null,
+          storageRef: null,
+          rowsCount: rawCount,
+          status: "uploaded",
+          meta: { source: "raw", rowsCount: rawCount },
+          createdBy: null,
+          updatedBy: null,
+        };
+
+        const rowToWrite = pickModelFields(db.PtrsDataset, candidate);
+
+        const existing = await db.PtrsDataset.findOne({
+          where: { customerId, ptrsId, role: "main" },
+          transaction: t,
+          raw: false,
+        });
+
+        if (existing) {
+          await existing.update(rowToWrite, { transaction: t });
+        } else {
+          await db.PtrsDataset.create(rowToWrite, { transaction: t });
+        }
+
+        // Refresh list so FE sees it immediately
+        const refreshed = await db.PtrsDataset.findAll({
+          where: { customerId, ptrsId },
+          order: [["createdAt", "DESC"]],
+          raw: true,
+          transaction: t,
+        });
+
+        rows.length = 0;
+        rows.push(...refreshed);
+      }
+    }
 
     await t.commit();
 

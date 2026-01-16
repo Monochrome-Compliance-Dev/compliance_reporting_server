@@ -11,6 +11,15 @@ const requirePtrs = authorise({
 });
 
 // Mounted at /api/v2/ptrs/:id/xero
+router.post("/connect", requirePtrs, xeroController.connect);
+router.get("/organisations", requirePtrs, xeroController.getOrganisations);
+router.post("/organisations", requirePtrs, xeroController.selectOrganisations);
+router.delete(
+  "/organisations/:tenantId",
+  requirePtrs,
+  xeroController.removeOrganisation
+);
+
 router.post("/import", requirePtrs, xeroController.startImport);
 router.get("/status", requirePtrs, xeroController.getStatus);
 

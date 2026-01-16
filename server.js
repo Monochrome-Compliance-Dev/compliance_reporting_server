@@ -330,6 +330,9 @@ app.use(
   require("@/v2/profiles/customerProfiles.controller")
 );
 
+// Xero (static OAuth callback)
+app.use("/api/v2/xero", require("@/v2/core/xero/xero.routes"));
+
 // Middleware to log all registered routes
 // app._router.stack.forEach((middleware) => {
 //   if (middleware.route) {

@@ -129,7 +129,6 @@ CREATE POLICY tbl_xero_invoice_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_xero_invoice FORCE ROW LEVEL SECURITY;
 
--- Xero Payment cache
 ALTER TABLE tbl_ptrs_xero_payment ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_xero_payment_rls_policy ON tbl_ptrs_xero_payment;
 CREATE POLICY tbl_xero_payment_rls_policy
@@ -138,6 +137,26 @@ CREATE POLICY tbl_xero_payment_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_xero_payment FORCE ROW LEVEL SECURITY;
+
+-- Xero Bank Transaction cache
+ALTER TABLE tbl_ptrs_xero_bank_transaction ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_xero_bank_transaction_rls_policy ON tbl_ptrs_xero_bank_transaction;
+CREATE POLICY tbl_xero_bank_transaction_rls_policy
+  ON tbl_ptrs_xero_bank_transaction
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_xero_bank_transaction FORCE ROW LEVEL SECURITY;
+
+-- Xero Organisation cache
+ALTER TABLE tbl_ptrs_xero_organisation ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_xero_organisation_rls_policy ON tbl_ptrs_xero_organisation;
+CREATE POLICY tbl_xero_organisation_rls_policy
+  ON tbl_ptrs_xero_organisation
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_xero_organisation FORCE ROW LEVEL SECURITY;
 
 -- =============================
 -- PTRS SBI Check tables: RLS policies
