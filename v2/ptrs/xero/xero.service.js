@@ -371,6 +371,73 @@ function getFirstKey(obj, keys = []) {
   return null;
 }
 
+function parseXeroDotNetDate(value) {
+  // Xero often returns dates like "/Date(1398902400000+0000)/"
+  if (value == null) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+
+  const s = String(value).trim();
+  if (!s) return null;
+
+  const m = /^\/Date\((\d+)(?:[+-]\d+)?\)\/$/.exec(s);
+  if (m) {
+    const ms = Number(m[1]);
+    if (Number.isFinite(ms)) {
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function toIsoDateOnlyUtc(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function safeJsonStringify(obj, fallback = null) {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return fallback;
+  }
+}
+
+function deriveXeroPaymentTermsConfig({
+  rawInvoice,
+  rawContact,
+  rawOrganisation,
+}) {
+  // Priority (purchases): invoice -> contact -> organisation.
+  const inv = rawInvoice?.PaymentTerms || null;
+  const con = rawContact?.PaymentTerms || null;
+  const org = rawOrganisation?.PaymentTerms || null;
+
+  const pickPurchases = (pt) => pt?.Purchases || pt?.purchases || null;
+
+  const purchases =
+    pickPurchases(inv) || pickPurchases(con) || pickPurchases(org) || null;
+
+  // Normalise common shape: { Day: 30, Type: "DAYSAFTERBILLDATE" }
+  const dayRaw = purchases?.Day ?? purchases?.day ?? null;
+  const typeRaw = purchases?.Type ?? purchases?.type ?? null;
+
+  const days = Number(dayRaw);
+  const hasDays = Number.isFinite(days);
+
+  return {
+    purchasesConfig: purchases || null,
+    purchasesType: typeRaw != null ? String(typeRaw) : null,
+    purchasesDay: hasDays ? Math.round(days) : null,
+    raw: purchases || null,
+  };
+}
+
 async function persistPayments({
   customerId,
   ptrsId,
@@ -907,6 +974,7 @@ async function buildRawDatasetFromXeroCache({
   const PtrsXeroPayment = getModel("PtrsXeroPayment");
   const PtrsXeroInvoice = getModel("PtrsXeroInvoice");
   const PtrsXeroContact = getModel("PtrsXeroContact");
+  const PtrsXeroOrganisation = getModel("PtrsXeroOrganisation");
 
   if (!PtrsXeroPayment) {
     throw new Error(
@@ -998,6 +1066,38 @@ async function buildRawDatasetFromXeroCache({
       );
     }
 
+    // Pull organisation details so we can populate payer name/ABN (Xero org) per tenant.
+    let orgByTenantId = new Map();
+    if (PtrsXeroOrganisation) {
+      const orgWhere = {
+        ...whereBase,
+        ...(PtrsXeroOrganisation.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...dateWhere,
+      };
+
+      const orgs = await PtrsXeroOrganisation.findAll({
+        where: orgWhere,
+        transaction: t,
+      });
+
+      // In case multiple org snapshots exist, prefer the most recently fetched per tenant.
+      const tmp = new Map();
+      for (const o of orgs) {
+        const j = o.toJSON();
+        const tid = j.xeroTenantId;
+        if (!tid) continue;
+        const prev = tmp.get(tid);
+        if (!prev) {
+          tmp.set(tid, j);
+          continue;
+        }
+        const prevAt = prev.fetchedAt ? new Date(prev.fetchedAt).getTime() : 0;
+        const nextAt = j.fetchedAt ? new Date(j.fetchedAt).getTime() : 0;
+        if (nextAt >= prevAt) tmp.set(tid, j);
+      }
+      orgByTenantId = tmp;
+    }
+
     // Make reruns deterministic
     await PtrsImportRaw.destroy({
       where: { customerId, ptrsId },
@@ -1011,6 +1111,32 @@ async function buildRawDatasetFromXeroCache({
       const inv = p.invoiceId ? invoicesById.get(p.invoiceId) : null;
       const c = inv?.contactId ? contactsById.get(inv.contactId) : null;
 
+      const org = p?.xeroTenantId ? orgByTenantId.get(p.xeroTenantId) : null;
+
+      // Raw payloads (best-effort) – used to compute dates and payment terms reliably.
+      const rawPayment = p?.rawPayload || null;
+      const rawInvoice = inv?.rawPayload || null;
+      const rawContact = c?.rawPayload || null;
+      const rawOrganisation = org?.rawPayload || null;
+
+      // Xero often returns .NET date strings, so normalise to ISO date-only strings for PTRS.
+      const invoiceDateIso = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawInvoice?.Date)
+      );
+      const dueDateIso = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawInvoice?.DueDate)
+      );
+      const paymentDateIso = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawPayment?.Date)
+      );
+
+      // Payment terms (purchases): invoice -> contact -> organisation.
+      const termCfg = deriveXeroPaymentTermsConfig({
+        rawInvoice,
+        rawContact,
+        rawOrganisation,
+      });
+
       rowsToInsert.push({
         customerId,
         ptrsId,
@@ -1019,15 +1145,19 @@ async function buildRawDatasetFromXeroCache({
           source: "xero",
           xeroTenantId: p.xeroTenantId,
 
+          // Payer = the Xero Organisation (per tenant). Needed for Payer ABN + Name mapping.
+          payerName: org?.name || org?.legalName || null,
+          payerAbn: org?.taxNumber || null,
+
           xeroPaymentId: p.xeroPaymentId,
-          paymentDate: p.paymentDate || null,
+          paymentDate: paymentDateIso || p.paymentDate || null,
           amount: p.amount ?? null,
           currency: p.currency || null,
 
           xeroInvoiceId: p.invoiceId || inv?.xeroInvoiceId || null,
           invoiceNumber: inv?.invoiceNumber || null,
-          invoiceDate: inv?.invoiceDate || null,
-          dueDate: inv?.dueDate || null,
+          invoiceDate: invoiceDateIso || inv?.invoiceDate || null,
+          dueDate: dueDateIso || inv?.dueDate || null,
           invoiceStatus: inv?.status || null,
           invoiceTotal: inv?.total ?? null,
 
@@ -1036,9 +1166,15 @@ async function buildRawDatasetFromXeroCache({
           supplierAbn: c?.abn || null,
           supplierStatus: c?.contactStatus || null,
 
-          rawPayment: p.rawPayload || null,
-          rawInvoice: inv?.rawPayload || null,
-          rawContact: c?.rawPayload || null,
+          // Payment terms – keep both the computed value and the raw config for later mapping.
+          paymentTermsDays: termCfg?.purchasesDay ?? null,
+          paymentTermsType: termCfg?.purchasesType ?? null,
+          rawPaymentTerms: termCfg?.raw ?? null,
+
+          rawPayment,
+          rawInvoice,
+          rawContact,
+          rawOrganisation,
         },
       });
     }
@@ -1684,7 +1820,7 @@ async function startImport({ customerId, ptrsId, userId }) {
             ptrsId,
             role: "main",
             fileName: "Xero import",
-            storageRef: "xero",
+            storageRef: null,
             rowsCount: rawBuild?.insertedRows ?? null,
             status: "uploaded",
             meta: {

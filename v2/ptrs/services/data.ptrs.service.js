@@ -95,19 +95,19 @@ async function upsertMainDatasetFromRaw({
       return { ok: true, rowsCount: 0, dataset: null };
     }
 
+    const displayName =
+      source === "xero"
+        ? "Xero import"
+        : source === "csv"
+          ? "CSV upload"
+          : "Main input";
+
     const candidate = {
       customerId,
       ptrsId,
       role: "main",
-      sourceName:
-        source === "xero"
-          ? "Xero import"
-          : source === "csv"
-            ? "CSV upload"
-            : "Main input",
-      fileName: null,
-      fileSize: null,
-      mimeType: null,
+      // PtrsDataset.fileName is NOT NULL. For non-file ingests (e.g. Xero), we still need a label.
+      fileName: displayName,
       storageRef: null,
       rowsCount: rawCount,
       status: "uploaded",
@@ -115,6 +115,7 @@ async function upsertMainDatasetFromRaw({
         ...(meta || {}),
         source,
         rowsCount: rawCount,
+        displayName,
         updatedAt: new Date().toISOString(),
       },
       createdBy: userId || null,
@@ -639,14 +640,16 @@ async function listDatasets({ customerId, ptrsId }) {
           customerId,
           ptrsId,
           role: "main",
-          sourceName: "Main input",
-          fileName: null,
-          fileSize: null,
-          mimeType: null,
+          // PtrsDataset.fileName is NOT NULL.
+          fileName: "Main input",
           storageRef: null,
           rowsCount: rawCount,
           status: "uploaded",
-          meta: { source: "raw", rowsCount: rawCount },
+          meta: {
+            source: "raw",
+            rowsCount: rawCount,
+            displayName: "Main input",
+          },
           createdBy: null,
           updatedBy: null,
         };
@@ -778,7 +781,79 @@ async function getDatasetSample({
   }
 
   const storageRef = row.storageRef;
-  if (!storageRef || !fs.existsSync(storageRef)) {
+
+  // If this is a synthetic "main" dataset (e.g. Xero import), there may be no file.
+  // In that case, sample from tbl_ptrs_import_raw instead so the existing FE Step 2 flow works.
+  const role = String(row.role || "")
+    .trim()
+    .toLowerCase();
+  const hasStorageRef = Boolean(storageRef);
+
+  const isUsableFile = (() => {
+    if (!hasStorageRef) return false;
+    try {
+      if (!fs.existsSync(storageRef)) return false;
+      const st = fs.statSync(storageRef);
+      return st.isFile();
+    } catch (_) {
+      return false;
+    }
+  })();
+
+  if (!isUsableFile) {
+    if (role === "main") {
+      const ptrsId = row.ptrsId;
+      if (!ptrsId) {
+        const e = new Error("Dataset is missing ptrsId");
+        e.statusCode = 500;
+        throw e;
+      }
+
+      // Sample ImportRaw rows (JSON payload) for this PTRS run.
+      const tRaw = await beginTransactionWithCustomerContext(customerId);
+      try {
+        const total = await db.PtrsImportRaw.count({
+          where: { customerId, ptrsId },
+          transaction: tRaw,
+        });
+
+        const items = await db.PtrsImportRaw.findAll({
+          where: { customerId, ptrsId },
+          order: [["rowNo", "ASC"]],
+          offset: Math.max(Number(offset) || 0, 0),
+          limit: Math.min(Math.max(Number(limit) || 10, 1), 200),
+          raw: true,
+          transaction: tRaw,
+        });
+
+        await tRaw.commit();
+
+        const rows = (items || []).map((r) => {
+          // Support common payload field names.
+          return r.data || r.payload || r.rawPayload || r.raw || {};
+        });
+
+        // Build headers from the union of keys across sampled rows.
+        const headerSet = new Set();
+        for (const r of rows) {
+          if (r && typeof r === "object" && !Array.isArray(r)) {
+            for (const k of Object.keys(r)) headerSet.add(k);
+          }
+        }
+
+        return {
+          headers: Array.from(headerSet.values()),
+          rows,
+          total,
+        };
+      } catch (err) {
+        try {
+          await tRaw.rollback();
+        } catch (_) {}
+        throw err;
+      }
+    }
+
     const e = new Error("Dataset file missing");
     e.statusCode = 404;
     throw e;
@@ -907,6 +982,16 @@ async function buildDatasetIndexByRole({
 
   const storageRef = ds.storageRef;
   if (!storageRef || !fs.existsSync(storageRef)) {
+    return { map: new Map(), headers: [], rowsIndexed: 0 };
+  }
+
+  // Guard against storageRef pointing at a directory
+  try {
+    const st = fs.statSync(storageRef);
+    if (!st.isFile()) {
+      return { map: new Map(), headers: [], rowsIndexed: 0 };
+    }
+  } catch (_) {
     return { map: new Map(), headers: [], rowsIndexed: 0 };
   }
 
