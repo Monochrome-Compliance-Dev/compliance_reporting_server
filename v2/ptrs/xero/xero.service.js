@@ -975,12 +975,64 @@ async function buildRawDatasetFromXeroCache({
   const PtrsXeroInvoice = getModel("PtrsXeroInvoice");
   const PtrsXeroContact = getModel("PtrsXeroContact");
   const PtrsXeroOrganisation = getModel("PtrsXeroOrganisation");
+  const PtrsXeroBankTransaction = getModel("PtrsXeroBankTransaction");
 
   if (!PtrsXeroPayment) {
     throw new Error(
       "PtrsXeroPayment model not loaded (db.PtrsXeroPayment missing)"
     );
   }
+
+  const cleanNumber = (val) => {
+    if (val === undefined || val === null || val === "") return null;
+    const s = String(val).replace(/\s+/g, "").trim();
+    if (!s) return null;
+    return s; // keep as string (ABNs can have leading zeros in some systems)
+  };
+
+  const getFirstLineItem = (raw) => {
+    const items = raw?.LineItems;
+    if (!Array.isArray(items) || !items.length) return null;
+    return items[0] || null;
+  };
+
+  const deriveDescription = ({ rawInvoice, rawBankTransaction }) => {
+    const li = getFirstLineItem(rawInvoice || rawBankTransaction);
+    const desc = typeof li?.Description === "string" ? li.Description : null;
+    if (!desc) return "None provided";
+    return desc.length > 255 ? desc.slice(0, 255) : desc;
+  };
+
+  const deriveAccountCode = ({ rawInvoice, rawBankTransaction }) => {
+    const li = getFirstLineItem(rawInvoice || rawBankTransaction);
+    const code = li?.AccountCode;
+    if (!code) return null;
+    return String(code).slice(0, 20);
+  };
+
+  const deriveInvoiceReferenceNumber = ({ inv, rawInvoice }) => {
+    const invoiceNumber =
+      getFirstKey(rawInvoice, ["InvoiceNumber", "invoiceNumber"]) ||
+      getFirstKey(inv, ["invoiceNumber"]) ||
+      null;
+
+    if (invoiceNumber) return String(invoiceNumber);
+
+    const stableId =
+      getFirstKey(rawInvoice, ["InvoiceID", "invoiceId", "invoiceID"]) ||
+      getFirstKey(inv, ["xeroInvoiceId", "invoiceId"]) ||
+      null;
+
+    if (!stableId) return "None provided";
+
+    return `sys:${String(stableId).slice(0, 8)}`;
+  };
+
+  const deriveBankTxnInvoiceRef = (rawBankTransaction) => {
+    const li = getFirstLineItem(rawBankTransaction);
+    const id = li?.LineItemID || li?.AccountNumber || li?.AccountCode || null;
+    return id ? String(id).slice(0, 255) : "None provided";
+  };
 
   // 🔐 Everything must run inside customer-context txn to satisfy RLS
   return await withCustomerTxn(customerId, async (t) => {
@@ -1010,6 +1062,25 @@ async function buildRawDatasetFromXeroCache({
 
     const paymentRows = payments.map((p) => p.toJSON());
 
+    // Bank transactions are a *separate* type of payment record.
+    const bankTxRows = [];
+    if (PtrsXeroBankTransaction) {
+      const bankTxWhere = {
+        ...whereBase,
+        ...(PtrsXeroBankTransaction.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...dateWhere,
+      };
+
+      const bankTx = await PtrsXeroBankTransaction.findAll({
+        where: bankTxWhere,
+        order: [["fetchedAt", "DESC"]],
+        limit: limit || undefined,
+        transaction: t,
+      });
+
+      bankTxRows.push(...bankTx.map((bt) => bt.toJSON()));
+    }
+
     const invoiceIds = Array.from(
       new Set(paymentRows.map((p) => p.invoiceId).filter(Boolean))
     );
@@ -1036,12 +1107,36 @@ async function buildRawDatasetFromXeroCache({
       );
     }
 
-    const contactIds = Array.from(
+    // Collect contact IDs from:
+    // - invoices linked to payments
+    // - bank transactions' embedded Contact.ContactID
+    const contactIdsFromInvoices = Array.from(
       new Set(
         Array.from(invoicesById.values())
           .map((inv) => inv.contactId)
           .filter(Boolean)
       )
+    );
+
+    const contactIdsFromBankTx = Array.from(
+      new Set(
+        bankTxRows
+          .map((bt) => {
+            const raw = bt?.rawPayload || null;
+            const cId = getFirstKey(raw?.Contact || raw?.contact, [
+              "ContactID",
+              "contactId",
+              "contactID",
+              "id",
+            ]);
+            return cId || null;
+          })
+          .filter(Boolean)
+      )
+    );
+
+    const contactIds = Array.from(
+      new Set([...contactIdsFromInvoices, ...contactIdsFromBankTx])
     );
 
     let contactsById = new Map();
@@ -1105,74 +1200,272 @@ async function buildRawDatasetFromXeroCache({
     });
 
     const rowsToInsert = [];
+    let rowNo = 1;
 
+    // -------------------------
+    // 1) Invoice-linked Payments
+    // -------------------------
     for (let i = 0; i < paymentRows.length; i++) {
       const p = paymentRows[i];
       const inv = p.invoiceId ? invoicesById.get(p.invoiceId) : null;
       const c = inv?.contactId ? contactsById.get(inv.contactId) : null;
-
       const org = p?.xeroTenantId ? orgByTenantId.get(p.xeroTenantId) : null;
 
-      // Raw payloads (best-effort) – used to compute dates and payment terms reliably.
       const rawPayment = p?.rawPayload || null;
       const rawInvoice = inv?.rawPayload || null;
       const rawContact = c?.rawPayload || null;
       const rawOrganisation = org?.rawPayload || null;
 
-      // Xero often returns .NET date strings, so normalise to ISO date-only strings for PTRS.
-      const invoiceDateIso = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawInvoice?.Date)
+      const invoiceIssueDate = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawInvoice?.Date || rawInvoice?.DateString)
       );
-      const dueDateIso = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawInvoice?.DueDate)
+      const invoiceReceiptDate = invoiceIssueDate;
+      const invoiceDueDate = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawInvoice?.DueDate || rawInvoice?.DueDateString)
       );
-      const paymentDateIso = toIsoDateOnlyUtc(
+      const paymentDate = toIsoDateOnlyUtc(
         parseXeroDotNetDate(rawPayment?.Date)
       );
 
-      // Payment terms (purchases): invoice -> contact -> organisation.
       const termCfg = deriveXeroPaymentTermsConfig({
         rawInvoice,
         rawContact,
         rawOrganisation,
       });
 
+      const payeeName =
+        getFirstKey(rawContact, ["Name"]) || c?.contactName || null;
+      const payeeAbn =
+        cleanNumber(getFirstKey(rawContact, ["TaxNumber"])) ||
+        cleanNumber(c?.abn) ||
+        null;
+      const payeeAcnArbn =
+        cleanNumber(getFirstKey(rawContact, ["CompanyNumber"])) || null;
+
+      const payerName =
+        getFirstKey(rawOrganisation, ["Name", "LegalName"]) ||
+        org?.name ||
+        org?.legalName ||
+        null;
+      const payerAbn =
+        cleanNumber(getFirstKey(rawOrganisation, ["TaxNumber"])) ||
+        cleanNumber(org?.taxNumber) ||
+        null;
+      const payerAcnArbn =
+        cleanNumber(getFirstKey(rawOrganisation, ["RegistrationNumber"])) ||
+        cleanNumber(org?.registrationNumber) ||
+        null;
+
+      // Contact payment terms (v1-style): PaymentTerms.Bills.Day
+      const billsDay =
+        rawContact?.PaymentTerms?.Bills &&
+        typeof rawContact.PaymentTerms.Bills.Day === "number"
+          ? rawContact.PaymentTerms.Bills.Day
+          : null;
+
+      const invoiceAmountRaw =
+        getFirstKey(rawInvoice, ["Total"]) ?? inv?.total ?? null;
+      const invoiceAmount =
+        invoiceAmountRaw !== null &&
+        invoiceAmountRaw !== undefined &&
+        invoiceAmountRaw !== ""
+          ? String(invoiceAmountRaw)
+          : null;
+
+      const paymentAmountRaw =
+        getFirstKey(rawPayment, ["Amount"]) ?? p?.amount ?? null;
+      const paymentAmount =
+        paymentAmountRaw !== null &&
+        paymentAmountRaw !== undefined &&
+        paymentAmountRaw !== ""
+          ? String(paymentAmountRaw)
+          : null;
+
       rowsToInsert.push({
         customerId,
         ptrsId,
-        rowNo: i + 1,
+        rowNo: rowNo++,
         data: {
+          // Core identifiers
           source: "xero",
+          xeroRecordType: "payment",
           xeroTenantId: p.xeroTenantId,
-
-          // Payer = the Xero Organisation (per tenant). Needed for Payer ABN + Name mapping.
-          payerName: org?.name || org?.legalName || null,
-          payerAbn: org?.taxNumber || null,
-
           xeroPaymentId: p.xeroPaymentId,
-          paymentDate: paymentDateIso || p.paymentDate || null,
-          amount: p.amount ?? null,
-          currency: p.currency || null,
-
           xeroInvoiceId: p.invoiceId || inv?.xeroInvoiceId || null,
-          invoiceNumber: inv?.invoiceNumber || null,
-          invoiceDate: invoiceDateIso || inv?.invoiceDate || null,
-          dueDate: dueDateIso || inv?.dueDate || null,
-          invoiceStatus: inv?.status || null,
-          invoiceTotal: inv?.total ?? null,
-
           xeroContactId: inv?.contactId || c?.xeroContactId || null,
-          supplierName: c?.contactName || null,
-          supplierAbn: c?.abn || null,
+
+          // v1-style map-ready fields
+          payerEntityName: payerName,
+          payerEntityAbn: payerAbn,
+          payerEntityAcnArbn: payerAcnArbn,
+
+          payeeEntityName: payeeName,
+          payeeEntityAbn: payeeAbn,
+          payeeEntityAcnArbn: payeeAcnArbn,
+
+          paymentAmount,
+          paymentDate,
+          transactionType:
+            getFirstKey(rawPayment, ["PaymentType"]) ||
+            rawPayment?.PaymentType ||
+            null,
+          isReconciled:
+            typeof rawPayment?.IsReconciled === "boolean"
+              ? rawPayment.IsReconciled
+              : null,
+
+          description: deriveDescription({ rawInvoice }),
+          accountCode: deriveAccountCode({ rawInvoice }),
+
+          invoiceReferenceNumber: deriveInvoiceReferenceNumber({
+            inv,
+            rawInvoice,
+          }),
+          invoiceIssueDate,
+          invoiceReceiptDate,
+          invoiceAmount,
+          invoiceDueDate,
+
+          // Payment terms candidates
+          contractPoPaymentTerms:
+            billsDay !== null && billsDay !== undefined
+              ? String(billsDay)
+              : null,
+          paymentTermsPurchasesDayCandidate:
+            termCfg?.purchasesDay !== null &&
+            termCfg?.purchasesDay !== undefined
+              ? String(termCfg.purchasesDay)
+              : null,
+          paymentTermsPurchasesTypeCandidate: termCfg?.purchasesType || null,
+          rawPaymentTermsCandidate: termCfg?.raw || null,
+
+          // Legacy convenience fields (keep existing FE assumptions alive)
+          payerName: payerName,
+          payerAbn: payerAbn,
+          supplierName: payeeName,
+          supplierAbn: payeeAbn,
+          invoiceTotal: invoiceAmount,
+          dueDate: invoiceDueDate,
+          amount: paymentAmount,
+          currency: p.currency || null,
+          invoiceNumber: inv?.invoiceNumber || null,
+          invoiceStatus: inv?.status || null,
           supplierStatus: c?.contactStatus || null,
 
-          // Payment terms – keep both the computed value and the raw config for later mapping.
-          paymentTermsDays: termCfg?.purchasesDay ?? null,
-          paymentTermsType: termCfg?.purchasesType ?? null,
-          rawPaymentTerms: termCfg?.raw ?? null,
-
+          // Raw blobs for audit/debug
           rawPayment,
           rawInvoice,
+          rawContact,
+          rawOrganisation,
+        },
+      });
+    }
+
+    // -------------------------
+    // 2) Bank Transactions (separate payment records)
+    // -------------------------
+    for (let i = 0; i < bankTxRows.length; i++) {
+      const bt = bankTxRows[i];
+      const rawBankTransaction = bt?.rawPayload || null;
+
+      const org = bt?.xeroTenantId ? orgByTenantId.get(bt.xeroTenantId) : null;
+      const rawOrganisation = org?.rawPayload || null;
+
+      const contactId = getFirstKey(
+        rawBankTransaction?.Contact || rawBankTransaction?.contact,
+        ["ContactID", "contactId", "contactID", "id"]
+      );
+      const c = contactId ? contactsById.get(contactId) : null;
+      const rawContact = c?.rawPayload || null;
+
+      const paymentDate = toIsoDateOnlyUtc(
+        parseXeroDotNetDate(rawBankTransaction?.Date)
+      );
+
+      const payerName =
+        getFirstKey(rawOrganisation, ["Name", "LegalName"]) ||
+        org?.name ||
+        org?.legalName ||
+        null;
+      const payerAbn =
+        cleanNumber(getFirstKey(rawOrganisation, ["TaxNumber"])) ||
+        cleanNumber(org?.taxNumber) ||
+        null;
+      const payerAcnArbn =
+        cleanNumber(getFirstKey(rawOrganisation, ["RegistrationNumber"])) ||
+        cleanNumber(org?.registrationNumber) ||
+        null;
+
+      const payeeName =
+        getFirstKey(rawContact, ["Name"]) || c?.contactName || null;
+      const payeeAbn =
+        cleanNumber(getFirstKey(rawContact, ["TaxNumber"])) ||
+        cleanNumber(c?.abn) ||
+        null;
+      const payeeAcnArbn =
+        cleanNumber(getFirstKey(rawContact, ["CompanyNumber"])) || null;
+
+      const totalRaw =
+        getFirstKey(rawBankTransaction, ["Total"]) ?? bt?.total ?? null;
+      const paymentAmount =
+        totalRaw !== null && totalRaw !== undefined && totalRaw !== ""
+          ? String(totalRaw)
+          : null;
+
+      const invoiceReferenceNumber =
+        deriveBankTxnInvoiceRef(rawBankTransaction);
+
+      rowsToInsert.push({
+        customerId,
+        ptrsId,
+        rowNo: rowNo++,
+        data: {
+          source: "xero",
+          xeroRecordType: "bankTransaction",
+          xeroTenantId: bt.xeroTenantId || null,
+          xeroBankTransactionId:
+            bt.xeroBankTransactionId ||
+            getFirstKey(rawBankTransaction, ["BankTransactionID"]) ||
+            null,
+
+          payerEntityName: payerName,
+          payerEntityAbn: payerAbn,
+          payerEntityAcnArbn: payerAcnArbn,
+
+          payeeEntityName: payeeName,
+          payeeEntityAbn: payeeAbn,
+          payeeEntityAcnArbn: payeeAcnArbn,
+
+          paymentAmount,
+          paymentDate,
+          transactionType: getFirstKey(rawBankTransaction, ["Type"]) || null,
+          isReconciled:
+            typeof rawBankTransaction?.IsReconciled === "boolean"
+              ? rawBankTransaction.IsReconciled
+              : null,
+
+          description: deriveDescription({ rawBankTransaction }),
+          accountCode: deriveAccountCode({ rawBankTransaction }),
+
+          // Bank tx has no invoice; provide sensible candidates to map from.
+          invoiceReferenceNumber,
+          invoiceIssueDate: null,
+          invoiceReceiptDate: paymentDate,
+          invoiceAmount: paymentAmount,
+          invoiceDueDate: paymentDate,
+
+          // Legacy convenience fields
+          payerName: payerName,
+          payerAbn: payerAbn,
+          supplierName: payeeName,
+          supplierAbn: payeeAbn,
+          invoiceTotal: paymentAmount,
+          dueDate: paymentDate,
+          amount: paymentAmount,
+          currency: bt.currency || null,
+
+          // Raw blobs
+          rawBankTransaction,
           rawContact,
           rawOrganisation,
         },
@@ -1183,7 +1476,7 @@ async function buildRawDatasetFromXeroCache({
       await PtrsImportRaw.bulkCreate(rowsToInsert, { transaction: t });
     }
 
-    return { insertedRows: paymentRows.length };
+    return { insertedRows: rowsToInsert.length };
   });
 }
 

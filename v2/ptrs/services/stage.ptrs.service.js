@@ -81,6 +81,7 @@ function computePaymentTimeRegulator(row) {
   const receipt = parseISODateOnly(row.invoice_receipt_date);
   const notice = parseISODateOnly(row.notice_for_payment_issue_date);
   const supply = parseISODateOnly(row.supply_date);
+  const due = parseISODateOnly(row.invoice_due_date);
 
   const rcti = isRctiYes(row.rcti);
 
@@ -94,10 +95,16 @@ function computePaymentTimeRegulator(row) {
     ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
   } else if (!issue && !notice) {
     // Both issue and notice missing -> use supply date.
-    if (!supply)
+    // MVP fallback: if supply is missing, allow invoice due date as the reference.
+    if (supply) {
+      calc = diffDaysUTC(payment, supply);
+      ref = { referenceDate: supply.iso, referenceKind: "supply" };
+    } else if (due) {
+      calc = diffDaysUTC(payment, due);
+      ref = { referenceDate: due.iso, referenceKind: "invoice_due" };
+    } else {
       return { days: null, referenceDate: null, referenceKind: null };
-    calc = diffDaysUTC(payment, supply);
-    ref = { referenceDate: supply.iso, referenceKind: "supply" };
+    }
   } else if (!issue) {
     // Issue missing -> use notice for payment terms issue date.
     if (!notice)
@@ -652,11 +659,19 @@ function deriveTermCode(row) {
   if (!row || typeof row !== "object") return null;
 
   const candidates = [
+    // If the user mapped numeric days directly, prefer that
+    row.payment_term_days,
+    row.paymentTermDays,
+
     // Invoice-derived fields first (preferred)
     row.invoice_payment_terms_effective,
     row.invoice_payment_terms_raw,
     row.payment_term,
     row.paymentTerm,
+
+    // System/user default fallback (e.g. "30")
+    row.default_payment_term,
+    row.defaultPaymentTerm,
 
     // Contract/PO effective term as a fallback (do not override invoice terms)
     row.contract_po_payment_terms_effective,
@@ -673,10 +688,18 @@ function deriveTermCode(row) {
 }
 
 function inferTermDaysFromCode(code) {
-  // Intentionally disabled.
-  // We do NOT guess payment term days in staging. Term days must come from
-  // tbl_ptrs_payment_term_map so data issues are visible and fixable.
-  // If you want inference for one-off backfills, do it in SQL or an explicit job.
+  // MVP: if the mapped term is already a number (e.g. "30"), treat it as explicit days.
+  // Otherwise, do not guess.
+  if (code == null) return null;
+  const s = String(code).trim();
+  if (!s) return null;
+
+  // Accept plain integer strings.
+  if (/^\d{1,4}$/.test(s)) {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
   return null;
 }
 

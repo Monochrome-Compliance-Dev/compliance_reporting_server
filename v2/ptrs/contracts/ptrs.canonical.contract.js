@@ -185,7 +185,13 @@ const PTRS_CANONICAL_CONTRACT = {
 
     payment_time_reference_kind: {
       type: "enum",
-      enum: ["invoice_issue", "invoice_receipt", "notice", "supply"],
+      enum: [
+        "invoice_issue",
+        "invoice_receipt",
+        "notice",
+        "supply",
+        "invoice_due",
+      ],
       required_for_report: false,
       required_for_metrics: false,
       derived_allowed: true,
