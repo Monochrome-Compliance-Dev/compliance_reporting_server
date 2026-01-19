@@ -53,7 +53,7 @@
     "nanoid": "^5.1.6",
     "nodemailer": "^7.0.12",
     "p-queue": "^9.1.0",
-    "pg": "^8.16.3",
+    "pg": "^8.17.1",
     "pg-copy-streams": "^7.0.0",
     "pg-pool": "^3.11.0",
     "rootpath": "^0.1.2",
