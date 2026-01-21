@@ -52,7 +52,7 @@ function setSelectedTenantIds(customerId, ptrsId, tenantIds) {
   const key = statusKey(customerId, ptrsId);
   selectionStore.set(
     key,
-    Array.isArray(tenantIds) ? tenantIds.filter(Boolean) : []
+    Array.isArray(tenantIds) ? tenantIds.filter(Boolean) : [],
   );
 }
 
@@ -80,8 +80,21 @@ function updateStatus(customerId, ptrsId, patch) {
   return next;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function getHttpErrorMeta(err) {
+  const statusCode =
+    err?.statusCode ||
+    err?.response?.status ||
+    err?.response?.statusCode ||
+    null;
+
+  const cfg = err?.config || err?.response?.config || null;
+  const method = cfg?.method ? String(cfg.method).toUpperCase() : null;
+  const url = cfg?.url ? String(cfg.url) : null;
+
+  // Don’t log tokens/headers.
+  const responseBody = err?.response?.data ?? err?.data ?? null;
+
+  return { statusCode, method, url, responseBody };
 }
 
 function base64(str) {
@@ -129,32 +142,52 @@ async function refreshAccessTokenIfNeeded({ customerId, tenantId, tokenRow }) {
 
   const expires = xeroClient.computeExpiresFromToken(data);
 
-  // Rotate the token record for this tenant (revoke old, create new) within customer RLS txn.
+  // IMPORTANT (multi-tenant): Xero refresh tokens are rotated.
+  // If we store the same refresh token per-tenant, then refreshing for tenant A invalidates
+  // the refresh token stored for tenants B..N.
+  // MVP fix: when we refresh once, rotate *all* active tenant token rows for this customer
+  // to the newly-issued refresh token.
   await withCustomerTxn(customerId, async (t) => {
+    const activeRows = await XeroToken.findAll({
+      where: { customerId, revoked: null },
+      transaction: t,
+    });
+
+    const tenantIds = Array.from(
+      new Set((activeRows || []).map((r) => r?.tenantId).filter(Boolean)),
+    );
+
+    // Revoke all active token rows for this customer (across tenants)
     await XeroToken.update(
       { revoked: new Date(), revokedByIp: "system", replacedByToken: null },
       {
-        where: { customerId, tenantId, revoked: null },
+        where: { customerId, revoked: null },
         transaction: t,
-      }
+      },
     );
 
-    await XeroToken.create(
-      {
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-        scope: data.scope || tokenRow.scope || "",
-        expires,
-        created: new Date(),
-        createdByIp: "system",
-        revoked: null,
-        revokedByIp: null,
-        replacedByToken: null,
-        customerId,
-        tenantId,
-      },
-      { transaction: t }
-    );
+    // Create a fresh active token row per tenant using the new refresh token
+    for (const tid of tenantIds) {
+      const prev = (activeRows || []).find((r) => r?.tenantId === tid) || null;
+
+      await XeroToken.create(
+        {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          scope: data.scope || prev?.scope || tokenRow.scope || "",
+          expires,
+          created: new Date(),
+          createdByIp: "system",
+          revoked: null,
+          revokedByIp: null,
+          replacedByToken: null,
+          customerId,
+          tenantId: tid,
+          ...(prev?.tenantName ? { tenantName: prev.tenantName } : {}),
+        },
+        { transaction: t },
+      );
+    }
   });
 
   // Return a tokenRow-shaped object to the caller.
@@ -166,16 +199,25 @@ async function refreshAccessTokenIfNeeded({ customerId, tenantId, tokenRow }) {
   };
 }
 
-async function fetchPaymentsPage({ customerId, tokenRow, tenantId, page = 1 }) {
+async function fetchPaymentsPage({
+  customerId,
+  tokenRow,
+  tenantId,
+  periodStart,
+  periodEnd,
+  page = 1,
+}) {
   if (!customerId) throw new Error("Missing customerId");
   if (!tenantId) throw new Error("Missing Xero tenantId");
   if (!tokenRow?.access_token) throw new Error("Missing Xero access token");
 
   let currentToken = tokenRow;
 
+  const where = buildXeroWhereDateRange("Date", periodStart, periodEnd);
+
   const url = `https://api.xero.com/api.xro/2.0/Payments?page=${encodeURIComponent(
-    page
-  )}`;
+    page,
+  )}${where ? `&where=${encodeURIComponent(where)}` : ""}`;
 
   const { data } = await callXeroApiWithAutoRefresh(
     () => xeroApi.get(url, currentToken.access_token, tenantId),
@@ -186,7 +228,7 @@ async function fetchPaymentsPage({ customerId, tokenRow, tenantId, page = 1 }) {
         tenantId,
         tokenRow: currentToken,
       });
-    }
+    },
   );
 
   // Xero returns { Payments: [...] }
@@ -205,7 +247,7 @@ async function fetchInvoiceById({ customerId, tokenRow, tenantId, invoiceId }) {
   let currentToken = tokenRow;
 
   const url = `https://api.xero.com/api.xro/2.0/Invoices/${encodeURIComponent(
-    invoiceId
+    invoiceId,
   )}`;
 
   const { data } = await callXeroApiWithAutoRefresh(
@@ -217,7 +259,7 @@ async function fetchInvoiceById({ customerId, tokenRow, tenantId, invoiceId }) {
         tenantId,
         tokenRow: currentToken,
       });
-    }
+    },
   );
 
   const invoices = Array.isArray(data?.Invoices) ? data.Invoices : [];
@@ -233,7 +275,7 @@ async function fetchContactById({ customerId, tokenRow, tenantId, contactId }) {
   let currentToken = tokenRow;
 
   const url = `https://api.xero.com/api.xro/2.0/Contacts/${encodeURIComponent(
-    contactId
+    contactId,
   )}`;
 
   const { data } = await callXeroApiWithAutoRefresh(
@@ -245,7 +287,7 @@ async function fetchContactById({ customerId, tokenRow, tenantId, contactId }) {
         tenantId,
         tokenRow: currentToken,
       });
-    }
+    },
   );
 
   const contacts = Array.isArray(data?.Contacts) ? data.Contacts : [];
@@ -256,6 +298,8 @@ async function fetchBankTransactionsPage({
   customerId,
   tokenRow,
   tenantId,
+  periodStart,
+  periodEnd,
   page = 1,
 }) {
   if (!customerId) throw new Error("Missing customerId");
@@ -264,9 +308,11 @@ async function fetchBankTransactionsPage({
 
   let currentToken = tokenRow;
 
+  const where = buildXeroWhereDateRange("Date", periodStart, periodEnd);
+
   const url = `https://api.xero.com/api.xro/2.0/BankTransactions?page=${encodeURIComponent(
-    page
-  )}`;
+    page,
+  )}${where ? `&where=${encodeURIComponent(where)}` : ""}`;
 
   const { data } = await callXeroApiWithAutoRefresh(
     () => xeroApi.get(url, currentToken.access_token, tenantId),
@@ -277,7 +323,7 @@ async function fetchBankTransactionsPage({
         tenantId,
         tokenRow: currentToken,
       });
-    }
+    },
   );
 
   return {
@@ -304,7 +350,7 @@ async function fetchOrganisationDetails({ customerId, tokenRow, tenantId }) {
         tenantId,
         tokenRow: currentToken,
       });
-    }
+    },
   );
 
   const orgs = Array.isArray(data?.Organisations) ? data.Organisations : [];
@@ -406,6 +452,39 @@ function safeJsonStringify(obj, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function assertIsoDateOnly(value, fieldName) {
+  if (value === undefined || value === null || value === "") return null;
+  const s = String(value).trim();
+  // Expect DATEONLY coming from Sequelize as YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    throw new Error(`${fieldName} must be a YYYY-MM-DD date (got: ${s})`);
+  }
+  return s;
+}
+
+function toXeroDateTimeExpr(isoDateOnly) {
+  // Xero filter syntax uses DateTime(YYYY,MM,DD)
+  const [y, m, d] = String(isoDateOnly)
+    .split("-")
+    .map((n) => Number(n));
+  if (![y, m, d].every((n) => Number.isFinite(n))) return null;
+  return `DateTime(${y},${m},${d})`;
+}
+
+function buildXeroWhereDateRange(fieldName, periodStart, periodEnd) {
+  const start = assertIsoDateOnly(periodStart, "periodStart");
+  const end = assertIsoDateOnly(periodEnd, "periodEnd");
+  if (!start || !end) return null;
+
+  const startExpr = toXeroDateTimeExpr(start);
+  const endExpr = toXeroDateTimeExpr(end);
+  if (!startExpr || !endExpr) return null;
+
+  // Inclusive bounds to match common reporting-period expectations.
+  // Note: fieldName must be a Xero date field (e.g. "Date").
+  return `${fieldName} >= ${startExpr} && ${fieldName} <= ${endExpr}`;
 }
 
 function deriveXeroPaymentTermsConfig({
@@ -967,7 +1046,7 @@ async function buildRawDatasetFromXeroCache({
   const PtrsImportRaw = getModel("PtrsImportRaw");
   if (!PtrsImportRaw) {
     throw new Error(
-      "PtrsImportRaw model not loaded (db.PtrsImportRaw missing)"
+      "PtrsImportRaw model not loaded (db.PtrsImportRaw missing)",
     );
   }
 
@@ -979,7 +1058,7 @@ async function buildRawDatasetFromXeroCache({
 
   if (!PtrsXeroPayment) {
     throw new Error(
-      "PtrsXeroPayment model not loaded (db.PtrsXeroPayment missing)"
+      "PtrsXeroPayment model not loaded (db.PtrsXeroPayment missing)",
     );
   }
 
@@ -1082,7 +1161,7 @@ async function buildRawDatasetFromXeroCache({
     }
 
     const invoiceIds = Array.from(
-      new Set(paymentRows.map((p) => p.invoiceId).filter(Boolean))
+      new Set(paymentRows.map((p) => p.invoiceId).filter(Boolean)),
     );
 
     let invoicesById = new Map();
@@ -1103,7 +1182,7 @@ async function buildRawDatasetFromXeroCache({
         invoices.map((inv) => {
           const j = inv.toJSON();
           return [j.xeroInvoiceId, j];
-        })
+        }),
       );
     }
 
@@ -1114,8 +1193,8 @@ async function buildRawDatasetFromXeroCache({
       new Set(
         Array.from(invoicesById.values())
           .map((inv) => inv.contactId)
-          .filter(Boolean)
-      )
+          .filter(Boolean),
+      ),
     );
 
     const contactIdsFromBankTx = Array.from(
@@ -1131,12 +1210,12 @@ async function buildRawDatasetFromXeroCache({
             ]);
             return cId || null;
           })
-          .filter(Boolean)
-      )
+          .filter(Boolean),
+      ),
     );
 
     const contactIds = Array.from(
-      new Set([...contactIdsFromInvoices, ...contactIdsFromBankTx])
+      new Set([...contactIdsFromInvoices, ...contactIdsFromBankTx]),
     );
 
     let contactsById = new Map();
@@ -1157,7 +1236,7 @@ async function buildRawDatasetFromXeroCache({
         contacts.map((c) => {
           const j = c.toJSON();
           return [j.xeroContactId, j];
-        })
+        }),
       );
     }
 
@@ -1217,14 +1296,14 @@ async function buildRawDatasetFromXeroCache({
       const rawOrganisation = org?.rawPayload || null;
 
       const invoiceIssueDate = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawInvoice?.Date || rawInvoice?.DateString)
+        parseXeroDotNetDate(rawInvoice?.Date || rawInvoice?.DateString),
       );
       const invoiceReceiptDate = invoiceIssueDate;
       const invoiceDueDate = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawInvoice?.DueDate || rawInvoice?.DueDateString)
+        parseXeroDotNetDate(rawInvoice?.DueDate || rawInvoice?.DueDateString),
       );
       const paymentDate = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawPayment?.Date)
+        parseXeroDotNetDate(rawPayment?.Date),
       );
 
       const termCfg = deriveXeroPaymentTermsConfig({
@@ -1373,13 +1452,13 @@ async function buildRawDatasetFromXeroCache({
 
       const contactId = getFirstKey(
         rawBankTransaction?.Contact || rawBankTransaction?.contact,
-        ["ContactID", "contactId", "contactID", "id"]
+        ["ContactID", "contactId", "contactID", "id"],
       );
       const c = contactId ? contactsById.get(contactId) : null;
       const rawContact = c?.rawPayload || null;
 
       const paymentDate = toIsoDateOnlyUtc(
-        parseXeroDotNetDate(rawBankTransaction?.Date)
+        parseXeroDotNetDate(rawBankTransaction?.Date),
       );
 
       const payerName =
@@ -1486,7 +1565,7 @@ async function buildRawDatasetFromXeroCache({
 
 async function connect({ customerId, ptrsId, userId }) {
   const state = Buffer.from(
-    JSON.stringify({ ptrsId, customerId, ts: Date.now() })
+    JSON.stringify({ ptrsId, customerId, ts: Date.now() }),
   ).toString("base64url");
 
   const redirectUri = requireEnv("XERO_REDIRECT_URI");
@@ -1517,14 +1596,14 @@ async function handleCallback({ ptrsId, code, state }) {
   const effectivePtrsId = ptrsId || parsedState?.ptrsId || null;
   if (!effectivePtrsId) {
     throw new Error(
-      "Missing ptrsId in Xero callback. Ensure connect() was called before OAuth redirect."
+      "Missing ptrsId in Xero callback. Ensure connect() was called before OAuth redirect.",
     );
   }
 
   const customerId = parsedState?.customerId || null;
   if (!customerId) {
     throw new Error(
-      "Missing customerId in Xero callback state. Ensure connect() was called before OAuth redirect."
+      "Missing customerId in Xero callback state. Ensure connect() was called before OAuth redirect.",
     );
   }
 
@@ -1565,7 +1644,7 @@ async function handleCallback({ ptrsId, code, state }) {
         {
           where: { customerId, tenantId: org.tenantId, revoked: null },
           transaction: t,
-        }
+        },
       );
 
       await XeroToken.create(
@@ -1581,9 +1660,10 @@ async function handleCallback({ ptrsId, code, state }) {
           replacedByToken: null,
           customerId,
           tenantId: org.tenantId,
-          // NOTE: tenantName persistence will be handled later once model supports it.
+          // Persist tenantName if the column exists (it does in most schemas)
+          ...(org?.tenantName ? { tenantName: org.tenantName } : {}),
         },
-        { transaction: t }
+        { transaction: t },
       );
     }
   });
@@ -1591,7 +1671,7 @@ async function handleCallback({ ptrsId, code, state }) {
   const frontEndBase = process.env.FRONTEND_URL || "http://localhost:3000";
   const orgParam = encodeURIComponent(JSON.stringify(organisations));
   const redirectUrl = `${frontEndBase}/v2/ptrs/xero/select?ptrsId=${encodeURIComponent(
-    effectivePtrsId
+    effectivePtrsId,
   )}&organisations=${orgParam}`;
 
   return { redirectUrl, organisations };
@@ -1612,16 +1692,78 @@ async function getOrganisations({ customerId, ptrsId }) {
     });
   });
 
-  const organisations = Array.from(
-    new Map(
-      (rows || [])
-        .filter((r) => r?.tenantId)
-        .map((r) => [
-          r.tenantId,
-          { tenantId: r.tenantId, tenantName: r.tenantName || r.tenantId },
-        ])
-    ).values()
-  );
+  // Prefer the newest row per tenantId (rows are ordered DESC by created)
+  const byTenant = new Map();
+  for (const r of rows || []) {
+    if (!r?.tenantId) continue;
+    if (!byTenant.has(r.tenantId)) {
+      byTenant.set(r.tenantId, r);
+    }
+  }
+
+  const tenantIds = Array.from(byTenant.keys());
+
+  // If we have cached organisation records, use their names as the authoritative display label.
+  // This avoids relying on tenantName being present in XeroToken rows.
+  let orgNameByTenantId = new Map();
+  let orgIdByTenantId = new Map();
+
+  const PtrsXeroOrganisation = getModel("PtrsXeroOrganisation");
+  if (PtrsXeroOrganisation && tenantIds.length) {
+    const orgRows = await withCustomerTxn(customerId, async (t) => {
+      return await PtrsXeroOrganisation.findAll({
+        where: {
+          customerId,
+          ...(PtrsXeroOrganisation.rawAttributes?.xeroTenantId
+            ? { xeroTenantId: tenantIds }
+            : {}),
+        },
+        order: [["fetchedAt", "DESC"]],
+        transaction: t,
+      });
+    });
+
+    // Prefer most recently fetched org per tenant
+    for (const o of orgRows || []) {
+      const j = typeof o.toJSON === "function" ? o.toJSON() : o;
+      const tid = j?.xeroTenantId || j?.tenantId;
+      if (!tid) continue;
+
+      if (!orgNameByTenantId.has(tid)) {
+        const name = j?.name || j?.legalName || null;
+        if (name) orgNameByTenantId.set(tid, name);
+
+        const oid = j?.xeroOrganisationId || j?.xeroOrganisationID || null;
+        if (oid) orgIdByTenantId.set(tid, oid);
+      }
+    }
+  }
+
+  const organisations = tenantIds.map((tid) => {
+    const tokenRow = byTenant.get(tid);
+    const cachedName = orgNameByTenantId.get(tid) || null;
+
+    return {
+      tenantId: tid,
+      // Prefer cached org name, then tokenRow.tenantName, then tenantId.
+      tenantName: cachedName || tokenRow?.tenantName || tid,
+      // Optional extra metadata (harmless for FE; useful for debugging)
+      xeroOrganisationId: orgIdByTenantId.get(tid) || null,
+      nameSource: cachedName
+        ? "cache"
+        : tokenRow?.tenantName
+          ? "token"
+          : "fallback",
+    };
+  });
+
+  logger?.info?.("PTRS v2 Xero organisations hydrated", {
+    action: "PtrsV2XeroOrganisationsHydrated",
+    customerId,
+    ptrsId,
+    count: organisations.length,
+    organisations,
+  });
 
   return { ptrsId, status: "READY", organisations };
 }
@@ -1643,7 +1785,7 @@ async function selectOrganisations({ customerId, ptrsId, tenantIds, userId }) {
           selectedTenantIds: selected,
           updatedAt: new Date(),
         }),
-        { transaction: t }
+        { transaction: t },
       );
     });
   }
@@ -1671,7 +1813,7 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
   await withCustomerTxn(customerId, async (t) => {
     await XeroToken.update(
       { revoked: new Date(), revokedByIp: "system" },
-      { where: { customerId, tenantId, revoked: null }, transaction: t }
+      { where: { customerId, tenantId, revoked: null }, transaction: t },
     );
   });
 
@@ -1692,6 +1834,37 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
 
 async function startImport({ customerId, ptrsId, userId }) {
   const importStartedAt = new Date();
+
+  // Source of truth: the PTRS run itself (periodStart/periodEnd)
+  const Ptrs = getModel("Ptrs");
+  if (!Ptrs) {
+    throw new Error("Ptrs model not loaded (db.Ptrs missing)");
+  }
+
+  const ptrsRow = await withCustomerTxn(customerId, async (t) => {
+    return await Ptrs.findOne({
+      where: { customerId, id: ptrsId },
+      transaction: t,
+    });
+  });
+
+  if (!ptrsRow) {
+    throw new Error(`PTRS run not found for ptrsId ${ptrsId}`);
+  }
+
+  const periodStart = assertIsoDateOnly(ptrsRow.periodStart, "periodStart");
+  const periodEnd = assertIsoDateOnly(ptrsRow.periodEnd, "periodEnd");
+
+  if (!periodStart || !periodEnd) {
+    const failed = updateStatus(customerId, ptrsId, {
+      status: "FAILED",
+      message:
+        "PTRS reporting period is not set (periodStart/periodEnd). Please set the reporting period in step 1 and try again.",
+      progress: { extractedCount: 0, insertedCount: 0 },
+    });
+    return failed;
+  }
+
   const extractLimit = getXeroExtractLimit();
   let selectedTenantIds = getSelectedTenantIds(customerId, ptrsId);
 
@@ -1737,6 +1910,45 @@ async function startImport({ customerId, ptrsId, userId }) {
 
   // Fire-and-forget runner (MVP). Status is polled via /status.
   setImmediate(async () => {
+    // ---- observability / heartbeat (MVP) ----
+    const startedMs = Date.now();
+    let lastHeartbeatMs = 0;
+
+    const heartbeat = (message, progressPatch = {}, level = "info") => {
+      const now = Date.now();
+      // Don't spam: max 1 log line per ~5s unless explicitly forced.
+      if (now - lastHeartbeatMs < 5000 && level === "info") return;
+      lastHeartbeatMs = now;
+
+      updateStatus(customerId, ptrsId, {
+        status: "RUNNING",
+        message,
+        progress: {
+          ...(progressPatch || {}),
+          tookMs: now - startedMs,
+        },
+      });
+
+      logger?.[level]?.("PTRS v2 Xero import heartbeat", {
+        action: "PtrsV2XeroImportHeartbeat",
+        customerId,
+        ptrsId,
+        message,
+        ...progressPatch,
+        tookMs: now - startedMs,
+      });
+    };
+
+    logger?.info?.("PTRS v2 Xero import runner started", {
+      action: "PtrsV2XeroImportRunnerStart",
+      customerId,
+      ptrsId,
+      userId,
+      periodStart,
+      periodEnd,
+      extractLimit,
+      tenantCount: selectedTenantIds.length,
+    });
     const counter = { count: 0 };
     let insertedCount = 0;
 
@@ -1744,6 +1956,25 @@ async function startImport({ customerId, ptrsId, userId }) {
     let invoicesInserted = 0;
     let contactsInserted = 0;
     let bankTxInserted = 0;
+
+    // Track non-fatal fetch issues so the FE can show them.
+    let invoiceFetchFailedCount = 0;
+    let contactFetchFailedCount = 0;
+    let bankTxFetchFailedCount = 0;
+
+    const invoiceFetchFailedSample = [];
+    const contactFetchFailedSample = [];
+    const bankTxFetchFailedSample = [];
+
+    const addSample = (arr, value, max = 10) => {
+      if (!value) return;
+      if (arr.length >= max) return;
+      if (arr.includes(value)) return;
+      arr.push(value);
+    };
+
+    const getErrStatusCode = (e) =>
+      e?.statusCode || e?.response?.status || e?.response?.statusCode || null;
 
     try {
       const XeroToken = db.XeroToken || db.models?.XeroToken;
@@ -1759,6 +1990,23 @@ async function startImport({ customerId, ptrsId, userId }) {
       // Process tenants sequentially (MVP) to avoid rate-limit spikes.
       for (let i = 0; i < selectedTenantIds.length; i++) {
         const tenantId = selectedTenantIds[i];
+        // Per-tenant progress counters for visibility
+        let paymentsPagesFetched = 0;
+        let paymentsFetched = 0;
+        let invoicesFetched = 0;
+        let contactsFetched = 0;
+        let bankTxPagesFetched = 0;
+        let bankTxFetched = 0;
+
+        heartbeat(
+          `Tenant ${i + 1}/${selectedTenantIds.length}: starting import…`,
+          {
+            tenantId,
+            currentTenantIndex: i + 1,
+            tenantCount: selectedTenantIds.length,
+          },
+          "info",
+        );
 
         updateStatus(customerId, ptrsId, {
           status: "RUNNING",
@@ -1779,7 +2027,7 @@ async function startImport({ customerId, ptrsId, userId }) {
 
         if (!tokenRow) {
           throw new Error(
-            `No active Xero token found for selected tenantId ${tenantId}`
+            `No active Xero token found for selected tenantId ${tenantId}`,
           );
         }
 
@@ -1804,14 +2052,22 @@ async function startImport({ customerId, ptrsId, userId }) {
             organisation,
             fetchedAt: orgFetchedAt,
           });
+
+          heartbeat(
+            `Tenant ${i + 1}/${selectedTenantIds.length}: organisation cached`,
+            { tenantId, currentTenantIndex: i + 1, orgCached: true },
+            "info",
+          );
         } catch (e) {
           // Do not fail the whole import if org fetch/persist fails; log once per tenant
+          const meta = getHttpErrorMeta(e);
           logger?.warn?.("PTRS v2 Xero organisation fetch/persist failed", {
             action: "PtrsV2XeroPersistOrganisationFailed",
             customerId,
             ptrsId,
             tenantId,
             error: e?.message,
+            ...meta,
           });
         }
 
@@ -1832,9 +2088,12 @@ async function startImport({ customerId, ptrsId, userId }) {
               customerId,
               tokenRow,
               tenantId,
+              periodStart,
+              periodEnd,
               page: pageNum,
             });
             tokenRow = paymentPage.tokenRow;
+            paymentsPagesFetched = pageNum;
             return {
               data: { Payments: paymentPage.items },
               headers: {},
@@ -1853,10 +2112,26 @@ async function startImport({ customerId, ptrsId, userId }) {
             const { items: limitedItems, done } = applyExtractLimit(
               pageItems,
               extractLimit,
-              counter
+              counter,
             );
 
             tenantPaymentItems.push(...limitedItems);
+            paymentsFetched += limitedItems.length;
+
+            // Heartbeat while paging (prevents the UI feeling dead and helps diagnose stalls)
+            heartbeat(
+              `Tenant ${i + 1}/${selectedTenantIds.length}: fetching payments… (${paymentsFetched} so far, page ${paymentsPagesFetched})`,
+              {
+                tenantId,
+                currentTenantIndex: i + 1,
+                tenantCount: selectedTenantIds.length,
+                paymentsPagesFetched,
+                paymentsFetched,
+                extractedCount: counter.count,
+                extractLimit,
+              },
+              "info",
+            );
 
             if (done) paymentsEmpty = true;
           },
@@ -1864,7 +2139,7 @@ async function startImport({ customerId, ptrsId, userId }) {
             startPage: 1,
             // Stop when the API returns an empty page, or we hit the global cap.
             hasMoreFn: () => !paymentsEmpty,
-          }
+          },
         );
 
         // Persist payments (best-effort)
@@ -1890,10 +2165,10 @@ async function startImport({ customerId, ptrsId, userId }) {
                   "invoiceId",
                   "invoiceID",
                   "id",
-                ])
+                ]),
               )
-              .filter(Boolean)
-          )
+              .filter(Boolean),
+          ),
         );
 
         updateStatus(customerId, ptrsId, {
@@ -1921,8 +2196,30 @@ async function startImport({ customerId, ptrsId, userId }) {
             tokenRow = invoiceRes.tokenRow;
             const inv = invoiceRes.item;
             if (inv) invoices.push(inv);
+            invoicesFetched++;
+            if (invoicesFetched % 25 === 0) {
+              heartbeat(
+                `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${invoicesFetched}/${invoiceIds.length} invoices…`,
+                {
+                  tenantId,
+                  currentTenantIndex: i + 1,
+                  invoicesFetched,
+                  invoicesTotal: invoiceIds.length,
+                  paymentsFetched,
+                  paymentsPagesFetched,
+                },
+                "info",
+              );
+            }
           } catch (e) {
-            // Don't kill import; record the first failure and keep going.
+            // Don't kill import; surface failures as warnings in status.
+            invoiceFetchFailedCount++;
+            addSample(invoiceFetchFailedSample, invId);
+
+            const sc = getErrStatusCode(e);
+
+            const meta = getHttpErrorMeta(e);
+
             logger?.warn?.("PTRS v2 Xero invoice fetch failed", {
               action: "PtrsV2XeroFetchInvoiceFailed",
               customerId,
@@ -1930,11 +2227,26 @@ async function startImport({ customerId, ptrsId, userId }) {
               xeroTenantId: tenantId,
               invoiceId: invId,
               error: e?.message,
-              statusCode: e?.statusCode || null,
+              statusCode: sc,
+              ...meta,
+            });
+
+            // Give the FE a hint without flipping the run to FAILED.
+            updateStatus(customerId, ptrsId, {
+              status: "RUNNING",
+              message:
+                sc === 404
+                  ? "Some invoices referenced by payments were not found in Xero (404). Continuing…"
+                  : "Some invoices could not be fetched from Xero. Continuing…",
+              progress: {
+                extractedCount: counter.count,
+                insertedCount,
+                lastTenantId: tenantId,
+                invoiceFetchFailedCount,
+                invoiceFetchFailedSample,
+              },
             });
           }
-
-          await sleep(120);
         }
 
         const invPersist = await persistInvoices({
@@ -1957,10 +2269,10 @@ async function startImport({ customerId, ptrsId, userId }) {
                   "contactId",
                   "contactID",
                   "id",
-                ])
+                ]),
               )
-              .filter(Boolean)
-          )
+              .filter(Boolean),
+          ),
         );
 
         updateStatus(customerId, ptrsId, {
@@ -1985,7 +2297,28 @@ async function startImport({ customerId, ptrsId, userId }) {
             tokenRow = contactRes.tokenRow;
             const c = contactRes.item;
             if (c) contacts.push(c);
+            contactsFetched++;
+            if (contactsFetched % 25 === 0) {
+              heartbeat(
+                `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${contactsFetched}/${contactIds.length} contacts…`,
+                {
+                  tenantId,
+                  currentTenantIndex: i + 1,
+                  contactsFetched,
+                  contactsTotal: contactIds.length,
+                  invoicesFetched,
+                },
+                "info",
+              );
+            }
           } catch (e) {
+            contactFetchFailedCount++;
+            addSample(contactFetchFailedSample, cId);
+
+            const sc = getErrStatusCode(e);
+
+            const meta = getHttpErrorMeta(e);
+
             logger?.warn?.("PTRS v2 Xero contact fetch failed", {
               action: "PtrsV2XeroFetchContactFailed",
               customerId,
@@ -1993,11 +2326,23 @@ async function startImport({ customerId, ptrsId, userId }) {
               xeroTenantId: tenantId,
               contactId: cId,
               error: e?.message,
-              statusCode: e?.statusCode || null,
+              statusCode: sc,
+              ...meta,
+            });
+
+            updateStatus(customerId, ptrsId, {
+              status: "RUNNING",
+              message:
+                "Some contacts could not be fetched from Xero. Continuing…",
+              progress: {
+                extractedCount: counter.count,
+                insertedCount,
+                lastTenantId: tenantId,
+                contactFetchFailedCount,
+                contactFetchFailedSample,
+              },
             });
           }
-
-          await sleep(120);
         }
 
         const contactPersist = await persistContacts({
@@ -2013,49 +2358,94 @@ async function startImport({ customerId, ptrsId, userId }) {
         // Bank transactions (v1 parity). Paged, but bounded by extractLimit for safety.
         // For MVP we only cache a small sample and do not interpret allocations yet.
         const bankTxItems = [];
-        if (extractLimit) {
-          const btCounter = { count: 0 };
-          let btEmpty = false;
+        try {
+          if (extractLimit) {
+            const btCounter = { count: 0 };
+            let btEmpty = false;
 
-          await paginateXeroApi(
-            async (pageNum) => {
-              const btPageRes = await fetchBankTransactionsPage({
-                customerId,
-                tokenRow,
-                tenantId,
-                page: pageNum,
-              });
-              tokenRow = btPageRes.tokenRow;
-              return {
-                data: { BankTransactions: btPageRes.items },
-                headers: {},
-                status: 200,
-              };
+            await paginateXeroApi(
+              async (pageNum) => {
+                const btPageRes = await fetchBankTransactionsPage({
+                  customerId,
+                  tokenRow,
+                  tenantId,
+                  periodStart,
+                  periodEnd,
+                  page: pageNum,
+                });
+                tokenRow = btPageRes.tokenRow;
+                bankTxPagesFetched = pageNum;
+                return {
+                  data: { BankTransactions: btPageRes.items },
+                  headers: {},
+                  status: 200,
+                };
+              },
+              async (response) => {
+                const pageItems = Array.isArray(
+                  response?.data?.BankTransactions,
+                )
+                  ? response.data.BankTransactions
+                  : [];
+                if (!pageItems.length) {
+                  btEmpty = true;
+                  return;
+                }
+
+                const { items: limitedItems, done } = applyExtractLimit(
+                  pageItems,
+                  extractLimit,
+                  btCounter,
+                );
+
+                bankTxItems.push(...limitedItems);
+                bankTxFetched += limitedItems.length;
+                heartbeat(
+                  `Tenant ${i + 1}/${selectedTenantIds.length}: fetching bank transactions… (${bankTxFetched} so far, page ${bankTxPagesFetched})`,
+                  {
+                    tenantId,
+                    currentTenantIndex: i + 1,
+                    bankTxPagesFetched,
+                    bankTxFetched,
+                  },
+                  "info",
+                );
+
+                if (done) btEmpty = true;
+              },
+              {
+                startPage: 1,
+                hasMoreFn: () => !btEmpty,
+              },
+            );
+          }
+        } catch (e) {
+          bankTxFetchFailedCount++;
+          const sc = getErrStatusCode(e);
+          const meta = getHttpErrorMeta(e);
+
+          logger?.warn?.("PTRS v2 Xero bank transactions fetch failed", {
+            action: "PtrsV2XeroFetchBankTransactionsFailed",
+            customerId,
+            ptrsId,
+            xeroTenantId: tenantId,
+            error: e?.message,
+            statusCode: sc,
+            ...meta,
+          });
+
+          updateStatus(customerId, ptrsId, {
+            status: "RUNNING",
+            message:
+              "Bank transactions could not be fetched from Xero. Continuing…",
+            progress: {
+              extractedCount: counter.count,
+              insertedCount,
+              lastTenantId: tenantId,
+              bankTxFetchFailedCount,
+              bankTxFetchFailedSample,
             },
-            async (response) => {
-              const pageItems = Array.isArray(response?.data?.BankTransactions)
-                ? response.data.BankTransactions
-                : [];
-              if (!pageItems.length) {
-                btEmpty = true;
-                return;
-              }
-
-              const { items: limitedItems, done } = applyExtractLimit(
-                pageItems,
-                extractLimit,
-                btCounter
-              );
-
-              bankTxItems.push(...limitedItems);
-
-              if (done) btEmpty = true;
-            },
-            {
-              startPage: 1,
-              hasMoreFn: () => !btEmpty,
-            }
-          );
+          });
         }
 
         const bankPersist = await persistBankTransactions({
@@ -2075,6 +2465,12 @@ async function startImport({ customerId, ptrsId, userId }) {
             extractedCount: counter.count,
             insertedCount,
             lastTenantId: tenantId,
+            invoiceFetchFailedCount,
+            invoiceFetchFailedSample,
+            contactFetchFailedCount,
+            contactFetchFailedSample,
+            bankTxFetchFailedCount,
+            bankTxFetchFailedSample,
           },
         });
 
@@ -2082,6 +2478,18 @@ async function startImport({ customerId, ptrsId, userId }) {
         if (extractLimit && counter.count >= extractLimit) break;
       }
 
+      heartbeat(
+        "All tenants processed. Building PTRS dataset from cached Xero records…",
+        {
+          tenantCount: selectedTenantIds.length,
+          extractedCount: counter.count,
+          paymentsInserted,
+          invoicesInserted,
+          contactsInserted,
+          bankTxInserted,
+        },
+        "info",
+      );
       updateStatus(customerId, ptrsId, {
         status: "RUNNING",
         message: "Building PTRS dataset from cached Xero records…",
@@ -2102,6 +2510,12 @@ async function startImport({ customerId, ptrsId, userId }) {
         importStartedAt,
         limit: extractLimit || null,
       });
+
+      heartbeat(
+        `PTRS raw dataset built (${rawBuild?.insertedRows ?? 0} rows). Creating main dataset record…`,
+        { insertedRows: rawBuild?.insertedRows ?? 0 },
+        "info",
+      );
 
       // Ensure the standard PTRS flow can proceed: create/update a "main" dataset row
       // even when the main input was Xero (i.e. no uploaded CSV file).
@@ -2154,7 +2568,7 @@ async function startImport({ customerId, ptrsId, userId }) {
             action: "PtrsV2XeroMainDatasetMissing",
             customerId,
             ptrsId,
-          }
+          },
         );
       }
 
@@ -2169,6 +2583,12 @@ async function startImport({ customerId, ptrsId, userId }) {
           contactsInserted,
           bankTxInserted,
           rawRowsInserted: rawBuild.insertedRows,
+          invoiceFetchFailedCount,
+          invoiceFetchFailedSample,
+          contactFetchFailedCount,
+          contactFetchFailedSample,
+          bankTxFetchFailedCount,
+          bankTxFetchFailedSample,
         },
       });
     } catch (err) {
@@ -2199,6 +2619,8 @@ async function startImport({ customerId, ptrsId, userId }) {
         progress: { extractedCount: counter.count, insertedCount },
       });
 
+      const meta = getHttpErrorMeta(err);
+
       logger?.error?.("PTRS v2 Xero import failed", {
         action: "PtrsV2XeroImportFailed",
         customerId,
@@ -2208,6 +2630,7 @@ async function startImport({ customerId, ptrsId, userId }) {
         url: err?.url || null,
         method: err?.method || null,
         responseBody: err?.responseBody || null,
+        meta,
       });
     }
   });

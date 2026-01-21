@@ -187,8 +187,11 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
     let missingPayerAbnCount = 0;
     let invalidPayerAbnCount = 0;
 
-    let missingInvoiceDateCount = 0;
-    let invalidInvoiceDateCount = 0;
+    let missingPaymentTimeReferenceDateCount = 0;
+    let invalidPaymentTimeReferenceDateCount = 0;
+
+    // Optional raw invoice issue date (NOT required by contract)
+    let invalidInvoiceIssueDateCount = 0;
 
     let missingPaymentDateCount = 0;
     let invalidPaymentDateCount = 0;
@@ -220,7 +223,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
           blockers.push(
             toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn", {
               field: "payee_entity_abn",
-            })
+            }),
           );
         }
       } else if (!isProbablyAbn(payeeAbn)) {
@@ -234,8 +237,8 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
               {
                 field: "payee_entity_abn",
                 value: data?.payee_entity_abn,
-              }
-            )
+              },
+            ),
           );
         }
       }
@@ -248,7 +251,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
           blockers.push(
             toIssue(r, "PAYER_ABN_MISSING", "Missing payer_entity_abn", {
               field: "payer_entity_abn",
-            })
+            }),
           );
         }
       } else if (!isProbablyAbn(payerAbn)) {
@@ -262,52 +265,35 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
               {
                 field: "payer_entity_abn",
                 value: data?.payer_entity_abn,
-              }
-            )
+              },
+            ),
           );
         }
       }
 
-      // ---- Dates ----
-      const invoiceDateRaw = data?.invoice_issue_date;
+      //     // ---- Dates (contract-aligned) ----
+      // Required for report/metrics:
+      // - payment_date
+      // - payment_time_reference_date
+      // Optional raw:
+      // - invoice_issue_date (only validate format if provided)
+
       const paymentDateRaw = data?.payment_date;
+      const paymentTimeRefRaw = data?.payment_time_reference_date;
+      const invoiceIssueDateRaw = data?.invoice_issue_date;
 
-      const invoiceDate = parseAusDate(invoiceDateRaw);
       const paymentDate = parseAusDate(paymentDateRaw);
+      const paymentTimeReferenceDate = parseAusDate(paymentTimeRefRaw);
+      const invoiceIssueDate = parseAusDate(invoiceIssueDateRaw);
 
-      if (!invoiceDateRaw) {
-        missingInvoiceDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "INVOICE_DATE_MISSING", "Missing invoice_issue_date", {
-              field: "invoice_issue_date",
-            })
-          );
-        }
-      } else if (!invoiceDate) {
-        invalidInvoiceDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "INVOICE_DATE_INVALID",
-              "invoice_issue_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
-              {
-                field: "invoice_issue_date",
-                value: invoiceDateRaw,
-              }
-            )
-          );
-        }
-      }
-
+      // payment_date (required)
       if (!paymentDateRaw) {
         missingPaymentDateCount += 1;
         if (blockers.length < LIMIT) {
           blockers.push(
             toIssue(r, "PAYMENT_DATE_MISSING", "Missing payment_date", {
               field: "payment_date",
-            })
+            }),
           );
         }
       } else if (!paymentDate) {
@@ -321,26 +307,79 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
               {
                 field: "payment_date",
                 value: paymentDateRaw,
-              }
-            )
+              },
+            ),
           );
         }
       }
 
-      if (invoiceDate && paymentDate) {
-        if (paymentDate.getTime() < invoiceDate.getTime()) {
+      // payment_time_reference_date (required)
+      if (!paymentTimeRefRaw) {
+        missingPaymentTimeReferenceDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TIME_REFERENCE_DATE_MISSING",
+              "Missing payment_time_reference_date",
+              {
+                field: "payment_time_reference_date",
+              },
+            ),
+          );
+        }
+      } else if (!paymentTimeReferenceDate) {
+        invalidPaymentTimeReferenceDateCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TIME_REFERENCE_DATE_INVALID",
+              "payment_time_reference_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
+              {
+                field: "payment_time_reference_date",
+                value: paymentTimeRefRaw,
+              },
+            ),
+          );
+        }
+      }
+
+      // invoice_issue_date (optional): warn only if present but invalid
+      if (invoiceIssueDateRaw && !invoiceIssueDate) {
+        invalidInvoiceIssueDateCount += 1;
+        if (warnings.length < LIMIT) {
+          warnings.push(
+            toIssue(
+              r,
+              "INVOICE_ISSUE_DATE_INVALID",
+              "invoice_issue_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
+              {
+                field: "invoice_issue_date",
+                value: invoiceIssueDateRaw,
+              },
+            ),
+          );
+        }
+      }
+
+      // Sanity check only (warning): payment before reference date can happen (credits/adjustments), but is worth flagging
+      if (paymentDate && paymentTimeReferenceDate) {
+        if (paymentDate.getTime() < paymentTimeReferenceDate.getTime()) {
           paymentBeforeInvoiceCount += 1;
           if (warnings.length < LIMIT) {
             warnings.push(
               toIssue(
                 r,
-                "PAYMENT_BEFORE_INVOICE",
-                "payment_date is earlier than invoice_issue_date (check for credit notes/adjustments)",
+                "PAYMENT_BEFORE_REFERENCE_DATE",
+                "payment_date is earlier than payment_time_reference_date (check for credit notes/adjustments)",
                 {
-                  invoice_issue_date: invoiceDateRaw,
                   payment_date: paymentDateRaw,
-                }
-              )
+                  payment_time_reference_date: paymentTimeRefRaw,
+                  payment_time_reference_kind:
+                    data?.payment_time_reference_kind || null,
+                },
+              ),
             );
           }
         }
@@ -356,7 +395,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
           blockers.push(
             toIssue(r, "PAYMENT_AMOUNT_MISSING", "Missing payment_amount", {
               field: "payment_amount",
-            })
+            }),
           );
         }
       } else if (paymentAmount == null) {
@@ -370,8 +409,94 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
               {
                 field: "payment_amount",
                 value: paymentAmountRaw,
-              }
-            )
+              },
+            ),
+          );
+        }
+      }
+
+      // ---- Contract-required derived fields for report/metrics ----
+      // payment_term_days (required)
+      const paymentTermDaysRaw = data?.payment_term_days;
+      const paymentTermDays =
+        paymentTermDaysRaw == null || String(paymentTermDaysRaw).trim() === ""
+          ? null
+          : Number(paymentTermDaysRaw);
+
+      if (paymentTermDays == null) {
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TERM_DAYS_MISSING",
+              "Missing payment_term_days",
+              { field: "payment_term_days" },
+            ),
+          );
+        }
+      } else if (
+        !Number.isFinite(paymentTermDays) ||
+        !Number.isInteger(paymentTermDays) ||
+        paymentTermDays < 0
+      ) {
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TERM_DAYS_INVALID",
+              "payment_term_days is not a valid non-negative integer",
+              { field: "payment_term_days", value: paymentTermDaysRaw },
+            ),
+          );
+        }
+      }
+
+      // payment_time_days (required)
+      const paymentTimeDaysRaw = data?.payment_time_days;
+      const paymentTimeDays =
+        paymentTimeDaysRaw == null || String(paymentTimeDaysRaw).trim() === ""
+          ? null
+          : Number(paymentTimeDaysRaw);
+
+      if (paymentTimeDays == null) {
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TIME_DAYS_MISSING",
+              "Missing payment_time_days",
+              { field: "payment_time_days" },
+            ),
+          );
+        }
+      } else if (
+        !Number.isFinite(paymentTimeDays) ||
+        !Number.isInteger(paymentTimeDays) ||
+        paymentTimeDays < 0
+      ) {
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "PAYMENT_TIME_DAYS_INVALID",
+              "payment_time_days is not a valid non-negative integer",
+              { field: "payment_time_days", value: paymentTimeDaysRaw },
+            ),
+          );
+        }
+      }
+
+      // is_small_business (required by contract for report/metrics)
+      if (data?.is_small_business == null) {
+        smallBusinessUnknownCount += 1;
+        if (blockers.length < LIMIT) {
+          blockers.push(
+            toIssue(
+              r,
+              "SMALL_BUSINESS_MISSING",
+              "Missing is_small_business (required for report/metrics)",
+              { field: "is_small_business" },
+            ),
           );
         }
       }
@@ -390,28 +515,12 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
               {
                 duplicateOfRowNo: firstRowNo,
                 key,
-              }
-            )
+              },
+            ),
           );
         }
       } else {
         seenKeys.set(key, r.rowNo);
-      }
-
-      // ---- Small business status completeness (post-SBI, this should usually be set) ----
-      // Treat as warning only for MVP; we can tighten later.
-      if (data?.is_small_business == null) {
-        smallBusinessUnknownCount += 1;
-        if (warnings.length < LIMIT) {
-          warnings.push(
-            toIssue(
-              r,
-              "SMALL_BUSINESS_UNKNOWN",
-              "Small business status is missing (post-SBI this should normally be set)",
-              { field: "is_small_business" }
-            )
-          );
-        }
       }
     }
 
@@ -437,8 +546,9 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
         invalidPayeeAbnCount,
         missingPayerAbnCount,
         invalidPayerAbnCount,
-        missingInvoiceDateCount,
-        invalidInvoiceDateCount,
+        missingPaymentTimeReferenceDateCount,
+        invalidPaymentTimeReferenceDateCount,
+        invalidInvoiceIssueDateCount,
         missingPaymentDateCount,
         invalidPaymentDateCount,
         paymentBeforeInvoiceCount,
@@ -510,7 +620,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const countsRow = Array.isArray(countsResult) ? countsResult[0] : null;
@@ -544,7 +654,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const kindsWanted = [
@@ -562,7 +672,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     }
 
     const paymentTimeByReferenceKind = Array.from(kindCountMap.entries()).map(
-      ([kind, count]) => ({ kind, count })
+      ([kind, count]) => ({ kind, count }),
     );
 
     const missingTimeRows = await db.sequelize.query(
@@ -578,7 +688,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const missingTimeRow = Array.isArray(missingTimeRows)
@@ -608,7 +718,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     // Payment terms dedupe table
@@ -636,7 +746,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const unmappedRawRows = await db.sequelize.query(
@@ -657,7 +767,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const unmappedRawValues = (unmappedRawRows || [])
@@ -666,7 +776,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
 
     const unmappedCount = (unmappedRawRows || []).reduce(
       (acc, r) => acc + (Number(r.count) || 0),
-      0
+      0,
     );
 
     // Canonical missing counts within the trade credit included population
@@ -686,7 +796,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         transaction: t,
         replacements: { customerId, ptrsId },
         type: db.sequelize.QueryTypes.SELECT,
-      }
+      },
     );
 
     const missingCanonRow = Array.isArray(missingCanonRows)
@@ -701,20 +811,20 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
 
     pushMissing(
       "payment_term_days",
-      missingCanonRow?.missing_payment_term_days
+      missingCanonRow?.missing_payment_term_days,
     );
     pushMissing(
       "is_small_business",
-      missingCanonRow?.missing_is_small_business
+      missingCanonRow?.missing_is_small_business,
     );
     pushMissing(
       "payment_time_days",
-      missingCanonRow?.missing_payment_time_days
+      missingCanonRow?.missing_payment_time_days,
     );
     pushMissing("payment_amount", missingCanonRow?.missing_payment_amount);
     pushMissing(
       "payment_time_reference_date",
-      missingCanonRow?.missing_payment_time_reference_date
+      missingCanonRow?.missing_payment_time_reference_date,
     );
     pushMissing("payment_date", missingCanonRow?.missing_payment_date);
 
