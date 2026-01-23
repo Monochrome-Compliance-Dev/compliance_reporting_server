@@ -7,6 +7,7 @@ const {
   mergeJoinedRow,
   normalizeJoinKeyValue,
   toSnake,
+  buildStableInputHash,
 } = require("@/v2/ptrs/services/ptrs.service");
 const {
   beginTransactionWithCustomerContext,
@@ -29,7 +30,11 @@ function normHeaderKey(s) {
     .trim();
 }
 
-function buildMapMetaFromMappings(mappings) {
+function buildMapMetaFromMappings(
+  mappings,
+  signature = null,
+  updatedAtIso = null,
+) {
   const m =
     mappings && typeof mappings === "object" && !Array.isArray(mappings)
       ? mappings
@@ -46,8 +51,8 @@ function buildMapMetaFromMappings(mappings) {
           return cfg?.field || null;
         })
         .filter((v) => v != null && String(v).trim() !== "")
-        .map((v) => String(v).trim())
-    )
+        .map((v) => String(v).trim()),
+    ),
   );
 
   return {
@@ -55,7 +60,9 @@ function buildMapMetaFromMappings(mappings) {
     sourceHeaders,
     sourceHeadersNorm,
     targets,
-    updatedAt: new Date().toISOString(),
+    // Only set updatedAt when the caller is actually persisting a material change
+    updatedAt: updatedAtIso || null,
+    signature: signature || null,
   };
 }
 
@@ -81,6 +88,27 @@ function extractMapMetaFromExtras(extras) {
   // No shims: only accept the current version.
   if (meta.version !== 1) return null;
   return meta;
+}
+
+function safeParseJsonAny(v) {
+  if (v == null) return null;
+  if (typeof v === "string") {
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  }
+  return v;
+}
+
+function buildMaterialMapSignature({ mappings, joins, customFields }) {
+  // Only include things that actually affect mapped rows content/shape.
+  return buildStableInputHash({
+    mappings: safeParseJsonAny(mappings) || null,
+    joins: safeParseJsonAny(joins) || null,
+    customFields: safeParseJsonAny(customFields) || null,
+  });
 }
 
 module.exports = {
@@ -325,7 +353,7 @@ async function loadMappedRowsForPtrs({
         ptrsId,
         requestedLimit: limit,
         rowsCount: Array.isArray(rows) ? rows.length : 0,
-      })
+      }),
     );
   }
 
@@ -349,7 +377,7 @@ async function loadMappedRowsForPtrs({
 
   // Simple header inference from the mapped rows
   const headers = Array.from(
-    new Set(composed.flatMap((row) => Object.keys(row)))
+    new Set(composed.flatMap((row) => Object.keys(row))),
   );
 
   if (logger && logger.debug && composed.length) {
@@ -360,7 +388,7 @@ async function loadMappedRowsForPtrs({
         ptrsId,
         sampleRowKeys: Object.keys(composed[0] || {}),
         headersCount: headers.length,
-      })
+      }),
     );
   }
 
@@ -416,7 +444,7 @@ async function getColumnMap({ customerId, ptrsId, transaction = null }) {
           map && map.customFields ? typeof map.customFields : null,
         hasJoinsField: !!(map && map.joins),
         joinsType: map && map.joins ? typeof map.joins : null,
-      })
+      }),
     );
     if (!isExternalTx && !t.finished) {
       await t.commit();
@@ -779,7 +807,7 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
             customerId,
             ptrsId,
             error: e.message,
-          }
+          },
         );
       }
     }
@@ -869,6 +897,38 @@ async function saveColumnMap({
       transaction: t,
     });
 
+    const incomingSignature = buildMaterialMapSignature({
+      mappings,
+      joins,
+      customFields,
+    });
+
+    const existingExtrasObj = safeParseJsonObject(existing?.extras) || {};
+    const existingMeta = existing
+      ? extractMapMetaFromExtras(existingExtrasObj)
+      : null;
+    const existingSignature = existingMeta?.signature || null;
+
+    if (
+      existing &&
+      existingSignature &&
+      existingSignature === incomingSignature
+    ) {
+      slog.info(
+        "PTRS v2 saveColumnMap: no material change detected; skipping update",
+        {
+          action: "PtrsV2SaveColumnMapNoop",
+          customerId,
+          ptrsId,
+          signature: incomingSignature,
+        },
+      );
+
+      const plain = existing.get ? existing.get({ plain: true }) : existing;
+      await t.commit();
+      return plain;
+    }
+
     const resolveField = (incoming, existingValue) =>
       typeof incoming === "undefined" ? existingValue : incoming;
 
@@ -898,15 +958,20 @@ async function saveColumnMap({
 
     // --- Persist compatibility metadata on every save (authoritative server-side) ---
     // Store in extras.mapMeta so the UI can list compatible maps without N+1 getMap calls.
-    const existingExtrasObj = safeParseJsonObject(existing?.extras) || {};
     const incomingExtrasObj = safeParseJsonObject(payload.extras) || {};
+
+    const nowIso = new Date().toISOString();
 
     const nextExtras = {
       ...existingExtrasObj,
       ...incomingExtrasObj,
     };
 
-    nextExtras.mapMeta = buildMapMetaFromMappings(payload.mappings);
+    nextExtras.mapMeta = buildMapMetaFromMappings(
+      payload.mappings,
+      incomingSignature,
+      nowIso,
+    );
 
     payload.extras = nextExtras;
 
@@ -923,7 +988,7 @@ async function saveColumnMap({
         customFieldsType: payload.customFields
           ? typeof payload.customFields
           : null,
-      })
+      }),
     );
 
     if (existing) {
@@ -932,7 +997,7 @@ async function saveColumnMap({
           ...payload,
           updatedBy: userId || existing.updatedBy || existing.createdBy || null,
         },
-        { transaction: t }
+        { transaction: t },
       );
 
       await t.commit();
@@ -947,7 +1012,7 @@ async function saveColumnMap({
         createdBy: userId || null,
         updatedBy: userId || null,
       },
-      { transaction: t }
+      { transaction: t },
     );
 
     await t.commit();
@@ -971,6 +1036,9 @@ async function buildMappedDatasetForPtrs({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
+  const BATCH_SIZE = 2000;
+  const MAX_HEADER_KEYS = 2000;
+
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
@@ -979,30 +1047,8 @@ async function buildMappedDatasetForPtrs({
       safeMeta({
         customerId,
         ptrsId,
-      })
+      }),
     );
-
-    // Compose the fully mapped + joined rows for this ptrs run.
-    // We intentionally pass limit: null here so the composer decides how much to load
-    // (typically the full dataset for this run).
-    const { rows, headers } = await composeMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      limit: null,
-      transaction: t,
-    });
-
-    // Ensure canonical defaults/transforms are applied BEFORE persisting mapped rows.
-    // Stage reads from tbl_ptrs_mapped_row, so this is the correct place to guarantee
-    // trade credit flags + amount normalisation are present end-to-end.
-    const canonicalRows = (rows || []).map((r) => ensureCanonicalRowShape(r));
-
-    // Recompute headers from canonical rows to reflect any injected canonical keys.
-    const canonicalHeaders = Array.from(
-      new Set(canonicalRows.flatMap((row) => Object.keys(row || {})))
-    );
-
-    const total = Array.isArray(canonicalRows) ? canonicalRows.length : 0;
 
     // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot
     await db.PtrsMappedRow.destroy({
@@ -1010,54 +1056,91 @@ async function buildMappedDatasetForPtrs({
       transaction: t,
     });
 
-    if (!total) {
-      slog.info(
-        "PTRS v2 buildMappedDatasetForPtrs: no rows composed, nothing persisted",
-        safeMeta({ customerId, ptrsId })
-      );
-      await t.commit();
-      return { count: 0, headers: canonicalHeaders || [] };
-    }
-
+    let offset = 0;
+    let totalPersisted = 0;
+    let canonicalHeaders = [];
+    const headersSet = new Set();
+    let isFirstBatch = true;
     const nowIso = new Date().toISOString();
 
-    const payload = canonicalRows.map((row, index) => ({
-      customerId,
-      ptrsId,
-      // Prefer an explicit row_no from the composer if present; otherwise fallback to index
-      rowNo:
-        typeof row.row_no === "number" && Number.isFinite(row.row_no)
-          ? row.row_no
-          : index + 1,
-      data: row,
-      meta: {
-        stage: "ptrs.v2.mapped",
-        builtAt: nowIso,
-        builtBy: actorId || null,
-      },
-    }));
+    while (true) {
+      // Compose mapped rows for this batch
+      const { rows } = await composeMappedRowsForPtrs({
+        customerId,
+        ptrsId,
+        limit: BATCH_SIZE,
+        offset,
+        transaction: t,
+      });
 
-    await db.PtrsMappedRow.bulkCreate(payload, {
-      transaction: t,
-      validate: false,
-    });
+      if (!rows || !rows.length) {
+        if (isFirstBatch) {
+          // No rows at all
+          slog.info(
+            "PTRS v2 buildMappedDatasetForPtrs: no rows composed, nothing persisted",
+            safeMeta({ customerId, ptrsId }),
+          );
+          await t.commit();
+          return { count: 0, headers: [] };
+        }
+        break;
+      }
+
+      // Build payload for this batch
+      const payload = [];
+      for (let i = 0; i < rows.length; ++i) {
+        const row = rows[i];
+        const canonicalRow = ensureCanonicalRowShape(row);
+        if (isFirstBatch) {
+          // Collect header keys from first batch only
+          for (const k of Object.keys(canonicalRow)) {
+            if (headersSet.size < MAX_HEADER_KEYS) headersSet.add(k);
+          }
+        }
+        payload.push({
+          customerId,
+          ptrsId,
+          rowNo:
+            typeof row.row_no === "number" && Number.isFinite(row.row_no)
+              ? row.row_no
+              : offset + i + 1,
+          data: canonicalRow,
+          meta: {
+            stage: "ptrs.v2.mapped",
+            builtAt: nowIso,
+            builtBy: actorId || null,
+          },
+        });
+      }
+
+      await db.PtrsMappedRow.bulkCreate(payload, {
+        transaction: t,
+        validate: false,
+      });
+      totalPersisted += payload.length;
+      if (isFirstBatch) {
+        canonicalHeaders = Array.from(headersSet);
+        isFirstBatch = false;
+      }
+      offset += BATCH_SIZE;
+    }
 
     slog.info(
       "PTRS v2 buildMappedDatasetForPtrs: persisted mapped rows",
       safeMeta({
         customerId,
         ptrsId,
-        rowsPersisted: total,
+        rowsPersisted: totalPersisted,
         headersCount: Array.isArray(canonicalHeaders)
           ? canonicalHeaders.length
           : 0,
-      })
+      }),
     );
 
     await t.commit();
 
     return {
-      count: total,
+      count: totalPersisted,
       headers: canonicalHeaders || [],
     };
   } catch (err) {
@@ -1075,6 +1158,7 @@ async function composeMappedRowsForPtrs({
   customerId,
   ptrsId,
   limit = 50,
+  offset = 0,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -1101,7 +1185,7 @@ async function composeMappedRowsForPtrs({
     // Non-fatal for MVP: fall back to non-canonical output
     slog.warn(
       "PTRS v2 composeMappedRowsForPtrs: failed to load field map",
-      safeMeta({ customerId, ptrsId, profileId, error: e.message })
+      safeMeta({ customerId, ptrsId, profileId, error: e.message }),
     );
     fieldMapRows = [];
   }
@@ -1114,7 +1198,7 @@ async function composeMappedRowsForPtrs({
         ptrsId,
         profileId,
         fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
-      })
+      }),
     );
   }
   if (logger && logger.debug) {
@@ -1125,7 +1209,7 @@ async function composeMappedRowsForPtrs({
         ptrsId,
         hasJoins: !!map.joins,
         joinsType: map.joins ? typeof map.joins : null,
-      })
+      }),
     );
   }
 
@@ -1183,7 +1267,7 @@ async function composeMappedRowsForPtrs({
   if (logger && logger.info) {
     slog.info(
       "PTRS v2 composeMappedRowsForPtrs: normalised joins",
-      safeMeta({ customerId, ptrsId, joinsCount: normalisedJoins.length })
+      safeMeta({ customerId, ptrsId, joinsCount: normalisedJoins.length }),
     );
   }
 
@@ -1210,7 +1294,7 @@ async function composeMappedRowsForPtrs({
           ? customFields.length
           : 0,
         customFieldsType: customFields ? typeof customFields : null,
-      })
+      }),
     );
   }
 
@@ -1277,7 +1361,7 @@ async function composeMappedRowsForPtrs({
 
     if (!RowModel) {
       throw new Error(
-        "Dataset row model not available (expected PtrsDatasetRow/PtrsDatasetData); cannot load payment terms dataset rows"
+        "Dataset row model not available (expected PtrsDatasetRow/PtrsDatasetData); cannot load payment terms dataset rows",
       );
     }
 
@@ -1506,7 +1590,7 @@ async function composeMappedRowsForPtrs({
     const paymentDs = await getPaymentTermsDataset();
     if (paymentDs && paymentDs.id) {
       paymentTermsHistoryIndex = await loadPaymentTermsHistoryIndex(
-        paymentDs.id
+        paymentDs.id,
       );
       slog.info(
         "PTRS v2 composeMappedRowsForPtrs: payment terms history index built",
@@ -1517,13 +1601,13 @@ async function composeMappedRowsForPtrs({
           keysCount: paymentTermsHistoryIndex
             ? paymentTermsHistoryIndex.size
             : 0,
-        })
+        }),
       );
     }
   } catch (e) {
     slog.warn(
       "PTRS v2 composeMappedRowsForPtrs: payment terms history index failed",
-      safeMeta({ customerId, ptrsId, error: e.message })
+      safeMeta({ customerId, ptrsId, error: e.message }),
     );
     paymentTermsHistoryIndex = null;
   }
@@ -1544,7 +1628,7 @@ async function composeMappedRowsForPtrs({
 
     roleIndexes.set(
       j.otherRole,
-      idx || { map: new Map(), headers: [], rowsIndexed: 0 }
+      idx || { map: new Map(), headers: [], rowsIndexed: 0 },
     );
   }
 
@@ -1566,7 +1650,7 @@ async function composeMappedRowsForPtrs({
     }
     slog.info(
       "PTRS v2 composeMappedRowsForPtrs: role indexes built",
-      safeMeta({ customerId, ptrsId, rolesMeta })
+      safeMeta({ customerId, ptrsId, rolesMeta }),
     );
   }
 
@@ -1581,8 +1665,10 @@ async function composeMappedRowsForPtrs({
 
   const numericLimit = Number(limit);
   if (Number.isFinite(numericLimit) && numericLimit > 0) {
-    // For previews we still want a cap; for full rules-apply we will pass null
     findOpts.limit = Math.min(numericLimit, 5000);
+  }
+  if (Number.isFinite(offset) && offset >= 0) {
+    findOpts.offset = offset;
   }
 
   const mainRows = await db.PtrsImportRaw.findAll(findOpts);
@@ -1618,7 +1704,7 @@ async function composeMappedRowsForPtrs({
                 join: j,
                 rawValue: lhsVal,
                 normalisedKey: key,
-              })
+              }),
             );
           }
           continue;
@@ -1638,7 +1724,7 @@ async function composeMappedRowsForPtrs({
                 rawValue: lhsVal,
                 normalisedKey: key,
                 joinedKeys: Object.keys(joined || {}),
-              })
+              }),
             );
           }
         } else if (!loggedJoinProbe && logger && logger.debug) {
@@ -1651,7 +1737,7 @@ async function composeMappedRowsForPtrs({
               join: j,
               rawValue: lhsVal,
               normalisedKey: key,
-            })
+            }),
           );
         }
       }
@@ -1737,16 +1823,23 @@ async function composeMappedRowsForPtrs({
           sampleRowKeys: Object.keys(out || {}),
           hasCustomFieldsApplied:
             Array.isArray(customFields) && customFields.length > 0,
-        })
+        }),
       );
     }
 
     composed.push(out);
   }
 
-  const headers = Array.from(
-    new Set(composed.flatMap((row) => Object.keys(row)))
-  );
+  // Sample-based header computation: scan up to first 200 rows, cap at 2000 headers
+  const headerSet = new Set();
+  for (let i = 0; i < composed.length && i < 200; ++i) {
+    const row = composed[i];
+    for (const k of Object.keys(row)) {
+      if (headerSet.size < 2000) headerSet.add(k);
+    }
+    if (headerSet.size >= 2000) break;
+  }
+  const headers = Array.from(headerSet);
 
   return { rows: composed, headers };
 }

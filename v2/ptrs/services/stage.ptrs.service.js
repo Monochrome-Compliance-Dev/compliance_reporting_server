@@ -244,7 +244,7 @@ function getCanonicalFieldForMainHeader(mapRow, header) {
       const found = mappings.find(
         (m) =>
           m &&
-          (m.from === h || m.source === h || m.column === h || m.header === h)
+          (m.from === h || m.source === h || m.column === h || m.header === h),
       );
       if (found) {
         return (
@@ -286,7 +286,7 @@ function extractTermChangesJoinSpec(mapRow) {
       c.to.role === "termschanges" &&
       c.from.role === "main" &&
       c.to.column &&
-      c.from.column
+      c.from.column,
   );
 
   // Default to Company Code if nothing configured
@@ -363,7 +363,7 @@ async function loadEffectiveTermChangesForRows({
       s &&
       s.mainField &&
       s.changeColumn &&
-      allowedJoinColumns.has(s.changeColumn)
+      allowedJoinColumns.has(s.changeColumn),
   );
 
   // Default if nothing configured/allowed
@@ -389,13 +389,13 @@ async function loadEffectiveTermChangesForRows({
           missingMainFields,
           availableFields: Object.keys(sample),
           joinSpec: effectiveJoinSpec,
-        }
+        },
       );
 
       const err = new Error(
         `Term changes join requires staged fields missing from row shape: ${missingMainFields.join(
-          ", "
-        )}. Fix the column map mappings for those headers.`
+          ", ",
+        )}. Fix the column map mappings for those headers.`,
       );
       err.statusCode = 400;
       throw err;
@@ -524,7 +524,7 @@ async function loadEffectiveTermChangesForRows({
       type: QueryTypes.SELECT,
       replacements: { customerId, profileId, input: JSON.stringify(input) },
       transaction,
-    }
+    },
   );
 
   for (const r of rowsOut || []) {
@@ -578,7 +578,7 @@ function applyEffectiveTermChangesToRows(rows, changeMap, mapRow) {
       s &&
       s.mainField &&
       s.changeColumn &&
-      allowedJoinColumns.has(s.changeColumn)
+      allowedJoinColumns.has(s.changeColumn),
   );
 
   const effectiveJoinSpec = safeJoinSpec.length
@@ -643,7 +643,7 @@ async function loadPaymentTermMap({ customerId, profileId, transaction }) {
       type: QueryTypes.SELECT,
       replacements: { customerId, profileId },
       transaction,
-    }
+    },
   );
 
   const map = new Map();
@@ -766,7 +766,7 @@ async function seedMissingPaymentTermMapRows({
           updatedBy: "system_mvp_seed",
         },
         transaction,
-      }
+      },
     );
 
     // Sequelize returns different shapes depending on dialect/versions; be defensive.
@@ -942,7 +942,7 @@ async function stagePtrs({
               type: QueryTypes.SELECT,
               replacements: { customerId, profileId },
               transaction: t,
-            }
+            },
           );
           return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
         })(),
@@ -959,7 +959,7 @@ async function stagePtrs({
               type: QueryTypes.SELECT,
               replacements: { customerId, profileId },
               transaction: t,
-            }
+            },
           );
           return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
         })(),
@@ -978,7 +978,7 @@ async function stagePtrs({
               type: QueryTypes.SELECT,
               replacements: { customerId, profileId },
               transaction: t,
-            }
+            },
           );
           return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
         })(),
@@ -995,7 +995,7 @@ async function stagePtrs({
               type: QueryTypes.SELECT,
               replacements: { customerId, profileId },
               transaction: t,
-            }
+            },
           );
           return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
         })(),
@@ -1049,6 +1049,44 @@ async function stagePtrs({
         step: "stage",
         transaction: t,
       });
+
+      if (
+        previous &&
+        previous.status === "success" &&
+        previous.inputHash === inputHash
+      ) {
+        const existingStageCount = await db.PtrsStageRow.count({
+          where: { customerId, ptrsId },
+          transaction: t,
+        });
+
+        slog.info(
+          "PTRS v2 stagePtrs: inputs unchanged; skipping persist staging",
+          {
+            action: "PtrsV2StagePtrsSkipped",
+            customerId,
+            ptrsId,
+            profileId: profileId || null,
+            inputHash,
+            previousRunId: previous.id || null,
+            existingStageCount,
+          },
+        );
+
+        await t.commit();
+        return {
+          skipped: true,
+          reason: "INPUT_UNCHANGED",
+          inputHash,
+          previousRunId: previous.id || null,
+          persistedCount: existingStageCount,
+          rowsIn: null,
+          rowsOut: null,
+          tookMs: Date.now() - started,
+          sample: null,
+          stats: null,
+        };
+      }
 
       slog.info("PTRS v2 stagePtrs: execution input hash", {
         action: "PtrsV2StagePtrsInputHash",
@@ -1122,7 +1160,7 @@ async function stagePtrs({
 
       const rulesResult = applyRules(
         stagedRows,
-        Array.isArray(rowRules) ? rowRules : []
+        Array.isArray(rowRules) ? rowRules : [],
       );
       stagedRows = rulesResult.rows || stagedRows;
       rulesStats = rulesResult.stats || null;
@@ -1151,7 +1189,7 @@ async function stagePtrs({
         const changeResult = applyEffectiveTermChangesToRows(
           stagedRows,
           changeMap,
-          mapRow
+          mapRow,
         );
         stagedRows = changeResult.rows || stagedRows;
         paymentTermChangeStats = changeResult.stats || null;
@@ -1166,7 +1204,7 @@ async function stagePtrs({
               profileId,
               ...paymentTermChangeStats,
               joinSpec: paymentTermChangeStats?.joinSpec || null,
-            }
+            },
           );
         }
         if (!paymentTermChangeStats?.applied) {
@@ -1180,7 +1218,7 @@ async function stagePtrs({
               ...paymentTermChangeStats,
               joinSpec: paymentTermChangeStats?.joinSpec || null,
               note: "No matches found using company_code join key (and optional supplier) against tbl_ptrs_payment_term_change",
-            }
+            },
           );
         }
       }
@@ -1229,7 +1267,7 @@ async function stagePtrs({
             action: "PtrsV2StagePtrsPaymentTermMapSkipped",
             customerId,
             ptrsId,
-          }
+          },
         );
       }
     } catch (err) {
@@ -1366,7 +1404,7 @@ async function stagePtrs({
       const offenders = safePayload
         .filter((p) => {
           const hasWarn = Boolean(
-            p?.data?._warning || p?.errors?._warning || p?.meta?._warning
+            p?.data?._warning || p?.errors?._warning || p?.meta?._warning,
           );
           const hasEmpty =
             isEmptyPlain(p?.data) ||
@@ -1379,7 +1417,7 @@ async function stagePtrs({
           rowNo: p.rowNo,
           dataKeys: p.data ? Object.keys(p.data) : null,
           hasWarning: Boolean(
-            p?.data?._warning || p?.errors?._warning || p?.meta?._warning
+            p?.data?._warning || p?.errors?._warning || p?.meta?._warning,
           ),
         }));
 
@@ -1410,7 +1448,7 @@ async function stagePtrs({
             type: QueryTypes.UPDATE,
             replacements: { customerId, ptrsId },
             transaction: t,
-          }
+          },
         );
 
         // `meta` shape varies by Sequelize version; log defensively.
@@ -1505,7 +1543,7 @@ async function stagePtrs({
             ptrsId,
             executionRunId: executionRun.id,
             error: e?.message,
-          }
+          },
         );
       }
     }
@@ -1586,7 +1624,7 @@ async function getStagePreview({
     ]);
 
     const rows = rowsRaw.map((r) =>
-      typeof r.toJSON === "function" ? r.toJSON() : r
+      typeof r.toJSON === "function" ? r.toJSON() : r,
     );
 
     // Derive headers from all rows' JSONB payloads (data/standard/custom)
