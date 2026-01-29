@@ -168,7 +168,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
     }
 
     const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       order: [["rowNo", "ASC"]],
       raw: false,
       transaction: t,
@@ -998,7 +998,7 @@ async function setStageRowExclusion({
 
   try {
     const row = await db.PtrsStageRow.findOne({
-      where: { id: stageRowId, customerId, ptrsId },
+      where: { id: stageRowId, customerId, ptrsId, deletedAt: null },
       transaction: t,
     });
 
@@ -1075,7 +1075,7 @@ async function getStageRow({ customerId, ptrsId, stageRowId }) {
 
   try {
     const row = await db.PtrsStageRow.findOne({
-      where: { id: stageRowId, customerId, ptrsId },
+      where: { id: stageRowId, customerId, ptrsId, deletedAt: null },
       transaction: t,
     });
 

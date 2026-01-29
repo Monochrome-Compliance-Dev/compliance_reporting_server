@@ -43,7 +43,7 @@ async function createSupplierRisk(params, options = {}) {
       {
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return newSupplierRisk.get({ plain: true });
@@ -102,7 +102,7 @@ async function updateSupplierRisk(params, options = {}) {
         returning: true,
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return updatedRisk ? updatedRisk.get({ plain: true }) : null;
@@ -137,7 +137,7 @@ async function createTraining(params, options = {}) {
       {
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return newTrainingRecord.get({ plain: true });
@@ -196,7 +196,7 @@ async function updateTraining(params, options = {}) {
         returning: true,
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return updatedRecord ? updatedRecord.get({ plain: true }) : null;
@@ -231,7 +231,7 @@ async function createGrievance(params, options = {}) {
       {
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return newGrievance.get({ plain: true });
@@ -290,7 +290,7 @@ async function updateGrievance(params, options = {}) {
         returning: true,
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return updatedGrievance ? updatedGrievance.get({ plain: true }) : null;
@@ -325,7 +325,7 @@ async function createReportingPeriod(params, options = {}) {
       {
         transaction: t,
         ...options,
-      }
+      },
     );
     await t.commit();
     return newPeriod.get({ plain: true });
@@ -369,7 +369,7 @@ async function getReportingPeriodById(customerId, id, options = {}) {
 async function getInterviewResponses(
   customerId,
   reportingPeriodId,
-  options = {}
+  options = {},
 ) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
@@ -399,7 +399,7 @@ async function submitInterviewResponses(params, options = {}) {
         createdBy,
         updatedBy: createdBy,
       })),
-      { transaction: t, ...options }
+      { transaction: t, ...options },
     );
     await t.commit();
     return dbResponses.map((r) => r.get({ plain: true }));

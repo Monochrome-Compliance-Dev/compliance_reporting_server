@@ -14,6 +14,163 @@ module.exports = {
 };
 
 // -------------------------
+// SQL aggregate helpers for metrics
+// -------------------------
+
+function qTableName(model) {
+  const tn = model.getTableName();
+  if (typeof tn === "string") return `"${tn}"`;
+  // Sequelize may return { tableName, schema }
+  const schema = tn.schema ? `"${tn.schema}".` : "";
+  const tableName = tn.tableName ? `"${tn.tableName}"` : "";
+  return `${schema}${tableName}`;
+}
+
+async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
+  // NOTE: This query intentionally does not return raw rows.
+  // It computes only what the dashboard/metrics preview needs.
+
+  const stageTbl = qTableName(db.PtrsStageRow);
+
+  const sql = `
+    WITH base AS (
+      SELECT
+        data,
+        meta,
+        -- Exclusion flags
+        COALESCE((data->>'exclude_from_metrics')::boolean, false) AS exclude_from_metrics,
+        COALESCE((meta->'rules'->>'exclude')::boolean, false) AS rules_exclude,
+
+        -- Canonical flags (safe parse: only true/false strings become booleans)
+        CASE
+          WHEN lower(data->>'trade_credit_payment') IN ('true','false') THEN (data->>'trade_credit_payment')::boolean
+          ELSE NULL
+        END AS trade_credit_payment,
+
+        CASE
+          WHEN lower(data->>'excluded_trade_credit_payment') IN ('true','false') THEN (data->>'excluded_trade_credit_payment')::boolean
+          ELSE NULL
+        END AS excluded_trade_credit_payment,
+
+        CASE
+          WHEN lower(data->>'is_small_business') IN ('true','false') THEN (data->>'is_small_business')::boolean
+          ELSE NULL
+        END AS is_small_business,
+
+        -- Safe numeric parses
+        CASE
+          WHEN (data->>'payment_amount') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_amount')::numeric
+          ELSE NULL
+        END AS payment_amount_num,
+
+        CASE
+          WHEN (data->>'payment_time_days') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_time_days')::numeric
+          ELSE NULL
+        END AS payment_time_days_num,
+
+        CASE
+          WHEN (data->>'payment_term_days') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_term_days')::numeric
+          ELSE NULL
+        END AS payment_term_days_num
+
+      FROM ${stageTbl}
+      WHERE "customerId" = :customerId
+        AND "ptrsId" = :ptrsId
+        AND "deletedAt" IS NULL
+    ),
+
+    non_excluded AS (
+      SELECT *
+      FROM base
+      WHERE NOT (exclude_from_metrics OR rules_exclude)
+    ),
+
+    population AS (
+      -- Trade credit population (match existing JS logic):
+      -- include when trade_credit_payment is true AND excluded_trade_credit_payment is not true (false or null)
+      SELECT *
+      FROM non_excluded
+      WHERE trade_credit_payment IS TRUE
+        AND COALESCE(excluded_trade_credit_payment, false) IS FALSE
+    ),
+
+    sb AS (
+      SELECT
+        *,
+        GREATEST(0, ROUND(payment_time_days_num)::int) AS payment_time_days_int,
+        GREATEST(0, ROUND(payment_term_days_num)::int) AS payment_term_days_int
+      FROM population
+      WHERE is_small_business IS TRUE
+    )
+
+    SELECT
+      -- Gating counts
+      (SELECT COUNT(*)::int FROM non_excluded) AS "stageRowCount",
+
+      -- Canonical missing flags (non-excluded rows)
+      (SELECT COUNT(*)::int FROM non_excluded WHERE trade_credit_payment IS NULL) AS "missingTradeCreditFlagCount",
+      (SELECT COUNT(*)::int FROM non_excluded WHERE excluded_trade_credit_payment IS NULL) AS "missingExcludedTradeCreditFlagCount",
+
+      -- Population totals
+      (SELECT COUNT(*)::int FROM population) AS "totalCount",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM population WHERE payment_amount_num IS NOT NULL) AS "totalValue",
+      (SELECT COUNT(*)::int FROM population WHERE payment_amount_num IS NULL) AS "missingAmountCount",
+
+      -- SB totals
+      (SELECT COUNT(*)::int FROM population WHERE is_small_business IS TRUE) AS "sbCount",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM population WHERE is_small_business IS TRUE AND payment_amount_num IS NOT NULL) AS "sbValue",
+      (SELECT COUNT(*)::int FROM population WHERE is_small_business IS NULL) AS "missingSbFlagCount",
+
+      -- Term day availability (population)
+      (SELECT COUNT(*)::int FROM population WHERE payment_term_days_num IS NULL) AS "missingTermDaysCount",
+
+      -- Missing payment time (SB only)
+      (SELECT COUNT(*)::int FROM population WHERE is_small_business IS TRUE AND payment_time_days_num IS NULL) AS "missingDatesCount",
+
+      -- SB payment time bands (counts)
+      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Count",
+      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Count",
+      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Count",
+
+      -- SB payment time bands (values)
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Value",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Value",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Value",
+
+      -- SB within terms
+      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL) AS "sbWithinTermsKnownCount",
+      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL AND payment_time_days_int <= payment_term_days_int) AS "sbWithinTermsYesCount",
+
+      -- SB payment time distribution stats
+      (SELECT AVG(payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "avgDays",
+      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "medianDays",
+      (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
+      (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
+
+      -- Term min/max/mode (population)
+      (SELECT MIN(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMin",
+      (SELECT MAX(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMax",
+      (SELECT x.term::int
+         FROM (
+           SELECT GREATEST(0, ROUND(payment_term_days_num)::int) AS term, COUNT(*) AS c
+           FROM population
+           WHERE payment_term_days_num IS NOT NULL
+           GROUP BY 1
+           ORDER BY c DESC
+           LIMIT 1
+         ) x
+      ) AS "commonTermMode";
+  `;
+
+  const [rows] = await db.sequelize.query(sql, {
+    replacements: { customerId, ptrsId },
+    transaction: t,
+  });
+
+  return rows && rows[0] ? rows[0] : null;
+}
+
+// -------------------------
 // Helpers
 // -------------------------
 
@@ -151,10 +308,10 @@ async function updateMetricsDraft({
       industryDivision:
         patch?.industryDivision ?? current.industryDivision ?? null,
       reportComments: safeText(
-        patch?.reportComments ?? current.reportComments ?? ""
+        patch?.reportComments ?? current.reportComments ?? "",
       ),
       descriptionOfChanges: safeText(
-        patch?.descriptionOfChanges ?? current.descriptionOfChanges ?? ""
+        patch?.descriptionOfChanges ?? current.descriptionOfChanges ?? "",
       ),
       revisedReport: patch?.revisedReport ?? current.revisedReport ?? false,
       redactedReport: patch?.redactedReport ?? current.redactedReport ?? false,
@@ -164,7 +321,7 @@ async function updateMetricsDraft({
 
     await db.Ptrs.update(
       { reportPreviewDraft: next, updatedBy: userId || null },
-      { where: { id: ptrsId, customerId }, transaction: t }
+      { where: { id: ptrsId, customerId }, transaction: t },
     );
 
     await t.commit();
@@ -199,158 +356,50 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       throw e;
     }
 
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
-      order: [["rowNo", "ASC"]],
-      raw: false,
-      transaction: t,
-    });
-
     const draft = ptrs.reportPreviewDraft || {};
 
-    // -------------------------
-    // Compute from dataset (best effort, based on existing stage row schema)
-    // -------------------------
+    const aggs = await fetchStageMetricsAggs({ t, customerId, ptrsId });
 
-    const basedOnRows = [];
+    // Defaults when there are no rows yet
+    const stageRowCount = aggs?.stageRowCount || 0;
 
-    // Track total number of non-excluded staged rows considered for metrics gating
-    let stageRowCount = 0;
+    const missingTradeCreditFlagCount = aggs?.missingTradeCreditFlagCount || 0;
+    const missingExcludedTradeCreditFlagCount =
+      aggs?.missingExcludedTradeCreditFlagCount || 0;
 
-    // Totals across all non-excluded rows
-    let totalCount = 0;
-    let totalValue = 0;
+    const totalCount = aggs?.totalCount || 0;
+    const totalValue = Number(aggs?.totalValue || 0);
+    const missingAmountCount = aggs?.missingAmountCount || 0;
 
-    // Small Business subset
-    let sbCount = 0;
-    let sbValue = 0;
+    const sbCount = aggs?.sbCount || 0;
+    const sbValue = Number(aggs?.sbValue || 0);
+    const missingSbFlagCount = aggs?.missingSbFlagCount || 0;
 
-    // Bands (for SB only, because that’s what’s commonly reported; adjust later if needed)
-    let sbBand0to30Count = 0;
-    let sbBand31to60Count = 0;
-    let sbBandOver60Count = 0;
+    const missingTermDaysCount = aggs?.missingTermDaysCount || 0;
+    const missingDatesCount = aggs?.missingDatesCount || 0;
 
-    let sbBand0to30Value = 0;
-    let sbBand31to60Value = 0;
-    let sbBandOver60Value = 0;
+    const sbBand0to30Count = aggs?.sbBand0to30Count || 0;
+    const sbBand31to60Count = aggs?.sbBand31to60Count || 0;
+    const sbBandOver60Count = aggs?.sbBandOver60Count || 0;
 
-    // Payment days list (SB)
-    const sbPaymentDays = [];
+    const sbBand0to30Value = Number(aggs?.sbBand0to30Value || 0);
+    const sbBand31to60Value = Number(aggs?.sbBand31to60Value || 0);
+    const sbBandOver60Value = Number(aggs?.sbBandOver60Value || 0);
 
-    // Term days list (all rows) to compute mode/min/max
-    const termDaysAll = [];
+    const sbWithinTermsKnownCount = aggs?.sbWithinTermsKnownCount || 0;
+    const sbWithinTermsYesCount = aggs?.sbWithinTermsYesCount || 0;
 
-    // % SB within terms
-    let sbWithinTermsKnownCount = 0;
-    let sbWithinTermsYesCount = 0;
+    const avgDays = aggs?.avgDays == null ? null : Number(aggs.avgDays);
+    const medianDays =
+      aggs?.medianDays == null ? null : Number(aggs.medianDays);
+    const p80Days = aggs?.p80Days == null ? null : Number(aggs.p80Days);
+    const p95Days = aggs?.p95Days == null ? null : Number(aggs.p95Days);
 
-    // Data availability flags
-    let missingTermDaysCount = 0;
-    let missingSbFlagCount = 0;
-    let missingDatesCount = 0;
-    let missingAmountCount = 0;
-    // Track missing canonical flags for trade credit gating
-    let missingTradeCreditFlagCount = 0;
-    let missingExcludedTradeCreditFlagCount = 0;
+    const commonTermMode =
+      aggs?.commonTermMode == null ? null : Number(aggs.commonTermMode);
 
-    for (const r of stageRows) {
-      if (isExcludedRow(r)) continue;
-
-      const data = r?.data || {};
-
-      // Increment total staged row count for all non-excluded rows
-      stageRowCount += 1;
-
-      // Canonical-only inputs
-      const tradeCredit = data?.trade_credit_payment === true;
-      const excludedTradeCredit = data?.excluded_trade_credit_payment === true;
-      const isSmallBusiness = data?.is_small_business;
-
-      // Check for missing canonical trade credit flags (must be explicit booleans)
-      const tradeCreditRaw = data?.trade_credit_payment;
-      const excludedTradeCreditRaw = data?.excluded_trade_credit_payment;
-
-      if (tradeCreditRaw !== true && tradeCreditRaw !== false) {
-        missingTradeCreditFlagCount += 1;
-      }
-
-      if (excludedTradeCreditRaw !== true && excludedTradeCreditRaw !== false) {
-        missingExcludedTradeCreditFlagCount += 1;
-      }
-
-      // Totals are based on trade credit rows only
-      if (!tradeCredit || excludedTradeCredit) {
-        continue;
-      }
-
-      const amountRaw = data?.payment_amount;
-      const amount =
-        amountRaw == null || amountRaw === "" ? null : Number(amountRaw);
-
-      totalCount += 1;
-
-      if (amount == null || !Number.isFinite(amount)) {
-        missingAmountCount += 1;
-      } else {
-        totalValue += Math.abs(amount);
-      }
-
-      if (isSmallBusiness == null) {
-        missingSbFlagCount += 1;
-      }
-
-      // Term days are an all-rows metric input (common term / forecast term), not SB-only.
-      const termDaysRawAll = data?.payment_term_days;
-      const termDaysAllRow =
-        termDaysRawAll == null || termDaysRawAll === ""
-          ? null
-          : Number(termDaysRawAll);
-
-      if (termDaysAllRow == null || !Number.isFinite(termDaysAllRow)) {
-        missingTermDaysCount += 1;
-      } else {
-        termDaysAll.push(Math.round(termDaysAllRow));
-      }
-
-      // Only compute SB metrics when SB flag is true.
-      if (isSmallBusiness === true) {
-        sbCount += 1;
-        if (amount != null && Number.isFinite(amount))
-          sbValue += Math.abs(amount);
-
-        const paymentTimeDaysRaw = data?.payment_time_days;
-        const paymentTimeDays =
-          paymentTimeDaysRaw == null || paymentTimeDaysRaw === ""
-            ? null
-            : Number(paymentTimeDaysRaw);
-
-        if (paymentTimeDays == null || !Number.isFinite(paymentTimeDays)) {
-          missingDatesCount += 1;
-        } else {
-          const pt = Math.max(0, Math.round(paymentTimeDays));
-          sbPaymentDays.push(pt);
-
-          if (pt <= 30) {
-            sbBand0to30Count += 1;
-            if (amount != null && Number.isFinite(amount))
-              sbBand0to30Value += Math.abs(amount);
-          } else if (pt <= 60) {
-            sbBand31to60Count += 1;
-            if (amount != null && Number.isFinite(amount))
-              sbBand31to60Value += Math.abs(amount);
-          } else {
-            sbBandOver60Count += 1;
-            if (amount != null && Number.isFinite(amount))
-              sbBandOver60Value += Math.abs(amount);
-          }
-
-          if (termDaysAllRow != null && Number.isFinite(termDaysAllRow)) {
-            sbWithinTermsKnownCount += 1;
-            if (pt <= Math.round(termDaysAllRow)) sbWithinTermsYesCount += 1;
-          }
-        }
-      }
-    }
+    const termMinFinal = aggs?.termMin == null ? null : Number(aggs.termMin);
+    const termMaxFinal = aggs?.termMax == null ? null : Number(aggs.termMax);
 
     // Canonical-mode quality gate
     // IMPORTANT:
@@ -419,40 +468,6 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     ) {
       canonicalQuality.blocked = true;
     }
-
-    const sortedSbDays = sbPaymentDays.slice().sort((a, b) => a - b);
-
-    const avgDays =
-      !canonicalQuality.blocked && sortedSbDays.length > 0
-        ? sortedSbDays.reduce((acc, x) => acc + x, 0) / sortedSbDays.length
-        : null;
-
-    const medianDays =
-      !canonicalQuality.blocked && sortedSbDays.length > 0
-        ? percentile(sortedSbDays, 0.5)
-        : null;
-
-    const p80Days =
-      !canonicalQuality.blocked && sortedSbDays.length > 0
-        ? percentile(sortedSbDays, 0.8)
-        : null;
-
-    const p95Days =
-      !canonicalQuality.blocked && sortedSbDays.length > 0
-        ? percentile(sortedSbDays, 0.95)
-        : null;
-
-    const commonTermMode = !canonicalQuality.blocked
-      ? modeInt(termDaysAll)
-      : null;
-    const termMin =
-      !canonicalQuality.blocked && termDaysAll.length
-        ? Math.min(...termDaysAll)
-        : null;
-    const termMax =
-      !canonicalQuality.blocked && termDaysAll.length
-        ? Math.max(...termDaysAll)
-        : null;
 
     const sbWithinTermsPct =
       !canonicalQuality.blocked && sbWithinTermsKnownCount > 0
@@ -535,12 +550,12 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     const computed = {
       commonPaymentTermsDays: commonTermMode,
-      commonPaymentTermMinimum: termMin,
-      commonPaymentTermMaximum: termMax,
+      commonPaymentTermMinimum: termMinFinal,
+      commonPaymentTermMaximum: termMaxFinal,
 
       forecastPaymentTerm: commonTermMode,
-      forecastMinimumPaymentTerm: termMin,
-      forecastMaximumPaymentTerm: termMax,
+      forecastMinimumPaymentTerm: termMinFinal,
+      forecastMaximumPaymentTerm: termMaxFinal,
 
       receivableTermsComparedToCommonPaymentTerm: "Unknown",
 
@@ -556,7 +571,7 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       paymentsMoreThan60DaysPct: round2(paymentsOver60Pct),
 
       percentageOfSmallBusinessTradeCreditPayments: round2(
-        sbTradeCreditPaymentsPct
+        sbTradeCreditPaymentsPct,
       ),
       percentagePeppolEnabledSmallBusinessProcurement:
         peppolEnabledSbProcurementPct,
@@ -580,25 +595,25 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     if (missingTermDaysCount > 0) {
       quality.notes.push(
-        "Some rows are missing payment term days; within-terms and term metrics may be incomplete."
+        "Some rows are missing payment term days; within-terms and term metrics may be incomplete.",
       );
     }
 
     if (missingSbFlagCount > 0) {
       quality.notes.push(
-        "Some rows are missing small business status; SB metrics are computed only for rows where is_small_business is true."
+        "Some rows are missing small business status; SB metrics are computed only for rows where is_small_business is true.",
       );
     }
 
     if (peppolEnabledSbProcurementPct == null) {
       quality.notes.push(
-        "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null)."
+        "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null).",
       );
     }
 
     if (canonicalQuality.blocked) {
       quality.notes.push(
-        "Metrics are blocked because the trade credit population cannot be reliably determined (see quality.canonical.missing). Ensure trade_credit_payment and excluded_trade_credit_payment are explicitly mapped so the system knows which rows belong to the trade credit population."
+        "Metrics are blocked because the trade credit population cannot be reliably determined (see quality.canonical.missing). Ensure trade_credit_payment and excluded_trade_credit_payment are explicitly mapped so the system knows which rows belong to the trade credit population.",
       );
     }
 

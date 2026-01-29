@@ -137,7 +137,7 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
     });
 
     const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       order: [["rowNo", "ASC"]],
       raw: false,
       transaction: t,
@@ -164,7 +164,7 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
         missingPayeeAbnCount += 1;
         if (blockers.length < LIMIT) {
           blockers.push(
-            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn")
+            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn"),
           );
         }
         continue;
@@ -177,8 +177,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
             toIssue(
               r,
               "PAYEE_ABN_INVALID",
-              "payee_entity_abn is not a valid 11-digit ABN"
-            )
+              "payee_entity_abn is not a valid 11-digit ABN",
+            ),
           );
         }
         continue;
@@ -192,8 +192,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
               r,
               "SBI_INVALID_ABN",
               "SBI results indicate this ABN is invalid/unrecognised",
-              { outcome }
-            )
+              { outcome },
+            ),
           );
         }
         continue;
@@ -207,8 +207,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
             toIssue(
               r,
               "SBI_NO_MATCH",
-              "No SBI outcome found for this payee ABN (possible mismatched SBI file)"
-            )
+              "No SBI outcome found for this payee ABN (possible mismatched SBI file)",
+            ),
           );
         }
         continue;
@@ -220,7 +220,7 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
           blockers.push(
             toIssue(r, "SBI_UNKNOWN_OUTCOME", "SBI outcome is not recognised", {
               outcome: sbi.outcome,
-            })
+            }),
           );
         }
         continue;
@@ -240,8 +240,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
               {
                 expectedEvidenceId: latestSbi.id,
                 actualEvidenceId: evidenceId || null,
-              }
-            )
+              },
+            ),
           );
         }
         continue;
@@ -259,8 +259,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
                 outcome: sbi.outcome,
                 expected,
                 actual: actual == null ? null : !!actual,
-              }
-            )
+              },
+            ),
           );
         }
         continue;
@@ -472,7 +472,7 @@ async function exportAbnCsv({ customerId, ptrsId }) {
     }
 
     const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       raw: false,
       transaction: t,
     });
@@ -556,7 +556,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
     if (abnIdx < 0 || outcomeIdx < 0) {
       const e = new Error(
-        "SBI results CSV must include columns for ABN and Outcome (e.g. headers: Year, ABN, Outcome)"
+        "SBI results CSV must include columns for ABN and Outcome (e.g. headers: Year, ABN, Outcome)",
       );
       e.statusCode = 400;
       throw e;
@@ -625,7 +625,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
         uploadedBy: userId || null,
         appliedBy: userId || null,
       },
-      { transaction: t }
+      { transaction: t },
     );
 
     // Insert results
@@ -646,7 +646,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
     // Apply to stage rows
     const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       order: [["rowNo", "ASC"]],
       raw: false,
       transaction: t,
@@ -760,7 +760,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
     if (unknownOutcomeRows > 0) {
       status = "BLOCKED";
       blockingReasons.push(
-        "Unknown SBI outcome values were encountered for matched stage rows"
+        "Unknown SBI outcome values were encountered for matched stage rows",
       );
     }
 
@@ -796,7 +796,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
     await db.PtrsSbiUpload.update(
       { status, summary, parsedAbnCount: parsedAbns, rawRowCount: rows.length },
-      { where: { id: uploadRow.id, customerId }, transaction: t }
+      { where: { id: uploadRow.id, customerId }, transaction: t },
     );
 
     await t.commit();
