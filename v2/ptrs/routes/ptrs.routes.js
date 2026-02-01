@@ -28,17 +28,17 @@ router.post("", requirePtrs, ptrsController.createPtrs);
 router.post(
   "/:id/execution-runs",
   requirePtrs,
-  ptrsController.createExecutionRun
+  ptrsController.createExecutionRun,
 );
 router.get(
   "/:id/execution-runs/latest",
   requirePtrs,
-  ptrsController.getLatestExecutionRun
+  ptrsController.getLatestExecutionRun,
 );
 router.patch(
   "/execution-runs/:executionRunId",
   requirePtrs,
-  ptrsController.updateExecutionRun
+  ptrsController.updateExecutionRun,
 );
 
 // Upload the CSV for a ptrs (multipart or text/csv)
@@ -46,7 +46,7 @@ router.post(
   "/:id/import",
   requirePtrs,
   upload.single("file"),
-  ptrsController.importCsv
+  ptrsController.importCsv,
 );
 
 // // Preview transformed sample (no mutation)
@@ -69,6 +69,7 @@ const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
 const sbiRoutes = require("@/v2/ptrs/routes/sbi.ptrs.routes");
 const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
 const metricsRoutes = require("@/v2/ptrs/routes/metrics.ptrs.routes");
+const reportRoutes = require("@/v2/ptrs/routes/report.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -91,6 +92,9 @@ router.use("/", validateRoutes);
 
 // metrics
 router.use("/", metricsRoutes);
+
+// report
+router.use("/", reportRoutes);
 
 // xero
 const xeroRoutes = require("@/v2/ptrs/xero/xero.routes");
