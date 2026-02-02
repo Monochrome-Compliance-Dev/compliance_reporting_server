@@ -51,7 +51,7 @@
     "module-alias": "^2.2.3",
     "multer": "^2.0.1",
     "nanoid": "^5.1.6",
-    "nodemailer": "^7.0.12",
+    "nodemailer": "^7.0.13",
     "p-queue": "^9.1.0",
     "pg": "^8.17.2",
     "pg-copy-streams": "^7.0.0",
