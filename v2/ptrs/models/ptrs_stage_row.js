@@ -18,6 +18,10 @@ function model(sequelize) {
       type: DataTypes.STRING(10),
       allowNull: false,
     },
+    datasetId: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+    },
     rowNo: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -43,7 +47,11 @@ function model(sequelize) {
     indexes: [
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },
+      { fields: ["datasetId"] },
       { fields: ["customerId", "ptrsId"] },
+      { fields: ["ptrsId", "datasetId"] },
+      { fields: ["customerId", "ptrsId", "datasetId"] },
+      { fields: ["customerId", "ptrsId", "datasetId", "rowNo"] },
     ],
   });
 

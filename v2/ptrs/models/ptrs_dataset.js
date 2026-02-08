@@ -31,6 +31,12 @@ function model(sequelize) {
       allowNull: false,
     },
 
+    // Where this dataset came from (e.g. "xero", "excel", "myob_excel")
+    sourceType: {
+      type: DataTypes.STRING(30),
+      allowNull: true,
+    },
+
     fileName: {
       type: DataTypes.STRING(255),
       allowNull: false,
@@ -88,6 +94,7 @@ function model(sequelize) {
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },
       { fields: ["ptrsId", "role"] },
+      { fields: ["sourceType"] },
       { fields: ["customerId", "ptrsId"] },
     ],
   });

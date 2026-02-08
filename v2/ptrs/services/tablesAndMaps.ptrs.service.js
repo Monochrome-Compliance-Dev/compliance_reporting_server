@@ -627,7 +627,13 @@ async function saveFieldMap({
  * Return a small window of staged rows plus count and inferred headers.
  * Also returns headerMeta: sources and example values per header.
  */
-async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
+async function getImportSample({
+  customerId,
+  ptrsId,
+  datasetId = null,
+  limit = 10,
+  offset = 0,
+}) {
   if (logger && logger.info) {
     slog.info("PTRS v2 getImportSample: begin", {
       action: "PtrsV2GetImportSample",
@@ -642,7 +648,9 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
   try {
     // rows
     const rows = await db.PtrsImportRaw.findAll({
-      where: { customerId, ptrsId },
+      where: datasetId
+        ? { customerId, ptrsId, datasetId }
+        : { customerId, ptrsId },
       order: [["rowNo", "ASC"]],
       limit,
       offset,
@@ -653,7 +661,9 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
 
     // total
     const total = await db.PtrsImportRaw.count({
-      where: { customerId, ptrsId },
+      where: datasetId
+        ? { customerId, ptrsId, datasetId }
+        : { customerId, ptrsId },
       transaction: t,
     });
 
@@ -669,7 +679,9 @@ async function getImportSample({ customerId, ptrsId, limit = 10, offset = 0 }) {
 
     // headers: scan up to 500 earliest rows to reduce noise
     const headerScan = await db.PtrsImportRaw.findAll({
-      where: { customerId, ptrsId },
+      where: datasetId
+        ? { customerId, ptrsId, datasetId }
+        : { customerId, ptrsId },
       order: [["rowNo", "ASC"]],
       limit: 500,
       attributes: ["data"],

@@ -19,6 +19,107 @@ if (process.env.NODE_ENV === "development") {
 
 const { logger } = require("./helpers/logger");
 
+const crypto = require("crypto");
+const os = require("os");
+const fs = require("fs");
+
+// --- BEGIN: request correlation + focused 429 logging to file ---
+const rateLimitLogDir = path.join(process.cwd(), "logs", "rate-limits");
+const rateLimitLogFile = path.join(rateLimitLogDir, "rate-limit.ndjson");
+const requestsLogFile = path.join(rateLimitLogDir, "requests.ndjson");
+const REQUESTS_TEXT_LOG =
+  String(process.env.REQUESTS_TEXT_LOG || "false").toLowerCase() === "true";
+
+function safeString(v) {
+  if (v == null) return null;
+  try {
+    const s = String(v);
+    return s.length > 500 ? s.slice(0, 500) + "…" : s;
+  } catch {
+    return null;
+  }
+}
+
+function getClientIp(req) {
+  const xf = req.headers["x-forwarded-for"];
+  if (xf) {
+    const first = String(xf).split(",")[0].trim();
+    if (first) return first;
+  }
+  return req.socket?.remoteAddress || req.connection?.remoteAddress || null;
+}
+
+function writeRateLimitNdjson(entry) {
+  try {
+    fs.mkdirSync(rateLimitLogDir, { recursive: true });
+    fs.appendFileSync(rateLimitLogFile, JSON.stringify(entry) + os.EOL);
+  } catch (e) {
+    // Never let logging break the app.
+    console.warn("⚠️ Failed to write rate-limit log", e?.message);
+  }
+}
+
+function writeRequestsNdjson(entry) {
+  try {
+    fs.mkdirSync(rateLimitLogDir, { recursive: true });
+    fs.appendFileSync(requestsLogFile, JSON.stringify(entry) + os.EOL);
+  } catch (e) {
+    // Never let logging break the app.
+    console.warn("⚠️ Failed to write requests log", e?.message);
+  }
+}
+
+function buildRequestLogContext(req, res, extra = {}) {
+  const userAgent = req.headers["user-agent"];
+  const origin = req.headers.origin;
+  const referer = req.headers.referer;
+
+  // Avoid dumping tokens/cookies. Log only presence.
+  const hasAuthHeader = Boolean(req.headers.authorization);
+  const hasCookie = Boolean(req.headers.cookie);
+
+  // Best-effort extraction of identifiers from query/body.
+  const ptrsId = req.query?.ptrsId || req.body?.ptrsId || null;
+  const profileId = req.query?.profileId || req.body?.profileId || null;
+
+  return {
+    ts: new Date().toISOString(),
+    requestId: req.id || null,
+    status: res?.statusCode,
+    method: req.method,
+    path: req.originalUrl,
+    ip: getClientIp(req),
+    origin: safeString(origin),
+    referer: safeString(referer),
+    userAgent: safeString(userAgent),
+    hasAuthHeader,
+    hasCookie,
+    ptrsId: ptrsId ? String(ptrsId) : null,
+    profileId: profileId ? String(profileId) : null,
+    ...extra,
+  };
+}
+function buildRequestTelemetry(req, res, durationMs) {
+  const origin = req.headers.origin;
+
+  // Best-effort extraction of identifiers from query/body.
+  const ptrsId = req.query?.ptrsId || req.body?.ptrsId || null;
+  const profileId = req.query?.profileId || req.body?.profileId || null;
+
+  return {
+    ts: new Date().toISOString(),
+    requestId: req.id || null,
+    method: req.method,
+    path: req.originalUrl,
+    ptrsId: ptrsId ? String(ptrsId) : null,
+    profileId: profileId ? String(profileId) : null,
+    origin: safeString(origin),
+    status: res?.statusCode,
+    durationMs,
+  };
+}
+// --- END: request correlation + focused 429 logging to file ---
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
   "https://monochrome-compliance.com",
   "https://www.monochrome-compliance.com",
@@ -60,9 +161,46 @@ process.on("unhandledRejection", (reason) => {
     reason: reason instanceof Error ? reason.message : String(reason),
   });
 });
+
 const express = require("express");
 const http = require("http");
 const app = express();
+
+// Correlate requests across logs
+app.use((req, res, next) => {
+  req.id = req.headers["x-request-id"] || crypto.randomUUID();
+  res.setHeader("x-request-id", req.id);
+
+  // High-resolution timer for request duration
+  const start = process.hrtime.bigint();
+
+  res.on("finish", () => {
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+    // Lightweight request telemetry (OFF by default; enable via REQUESTS_TEXT_LOG=true)
+    if (REQUESTS_TEXT_LOG) {
+      const requestEntry = buildRequestTelemetry(
+        req,
+        res,
+        Math.round(durationMs),
+      );
+      writeRequestsNdjson(requestEntry);
+    }
+
+    // Additionally log 429s with richer context (existing behaviour)
+    if (res.statusCode !== 429) return;
+
+    const entry = buildRequestLogContext(req, res, {
+      type: "rate_limit",
+      stage: "response_finish",
+    });
+
+    writeRateLimitNdjson(entry);
+    logger?.logEvent?.("warn", "RateLimit429", entry);
+  });
+
+  next();
+});
 
 app.set("trust proxy", ["loopback", "linklocal", "uniquelocal"]); // Trust local traffic only
 
@@ -91,6 +229,60 @@ io.on("connection", (socket) => {
     payload: { message: "Welcome to Monochrome Compliance socket updates!" },
   });
 
+  // Allow clients to subscribe to PTRS run updates (MVP)
+  // Room convention: ptrs:<ptrsId>
+  socket.on("ptrs:join", (payload = {}, ack) => {
+    try {
+      const ptrsId = payload?.ptrsId ? String(payload.ptrsId) : "";
+      if (!ptrsId) {
+        if (typeof ack === "function")
+          ack({ ok: false, error: "ptrsId is required" });
+        return;
+      }
+
+      const room = `ptrs:${ptrsId}`;
+      socket.join(room);
+
+      logger.logEvent("info", "Socket subscribed to PTRS room", {
+        action: "SocketJoinPtrs",
+        socketId: socket.id,
+        room,
+        ptrsId,
+      });
+
+      if (typeof ack === "function") ack({ ok: true, room });
+    } catch (e) {
+      if (typeof ack === "function")
+        ack({ ok: false, error: e?.message || "join failed" });
+    }
+  });
+
+  socket.on("ptrs:leave", (payload = {}, ack) => {
+    try {
+      const ptrsId = payload?.ptrsId ? String(payload.ptrsId) : "";
+      if (!ptrsId) {
+        if (typeof ack === "function")
+          ack({ ok: false, error: "ptrsId is required" });
+        return;
+      }
+
+      const room = `ptrs:${ptrsId}`;
+      socket.leave(room);
+
+      logger.logEvent("info", "Socket unsubscribed from PTRS room", {
+        action: "SocketLeavePtrs",
+        socketId: socket.id,
+        room,
+        ptrsId,
+      });
+
+      if (typeof ack === "function") ack({ ok: true, room });
+    } catch (e) {
+      if (typeof ack === "function")
+        ack({ ok: false, error: e?.message || "leave failed" });
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log("⚠️ [SOCKET] Customer disconnected:", socket.id);
     logger.logEvent("info", "Socket.io customer disconnected", {
@@ -104,7 +296,7 @@ io.on("connection", (socket) => {
 io.engine.on("upgrade", (req) => {
   console.log(
     "🔥 [SOCKET] Upgrading transport to websocket for origin:",
-    req.headers.origin
+    req.headers.origin,
   );
 });
 
@@ -114,6 +306,8 @@ io.engine.on("connection", (rawSocket) => {
 
 // Make io accessible from controllers
 app.set("socketio", io);
+// Expose for service-layer emitters (MVP)
+global.__socketio = io;
 
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
@@ -145,7 +339,7 @@ app.use(
       }
     },
     credentials: true,
-  })
+  }),
 );
 
 // Immediately reject suspicious bot routes such as /boaform/admin/formLogin
@@ -168,9 +362,29 @@ app.get("/api/health-check", (req, res) => {
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 1000, // limit each IP to 1000 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
+
+  handler: (req, res, next, options) => {
+    const entry = buildRequestLogContext(req, res, {
+      type: "rate_limit",
+      stage: "limiter_handler",
+      limiter: "api",
+      windowMs: options?.windowMs,
+      max: options?.max,
+    });
+
+    writeRateLimitNdjson(entry);
+    logger?.logEvent?.("warn", "RateLimit429", entry);
+
+    res.status(options.statusCode || 429).json({
+      status: "error",
+      code: "RATE_LIMITED",
+      message: options.message || "Too many requests, please try again later.",
+      requestId: req.id || null,
+    });
+  },
 });
 
 app.use("/api/", apiLimiter); // Apply to all API routes
@@ -179,6 +393,26 @@ const loginLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
   message: "Too many login attempts from this IP, please try again later.",
+
+  handler: (req, res, next, options) => {
+    const entry = buildRequestLogContext(req, res, {
+      type: "rate_limit",
+      stage: "limiter_handler",
+      limiter: "login",
+      windowMs: options?.windowMs,
+      max: options?.max,
+    });
+
+    writeRateLimitNdjson(entry);
+    logger?.logEvent?.("warn", "RateLimit429", entry);
+
+    res.status(options.statusCode || 429).json({
+      status: "error",
+      code: "RATE_LIMITED",
+      message: options.message,
+      requestId: req.id || null,
+    });
+  },
 });
 
 app.use("/api/users/authenticate", loginLimiter);
@@ -191,6 +425,26 @@ const emailLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
   max: 5,
   message: "Too many attempts, please try again later.",
+
+  handler: (req, res, next, options) => {
+    const entry = buildRequestLogContext(req, res, {
+      type: "rate_limit",
+      stage: "limiter_handler",
+      limiter: "email",
+      windowMs: options?.windowMs,
+      max: options?.max,
+    });
+
+    writeRateLimitNdjson(entry);
+    logger?.logEvent?.("warn", "RateLimit429", entry);
+
+    res.status(options.statusCode || 429).json({
+      status: "error",
+      code: "RATE_LIMITED",
+      message: options.message,
+      requestId: req.id || null,
+    });
+  },
 });
 
 app.use("/api/public/send-attachment-email", emailLimiter);
@@ -212,7 +466,7 @@ app.post(
     } catch (e) {
       res.status(e.statusCode || 400).send(`Webhook Error: ${e.message}`);
     }
-  }
+  },
 );
 // --- end webhook mount ---
 
@@ -227,7 +481,7 @@ if (process.env.NODE_ENV === "production") {
       maxAge: 63072000, // 2 years
       includeSubDomains: true,
       preload: true,
-    })
+    }),
   );
 }
 
@@ -285,29 +539,29 @@ app.use("/api/products", require("./products/product.controller"));
 app.use("/api/pulse/clients", require("./pulse/clients/client.controller"));
 app.use(
   "/api/pulse/trackables",
-  require("./pulse/trackables/trackable.controller")
+  require("./pulse/trackables/trackable.controller"),
 );
 app.use(
   "/api/pulse/resources",
-  require("./pulse/resources/resource.controller")
+  require("./pulse/resources/resource.controller"),
 );
 app.use(
   "/api/pulse/assignments",
-  require("./pulse/assignments/assignment.controller")
+  require("./pulse/assignments/assignment.controller"),
 );
 app.use(
   "/api/pulse/contributions",
-  require("./pulse/contributions/contribution.controller")
+  require("./pulse/contributions/contribution.controller"),
 );
 // Combined controller handles /budget-items and /budgets under /api/pulse
 app.use("/api/pulse", require("./pulse/budgets/budget.controller"));
 app.use(
   "/api/pulse/maximiser",
-  require("./pulse/maximiser/maximiser.controller")
+  require("./pulse/maximiser/maximiser.controller"),
 );
 app.use(
   "/api/pulse",
-  require("./pulse/pulse-dashboard/pulse_dashboard.controller")
+  require("./pulse/pulse-dashboard/pulse_dashboard.controller"),
 );
 
 app.use("/api/stripe", require("./stripe/stripe.controller"));
@@ -323,11 +577,11 @@ app.use("/api/v2/ptrs", require("@/v2/ptrs/routes/ptrs.routes"));
 app.use("/api/v2/customers", require("@/v2/customers/customers.controller"));
 app.use(
   "/api/v2/customers",
-  require("@/v2/entitlements/customerEntitlements.controller")
+  require("@/v2/entitlements/customerEntitlements.controller"),
 );
 app.use(
   "/api/v2/customers",
-  require("@/v2/profiles/customerProfiles.controller")
+  require("@/v2/profiles/customerProfiles.controller"),
 );
 
 // Xero (static OAuth callback)
@@ -361,7 +615,7 @@ const { sequelize } = require("./db/database");
 async function verifyAppCustomerIdGUC() {
   try {
     const [[{ current_customer_id }]] = await sequelize.query(
-      "SELECT current_setting('app.current_customer_id', true) AS current_customer_id;"
+      "SELECT current_setting('app.current_customer_id', true) AS current_customer_id;",
     );
     // logger.logEvent("info", "Verified Postgres app.current_customer_id GUC", {
     //   current_customer_id,
@@ -370,7 +624,7 @@ async function verifyAppCustomerIdGUC() {
     logger.logEvent(
       "error",
       "Postgres custom GUC app.current_customer_id not found or not accessible",
-      { error: error.message }
+      { error: error.message },
     );
   }
 }

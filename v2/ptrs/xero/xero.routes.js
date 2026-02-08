@@ -17,10 +17,28 @@ router.post("/organisations", requirePtrs, xeroController.selectOrganisations);
 router.delete(
   "/organisations/:tenantId",
   requirePtrs,
-  xeroController.removeOrganisation
+  xeroController.removeOrganisation,
 );
 
 router.post("/import", requirePtrs, xeroController.startImport);
 router.get("/status", requirePtrs, xeroController.getStatus);
+
+router.get(
+  "/import/exceptions",
+  requirePtrs,
+  xeroController.getImportExceptions,
+);
+
+router.get(
+  "/import/exceptions/summary",
+  requirePtrs,
+  xeroController.getImportExceptionsSummary,
+);
+
+router.get(
+  "/import/exceptions.csv",
+  requirePtrs,
+  xeroController.downloadImportExceptionsCsv,
+);
 
 module.exports = router;

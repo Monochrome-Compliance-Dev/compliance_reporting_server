@@ -167,7 +167,7 @@ async function initialise() {
             {
               action: "DatabaseInit",
               file: fullPath,
-            }
+            },
           );
           return;
         }
@@ -191,6 +191,22 @@ async function initialise() {
       // Keep naming consistent with existing convention
       db[toPascal(model.name)] = model;
     }
+
+    // Ensure PTRS v2 import exception model is available (table: ptrs_import_exception)
+    try {
+      const definePtrsImportException = require("@/v2/ptrs/models/ptrs_import_exception");
+      if (typeof definePtrsImportException === "function") {
+        const m = definePtrsImportException(sequelize);
+        const key = toPascal(m.name);
+        if (!db[key]) db[key] = m;
+      }
+    } catch (e) {
+      logger.logEvent("warn", "Failed to load PTRS v2 import exception model", {
+        action: "DatabaseInit",
+        error: e?.message,
+      });
+    }
+
     logger.logEvent("info", "PTRS v2 models initialised", {
       action: "DatabaseInit",
       count: Object.keys(v2Models).length,

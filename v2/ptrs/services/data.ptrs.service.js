@@ -172,7 +172,7 @@ function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
   return new Promise((resolve, reject) => {
     const workerPath = path.resolve(
       __dirname,
-      "../workers/xlsxToCsv.worker.js"
+      "../workers/xlsxToCsv.worker.js",
     );
     let settled = false;
     const worker = new Worker(workerPath);
@@ -212,7 +212,7 @@ function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
       clearTimeout(timer);
       if (code !== 0) {
         const err = new Error(
-          "Excel conversion worker exited with code " + code
+          "Excel conversion worker exited with code " + code,
         );
         err.statusCode = 500;
         return reject(err);
@@ -222,7 +222,7 @@ function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
     // Transfer the underlying ArrayBuffer for zero-copy
     const ab = buffer.buffer.slice(
       buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength
+      buffer.byteOffset + buffer.byteLength,
     );
     worker.postMessage({ buffer: ab }, [ab]);
   });
@@ -235,7 +235,7 @@ function pickFromRowLoose(row, header) {
       return row[h];
     }
     const kh = Object.keys(row).find(
-      (k) => String(k).toLowerCase() === String(h).toLowerCase()
+      (k) => String(k).toLowerCase() === String(h).toLowerCase(),
     );
     if (kh && row[kh] != null) {
       return row[kh];
@@ -316,7 +316,7 @@ async function parseCsvMetaFromStream(stream) {
   return new Promise((resolve, reject) => {
     let rowsCount = 0;
     const nonEmptyByHeader = Object.fromEntries(
-      headersArray.map((h) => [h, false])
+      headersArray.map((h) => [h, false]),
     );
 
     fixedStream
@@ -329,7 +329,7 @@ async function parseCsvMetaFromStream(stream) {
           strictColumnHandling: false,
           skipLines: 1, // skip the original header row we consumed
           discardUnmappedColumns: true,
-        })
+        }),
       )
       .on("error", (err) => reject(err))
       .on("data", (row) => {
@@ -357,6 +357,7 @@ async function addDataset({
   customerId,
   ptrsId,
   role,
+  sourceType = null,
   sourceName = null,
   fileName = null,
   fileSize = null,
@@ -421,25 +422,31 @@ async function addDataset({
     }
 
     // Create DB row first to get dataset id
+    const dsCandidate = {
+      customerId,
+      ptrsId,
+      role: normalisedRole,
+      sourceType:
+        sourceType || (looksLikeXlsx(buffer, mimeType) ? "excel" : "csv"),
+      sourceName: sourceName || fileName || null,
+      fileName: fileName || null,
+      fileSize: Number.isFinite(fileSize)
+        ? fileSize
+        : workBuffer.length || null,
+      mimeType: workMime || mimeType || null,
+      storageRef: null,
+      rowsCount: null,
+      status: "uploaded",
+      meta: null,
+      createdBy: userId || null,
+      updatedBy: userId || null,
+    };
+
     const row = await db.PtrsDataset.create(
+      pickModelFields(db.PtrsDataset, dsCandidate),
       {
-        customerId,
-        ptrsId,
-        role: normalisedRole,
-        sourceName: sourceName || fileName || null,
-        fileName: fileName || null,
-        fileSize: Number.isFinite(fileSize)
-          ? fileSize
-          : workBuffer.length || null,
-        mimeType: workMime || mimeType || null,
-        storageRef: null,
-        rowsCount: null,
-        status: "uploaded",
-        meta: null,
-        createdBy: userId || null,
-        updatedBy: userId || null,
+        transaction: t,
       },
-      { transaction: t }
     );
 
     const datasetId = row.id;
@@ -450,7 +457,7 @@ async function addDataset({
       "storage",
       "ptrs_datasets",
       String(customerId),
-      String(ptrsId)
+      String(ptrsId),
     );
     fs.mkdirSync(baseDir, { recursive: true });
     const ext = workExt || ".csv";
@@ -459,13 +466,13 @@ async function addDataset({
 
     // Parse headers + count rows
     const { headers, rowsCount } = await parseCsvMetaFromStream(
-      Readable.from(workBuffer)
+      Readable.from(workBuffer),
     );
     const meta = { headers, rowsCount };
 
     await row.update(
       { storageRef: storagePath, rowsCount, meta },
-      { transaction: t }
+      { transaction: t },
     );
 
     // Commit the dataset upload first; the subsequent import runs its own txn.
@@ -489,7 +496,7 @@ async function addDataset({
     if (isPaymentTermChangeRole(normalisedRole)) {
       if (!ptrsProfileId) {
         const e = new Error(
-          "PTRS profileId is missing; cannot import payment term changes without a profileId"
+          "PTRS profileId is missing; cannot import payment term changes without a profileId",
         );
         e.statusCode = 400;
         throw e;
@@ -504,7 +511,7 @@ async function addDataset({
           datasetId: plain.id,
           role: normalisedRole,
           profileId: ptrsProfileId,
-        }
+        },
       );
 
       let importResult;
@@ -527,7 +534,7 @@ async function addDataset({
             role: normalisedRole,
             profileId: ptrsProfileId,
             error: e?.message,
-          }
+          },
         );
         throw e;
       }
@@ -554,7 +561,7 @@ async function addDataset({
               },
               updatedBy: userId || ds.get("updatedBy") || null,
             },
-            { transaction: t2 }
+            { transaction: t2 },
           );
         }
 
@@ -572,7 +579,7 @@ async function addDataset({
             ptrsId,
             datasetId: plain.id,
             error: e?.message,
-          }
+          },
         );
       }
 
@@ -622,12 +629,14 @@ async function listDatasets({ customerId, ptrsId }) {
       transaction: t,
     });
 
-    const hasMain = rows.some(
-      (r) =>
-        String(r.role || "")
-          .trim()
-          .toLowerCase() === "main"
-    );
+    const hasMain = rows.some((r) => {
+      const role = String(r.role || "")
+        .trim()
+        .toLowerCase();
+      return (
+        role === "main" || role === "transactions" || role.startsWith("main_")
+      );
+    });
 
     if (!hasMain) {
       const rawCount = await db.PtrsImportRaw.count({
@@ -1122,7 +1131,7 @@ function parseAuDateTimeDMY(dateStr, timeStr) {
   // Date parsers
   const tryDMY4 = (sep) => {
     const m = String(dPart).match(
-      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{4})$`)
+      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{4})$`),
     );
     if (!m) return null;
     const day = Number(m[1]);
@@ -1134,7 +1143,7 @@ function parseAuDateTimeDMY(dateStr, timeStr) {
 
   const tryDMY2orMDY2 = (sep) => {
     const m = String(dPart).match(
-      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{2})$`)
+      new RegExp(`^(\\d{1,2})\\${sep}(\\d{1,2})\\${sep}(\\d{2})$`),
     );
     if (!m) return null;
 
@@ -1270,7 +1279,7 @@ async function importPaymentTermChangesFromDataset({
 
     if (!resolvedProfileId) {
       const e = new Error(
-        "profileId is required (and could not be resolved from ptrs)"
+        "profileId is required (and could not be resolved from ptrs)",
       );
       e.statusCode = 400;
       throw e;
@@ -1334,7 +1343,7 @@ async function importPaymentTermChangesFromDataset({
               profileId: resolvedProfileId,
               keys: Object.keys(row),
               sample: row,
-            }
+            },
           );
         }
 
@@ -1428,7 +1437,7 @@ async function importPaymentTermChangesFromDataset({
         datasetId,
         profileId: resolvedProfileId,
         stats,
-      }
+      },
     );
 
     return {

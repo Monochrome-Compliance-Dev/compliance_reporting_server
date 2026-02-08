@@ -105,6 +105,16 @@ CREATE POLICY tbl_ptrs_stage_row_rls_policy
 
 ALTER TABLE tbl_ptrs_stage_row FORCE ROW LEVEL SECURITY;
 
+-- PTRS Import Exceptions (import-time issues like Xero 404 invoice lookups)
+ALTER TABLE tbl_ptrs_import_exception ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_import_exception_rls_policy ON tbl_ptrs_import_exception;
+CREATE POLICY tbl_ptrs_import_exception_rls_policy
+  ON tbl_ptrs_import_exception
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_import_exception FORCE ROW LEVEL SECURITY;
+
 -- =============================
 -- PTRS v2 Xero cache tables: RLS policies
 -- =============================

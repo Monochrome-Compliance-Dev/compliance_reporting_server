@@ -88,7 +88,24 @@ function handleXeroApiError(error) {
 // -----------------------------------------------------------------------------
 async function rateLimitHandler(headers) {
   const retryAfter = Number(headers?.["retry-after"]) || 60;
-  await new Promise((res) => setTimeout(res, retryAfter * 1000));
+  const totalSeconds = Math.max(1, Math.floor(retryAfter));
+  const startedAt = Date.now();
+
+  for (let remaining = totalSeconds; remaining > 0; remaining--) {
+    if (global.sendWebSocketUpdate) {
+      global.sendWebSocketUpdate({
+        status: "paused",
+        reason: "xero-throttle",
+        message: `Paused due to Xero throttle. Retrying in ${remaining}s`,
+        retryAfterSeconds: totalSeconds,
+        secondsRemaining: remaining,
+        startedAt,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    await new Promise((res) => setTimeout(res, 1000));
+  }
 }
 
 function backoff(attempt, base = BASE_BACKOFF_MS, cap = MAX_BACKOFF_MS) {
@@ -130,7 +147,7 @@ async function handleXeroRateLimitWarnings(headers = {}) {
 async function retryWithExponentialBackoff(
   fn,
   retries = 3,
-  baseDelay = BASE_BACKOFF_MS
+  baseDelay = BASE_BACKOFF_MS,
 ) {
   let attempt = 0;
   while (attempt < retries) {
@@ -144,7 +161,7 @@ async function retryWithExponentialBackoff(
         await handleXeroRateLimitWarnings(simulatedHeaders);
         const remaining = parseInt(
           simulatedHeaders["x-minlimit-remaining"],
-          10
+          10,
         );
         if (Number.isFinite(remaining) && remaining <= 3) {
           const waitMs = 1000 * (6 - remaining);
@@ -174,7 +191,7 @@ async function retryWithExponentialBackoff(
 
       const delay = Math.min(
         backoff(attempt, baseDelay, MAX_BACKOFF_MS),
-        MAX_BACKOFF_MS
+        MAX_BACKOFF_MS,
       );
       if (global.sendWebSocketUpdate) {
         global.sendWebSocketUpdate({
@@ -205,7 +222,7 @@ async function paginateXeroApi(fetchPageFn, processPageFn, options = {}) {
   while (hasMore) {
     try {
       const response = await retryWithExponentialBackoff(() =>
-        fetchPageFn(page)
+        fetchPageFn(page),
       );
       await handleXeroRateLimitWarnings(response?.headers || {});
       await processPageFn(response, page);

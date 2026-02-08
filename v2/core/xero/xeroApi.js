@@ -1,5 +1,13 @@
 const axios = require("axios");
+const { logger } = require("@/helpers/logger");
 require("dotenv").config();
+
+function getXeroLogSlowMs() {
+  const raw = process.env.XERO_LOG_SLOW_MS;
+  if (raw === undefined || raw === null || raw === "") return 2000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2000;
+}
 
 // -----------------------------
 // Progress helpers
@@ -64,7 +72,8 @@ function updateXeroProgress(method, url) {
 let xeroQueue;
 const queueReady = (async () => {
   const { default: PQueue } = await import("p-queue");
-  xeroQueue = new PQueue({ concurrency: 5, interval: 60000, intervalCap: 55 });
+  // Concurrency guard ONLY. Rate limiting/backoff handled centrally in xeroApiUtils.
+  xeroQueue = new PQueue({ concurrency: 1 });
   return xeroQueue;
 })();
 
@@ -115,7 +124,7 @@ function resolveBaseURL(url) {
 async function request(
   method,
   url,
-  { data, accessToken, tenantId, config = {} } = {}
+  { data, accessToken, tenantId, config = {} } = {},
 ) {
   await ensureQueue();
   const at = normalizeAccessToken(accessToken);
@@ -134,31 +143,42 @@ async function request(
 
   const baseURL = resolveBaseURL(url);
 
-  const run = () =>
-    xeroQueue.add(() =>
-      axios({
-        method,
-        url,
-        data,
-        ...(baseURL && { baseURL }),
-        headers,
-        ...config,
-      })
-    );
+  const run = () => {
+    const started = Date.now();
+    return xeroQueue
+      .add(() =>
+        axios({
+          method,
+          url,
+          data,
+          ...(baseURL && { baseURL }),
+          headers,
+          ...config,
+        }),
+      )
+      .then((res) => {
+        const tookMs = Date.now() - started;
+        const slowMs = getXeroLogSlowMs();
+        if (tookMs >= slowMs) {
+          logger?.warn?.("Slow Xero HTTP request", {
+            action: "XeroApiSlowRequest",
+            method,
+            url,
+            tookMs,
+            status: res?.status,
+            queue: xeroQueue
+              ? { size: xeroQueue.size, pending: xeroQueue.pending }
+              : null,
+          });
+        }
+        return res;
+      });
+  };
 
   try {
     const res = await run();
     return { data: res.data, headers: res.headers, status: res.status };
   } catch (error) {
-    // Basic 429 handling with Retry-After
-    const status = error?.response?.status;
-    const retryAfter = Number(error?.response?.headers?.["retry-after"]);
-    if (status === 429 && Number.isFinite(retryAfter) && retryAfter >= 0) {
-      await new Promise((r) => setTimeout(r, retryAfter * 1000));
-      const res = await run();
-      return { data: res.data, headers: res.headers, status: res.status };
-    }
-
     // Enrich error context for easier debugging
     error.context = {
       url,

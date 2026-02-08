@@ -83,7 +83,7 @@ function buildStableInputHash(input) {
 
     const keys = Object.keys(value).sort();
     const entries = keys.map(
-      (k) => JSON.stringify(k) + ":" + stableStringify(value[k])
+      (k) => JSON.stringify(k) + ":" + stableStringify(value[k]),
     );
     return "{" + entries.join(",") + "}";
   };
@@ -346,7 +346,7 @@ async function createExecutionRun({
         createdBy,
         updatedBy: createdBy,
       },
-      { transaction: t }
+      { transaction: t },
     );
 
     if (ownsTx) await t.commit();
@@ -477,6 +477,8 @@ async function importCsvStream({
   ptrsId,
   stream,
   fileMeta = null,
+  datasetId = null,
+  sourceType = null,
 }) {
   console.log("PTRS v2 importCsvStream: begin", {
     action: "PtrsV2ImportCsvStream",
@@ -533,7 +535,7 @@ async function importCsvStream({
   };
 
   const rawHeaders = splitCsvLine(headerLine).map((s) =>
-    String(s || "").trim()
+    String(s || "").trim(),
   );
   if (!rawHeaders.length) {
     const err = new Error("CSV appears to have no header row");
@@ -550,10 +552,48 @@ async function importCsvStream({
     return n === 1 ? label : `${label}_${n}`;
   });
 
-  const fixedStream = Readable.from(text);
+  // Ensure there is a dataset row for this main upload so we can scope raw rows.
+  // If caller provided datasetId, we trust it (strictly) and do not attempt to infer.
+  let effectiveDatasetId = datasetId || null;
 
   // Begin a customer-scoped transaction for all DB writes (RLS-safe)
   const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    if (!effectiveDatasetId) {
+      const originalName = fileMeta?.originalName || null;
+      const displayName = originalName || "Main input";
+
+      const ds = await db.PtrsDataset.create(
+        {
+          customerId,
+          ptrsId,
+          role: "main",
+          sourceType: sourceType || "csv",
+          fileName: displayName,
+          storageRef: null,
+          rowsCount: null,
+          status: "uploaded",
+          meta: {
+            headers: headersArray,
+            source: "csv",
+            originalName,
+          },
+          createdBy: null,
+          updatedBy: null,
+        },
+        { transaction: t },
+      );
+
+      effectiveDatasetId = ds.id;
+    }
+  } catch (e) {
+    // If we fail to create a dataset row, abort loudly.
+    await t.rollback().catch(() => {});
+    throw e;
+  }
+
+  const fixedStream = Readable.from(text);
 
   const flush = async () => {
     if (!batch.length) return;
@@ -572,7 +612,7 @@ async function importCsvStream({
   return new Promise((resolve, reject) => {
     const handleFatal = (err) => {
       // Ensure we rollback the transaction on any fatal error
-      t.rollback()
+      (t.finished ? Promise.resolve() : t.rollback())
         .catch(() => {})
         .finally(() => {
           reject(err);
@@ -594,7 +634,14 @@ async function importCsvStream({
       })
       .on("data", (row) => {
         rowNo += 1;
-        batch.push({ customerId, ptrsId, rowNo, data: row, errors: null });
+        batch.push({
+          customerId,
+          ptrsId,
+          datasetId: effectiveDatasetId,
+          rowNo,
+          data: row,
+          errors: null,
+        });
         if (batch.length >= BATCH_SIZE) {
           parser.pause();
           flush()
@@ -633,6 +680,29 @@ async function importCsvStream({
               sizeBytes: fileMeta?.sizeBytes ?? null,
             };
             await upload.update(updatePayload, { transaction: t });
+          }
+
+          // Update dataset row stats for the main upload
+          if (effectiveDatasetId) {
+            const ds = await db.PtrsDataset.findOne({
+              where: { id: effectiveDatasetId, customerId, ptrsId },
+              transaction: t,
+            });
+            if (ds) {
+              const currentMeta = ds.get("meta") || {};
+              await ds.update(
+                {
+                  rowsCount: rowsInserted,
+                  meta: {
+                    ...currentMeta,
+                    headers: headersArray,
+                    rowsCount: rowsInserted,
+                    updatedAt: new Date().toISOString(),
+                  },
+                },
+                { transaction: t },
+              );
+            }
           }
 
           await t.commit();
@@ -690,7 +760,7 @@ async function createPtrs(params) {
         createdBy: createdBy || null,
         updatedBy: createdBy || null,
       },
-      { transaction: t }
+      { transaction: t },
     );
 
     await t.commit();
@@ -1368,12 +1438,12 @@ async function getBlueprint({ customerId = null, profileId = null } = {}) {
     // will need beginTransactionWithCustomerContext
     const baseRow = await db.PtrsBlueprint.findByPk(
       "ptrsCalculationBlueprint",
-      { raw: true }
+      { raw: true },
     );
 
     if (!baseRow || !baseRow.json) {
       const err = new Error(
-        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint."
+        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint.",
       );
       err.statusCode = 500;
       throw err;
@@ -1402,12 +1472,12 @@ async function getBlueprint({ customerId = null, profileId = null } = {}) {
     // 1) Base blueprint (required)
     const baseRow = await db.PtrsBlueprint.findByPk(
       "ptrsCalculationBlueprint",
-      { raw: true, transaction: t }
+      { raw: true, transaction: t },
     );
 
     if (!baseRow || !baseRow.json) {
       const err = new Error(
-        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint."
+        "PTRS base blueprint not found in DB (id=ptrsCalculationBlueprint). Seed tbl_ptrs_blueprint before calling getBlueprint.",
       );
       err.statusCode = 500;
       throw err;

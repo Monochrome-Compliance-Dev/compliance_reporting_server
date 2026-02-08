@@ -10,7 +10,76 @@ module.exports = {
   removeOrganisation,
   startImport,
   getStatus,
+  getImportExceptions,
+  getImportExceptionsSummary,
+  downloadImportExceptionsCsv,
 };
+/**
+ * GET /api/v2/ptrs/:id/xero/import/exceptions/summary
+ */
+async function getImportExceptionsSummary(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const ptrsId = req.params.id;
+
+  try {
+    const count = await xeroService.getImportExceptionsSummary({
+      customerId,
+      ptrsId,
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: { count },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+/**
+ * GET /api/v2/ptrs/:id/xero/import/exceptions
+ */
+async function getImportExceptions(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const ptrsId = req.params.id;
+
+  try {
+    const rows = await xeroService.getImportExceptions({ customerId, ptrsId });
+    return res.status(200).json({
+      status: "success",
+      data: {
+        count: rows.length,
+        rows,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/xero/import/exceptions.csv
+ */
+async function downloadImportExceptionsCsv(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const ptrsId = req.params.id;
+
+  try {
+    const csv = await xeroService.getImportExceptionsCsv({
+      customerId,
+      ptrsId,
+    });
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=ptrs_${ptrsId}_import_exceptions.csv`,
+    );
+
+    return res.status(200).send(csv);
+  } catch (err) {
+    return next(err);
+  }
+}
 
 /**
  * POST /api/v2/ptrs/:id/xero/connect
@@ -255,7 +324,7 @@ async function selectOrganisations(req, res, next) {
         userId,
         error: error?.message,
         statusCode: error?.statusCode || 500,
-      }
+      },
     );
     return next(error);
   }

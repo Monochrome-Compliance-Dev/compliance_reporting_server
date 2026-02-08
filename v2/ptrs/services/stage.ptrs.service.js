@@ -1319,196 +1319,227 @@ async function stagePtrs({
 
     // 3) Persist into tbl_ptrs_stage_row if requested
     let persistedCount = null;
-    if (persist) {
-      const basePayload = stagedRows.map((r) => {
-        const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
 
-        // Persist the full resolved row into JSONB `data`.
-        // NOTE: tbl_ptrs_stage_row only has: customerId, ptrsId, rowNo, data, errors, meta (+ timestamps)
-        const dataObjBase =
-          r && typeof r === "object" && Object.keys(r).length
-            ? r
-            : { _warning: "⚠️ No mapped data for this row" };
+    // tbl_ptrs_stage_row requires datasetId (NOT NULL).
+    // Align with the data step behaviour:
+    // - Prefer the synthetic dataset row with role === "main" when present (covers Xero/raw ingests)
+    // - Otherwise fall back to the most recently updated dataset whose role starts with "main" (e.g. main_xero/main_excel)
+    // - If we cannot resolve a datasetId, fail loudly before attempting to insert
+    const resolveDefaultDatasetId = async () => {
+      if (!db.PtrsDataset) {
+        const e = new Error(
+          "PtrsDataset model is not available; cannot resolve datasetId for staging",
+        );
+        e.statusCode = 500;
+        throw e;
+      }
 
-        // If the rules engine excluded the row, persist canonical exclusion fields.
-        const shouldExclude = !!r?.exclude;
-        const excludeComment =
-          Array.isArray(r?._warnings) && r._warnings.length
-            ? String(r._warnings[0])
-            : shouldExclude
-              ? "Excluded by rule"
-              : null;
+      // Pull all datasets for this ptrs
+      const all = await db.PtrsDataset.findAll({
+        where: { customerId, ptrsId },
+        attributes: ["id", "role", "updatedAt", "createdAt", "storageRef"],
+        order: [
+          ["updatedAt", "DESC"],
+          ["createdAt", "DESC"],
+        ],
+        transaction: t,
+        raw: true,
+      });
 
-        const dataObj = shouldExclude
-          ? {
-              ...dataObjBase,
-              exclude_from_metrics: true,
-              exclude_comment: excludeComment,
-              exclude_set_at: new Date().toISOString(),
-              exclude_set_by: userId || null,
-            }
-          : dataObjBase;
+      const normRole = (r) =>
+        String(r || "")
+          .trim()
+          .toLowerCase();
+      const main = all.find((d) => normRole(d.role) === "main");
+      if (main?.id) return main.id;
 
-        return {
-          customerId: String(customerId),
-          ptrsId: String(ptrsId),
-          rowNo: rowNoVal,
-          data: dataObj,
-          errors:
-            Array.isArray(r?._stageErrors) && r._stageErrors.length
-              ? r._stageErrors
-              : null,
+      // Fall back to any dataset whose role starts with main
+      const mainLike = all.find((d) => normRole(d.role).startsWith("main"));
+      if (mainLike?.id) return mainLike.id;
+
+      // If there are raw rows, create a synthetic main dataset row (same pattern as data.listDatasets / upsertMainDatasetFromRaw)
+      const rawCount = await db.PtrsImportRaw.count({
+        where: { customerId, ptrsId },
+        transaction: t,
+      });
+
+      if (rawCount && rawCount > 0) {
+        const candidate = {
+          customerId,
+          ptrsId,
+          role: "main",
+          // PtrsDataset.fileName is NOT NULL.
+          fileName: "Main input",
+          storageRef: null,
+          rowsCount: rawCount,
+          status: "uploaded",
           meta: {
+            source: "raw",
+            rowsCount: rawCount,
+            displayName: "Main input",
+            updatedAt: new Date().toISOString(),
+          },
+          createdBy: userId || null,
+          updatedBy: userId || null,
+        };
+
+        const created = await db.PtrsDataset.create(
+          typeof pickModelFields === "function"
+            ? pickModelFields(db.PtrsDataset, candidate)
+            : candidate,
+          { transaction: t },
+        );
+
+        if (created?.id) return created.id;
+      }
+
+      const e = new Error(
+        "No dataset is available for staging. Upload a dataset or complete an import first.",
+      );
+      e.statusCode = 400;
+      throw e;
+    };
+
+    const deriveRowNoForStage = (row, idx) => {
+      const candidates = [
+        row?.row_no,
+        row?.rowNo,
+        row?.row_number,
+        row?.rowNumber,
+      ];
+      for (const c of candidates) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return idx + 1;
+    };
+
+    const extractStageErrors = (row) => {
+      const errs = row?._stageErrors;
+      return Array.isArray(errs) && errs.length ? errs : null;
+    };
+
+    const stripInternalStageKeys = (row) => {
+      if (!row || typeof row !== "object") return row;
+      const out = { ...row };
+      // Remove internal helper keys that should not persist into `data`
+      delete out._stageErrors;
+      return out;
+    };
+
+    const extractExistingStageMeta = (row) => {
+      // Preserve any upstream meta already attached by mapping/rules steps.
+      const meta = row?.meta;
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) return meta;
+      return null;
+    };
+
+    if (persist) {
+      const defaultDatasetId = await resolveDefaultDatasetId();
+
+      // Validate datasetId on every row (row.datasetId may be present if mapping layer supplies it)
+      const missingDatasetIdCount = (stagedRows || []).reduce((acc, r) => {
+        const did = r?.datasetId || r?.dataset_id || null;
+        return acc + (did ? 0 : 1);
+      }, 0);
+
+      // If *all* rows are missing, we will use the defaultDatasetId.
+      // If *some* rows have datasetId and others don't, fill the blanks with defaultDatasetId.
+      // If we still can't resolve a datasetId, fail loudly.
+      if (!defaultDatasetId) {
+        const e = new Error("Unable to resolve datasetId for staging");
+        e.statusCode = 500;
+        throw e;
+      }
+
+      const rowsToInsert = (stagedRows || []).map((r, idx) => {
+        const rowDatasetId = r?.datasetId || r?.dataset_id || defaultDatasetId;
+        return {
+          customerId,
+          ptrsId,
+          profileId: profileId || null,
+          datasetId: rowDatasetId,
+          rowNo: deriveRowNoForStage(r, idx),
+          data: stripInternalStageKeys(r),
+          errors: extractStageErrors(r),
+          meta: {
+            ...(extractExistingStageMeta(r) || {}),
             _stage: "ptrs.v2.stagePtrs",
             at: new Date().toISOString(),
-            rules: {
-              applied: Array.isArray(r?._appliedRules) ? r._appliedRules : [],
-              exclude: !!r?.exclude,
-              exclude_comment: dataObj?.exclude_comment || null,
-            },
+            rules: rulesStats || null,
           },
+          createdBy: userId || null,
+          updatedBy: userId || null,
         };
       });
 
-      const isEmptyPlain = (v) =>
-        v &&
-        typeof v === "object" &&
-        !Array.isArray(v) &&
-        Object.keys(v).length === 0;
-
-      const insertWarning = (obj) => {
-        if (!obj || typeof obj !== "object") return obj;
-        for (const key of ["data", "errors", "meta"]) {
-          if (isEmptyPlain(obj[key])) {
-            obj[key] = {
-              _warning: "⚠️ Empty JSONB payload — nothing to insert",
-            };
-          }
-          if (typeof obj[key] === "undefined") {
-            obj[key] = null;
-          }
-        }
-        return obj;
-      };
-
-      const safePayload = basePayload.map(insertWarning);
+      // Final guard: ensure none are missing datasetId before bulkCreate.
+      const stillMissing = rowsToInsert.filter((r) => !r.datasetId);
+      if (stillMissing.length) {
+        const e = new Error(
+          `Unable to stage: ${stillMissing.length} rows are missing datasetId`,
+        );
+        e.statusCode = 500;
+        throw e;
+      }
 
       slog.info("PTRS v2 stagePtrs: preparing to insert", {
         action: "PtrsV2StagePtrsBatch",
         customerId,
         ptrsId,
-        batchSize: safePayload.length,
-        sampleRow: safeMeta(safePayload[0] || {}),
+        batchSize: rowsToInsert.length,
+        sampleRow: rowsToInsert[0] || null,
+        defaultDatasetId,
+        missingDatasetIdCount,
       });
 
-      const offenders = safePayload
-        .filter((p) => {
-          const hasWarn = Boolean(
-            p?.data?._warning || p?.errors?._warning || p?.meta?._warning,
-          );
-          const hasEmpty =
-            isEmptyPlain(p?.data) ||
-            isEmptyPlain(p?.errors) ||
-            isEmptyPlain(p?.meta);
-          return hasWarn || hasEmpty;
-        })
-        .slice(0, 3)
-        .map((p) => ({
-          rowNo: p.rowNo,
-          dataKeys: p.data ? Object.keys(p.data) : null,
-          hasWarning: Boolean(
-            p?.data?._warning || p?.errors?._warning || p?.meta?._warning,
-          ),
-        }));
-
-      if (offenders.length) {
-        slog.warn("PTRS v2 stagePtrs: warning/empty JSONB rows detected", {
-          action: "PtrsV2StagePtrsWarningRows",
-          ptrsId,
-          customerId,
-          offenderCount: offenders.length,
-          sample: safeMeta(offenders),
-        });
-      }
-
-      // IMPORTANT: staging must be idempotent.
-      // On persist runs, we soft-delete any existing *active* stage rows for this ptrs
-      // before inserting the new snapshot. We do this with raw SQL so we are not
-      // dependent on Sequelize's destroy/paranoid behaviour (and to avoid silent no-ops).
-      try {
-        const [_, meta] = await db.sequelize.query(
-          `
-          UPDATE "tbl_ptrs_stage_row"
-          SET "deletedAt" = NOW(), "updatedAt" = NOW()
-          WHERE "customerId" = :customerId
-            AND "ptrsId" = :ptrsId
-            AND "deletedAt" IS NULL
-          `,
-          {
-            type: QueryTypes.UPDATE,
-            replacements: { customerId, ptrsId },
-            transaction: t,
-          },
-        );
-
-        // `meta` shape varies by Sequelize version; log defensively.
-        const clearedCount =
-          (meta && typeof meta.rowCount === "number" && meta.rowCount) ||
-          (meta &&
-            typeof meta.affectedRows === "number" &&
-            meta.affectedRows) ||
-          0;
-
-        slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
-          action: "PtrsV2StagePtrsClearActive",
-          customerId,
-          ptrsId,
-          clearedCount,
-        });
-      } catch (e) {
-        // If this fails, do NOT proceed to insert (otherwise we will duplicate rows).
-        slog.error("PTRS v2 stagePtrs: failed to clear active stage rows", {
-          action: "PtrsV2StagePtrsClearActiveFailed",
-          customerId,
-          ptrsId,
-          error: e?.message,
-        });
-        throw e;
-      }
-
-      if (safePayload.length) {
-        try {
-          await db.PtrsStageRow.bulkCreate(safePayload, {
-            validate: false,
-            returning: false,
-            transaction: t,
-          });
-        } catch (e) {
-          // If RLS blocks inserts, or the model/table are out of sync, we want this to be unmistakable.
-          slog.error("PTRS v2 stagePtrs: bulkCreate failed", {
-            action: "PtrsV2StagePtrsBulkCreateFailed",
-            customerId,
-            ptrsId,
-            error: e?.message,
-          });
-          throw e;
-        }
-      }
-
-      // With paranoid enabled, this count will automatically exclude soft-deleted rows.
-      persistedCount = await db.PtrsStageRow.count({
+      // Clear existing active stage rows for this ptrsId/customerId (full rebuild)
+      const clearedCount = await db.PtrsStageRow.destroy({
         where: { customerId, ptrsId },
         transaction: t,
       });
 
-      slog.info("PTRS v2 stagePtrs: persistence check", {
-        action: "PtrsV2StagePtrsPersistedCount",
+      slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
+        action: "PtrsV2StagePtrsClearActive",
         customerId,
         ptrsId,
-        attempted: safePayload.length,
-        persistedCount,
+        clearedCount: Number(clearedCount) || 0,
       });
+
+      try {
+        await db.PtrsStageRow.bulkCreate(rowsToInsert, {
+          transaction: t,
+          validate: false,
+        });
+        persistedCount = rowsToInsert.length;
+      } catch (err) {
+        slog.error("PTRS v2 stagePtrs: bulkCreate failed", {
+          action: "PtrsV2StagePtrsBulkCreateFailed",
+          customerId,
+          ptrsId,
+          error: err?.message,
+        });
+        throw err;
+      }
     }
+
+    // Helper: best-effort pick datasetId from the row shape, else fall back to defaultDatasetId.
+    const resolveRowDatasetId = (r) => {
+      if (!r || typeof r !== "object") return defaultDatasetId;
+      const candidates = [
+        r.datasetId,
+        r.dataset_id,
+        r._datasetId,
+        r._dataset_id,
+        r.meta && (r.meta.datasetId || r.meta.dataset_id),
+      ];
+      for (const c of candidates) {
+        if (c == null) continue;
+        const s = String(c).trim();
+        if (s) return s;
+      }
+      return defaultDatasetId;
+    };
 
     const tookMs = Date.now() - started;
     // Ensure persistedCount is calculated before commit
