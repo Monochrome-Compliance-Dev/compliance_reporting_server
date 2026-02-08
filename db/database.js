@@ -219,6 +219,45 @@ async function initialise() {
     });
   }
 
+  // --- Load PTRS v2 reference models (non-*.model.js, explicit requires) ---
+  // These live under v2/ptrs/models and are intentionally not part of the generic *.model.js loader.
+  // Only define them if they are not already present.
+  try {
+    const definePtrsEmployeeRef = require("@/v2/ptrs/models/ptrs_employee_ref");
+    const definePtrsIntraCompanyRef = require("@/v2/ptrs/models/ptrs_intra_company_ref");
+    const definePtrsGovEntityRef = require("@/v2/ptrs/models/ptrs_gov_entity_ref");
+    const definePtrsExclusionKeywordCustomerRef = require("@/v2/ptrs/models/ptrs_exclusion_keyword_customer_ref");
+
+    const ensureModel = (factory) => {
+      if (typeof factory !== "function") return null;
+      const model = factory(sequelize);
+      const key = toPascal(model.name);
+      if (!db[key]) db[key] = model;
+      return model;
+    };
+
+    ensureModel(definePtrsEmployeeRef);
+    ensureModel(definePtrsIntraCompanyRef);
+    ensureModel(definePtrsGovEntityRef);
+    ensureModel(definePtrsExclusionKeywordCustomerRef);
+
+    logger.logEvent("info", "PTRS v2 reference models initialised", {
+      action: "DatabaseInit",
+      models: [
+        "PtrsEmployeeRef",
+        "PtrsIntraCompanyRef",
+        "PtrsGovEntityRef",
+        "PtrsExclusionKeywordCustomerRef",
+      ],
+    });
+  } catch (err) {
+    logger.logEvent("error", "Failed to initialise PTRS v2 reference models", {
+      action: "DatabaseInit",
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+
   // --- Load PTRS v2 Xero cache models (non-*.model.js, via explicit requires) ---
   // These live under v2/ptrs/xero/models and are intentionally not part of the generic *.model.js loader.
   // Only define them if they are not already present (avoids clobbering any existing Xero models loaded elsewhere).
@@ -669,7 +708,9 @@ async function initialise() {
     db.FeatureEntitlement.belongsTo(db.Customer, { foreignKey: "customerId" });
   }
 
-  // TODO: Replace sequelize.sync() with proper migrations (e.g. umzug / sequelize-cli)
+  // IMPORTANT:
+  // Do NOT use alter:true globally – it breaks Postgres enums when defaults exist.
+  // We rely on explicit model additions instead.
   await sequelize.sync();
 
   // Initialise RLS policies (if using them)

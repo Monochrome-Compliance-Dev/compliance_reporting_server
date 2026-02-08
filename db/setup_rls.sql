@@ -582,7 +582,18 @@ CREATE POLICY tbl_ptrs_exclusion_keyword_customer_ref_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_exclusion_keyword_customer_ref FORCE ROW LEVEL SECURITY;
 
--- Global/common reference (no RLS): Government Entities
 -- Intentionally no RLS here because this table is shared across tenants.
 -- If you created it as tbl_ptrs_gov_entity_ref, do NOT enable RLS.
 -- (If RLS was previously enabled, consider: ALTER TABLE tbl_gov_entity_ref DISABLE ROW LEVEL SECURITY;)
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = 'tbl_ptrs_gov_entity_ref'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.tbl_ptrs_gov_entity_ref DISABLE ROW LEVEL SECURITY';
+  END IF;
+END$$;

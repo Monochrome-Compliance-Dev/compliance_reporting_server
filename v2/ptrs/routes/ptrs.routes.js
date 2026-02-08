@@ -65,6 +65,7 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
 const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
 const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
+const exclusionsRoutes = require("@/v2/ptrs/routes/exclusions.ptrs.routes");
 const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
 const sbiRoutes = require("@/v2/ptrs/routes/sbi.ptrs.routes");
 const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
@@ -80,6 +81,9 @@ router.use("/", tablesAndmapsRoutes);
 
 // staging
 router.use("/", stageRoutes);
+
+// exclusions
+router.use("/", exclusionsRoutes);
 
 // rules
 router.use("/", rulesRoutes);
