@@ -24,11 +24,28 @@ router.get(
   exclusionsController.exclusionsPreview,
 );
 
-// Exclusions (apply)
-router.post(
-  "/:id/exclusions/apply",
+router.get(
+  "/:id/exclusions/keywords",
   requirePtrs,
-  exclusionsController.exclusionsApply,
+  exclusionsController.exclusionKeywordsList,
+);
+
+router.post(
+  "/:id/exclusions/keywords",
+  requirePtrs,
+  exclusionsController.exclusionKeywordsCreate,
+);
+
+router.put(
+  "/:id/exclusions/keywords/:keywordId",
+  requirePtrs,
+  exclusionsController.exclusionKeywordsUpdate,
+);
+
+router.delete(
+  "/:id/exclusions/keywords/:keywordId",
+  requirePtrs,
+  exclusionsController.exclusionKeywordsDelete,
 );
 
 module.exports = router;

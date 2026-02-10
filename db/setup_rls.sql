@@ -572,6 +572,16 @@ CREATE POLICY tbl_ptrs_intra_company_ref_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_intra_company_ref FORCE ROW LEVEL SECURITY;
 
+-- Entity registry (profile-scoped, customer-scoped RLS)
+ALTER TABLE tbl_ptrs_entity_ref ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_ptrs_entity_ref_rls_policy ON tbl_ptrs_entity_ref;
+CREATE POLICY tbl_ptrs_entity_ref_rls_policy
+  ON tbl_ptrs_entity_ref
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_entity_ref FORCE ROW LEVEL SECURITY;
+
 -- Customer keywords
 ALTER TABLE tbl_ptrs_exclusion_keyword_customer_ref ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_ptrs_exclusion_keyword_customer_ref_rls_policy ON tbl_ptrs_exclusion_keyword_customer_ref;

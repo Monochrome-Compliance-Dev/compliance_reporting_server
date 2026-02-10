@@ -227,6 +227,7 @@ async function initialise() {
     const definePtrsIntraCompanyRef = require("@/v2/ptrs/models/ptrs_intra_company_ref");
     const definePtrsGovEntityRef = require("@/v2/ptrs/models/ptrs_gov_entity_ref");
     const definePtrsExclusionKeywordCustomerRef = require("@/v2/ptrs/models/ptrs_exclusion_keyword_customer_ref");
+    const definePtrsEntityRef = require("@/v2/ptrs/models/ptrs_entity_ref");
 
     const ensureModel = (factory) => {
       if (typeof factory !== "function") return null;
@@ -240,6 +241,7 @@ async function initialise() {
     ensureModel(definePtrsIntraCompanyRef);
     ensureModel(definePtrsGovEntityRef);
     ensureModel(definePtrsExclusionKeywordCustomerRef);
+    ensureModel(definePtrsEntityRef);
 
     logger.logEvent("info", "PTRS v2 reference models initialised", {
       action: "DatabaseInit",
@@ -248,6 +250,7 @@ async function initialise() {
         "PtrsIntraCompanyRef",
         "PtrsGovEntityRef",
         "PtrsExclusionKeywordCustomerRef",
+        "PtrsEntityRef",
       ],
     });
   } catch (err) {
