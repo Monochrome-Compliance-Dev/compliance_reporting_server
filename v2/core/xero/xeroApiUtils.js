@@ -262,14 +262,28 @@ async function callXeroApiWithAutoRefresh(
     return response;
   } catch (error) {
     const statusCode = error?.response?.status || error.statusCode || 500;
-    if (statusCode === 401 || statusCode === 403) {
-      if (typeof refreshFn === "function") {
-        await refreshFn();
-        const retry = await exec();
-        await handleXeroRateLimitWarnings(retry?.headers || {});
-        return retry;
-      }
+
+    // Handle Xero rate limits (429) with backoff + retry
+    if (statusCode === 429) {
+      await rateLimitHandler(error?.response?.headers || {});
+
+      const retry = await exec();
+      await handleXeroRateLimitWarnings(retry?.headers || {});
+      return retry;
     }
+
+    // Handle expired/invalid token (401/403)
+    if (
+      (statusCode === 401 || statusCode === 403) &&
+      typeof refreshFn === "function"
+    ) {
+      await refreshFn();
+
+      const retry = await exec();
+      await handleXeroRateLimitWarnings(retry?.headers || {});
+      return retry;
+    }
+
     throw enrichXeroError(error);
   }
 }

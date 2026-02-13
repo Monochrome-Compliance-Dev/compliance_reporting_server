@@ -136,8 +136,8 @@ async function connect(req, res, next) {
 }
 
 /**
- * GET /api/v2/xero/callback
- * (legacy/dev) GET /api/v2/ptrs/:id/xero/callback
+ * GET /api/app/xero/callback
+ * (legacy/dev) GET /api/app/ptrs/:id/xero/callback
  *
  * Xero redirects here after consent (or cancel/error). We must exchange code -> tokens,
  * fetch connections, persist tokens per tenant, then redirect back to FE.
@@ -165,7 +165,7 @@ async function callback(req, res, next) {
   const effectivePtrsId = ptrsIdFromParams || ptrsIdFromState || null;
 
   const frontEndBase = process.env.FRONTEND_URL || "http://localhost:3000";
-  const feCallbackBase = `${frontEndBase}/v2/ptrs/xero/callback`;
+  const feCallbackBase = `${frontEndBase}/app/ptrs/xero/callback`;
 
   try {
     // Xero sends `error=access_denied` when the user cancels.

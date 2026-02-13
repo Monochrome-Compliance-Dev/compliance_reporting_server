@@ -180,13 +180,16 @@ async function request(
     return { data: res.data, headers: res.headers, status: res.status };
   } catch (error) {
     // Enrich error context for easier debugging
+    const statusCode = error?.response?.status ?? error?.statusCode ?? null;
+
     error.context = {
       url,
       method,
-      status,
+      status: statusCode,
       statusText: error?.response?.statusText,
       xeroCorrelationId: error?.response?.headers?.["xero-correlation-id"],
     };
+
     error.responseBody = error?.response?.data;
     throw error;
   }

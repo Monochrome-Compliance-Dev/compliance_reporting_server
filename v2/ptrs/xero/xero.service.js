@@ -2,6 +2,7 @@ const db = require("@/db/database");
 const { logger } = require("@/helpers/logger");
 const fs = require("fs");
 const path = require("path");
+const { Op } = require("sequelize");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -12,6 +13,19 @@ const {
   paginateXeroApi,
   callXeroApiWithAutoRefresh,
 } = require("@/v2/core/xero/xeroApiUtils");
+
+module.exports = {
+  connect,
+  handleCallback,
+  getOrganisations,
+  selectOrganisations,
+  removeOrganisation,
+  startImport,
+  getStatus,
+  getImportExceptions,
+  getImportExceptionsSummary,
+  getImportExceptionsCsv,
+};
 
 const statusStore = new Map();
 const selectionStore = new Map();
@@ -377,49 +391,119 @@ async function fetchPaymentsPage({
   };
 }
 
-async function fetchInvoiceById({ customerId, tokenRow, tenantId, invoiceId }) {
+// async function fetchInvoiceById({ customerId, tokenRow, tenantId, invoiceId }) {
+//   if (!customerId) throw new Error("Missing customerId");
+//   if (!tenantId) throw new Error("Missing Xero tenantId");
+//   if (!invoiceId) throw new Error("Missing invoiceId");
+//   if (!tokenRow?.access_token) throw new Error("Missing Xero access token");
+
+//   let currentToken = tokenRow;
+
+//   const url = `https://api.xero.com/api.xro/2.0/Invoices/${encodeURIComponent(
+//     invoiceId,
+//   )}`;
+
+//   const started = Date.now();
+//   const { data, headers, status } = await callXeroApiWithAutoRefresh(
+//     () => xeroApi.get(url, currentToken.access_token, tenantId),
+//     customerId,
+//     async () => {
+//       currentToken = await refreshAccessTokenIfNeeded({
+//         customerId,
+//         tenantId,
+//         tokenRow: currentToken,
+//       });
+//     },
+//   );
+
+//   const tookMs = Date.now() - started;
+
+//   logSlowXeroCall({
+//     customerId,
+//     ptrsId: null,
+//     tenantId,
+//     phase: "fetchInvoiceById",
+//     tookMs,
+//     extra: {
+//       invoiceId,
+//       url,
+//       statusCode: status ?? null,
+//       xeroCorrelationId: headers?.["xero-correlation-id"] || null,
+//     },
+//   });
+
+//   const invoices = Array.isArray(data?.Invoices) ? data.Invoices : [];
+//   return { item: invoices[0] || null, tokenRow: currentToken };
+// }
+
+function chunkArray(items, size) {
+  if (!Array.isArray(items) || size <= 0) return [];
+  const out = [];
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
+  return out;
+}
+
+async function fetchInvoicesByIds({
+  customerId,
+  tokenRow,
+  tenantId,
+  invoiceIds,
+  chunkSize = 40,
+}) {
   if (!customerId) throw new Error("Missing customerId");
   if (!tenantId) throw new Error("Missing Xero tenantId");
-  if (!invoiceId) throw new Error("Missing invoiceId");
   if (!tokenRow?.access_token) throw new Error("Missing Xero access token");
 
+  const ids = Array.isArray(invoiceIds) ? invoiceIds.filter(Boolean) : [];
+  if (!ids.length) return { items: [], tokenRow };
+
   let currentToken = tokenRow;
+  const chunks = chunkArray(Array.from(new Set(ids)), chunkSize);
+  const all = [];
 
-  const url = `https://api.xero.com/api.xro/2.0/Invoices/${encodeURIComponent(
-    invoiceId,
-  )}`;
+  for (const batch of chunks) {
+    // Use Xero-supported IDs query parameter instead of Guid(...) where clause
+    const idsParam = batch.join(",");
+    const url = `https://api.xero.com/api.xro/2.0/Invoices?IDs=${encodeURIComponent(
+      idsParam,
+    )}`;
 
-  const started = Date.now();
-  const { data, headers, status } = await callXeroApiWithAutoRefresh(
-    () => xeroApi.get(url, currentToken.access_token, tenantId),
-    customerId,
-    async () => {
-      currentToken = await refreshAccessTokenIfNeeded({
-        customerId,
-        tenantId,
-        tokenRow: currentToken,
-      });
-    },
-  );
+    const started = Date.now();
+    const { data, headers, status } = await callXeroApiWithAutoRefresh(
+      () => xeroApi.get(url, currentToken.access_token, tenantId),
+      customerId,
+      async () => {
+        currentToken = await refreshAccessTokenIfNeeded({
+          customerId,
+          tenantId,
+          tokenRow: currentToken,
+        });
+      },
+    );
 
-  const tookMs = Date.now() - started;
+    const tookMs = Date.now() - started;
 
-  logSlowXeroCall({
-    customerId,
-    ptrsId: null,
-    tenantId,
-    phase: "fetchInvoiceById",
-    tookMs,
-    extra: {
-      invoiceId,
-      url,
-      statusCode: status ?? null,
-      xeroCorrelationId: headers?.["xero-correlation-id"] || null,
-    },
-  });
+    logSlowXeroCall({
+      customerId,
+      ptrsId: null,
+      tenantId,
+      phase: "fetchInvoicesByIds",
+      tookMs,
+      extra: {
+        batchSize: batch.length,
+        totalIds: ids.length,
+        url,
+        statusCode: status ?? null,
+        xeroCorrelationId: headers?.["xero-correlation-id"] || null,
+      },
+    });
 
-  const invoices = Array.isArray(data?.Invoices) ? data.Invoices : [];
-  return { item: invoices[0] || null, tokenRow: currentToken };
+    const invoices = Array.isArray(data?.Invoices) ? data.Invoices : [];
+    all.push(...invoices);
+  }
+
+  return { items: all, tokenRow: currentToken };
 }
 
 async function fetchContactById({ customerId, tokenRow, tenantId, contactId }) {
@@ -465,6 +549,67 @@ async function fetchContactById({ customerId, tokenRow, tenantId, contactId }) {
 
   const contacts = Array.isArray(data?.Contacts) ? data.Contacts : [];
   return { item: contacts[0] || null, tokenRow: currentToken };
+}
+
+async function fetchContactsByIds({
+  customerId,
+  tokenRow,
+  tenantId,
+  contactIds,
+  chunkSize = 40,
+}) {
+  if (!customerId) throw new Error("Missing customerId");
+  if (!tenantId) throw new Error("Missing Xero tenantId");
+  if (!tokenRow?.access_token) throw new Error("Missing Xero access token");
+
+  const ids = Array.isArray(contactIds) ? contactIds.filter(Boolean) : [];
+  if (!ids.length) return { items: [], tokenRow };
+
+  let currentToken = tokenRow;
+  const chunks = chunkArray(Array.from(new Set(ids)), chunkSize);
+  const all = [];
+
+  for (const batch of chunks) {
+    const idsParam = batch.join(",");
+    const url = `https://api.xero.com/api.xro/2.0/Contacts?IDs=${encodeURIComponent(
+      idsParam,
+    )}`;
+
+    const started = Date.now();
+    const { data, headers, status } = await callXeroApiWithAutoRefresh(
+      () => xeroApi.get(url, currentToken.access_token, tenantId),
+      customerId,
+      async () => {
+        currentToken = await refreshAccessTokenIfNeeded({
+          customerId,
+          tenantId,
+          tokenRow: currentToken,
+        });
+      },
+    );
+
+    const tookMs = Date.now() - started;
+
+    logSlowXeroCall({
+      customerId,
+      ptrsId: null,
+      tenantId,
+      phase: "fetchContactsByIds",
+      tookMs,
+      extra: {
+        batchSize: batch.length,
+        totalIds: ids.length,
+        url,
+        statusCode: status ?? null,
+        xeroCorrelationId: headers?.["xero-correlation-id"] || null,
+      },
+    });
+
+    const contacts = Array.isArray(data?.Contacts) ? data.Contacts : [];
+    all.push(...contacts);
+  }
+
+  return { items: all, tokenRow: currentToken };
 }
 
 async function fetchBankTransactionsPage({
@@ -566,19 +711,6 @@ async function fetchOrganisationDetails({ customerId, tokenRow, tenantId }) {
     tokenRow: currentToken,
   };
 }
-
-module.exports = {
-  connect,
-  handleCallback,
-  getOrganisations,
-  selectOrganisations,
-  removeOrganisation,
-  startImport,
-  getStatus,
-  getImportExceptions,
-  getImportExceptionsSummary,
-  getImportExceptionsCsv,
-};
 // ------------------------
 // Import Exceptions (PTRS Import Errors)
 // ------------------------
@@ -696,77 +828,77 @@ function pickModelFields(model, payload) {
 }
 
 // Helper to persist import exceptions, never throws
-async function recordImportException({
-  customerId,
-  ptrsId,
-  importRunId,
-  source,
-  phase,
-  severity,
-  statusCode,
-  method,
-  url,
-  message,
-  xeroTenantId,
-  invoiceId,
-  responseBody,
-  meta,
-}) {
-  try {
-    const PtrsImportException = getModel("PtrsImportException");
-    if (!PtrsImportException) {
-      logger?.warn?.(
-        "PtrsImportException model not loaded; skipping exception persist",
-        {
-          action: "PtrsV2ImportExceptionModelMissing",
-          customerId,
-          ptrsId,
-          source,
-          phase,
-        },
-      );
-      return null;
-    }
+// async function recordImportException({
+//   customerId,
+//   ptrsId,
+//   importRunId,
+//   source,
+//   phase,
+//   severity,
+//   statusCode,
+//   method,
+//   url,
+//   message,
+//   xeroTenantId,
+//   invoiceId,
+//   responseBody,
+//   meta,
+// }) {
+//   try {
+//     const PtrsImportException = getModel("PtrsImportException");
+//     if (!PtrsImportException) {
+//       logger?.warn?.(
+//         "PtrsImportException model not loaded; skipping exception persist",
+//         {
+//           action: "PtrsV2ImportExceptionModelMissing",
+//           customerId,
+//           ptrsId,
+//           source,
+//           phase,
+//         },
+//       );
+//       return null;
+//     }
 
-    if (!customerId)
-      throw new Error("recordImportException: customerId is required");
-    if (!ptrsId) throw new Error("recordImportException: ptrsId is required");
+//     if (!customerId)
+//       throw new Error("recordImportException: customerId is required");
+//     if (!ptrsId) throw new Error("recordImportException: ptrsId is required");
 
-    const row = pickModelFields(PtrsImportException, {
-      customerId,
-      ptrsId,
-      importRunId: importRunId || ptrsId,
-      source: source || null,
-      phase: phase || null,
-      severity: severity || "error",
-      statusCode: Number.isFinite(Number(statusCode))
-        ? Number(statusCode)
-        : null,
-      method: method ? String(method).toUpperCase() : null,
-      url: url ? String(url) : null,
-      message: message ? String(message) : null,
-      xeroTenantId: xeroTenantId || null,
-      invoiceId: invoiceId || null,
-      responseBody: responseBody ?? null,
-      meta: meta ?? null,
-      deletedAt: null,
-    });
+//     const row = pickModelFields(PtrsImportException, {
+//       customerId,
+//       ptrsId,
+//       importRunId: importRunId || ptrsId,
+//       source: source || null,
+//       phase: phase || null,
+//       severity: severity || "error",
+//       statusCode: Number.isFinite(Number(statusCode))
+//         ? Number(statusCode)
+//         : null,
+//       method: method ? String(method).toUpperCase() : null,
+//       url: url ? String(url) : null,
+//       message: message ? String(message) : null,
+//       xeroTenantId: xeroTenantId || null,
+//       invoiceId: invoiceId || null,
+//       responseBody: responseBody ?? null,
+//       meta: meta ?? null,
+//       deletedAt: null,
+//     });
 
-    return await withCustomerTxn(customerId, async (t) => {
-      return await PtrsImportException.create(row, { transaction: t });
-    });
-  } catch (err) {
-    // Never let exception logging break the import runner.
-    logger?.error?.("PTRS v2 import exception persist failed", {
-      action: "PtrsV2ImportExceptionPersistFailed",
-      customerId,
-      ptrsId,
-      error: err?.message,
-      stack: err?.stack,
-    });
-    return null;
-  }
-}
+//     return await withCustomerTxn(customerId, async (t) => {
+//       return await PtrsImportException.create(row, { transaction: t });
+//     });
+//   } catch (err) {
+//     // Never let exception logging break the import runner.
+//     logger?.error?.("PTRS v2 import exception persist failed", {
+//       action: "PtrsV2ImportExceptionPersistFailed",
+//       customerId,
+//       ptrsId,
+//       error: err?.message,
+//       stack: err?.stack,
+//     });
+//     return null;
+//   }
+// }
 
 function getFirstKey(obj, keys = []) {
   for (const k of keys) {
@@ -803,14 +935,6 @@ function toIsoDateOnlyUtc(d) {
   const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(d.getUTCDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
-}
-
-function safeJsonStringify(obj, fallback = null) {
-  try {
-    return JSON.stringify(obj);
-  } catch {
-    return fallback;
-  }
 }
 
 function assertIsoDateOnly(value, fieldName) {
@@ -1392,8 +1516,6 @@ async function persistOrganisation({
 
   return { inserted, skipped };
 }
-
-const { Op } = require("sequelize");
 
 async function buildRawDatasetFromXeroCache({
   customerId,
@@ -2084,7 +2206,7 @@ async function handleCallback({ ptrsId, code, state }) {
 
   const frontEndBase = process.env.FRONTEND_URL || "http://localhost:3000";
   const orgParam = encodeURIComponent(JSON.stringify(organisations));
-  const redirectUrl = `${frontEndBase}/v2/ptrs/xero/select?ptrsId=${encodeURIComponent(
+  const redirectUrl = `${frontEndBase}/app/ptrs/xero/select?ptrsId=${encodeURIComponent(
     effectivePtrsId,
   )}&organisations=${orgParam}`;
 
@@ -2681,92 +2803,38 @@ async function startImport({ customerId, ptrsId, userId }) {
 
           // Fetch + persist invoices (deduped). This is the minimum we need to later build the PTRS dataset.
           const invoices = [];
-          for (const invId of invoiceIds) {
-            try {
-              const invoiceRes = await fetchInvoiceById({
-                customerId,
-                tokenRow,
-                tenantId,
-                invoiceId: invId,
-              });
-              tokenRow = invoiceRes.tokenRow;
-              const inv = invoiceRes.item;
-              if (inv) invoices.push(inv);
-              tenantInvoicesFetched++;
-              invoicesFetched = tenantInvoicesFetched;
-              if (tenantInvoicesFetched % 25 === 0) {
-                heartbeat(
-                  `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${tenantInvoicesFetched}/${invoiceIds.length} invoices…`,
-                  {
-                    tenantId,
-                    currentTenantIndex: i + 1,
-                    invoicesFetched: tenantInvoicesFetched,
-                    invoicesTotal: invoiceIds.length,
-                    paymentsFetched: tenantPaymentsFetched,
-                    paymentsPagesFetched: tenantPaymentsPagesFetched,
-                  },
-                  "info",
-                );
-              }
-            } catch (e) {
-              // Don't kill import; surface failures as warnings in status.
-              invoiceFetchFailedCount++;
-              addSample(invoiceFetchFailedSample, invId);
 
-              const sc = getErrStatusCode(e);
+          // Batch fetch invoices to avoid 429s. We still get invoice totals/payments/etc,
+          // and we fetch contacts separately for ABN (TaxNumber).
+          const invoiceBatchRes = await fetchInvoicesByIds({
+            customerId,
+            tokenRow,
+            tenantId,
+            invoiceIds,
+            chunkSize: 40,
+          });
 
-              const meta = getHttpErrorMeta(e);
+          tokenRow = invoiceBatchRes.tokenRow;
 
-              logger?.warn?.("PTRS v2 Xero invoice fetch failed", {
-                action: "PtrsV2XeroFetchInvoiceFailed",
-                customerId,
-                ptrsId,
-                xeroTenantId: tenantId,
-                invoiceId: invId,
-                error: e?.message,
-                statusCode: sc,
-                ...meta,
-              });
+          const fetchedInvoices = Array.isArray(invoiceBatchRes.items)
+            ? invoiceBatchRes.items.filter(Boolean)
+            : [];
 
-              if (meta?.statusCode === 404) {
-                await recordImportException({
-                  customerId,
-                  ptrsId,
-                  importRunId: ptrsId, // MVP: group by ptrsId (your current run identifier)
-                  source: "xero",
-                  phase: "fetchInvoiceById",
-                  severity: "error",
-                  statusCode: meta.statusCode,
-                  method: meta.method,
-                  url: meta.url,
-                  message:
-                    meta.responseBody || e?.message || "Invoice not found",
-                  xeroTenantId: tenantId,
-                  invoiceId: invId,
-                  responseBody: meta.responseBody || null,
-                  meta: {
-                    error: e?.message || null,
-                  },
-                });
-              }
+          invoices.push(...fetchedInvoices);
+          tenantInvoicesFetched += fetchedInvoices.length;
+          invoicesFetched = tenantInvoicesFetched;
 
-              // Give the FE a hint without flipping the run to FAILED.
-              updateStatus(customerId, ptrsId, {
-                status: "RUNNING",
-                message:
-                  sc === 404
-                    ? "Some invoices referenced by payments were not found in Xero (404). Continuing…"
-                    : "Some invoices could not be fetched from Xero. Continuing…",
-                progress: {
-                  extractedCount: counter.count,
-                  insertedCount,
-                  lastTenantId: tenantId,
-                  invoiceFetchFailedCount,
-                  invoiceFetchFailedSample,
-                },
-              });
-            }
-          }
+          heartbeat(
+            `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${tenantInvoicesFetched}/${invoiceIds.length} invoices…`,
+            {
+              tenantId,
+              currentTenantIndex: i + 1,
+              tenantCount: selectedTenantIds.length,
+              invoicesFetched: tenantInvoicesFetched,
+              invoicesTotal: invoiceIds.length,
+            },
+            "info",
+          );
 
           const invPersist = await persistInvoices({
             customerId,
@@ -2805,46 +2873,49 @@ async function startImport({ customerId, ptrsId, userId }) {
           });
 
           const contacts = [];
-          for (const cId of contactIds) {
+
+          if (contactIds.length) {
             try {
-              const contactRes = await fetchContactById({
+              const contactBatchRes = await fetchContactsByIds({
                 customerId,
                 tokenRow,
                 tenantId,
-                contactId: cId,
+                contactIds,
+                chunkSize: 40,
               });
-              tokenRow = contactRes.tokenRow;
-              const c = contactRes.item;
-              if (c) contacts.push(c);
-              tenantContactsFetched++;
+
+              tokenRow = contactBatchRes.tokenRow;
+
+              const fetchedContacts = Array.isArray(contactBatchRes.items)
+                ? contactBatchRes.items.filter(Boolean)
+                : [];
+
+              contacts.push(...fetchedContacts);
+              tenantContactsFetched += fetchedContacts.length;
               contactsFetched = tenantContactsFetched;
-              if (tenantContactsFetched % 25 === 0) {
-                heartbeat(
-                  `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${tenantContactsFetched}/${contactIds.length} contacts…`,
-                  {
-                    tenantId,
-                    currentTenantIndex: i + 1,
-                    contactsFetched: tenantContactsFetched,
-                    contactsTotal: contactIds.length,
-                    invoicesFetched: tenantInvoicesFetched,
-                  },
-                  "info",
-                );
-              }
+
+              heartbeat(
+                `Tenant ${i + 1}/${selectedTenantIds.length}: fetched ${tenantContactsFetched}/${contactIds.length} contacts…`,
+                {
+                  tenantId,
+                  currentTenantIndex: i + 1,
+                  contactsFetched: tenantContactsFetched,
+                  contactsTotal: contactIds.length,
+                  invoicesFetched: tenantInvoicesFetched,
+                },
+                "info",
+              );
             } catch (e) {
-              contactFetchFailedCount++;
-              addSample(contactFetchFailedSample, cId);
+              contactFetchFailedCount += contactIds.length;
 
               const sc = getErrStatusCode(e);
-
               const meta = getHttpErrorMeta(e);
 
-              logger?.warn?.("PTRS v2 Xero contact fetch failed", {
-                action: "PtrsV2XeroFetchContactFailed",
+              logger?.warn?.("PTRS v2 Xero contact batch fetch failed", {
+                action: "PtrsV2XeroFetchContactsBatchFailed",
                 customerId,
                 ptrsId,
                 xeroTenantId: tenantId,
-                contactId: cId,
                 error: e?.message,
                 statusCode: sc,
                 ...meta,
@@ -2852,14 +2923,12 @@ async function startImport({ customerId, ptrsId, userId }) {
 
               updateStatus(customerId, ptrsId, {
                 status: "RUNNING",
-                message:
-                  "Some contacts could not be fetched from Xero. Continuing…",
+                message: "Contacts could not be fetched from Xero. Continuing…",
                 progress: {
                   extractedCount: counter.count,
                   insertedCount,
                   lastTenantId: tenantId,
                   contactFetchFailedCount,
-                  contactFetchFailedSample,
                 },
               });
             }
