@@ -22,6 +22,7 @@ router.delete(
 
 router.post("/import", requirePtrs, xeroController.startImport);
 router.get("/status", requirePtrs, xeroController.getStatus);
+router.get("/readiness", requirePtrs, xeroController.getReadiness);
 
 router.get(
   "/import/exceptions",

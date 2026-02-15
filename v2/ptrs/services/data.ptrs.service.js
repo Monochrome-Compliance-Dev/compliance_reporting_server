@@ -71,6 +71,7 @@ function pickModelFields(model, candidate) {
 /**
  * Ensure a PTRS run has a \"main\" dataset row in tbl_ptrs_dataset when raw rows exist.
  * This is required for the standard Step 2 FE flow (datasets list) to work for non-file ingests like Xero.
+ * Supports being called inside an existing transaction and serialises via a Postgres advisory transaction lock.
  */
 async function upsertMainDatasetFromRaw({
   customerId,
@@ -78,20 +79,39 @@ async function upsertMainDatasetFromRaw({
   source = "raw",
   userId = null,
   meta = {},
+  transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  const t = await beginTransactionWithCustomerContext(customerId);
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const ownsTxn = !transaction;
 
   try {
+    // Prevent duplicate synthetic "main" dataset rows under concurrent calls.
+    // We don't rely on a DB unique constraint here, so we serialise with an advisory lock.
+    try {
+      const key = `${customerId}:${ptrsId}:ptrs_dataset:main`;
+      if (db?.sequelize?.query) {
+        await db.sequelize.query(
+          "SELECT pg_advisory_xact_lock(hashtext(:key))",
+          {
+            replacements: { key },
+            transaction: t,
+          },
+        );
+      }
+    } catch (_) {
+      // Best-effort; never fail the request just because the lock couldn't be taken.
+    }
     const rawCount = await db.PtrsImportRaw.count({
       where: { customerId, ptrsId },
       transaction: t,
     });
 
     if (!rawCount || rawCount <= 0) {
-      await t.commit();
+      if (ownsTxn) await t.commit();
       return { ok: true, rowsCount: 0, dataset: null };
     }
 
@@ -124,20 +144,39 @@ async function upsertMainDatasetFromRaw({
 
     const rowToWrite = pickModelFields(db.PtrsDataset, candidate);
 
-    const existing = await db.PtrsDataset.findOne({
+    // De-dupe: only one synthetic "main" dataset should exist for a PTRS run.
+    // If multiple exist (e.g. legacy code paths), keep the newest and remove the rest.
+    const existingRows = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId, role: "main" },
+      order: [["createdAt", "DESC"]],
       transaction: t,
       raw: false,
     });
 
+    const canonical =
+      Array.isArray(existingRows) && existingRows.length
+        ? existingRows[0]
+        : null;
+
+    // Best-effort cleanup of duplicates.
+    if (Array.isArray(existingRows) && existingRows.length > 1) {
+      for (const dup of existingRows.slice(1)) {
+        try {
+          await dup.destroy({ transaction: t });
+        } catch (_) {
+          // never fail the request due to cleanup
+        }
+      }
+    }
+
     let saved;
-    if (existing) {
-      saved = await existing.update(rowToWrite, { transaction: t });
+    if (canonical) {
+      saved = await canonical.update(rowToWrite, { transaction: t });
     } else {
       saved = await db.PtrsDataset.create(rowToWrite, { transaction: t });
     }
 
-    await t.commit();
+    if (ownsTxn) await t.commit();
 
     return {
       ok: true,
@@ -145,7 +184,7 @@ async function upsertMainDatasetFromRaw({
       dataset: saved?.get ? saved.get({ plain: true }) : saved,
     };
   } catch (err) {
-    if (!t.finished) {
+    if (ownsTxn && !t.finished) {
       try {
         await t.rollback();
       } catch (_) {}
@@ -629,6 +668,38 @@ async function listDatasets({ customerId, ptrsId }) {
       transaction: t,
     });
 
+    // Safety: if we ever end up with multiple "main" datasets (from older code paths),
+    // collapse them to one canonical row via `upsertMainDatasetFromRaw`.
+    const mainRows = (rows || []).filter((r) => {
+      const role = String(r.role || "")
+        .trim()
+        .toLowerCase();
+      return role === "main";
+    });
+
+    if (mainRows.length > 1) {
+      // Use the standard de-dupe/upsert routine (stays inside this txn).
+      await upsertMainDatasetFromRaw({
+        customerId,
+        ptrsId,
+        source: (mainRows[0]?.meta && mainRows[0].meta.source) || "raw",
+        userId: null,
+        meta: {},
+        transaction: t,
+      });
+
+      // Refresh list after cleanup.
+      const refreshed = await db.PtrsDataset.findAll({
+        where: { customerId, ptrsId },
+        order: [["createdAt", "DESC"]],
+        raw: true,
+        transaction: t,
+      });
+
+      rows.length = 0;
+      rows.push(...refreshed);
+    }
+
     const hasMain = rows.some((r) => {
       const role = String(r.role || "")
         .trim()
@@ -639,44 +710,18 @@ async function listDatasets({ customerId, ptrsId }) {
     });
 
     if (!hasMain) {
-      const rawCount = await db.PtrsImportRaw.count({
-        where: { customerId, ptrsId },
+      // Only `upsertMainDatasetFromRaw` is allowed to create the synthetic "main" dataset.
+      // Keep it inside this transaction to avoid extra round trips and to preserve RLS context.
+      const ensured = await upsertMainDatasetFromRaw({
+        customerId,
+        ptrsId,
+        source: "raw",
+        userId: null,
+        meta: {},
         transaction: t,
       });
 
-      if (rawCount > 0) {
-        const candidate = {
-          customerId,
-          ptrsId,
-          role: "main",
-          // PtrsDataset.fileName is NOT NULL.
-          fileName: "Main input",
-          storageRef: null,
-          rowsCount: rawCount,
-          status: "uploaded",
-          meta: {
-            source: "raw",
-            rowsCount: rawCount,
-            displayName: "Main input",
-          },
-          createdBy: null,
-          updatedBy: null,
-        };
-
-        const rowToWrite = pickModelFields(db.PtrsDataset, candidate);
-
-        const existing = await db.PtrsDataset.findOne({
-          where: { customerId, ptrsId, role: "main" },
-          transaction: t,
-          raw: false,
-        });
-
-        if (existing) {
-          await existing.update(rowToWrite, { transaction: t });
-        } else {
-          await db.PtrsDataset.create(rowToWrite, { transaction: t });
-        }
-
+      if (ensured?.dataset) {
         // Refresh list so FE sees it immediately
         const refreshed = await db.PtrsDataset.findAll({
           where: { customerId, ptrsId },

@@ -10,6 +10,7 @@ module.exports = {
   removeOrganisation,
   startImport,
   getStatus,
+  getReadiness,
   getImportExceptions,
   getImportExceptionsSummary,
   downloadImportExceptionsCsv,
@@ -492,6 +493,67 @@ async function getStatus(req, res, next) {
   } catch (error) {
     logger?.logEvent?.("error", "Error fetching PTRS v2 Xero import status", {
       action: "PtrsV2XeroImportStatus",
+      ptrsId,
+      customerId,
+      userId,
+      error: error?.message,
+      statusCode: error?.statusCode || 500,
+    });
+    return next(error);
+  }
+}
+
+/**
+ * GET /api/v2/ptrs/:id/xero/readiness
+ * Returns whether the stored Xero connection is still valid, and whether selected orgs are still present.
+ */
+async function getReadiness(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const ptrsId = req.params.id;
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!ptrsId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "ptrsId is required" });
+    }
+
+    const readiness = await xeroService.getReadiness({ customerId, ptrsId });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2XeroReadinessGet",
+      entity: "PtrsXeroConnection",
+      entityId: ptrsId,
+      details: {
+        ptrsId,
+        connected: Boolean(readiness?.connected),
+        selectedTenantCount: Array.isArray(readiness?.selectedTenantIds)
+          ? readiness.selectedTenantIds.length
+          : 0,
+        missingSelectedTenantCount: Array.isArray(
+          readiness?.missingSelectedTenantIds,
+        )
+          ? readiness.missingSelectedTenantIds.length
+          : 0,
+      },
+    });
+
+    return res.status(200).json({ status: "success", data: readiness });
+  } catch (error) {
+    logger?.logEvent?.("error", "Error checking Xero readiness (PTRS v2)", {
+      action: "PtrsV2XeroReadinessGet",
       ptrsId,
       customerId,
       userId,

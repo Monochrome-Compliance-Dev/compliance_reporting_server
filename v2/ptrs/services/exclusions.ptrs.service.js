@@ -573,9 +573,19 @@ WHERE
           FROM groups g
         ),
         eligible AS (
+          SELECT
+            g.*,
+            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
+          FROM grouped g
+          WHERE g.grp_count > 1
+        ),
+        filtered AS (
           SELECT *
-          FROM grouped
-          WHERE grp_count > 1
+          FROM eligible
+          WHERE
+            net_sum <> 0               -- exclude reversal pairs (net zero)
+            AND sign_count = 1         -- all payments must have same sign
         ),
         ordered AS (
           SELECT
@@ -588,12 +598,12 @@ WHERE
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" DESC
             ) AS rn_desc,
-            SUM(e.pay_amt) OVER (
+            SUM(abs(COALESCE(e.pay_amt_raw, 0))) OVER (
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" ASC
               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS cum_paid
-          FROM eligible e
+          FROM filtered e
         ),
         keep_row AS (
           SELECT DISTINCT ON (o.group_key)
@@ -1491,9 +1501,19 @@ LIMIT :limit;
           WHERE k.group_key IS NOT NULL AND k.group_key <> '|'
         ),
         eligible AS (
+          SELECT
+            g.*,
+            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
+          FROM grouped g
+          WHERE g.grp_count > 1
+        ),
+        filtered AS (
           SELECT *
-          FROM grouped
-          WHERE grp_count > 1
+          FROM eligible
+          WHERE
+            net_sum <> 0
+            AND sign_count = 1
         ),
         ordered AS (
           SELECT
@@ -1506,12 +1526,12 @@ LIMIT :limit;
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" DESC
             ) AS rn_desc,
-            SUM(e.pay_amt) OVER (
+            SUM(abs(COALESCE(e.pay_amt_raw, 0))) OVER (
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" ASC
               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS cum_paid
-          FROM eligible e
+          FROM filtered e
         ),
         keep_row AS (
           SELECT DISTINCT ON (o.group_key)
@@ -1548,17 +1568,17 @@ LIMIT :limit;
               ),
               0
             ) AS keep_inv_amt
-            FROM ordered o
-            ),
-            candidates AS (
-              SELECT
-                o.*,
-                k.keep_row_no,
-                k.keep_inv_amt
-              FROM ordered o
-              JOIN keep_row k ON k.group_key = o.group_key
-              WHERE o."rowNo" <> k.keep_row_no
-            )
+          FROM ordered o
+        ),
+        candidates AS (
+          SELECT
+            o.*,
+            k.keep_row_no,
+            k.keep_inv_amt
+          FROM ordered o
+          JOIN keep_row k ON k.group_key = o.group_key
+          WHERE o."rowNo" <> k.keep_row_no
+        )
         SELECT
           COUNT(*)::int AS "matchedCount",
           SUM(CASE WHEN c.already_excluded = true THEN 1 ELSE 0 END)::int AS "alreadyExcludedCount"
@@ -1630,9 +1650,19 @@ LIMIT :limit;
           WHERE k.group_key IS NOT NULL AND k.group_key <> '|'
         ),
         eligible AS (
+          SELECT
+            g.*,
+            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
+          FROM grouped g
+          WHERE g.grp_count > 1
+        ),
+        filtered AS (
           SELECT *
-          FROM grouped
-          WHERE grp_count > 1
+          FROM eligible
+          WHERE
+            net_sum <> 0
+            AND sign_count = 1
         ),
         ordered AS (
           SELECT
@@ -1645,12 +1675,12 @@ LIMIT :limit;
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" DESC
             ) AS rn_desc,
-            SUM(e.pay_amt) OVER (
+            SUM(abs(COALESCE(e.pay_amt_raw, 0))) OVER (
               PARTITION BY e.group_key
               ORDER BY e.pay_date NULLS LAST, e."rowNo" ASC
               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS cum_paid
-          FROM eligible e
+          FROM filtered e
         ),
         keep_row AS (
           SELECT DISTINCT ON (o.group_key)
@@ -1687,17 +1717,17 @@ LIMIT :limit;
               ),
               0
             ) AS keep_inv_amt
-            FROM ordered o
-            ),
-            candidates AS (
-              SELECT
-                o.*,
-                k.keep_row_no,
-                k.keep_inv_amt
-              FROM ordered o
-              JOIN keep_row k ON k.group_key = o.group_key
-              WHERE o."rowNo" <> k.keep_row_no
-            )
+          FROM ordered o
+        ),
+        candidates AS (
+          SELECT
+            o.*,
+            k.keep_row_no,
+            k.keep_inv_amt
+          FROM ordered o
+          JOIN keep_row k ON k.group_key = o.group_key
+          WHERE o."rowNo" <> k.keep_row_no
+        )
         SELECT
           (c."data"->>'row_no')::int AS "row_no",
           c."data"->>'payer_entity_abn' AS "payer_entity_abn",

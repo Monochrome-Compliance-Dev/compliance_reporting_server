@@ -22,6 +22,7 @@ module.exports = {
   removeOrganisation,
   startImport,
   getStatus,
+  getReadiness,
   getImportExceptions,
   getImportExceptionsSummary,
   getImportExceptionsCsv,
@@ -2326,6 +2327,45 @@ async function selectOrganisations({ customerId, ptrsId, tenantIds, userId }) {
     });
   }
 
+  // Best-effort: if a main dataset already exists, keep its meta in sync.
+  // (Do not create one here — schema requirements may change.)
+  try {
+    const PtrsDataset = getModel("PtrsDataset");
+    if (PtrsDataset) {
+      await withCustomerTxn(customerId, async (t) => {
+        const row = await PtrsDataset.findOne({
+          where: {
+            customerId,
+            ptrsId,
+            role: "main",
+            ...(PtrsDataset.rawAttributes?.deletedAt
+              ? { deletedAt: null }
+              : {}),
+          },
+          order: [["createdAt", "DESC"]],
+          transaction: t,
+        });
+
+        if (row) {
+          const meta =
+            row?.meta && typeof row.meta === "object" ? row.meta : {};
+          await row.update(
+            pickModelFields(PtrsDataset, {
+              meta: {
+                ...meta,
+                selectedTenantIds: selected,
+              },
+              updatedAt: new Date(),
+            }),
+            { transaction: t },
+          );
+        }
+      });
+    }
+  } catch (_) {
+    // Ignore — selection is still persisted via PtrsXeroImport.
+  }
+
   // Multi-tenant MVP: do not revoke non-selected tenants here.
   // Selection persistence can be added later (e.g., on the PTRS run), but for now we
   // keep tokens for all connected tenants and rely on later steps to choose how to
@@ -2352,6 +2392,69 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
       { where: { customerId, tenantId, revoked: null }, transaction: t },
     );
   });
+
+  // If this tenant was selected for the current run, remove it from the selection.
+  try {
+    const current = await resolveSelectedTenantIds({ customerId, ptrsId });
+    const next = Array.isArray(current)
+      ? current.filter((id) => id && id !== tenantId)
+      : [];
+
+    // Update in-memory cache
+    setSelectedTenantIds(customerId, ptrsId, next);
+
+    // Persist to PtrsXeroImport if available
+    const PtrsXeroImport = getModel("PtrsXeroImport");
+    if (PtrsXeroImport && PtrsXeroImport.rawAttributes?.selectedTenantIds) {
+      await withCustomerTxn(customerId, async (t) => {
+        await PtrsXeroImport.upsert(
+          pickModelFields(PtrsXeroImport, {
+            customerId,
+            ptrsId,
+            selectedTenantIds: next,
+            updatedAt: new Date(),
+          }),
+          { transaction: t },
+        );
+      });
+    }
+
+    // Best-effort: sync existing main dataset meta if present
+    const PtrsDataset = getModel("PtrsDataset");
+    if (PtrsDataset) {
+      await withCustomerTxn(customerId, async (t) => {
+        const row = await PtrsDataset.findOne({
+          where: {
+            customerId,
+            ptrsId,
+            role: "main",
+            ...(PtrsDataset.rawAttributes?.deletedAt
+              ? { deletedAt: null }
+              : {}),
+          },
+          order: [["createdAt", "DESC"]],
+          transaction: t,
+        });
+
+        if (row) {
+          const meta =
+            row?.meta && typeof row.meta === "object" ? row.meta : {};
+          await row.update(
+            pickModelFields(PtrsDataset, {
+              meta: {
+                ...meta,
+                selectedTenantIds: next,
+              },
+              updatedAt: new Date(),
+            }),
+            { transaction: t },
+          );
+        }
+      });
+    }
+  } catch (_) {
+    // Ignore selection cleanup errors; token revocation is the main objective.
+  }
 
   logger?.info?.("PTRS v2 Xero organisation removed", {
     action: "PtrsV2XeroOrganisationRemove",
@@ -2402,23 +2505,19 @@ async function startImport({ customerId, ptrsId, userId }) {
   }
 
   const extractLimit = getXeroExtractLimit();
-  let selectedTenantIds = getSelectedTenantIds(customerId, ptrsId);
 
-  if (!selectedTenantIds.length) {
-    const PtrsXeroImport = getModel("PtrsXeroImport");
-    if (PtrsXeroImport && PtrsXeroImport.rawAttributes?.selectedTenantIds) {
-      const row = await withCustomerTxn(customerId, async (t) => {
-        return await PtrsXeroImport.findOne({
-          where: { customerId, ptrsId },
-          transaction: t,
-        });
-      });
-      const persisted = row?.selectedTenantIds;
-      if (Array.isArray(persisted) && persisted.length) {
-        selectedTenantIds = persisted.filter(Boolean);
-        setSelectedTenantIds(customerId, ptrsId, selectedTenantIds);
-      }
-    }
+  // Single source of truth for selection: resolve from memory, then persisted storage.
+  let selectedTenantIds = await resolveSelectedTenantIds({
+    customerId,
+    ptrsId,
+  });
+  selectedTenantIds = Array.isArray(selectedTenantIds)
+    ? selectedTenantIds.filter(Boolean)
+    : [];
+
+  // Cache for this process so later calls (status, readiness) stay consistent.
+  if (selectedTenantIds.length) {
+    setSelectedTenantIds(customerId, ptrsId, selectedTenantIds);
   }
 
   if (!selectedTenantIds.length) {
@@ -3405,4 +3504,194 @@ async function getStatus({ customerId, ptrsId }) {
     progress: null,
     updatedAt: new Date().toISOString(),
   };
+}
+
+// ------------------------
+// Xero Connection Readiness
+// ------------------------
+
+async function getReadiness({ customerId, ptrsId }) {
+  if (!customerId) throw new Error("Missing customerId");
+  if (!ptrsId) throw new Error("Missing ptrsId");
+
+  const selectedTenantIds = await resolveSelectedTenantIds({
+    customerId,
+    ptrsId,
+  });
+
+  const XeroToken = getModel("XeroToken");
+  if (!XeroToken)
+    throw new Error("XeroToken model not loaded (db.XeroToken missing)");
+
+  // Load the latest active token per tenant.
+  // IMPORTANT: when nothing is selected yet, we still load tokens so we can validate the connection.
+  const tokenRows = await withCustomerTxn(customerId, async (t) => {
+    const where = {
+      customerId,
+      revoked: null,
+      ...(selectedTenantIds.length
+        ? { tenantId: { [Op.in]: selectedTenantIds } }
+        : {}),
+    };
+
+    // Prefer the newest tokens first.
+    return await XeroToken.findAll({
+      where,
+      order: [["created", "DESC"]],
+      transaction: t,
+    });
+  });
+
+  const latestByTenant = new Map();
+  for (const r of tokenRows || []) {
+    const tid = r?.tenantId;
+    if (!tid) continue;
+    if (!latestByTenant.has(tid)) latestByTenant.set(tid, r);
+  }
+
+  const tenantsWithTokens = Array.from(latestByTenant.keys());
+
+  // If we have no tokens at all, user must reconnect.
+  if (!tenantsWithTokens.length) {
+    return {
+      connected: false,
+      connectionValid: false,
+      selectedTenantIds,
+      // When there is no connection, selection can't be valid.
+      selectedValid: false,
+      missingSelectedTenantIds: selectedTenantIds,
+      tenantsWithTokens: [],
+      connections: [],
+      error: {
+        message:
+          "No active Xero tokens found for this customer. Reconnect to Xero.",
+      },
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  // Validate the access token by calling /connections (doesn’t require tenant header).
+  // We only need ONE token to validate the overall connection.
+  const firstTenantId = tenantsWithTokens[0];
+  let tokenRow = latestByTenant.get(firstTenantId);
+
+  let connections = [];
+  let connectionValid = false;
+  let error = null;
+
+  try {
+    // Refresh if needed (also rotates all tenants for this customer in our storage).
+    tokenRow = await refreshAccessTokenIfNeeded({
+      customerId,
+      tenantId: firstTenantId,
+      tokenRow,
+    });
+
+    const result = await xeroClient.listConnections({
+      accessToken: tokenRow.access_token,
+    });
+
+    connections = Array.isArray(result) ? result : [];
+    connectionValid = true;
+  } catch (err) {
+    const meta = getHttpErrorMeta(err);
+    error = {
+      message: err?.message || "Xero readiness check failed",
+      ...meta,
+      xeroCorrelationId: err?.context?.xeroCorrelationId || null,
+    };
+    connections = [];
+    connectionValid = false;
+  }
+
+  const connectionTenantIds = new Set(
+    (connections || []).map((c) => c?.tenantId).filter(Boolean),
+  );
+
+  // Selection validity is a *separate* concept from connection validity.
+  // - If nothing is selected yet: selection is neither valid nor invalid (null).
+  // - If selection exists: it is valid only if all selected tenants are still present in /connections.
+  const hasSelection = selectedTenantIds.length > 0;
+
+  const missingSelectedTenantIds = hasSelection
+    ? selectedTenantIds.filter((tid) => !connectionTenantIds.has(tid))
+    : [];
+
+  const selectedValid = hasSelection
+    ? missingSelectedTenantIds.length === 0
+    : null;
+
+  return {
+    connected: connectionValid,
+    connectionValid,
+    selectedTenantIds,
+    selectedValid,
+    missingSelectedTenantIds,
+    tenantsWithTokens,
+    connections: (connections || []).map((c) => ({
+      tenantId: c?.tenantId || null,
+      tenantName: c?.tenantName || null,
+    })),
+    error,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function resolveSelectedTenantIds({ customerId, ptrsId }) {
+  // 1) Prefer in-memory selection for this run (current session)
+  const fromMemory = getSelectedTenantIds(customerId, ptrsId);
+  if (Array.isArray(fromMemory) && fromMemory.length) return fromMemory;
+
+  // 2) Fall back to persisted PtrsXeroImport selection (survives restarts)
+  const PtrsXeroImport = getModel("PtrsXeroImport");
+  if (PtrsXeroImport && PtrsXeroImport.rawAttributes?.selectedTenantIds) {
+    try {
+      const row = await withCustomerTxn(customerId, async (t) => {
+        return await PtrsXeroImport.findOne({
+          where: { customerId, ptrsId },
+          transaction: t,
+        });
+      });
+
+      const ids = row?.selectedTenantIds;
+      if (Array.isArray(ids) && ids.length) {
+        const selected = ids.filter(Boolean);
+        // Cache in-memory for consistency within this process
+        setSelectedTenantIds(customerId, ptrsId, selected);
+        return selected;
+      }
+    } catch (_) {
+      // Ignore and fall through
+    }
+  }
+
+  // 3) Fall back to latest PtrsDataset meta if present (legacy/secondary persistence)
+  const PtrsDataset = getModel("PtrsDataset");
+  if (!PtrsDataset) return [];
+
+  try {
+    const row = await withCustomerTxn(customerId, async (t) => {
+      return await PtrsDataset.findOne({
+        where: {
+          customerId,
+          ptrsId,
+          role: "main",
+          ...(PtrsDataset.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+        },
+        order: [["createdAt", "DESC"]],
+        transaction: t,
+      });
+    });
+
+    const meta = row?.meta || {};
+
+    const ids =
+      meta?.selectedTenantIds || meta?.tenantIds || meta?.selectedTenants || [];
+
+    const selected = Array.isArray(ids) ? ids.filter(Boolean) : [];
+    if (selected.length) setSelectedTenantIds(customerId, ptrsId, selected);
+    return selected;
+  } catch (_) {
+    return [];
+  }
 }

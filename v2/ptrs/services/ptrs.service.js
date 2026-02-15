@@ -729,6 +729,7 @@ async function importCsvStream({
  * @param {string} [params.periodStart] - YYYY-MM-DD
  * @param {string} [params.periodEnd] - YYYY-MM-DD
  * @param {string} [params.reportingEntityName]
+ * @param {Object} [params.meta]
  * @param {string} [params.createdBy]
  */
 async function createPtrs(params) {
@@ -739,6 +740,7 @@ async function createPtrs(params) {
     periodStart,
     periodEnd,
     reportingEntityName,
+    meta,
     createdBy,
   } = params || {};
 
@@ -756,7 +758,7 @@ async function createPtrs(params) {
         reportingEntityName: reportingEntityName || null,
         status: "draft",
         currentStep: "create",
-        meta: null,
+        meta: meta && typeof meta === "object" ? meta : null,
         createdBy: createdBy || null,
         updatedBy: createdBy || null,
       },

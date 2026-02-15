@@ -1,12 +1,12 @@
 const db = require("@/db/database");
-const { logger } = require("@/helpers/logger");
+// const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
-const {
-  PTRS_CANONICAL_CONTRACT,
-} = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
+// const {
+//   PTRS_CANONICAL_CONTRACT,
+// } = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
 
 module.exports = {
   getMetrics,
@@ -174,19 +174,19 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
 // Helpers
 // -------------------------
 
-function isExcludedRow(stageRow) {
-  const data = stageRow?.data || {};
-  if (data?.exclude_from_metrics === true) return true;
-  const meta = stageRow?.meta || {};
-  return meta?.rules?.exclude === true;
-}
+// function isExcludedRow(stageRow) {
+//   const data = stageRow?.data || {};
+//   if (data?.exclude_from_metrics === true) return true;
+//   const meta = stageRow?.meta || {};
+//   return meta?.rules?.exclude === true;
+// }
 
-function clampPct(value) {
-  if (value == null) return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.min(100, n));
-}
+// function clampPct(value) {
+//   if (value == null) return null;
+//   const n = Number(value);
+//   if (!Number.isFinite(n)) return null;
+//   return Math.max(0, Math.min(100, n));
+// }
 
 function round2(n) {
   if (n == null) return null;
@@ -195,43 +195,43 @@ function round2(n) {
   return Math.round(x * 100) / 100;
 }
 
-function percentile(sortedNums, p) {
-  // p in [0,1]. Uses linear interpolation between closest ranks.
-  if (!sortedNums.length) return null;
-  if (p <= 0) return sortedNums[0];
-  if (p >= 1) return sortedNums[sortedNums.length - 1];
+// function percentile(sortedNums, p) {
+//   // p in [0,1]. Uses linear interpolation between closest ranks.
+//   if (!sortedNums.length) return null;
+//   if (p <= 0) return sortedNums[0];
+//   if (p >= 1) return sortedNums[sortedNums.length - 1];
 
-  const idx = (sortedNums.length - 1) * p;
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  if (lo === hi) return sortedNums[lo];
+//   const idx = (sortedNums.length - 1) * p;
+//   const lo = Math.floor(idx);
+//   const hi = Math.ceil(idx);
+//   if (lo === hi) return sortedNums[lo];
 
-  const w = idx - lo;
-  return sortedNums[lo] * (1 - w) + sortedNums[hi] * w;
-}
+//   const w = idx - lo;
+//   return sortedNums[lo] * (1 - w) + sortedNums[hi] * w;
+// }
 
-function modeInt(values) {
-  const freq = new Map();
-  for (const v of values) {
-    if (v == null) continue;
-    const n = Number(v);
-    if (!Number.isFinite(n)) continue;
-    const k = Math.round(n);
-    freq.set(k, (freq.get(k) || 0) + 1);
-  }
+// function modeInt(values) {
+//   const freq = new Map();
+//   for (const v of values) {
+//     if (v == null) continue;
+//     const n = Number(v);
+//     if (!Number.isFinite(n)) continue;
+//     const k = Math.round(n);
+//     freq.set(k, (freq.get(k) || 0) + 1);
+//   }
 
-  let best = null;
-  let bestCount = 0;
+//   let best = null;
+//   let bestCount = 0;
 
-  for (const [k, c] of freq.entries()) {
-    if (c > bestCount) {
-      best = k;
-      bestCount = c;
-    }
-  }
+//   for (const [k, c] of freq.entries()) {
+//     if (c > bestCount) {
+//       best = k;
+//       bestCount = c;
+//     }
+//   }
 
-  return best;
-}
+//   return best;
+// }
 
 function makeMissingInputs(declarations) {
   const missing = [];
@@ -382,9 +382,9 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     const sbBand31to60Count = aggs?.sbBand31to60Count || 0;
     const sbBandOver60Count = aggs?.sbBandOver60Count || 0;
 
-    const sbBand0to30Value = Number(aggs?.sbBand0to30Value || 0);
-    const sbBand31to60Value = Number(aggs?.sbBand31to60Value || 0);
-    const sbBandOver60Value = Number(aggs?.sbBandOver60Value || 0);
+    // const sbBand0to30Value = Number(aggs?.sbBand0to30Value || 0);
+    // const sbBand31to60Value = Number(aggs?.sbBand31to60Value || 0);
+    // const sbBandOver60Value = Number(aggs?.sbBandOver60Value || 0);
 
     const sbWithinTermsKnownCount = aggs?.sbWithinTermsKnownCount || 0;
     const sbWithinTermsYesCount = aggs?.sbWithinTermsYesCount || 0;
