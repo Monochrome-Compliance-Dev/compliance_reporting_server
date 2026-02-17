@@ -1,41 +1,58 @@
+const { Op } = require("sequelize");
 const db = require("@/db/database");
+const {
+  beginTransactionWithCustomerContext,
+} = require("@/helpers/setCustomerIdRLS");
 
 /**
- * List all customers for Boss admin.
- * This is not tenant-scoped; Boss can see all customers.
+ * v2 Customers Service
+ * Mirrors legacy customer.service.js behaviour,
+ * but aligned to New World patterns and explicit status codes.
  */
+
 async function listCustomers() {
-  const customers = await db.Customer.findAll({
+  const rows = await db.Customer.findAll({
     order: [["businessName", "ASC"]],
   });
-  return customers.map((c) => c.get({ plain: true }));
+
+  return rows.map((r) =>
+    typeof r.get === "function" ? r.get({ plain: true }) : r,
+  );
 }
 
-/**
- * Create a new customer.
- * Expects `data` to contain the customer fields and `userId` for audit.
- */
+async function getCustomerById({ id }) {
+  if (!id) {
+    throw { status: 400, message: "Missing customer id" };
+  }
+
+  const customer = await db.Customer.findOne({ where: { id } });
+  if (!customer) {
+    throw { status: 404, message: "Customer not found" };
+  }
+
+  return typeof customer.get === "function"
+    ? customer.get({ plain: true })
+    : customer;
+}
+
 async function createCustomer({ data, userId }) {
   if (!data) {
     throw { status: 400, message: "Missing payload" };
   }
 
-  if (!userId) {
-    // Let this fail loudly at the DB layer if createdBy is NOT NULL,
-    // rather than silently creating unaudited records.
-    console.warn("[v2/customers.service] createCustomer called without userId");
+  if (!data.abn) {
+    throw { status: 400, message: "ABN is required" };
   }
 
-  if (data.abn) {
-    const existing = await db.Customer.findOne({
-      where: { abn: data.abn },
-    });
-    if (existing) {
-      throw {
-        status: 400,
-        message: "A customer with this ABN already exists",
-      };
-    }
+  const existing = await db.Customer.findOne({
+    where: { abn: data.abn },
+  });
+
+  if (existing) {
+    throw {
+      status: 400,
+      message: "Customer with this ABN already exists",
+    };
   }
 
   const created = await db.Customer.create({
@@ -47,10 +64,6 @@ async function createCustomer({ data, userId }) {
   return created.get({ plain: true });
 }
 
-/**
- * Update an existing customer by id.
- * Expects `data` to contain the updatable fields and `userId` for audit.
- */
 async function updateCustomer({ id, data, userId }) {
   if (!id) {
     throw { status: 400, message: "Missing customer id" };
@@ -61,11 +74,6 @@ async function updateCustomer({ id, data, userId }) {
     throw { status: 404, message: "Customer not found" };
   }
 
-  if (!userId) {
-    console.warn("[v2/customers.service] updateCustomer called without userId");
-  }
-
-  // Shallow assign allowed fields; rely on validation at the model/DB level.
   Object.assign(customer, data, { updatedBy: userId });
 
   await customer.save();
@@ -73,9 +81,6 @@ async function updateCustomer({ id, data, userId }) {
   return customer.get({ plain: true });
 }
 
-/**
- * Soft-delete (paranoid) an existing customer by id.
- */
 async function deleteCustomer({ id }) {
   if (!id) {
     throw { status: 400, message: "Missing customer id" };
@@ -86,14 +91,92 @@ async function deleteCustomer({ id }) {
     throw { status: 404, message: "Customer not found" };
   }
 
-  await customer.destroy(); // paranoid: true will soft-delete
+  await customer.destroy(); // paranoid soft-delete if enabled
 
   return { message: "Customer deleted" };
 }
 
+/**
+ * Feature entitlements for a specific customer (RLS scoped)
+ */
+async function getCustomerEntitlements({ customerId }) {
+  if (!customerId) {
+    throw { status: 400, message: "Missing customerId" };
+  }
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const entitlements = await db.FeatureEntitlement.findAll({
+      where: { customerId },
+      attributes: ["feature", "status", "source", "validFrom", "validTo"],
+      transaction: t,
+    });
+
+    await t.commit();
+
+    return (entitlements || []).map((e) =>
+      typeof e.get === "function" ? e.get({ plain: true }) : e,
+    );
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw {
+      status: error.status || 500,
+      message: error.message || error,
+    };
+  }
+}
+
+/**
+ * Customers a user has access to (used for "act on behalf of")
+ */
+async function getCustomersByAccess({ userId }) {
+  if (!userId) {
+    throw { status: 400, message: "Missing userId" };
+  }
+
+  const accessRows = await db.CustomerAccess.findAll({
+    where: { userId },
+  });
+
+  if (!accessRows || accessRows.length === 0) {
+    return [];
+  }
+
+  const customerIds = Array.from(
+    new Set(
+      accessRows
+        .map((r) =>
+          typeof r.get === "function"
+            ? r.get({ plain: true }).customerId
+            : r.customerId,
+        )
+        .filter(Boolean),
+    ),
+  );
+
+  if (customerIds.length === 0) {
+    return [];
+  }
+
+  const customerRows = await db.Customer.findAll({
+    where: { id: { [Op.in]: customerIds } },
+    attributes: ["id", "businessName"],
+  });
+
+  return customerRows.map((row) => {
+    const plain =
+      typeof row.get === "function" ? row.get({ plain: true }) : row;
+    return { id: plain.id, businessName: plain.businessName };
+  });
+}
+
 module.exports = {
   listCustomers,
+  getCustomerById,
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  getCustomerEntitlements,
+  getCustomersByAccess,
 };

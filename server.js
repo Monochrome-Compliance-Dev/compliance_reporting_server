@@ -573,8 +573,15 @@ app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 // PTRS
 app.use("/api/v2/ptrs", require("@/v2/ptrs/routes/ptrs.routes"));
 
+// Users
+app.use("/api/v2/users", require("@/v2/users/user.routes"));
+
+app.use("/api/v2/users/authenticate", loginLimiter);
+app.use("/api/v2/users/forgot-password", loginLimiter);
+app.use("/api/v2/users/reset-password", loginLimiter);
+
 // Customers
-app.use("/api/v2/customers", require("@/v2/customers/customers.controller"));
+app.use("/api/v2/customers", require("@/v2/customers/customers.routes"));
 app.use(
   "/api/v2/customers",
   require("@/v2/entitlements/customerEntitlements.controller"),

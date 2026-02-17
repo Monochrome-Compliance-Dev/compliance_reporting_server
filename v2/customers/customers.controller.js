@@ -1,19 +1,5 @@
-const express = require("express");
-const router = express.Router();
-
-const authorise = require("@/middleware/authorise");
-const validateRequest = require("@/middleware/validate-request");
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
-// Restrict v2 customer admin to Boss roles
-const requireBoss = authorise({
-  roles: ["Boss"],
-});
-
-const {
-  customerCreateSchema,
-  customerUpdateSchema,
-} = require("./customers.validator");
 
 const customerService = require("./customers.service");
 
@@ -27,14 +13,13 @@ function getUserId(req) {
   );
 }
 
-// GET /api/v2/customers
-// Returns an array of customers
-router.get("/", requireBoss, async (req, res) => {
+async function listCustomers(req, res, next) {
   try {
     const customers = await customerService.listCustomers();
     const userId = getUserId(req);
     const ip = req.ip;
     const device = req.headers["user-agent"];
+
     await auditService.logEvent({
       customerId: "-R1o0gWoZX",
       userId,
@@ -46,10 +31,12 @@ router.get("/", requireBoss, async (req, res) => {
         count: Array.isArray(customers) ? customers.length : undefined,
       },
     });
+
     return res.json(customers);
   } catch (err) {
     const status = err.status || 500;
     const message = err.message || "Failed to list customers";
+
     logger.logEvent("error", "Error listing v2 customers", {
       action: "ListCustomersV2",
       userId: getUserId(req),
@@ -58,116 +45,144 @@ router.get("/", requireBoss, async (req, res) => {
       statusCode: status,
       timestamp: new Date().toISOString(),
     });
+
+    // propagate to global handler (still return safe response)
     return res.status(status).json({ status: "error", message });
   }
-});
+}
 
-// POST /api/v2/customers
-// Creates a customer and returns { status, data }
-router.post(
-  "/",
-  requireBoss,
-  validateRequest(customerCreateSchema),
-  async (req, res) => {
-    try {
-      const userId = getUserId(req);
-      const customer = await customerService.createCustomer({
-        data: req.body,
-        userId,
-      });
-      const ip = req.ip;
-      const device = req.headers["user-agent"];
-      await auditService.logEvent({
-        customerId: customer.id,
-        userId,
-        ip,
-        device,
-        action: "CreateCustomerV2",
-        entity: "Customer",
-        entityId: customer.id,
-        details: {
-          businessName: customer.businessName,
-          abn: customer.abn,
-        },
-      });
-      return res.status(201).json({
-        status: "success",
-        data: customer,
-      });
-    } catch (err) {
-      const status = err.status || 500;
-      const message = err.message || "Failed to create customer";
-      logger.logEvent("error", "Error creating v2 customer", {
-        action: "CreateCustomerV2",
-        userId: getUserId(req),
-        customerId: null,
-        error: err.message,
-        statusCode: status,
-        timestamp: new Date().toISOString(),
-      });
-      return res.status(status).json({ status: "error", message });
+async function getCustomersByAccess(req, res, next) {
+  try {
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Unauthorised" });
     }
-  }
-);
 
-// PUT /api/v2/customers/:id
-// Updates a customer and returns { status, data }
-router.put(
-  "/:id",
-  requireBoss,
-  validateRequest(customerUpdateSchema),
-  async (req, res) => {
-    try {
-      const userId = getUserId(req);
-      const { id } = req.params;
-      const customer = await customerService.updateCustomer({
-        id,
-        data: req.body,
-        userId,
-      });
-      const ip = req.ip;
-      const device = req.headers["user-agent"];
-      await auditService.logEvent({
-        customerId: customer.id,
-        userId,
-        ip,
-        device,
-        action: "UpdateCustomerV2",
-        entity: "Customer",
-        entityId: customer.id,
-        details: {
-          updates: Object.keys(req.body || {}),
-        },
-      });
-      return res.json({
-        status: "success",
-        data: customer,
-      });
-    } catch (err) {
-      const status = err.status || 500;
-      const message = err.message || "Failed to update customer";
-      logger.logEvent("error", "Error updating v2 customer", {
-        action: "UpdateCustomerV2",
-        userId: getUserId(req),
-        customerId: req.params.id,
-        error: err.message,
-        statusCode: status,
-        timestamp: new Date().toISOString(),
-      });
-      return res.status(status).json({ status: "error", message });
-    }
-  }
-);
+    const list = await customerService.getCustomersByAccess({ userId });
 
-// DELETE /api/v2/customers/:id
-// Deletes a customer and returns { status, message }
-router.delete("/:id", requireBoss, async (req, res) => {
+    // Keep response shape as a plain array to match legacy FE expectations
+    return res.json(Array.isArray(list) ? list : []);
+  } catch (err) {
+    const status = err.status || 500;
+    const message = err.message || "Failed to load customer access";
+
+    logger.logEvent("error", "Error loading v2 customer access", {
+      action: "GetCustomersByAccessV2",
+      userId: getUserId(req),
+      customerId: null,
+      error: err.message,
+      statusCode: status,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(status).json({ status: "error", message });
+  }
+}
+
+async function createCustomer(req, res, next) {
+  try {
+    const userId = getUserId(req);
+    const customer = await customerService.createCustomer({
+      data: req.body,
+      userId,
+    });
+
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    await auditService.logEvent({
+      customerId: customer.id,
+      userId,
+      ip,
+      device,
+      action: "CreateCustomerV2",
+      entity: "Customer",
+      entityId: customer.id,
+      details: {
+        businessName: customer.businessName,
+        abn: customer.abn,
+      },
+    });
+
+    return res.status(201).json({
+      status: "success",
+      data: customer,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    const message = err.message || "Failed to create customer";
+
+    logger.logEvent("error", "Error creating v2 customer", {
+      action: "CreateCustomerV2",
+      userId: getUserId(req),
+      customerId: null,
+      error: err.message,
+      statusCode: status,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(status).json({ status: "error", message });
+  }
+}
+
+async function updateCustomer(req, res, next) {
+  try {
+    const userId = getUserId(req);
+    const { id } = req.params;
+
+    const customer = await customerService.updateCustomer({
+      id,
+      data: req.body,
+      userId,
+    });
+
+    const ip = req.ip;
+    const device = req.headers["user-agent"];
+
+    await auditService.logEvent({
+      customerId: customer.id,
+      userId,
+      ip,
+      device,
+      action: "UpdateCustomerV2",
+      entity: "Customer",
+      entityId: customer.id,
+      details: {
+        updates: Object.keys(req.body || {}),
+      },
+    });
+
+    return res.json({
+      status: "success",
+      data: customer,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    const message = err.message || "Failed to update customer";
+
+    logger.logEvent("error", "Error updating v2 customer", {
+      action: "UpdateCustomerV2",
+      userId: getUserId(req),
+      customerId: req.params.id,
+      error: err.message,
+      statusCode: status,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.status(status).json({ status: "error", message });
+  }
+}
+
+async function deleteCustomer(req, res, next) {
   try {
     const { id } = req.params;
+
     const result = await customerService.deleteCustomer({ id });
+
     const userId = getUserId(req);
     const ip = req.ip;
     const device = req.headers["user-agent"];
+
     await auditService.logEvent({
       customerId: id,
       userId,
@@ -177,6 +192,7 @@ router.delete("/:id", requireBoss, async (req, res) => {
       entity: "Customer",
       entityId: id,
     });
+
     return res.json({
       status: "success",
       message: result.message,
@@ -184,6 +200,7 @@ router.delete("/:id", requireBoss, async (req, res) => {
   } catch (err) {
     const status = err.status || 500;
     const message = err.message || "Failed to delete customer";
+
     logger.logEvent("error", "Error deleting v2 customer", {
       action: "DeleteCustomerV2",
       userId: getUserId(req),
@@ -192,8 +209,15 @@ router.delete("/:id", requireBoss, async (req, res) => {
       statusCode: status,
       timestamp: new Date().toISOString(),
     });
+
     return res.status(status).json({ status: "error", message });
   }
-});
+}
 
-module.exports = router;
+module.exports = {
+  listCustomers,
+  getCustomersByAccess,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer,
+};
