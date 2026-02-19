@@ -4,7 +4,6 @@ const { logger } = require("@/helpers/logger");
 const {
   safeMeta,
   slog,
-  mergeJoinedRow,
   normalizeJoinKeyValue,
   toSnake,
   buildStableInputHash,
@@ -14,7 +13,6 @@ const {
 } = require("@/helpers/setCustomerIdRLS");
 const {
   pickFromRowLoose,
-  buildDatasetIndexByRole,
   getDatasetSample,
 } = require("@/v2/ptrs/services/data.ptrs.service");
 
@@ -1248,30 +1246,25 @@ async function composeMappedRowsForPtrs({
   const normalisedJoins = [];
   for (const j of joinsArray) {
     if (!j || typeof j !== "object") continue;
+
     const from = j.from || {};
     const to = j.to || {};
 
-    const fromRole = (from.role || "").toLowerCase();
-    const toRole = (to.role || "").toLowerCase();
+    const fromRole = String(from.role || "").toLowerCase();
+    const toRole = String(to.role || "").toLowerCase();
+
     const fromCol = from.column;
     const toCol = to.column;
 
     if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
-    // Only support joins that involve the main dataset on one side
-    const isFromMain = fromRole === "main";
-    const isToMain = toRole === "main";
-    if (!isFromMain && !isToMain) continue;
-
-    const mainSide = isFromMain ? from : to;
-    const otherSide = isFromMain ? to : from;
-
-    if (!otherSide.role || !otherSide.column) continue;
-
     normalisedJoins.push({
-      mainColumn: mainSide.column,
-      otherRole: String(otherSide.role).toLowerCase(),
-      otherColumn: otherSide.column,
+      fromRole,
+      fromColumn: fromCol,
+      fromTransform: from.transform || null,
+      toRole,
+      toColumn: toCol,
+      toTransform: to.transform || null,
     });
   }
 
@@ -1309,6 +1302,220 @@ async function composeMappedRowsForPtrs({
       }),
     );
   }
+
+  const orderJoinsForExecution = (joins) => {
+    const list = Array.isArray(joins) ? joins.slice() : [];
+    if (list.length <= 1) return list;
+
+    const norm = (r) =>
+      String(r || "")
+        .trim()
+        .toLowerCase();
+
+    const available = new Set(["main"]);
+    let remaining = list.slice();
+    const ordered = [];
+
+    let guard = 0;
+    while (remaining.length) {
+      guard += 1;
+      if (guard > list.length + 5) break;
+
+      const passPicked = [];
+      const passLeft = [];
+
+      for (const j of remaining) {
+        const fromRole = norm(j.fromRole);
+        const toRole = norm(j.toRole);
+
+        // malformed joins: keep stable, they’ll get ignored later anyway
+        if (!fromRole || !toRole) {
+          passPicked.push(j);
+          continue;
+        }
+
+        if (fromRole === "main" || available.has(fromRole)) {
+          passPicked.push(j);
+        } else {
+          passLeft.push(j);
+        }
+      }
+
+      if (!passPicked.length) {
+        const rolesKnown = Array.from(available);
+        const missing = Array.from(
+          new Set(
+            passLeft
+              .map((j) => norm(j.fromRole))
+              .filter((r) => r && r !== "main" && !available.has(r)),
+          ),
+        );
+
+        const e = new Error(
+          `Invalid join dependency chain: cannot resolve join order. ` +
+            `Roles available: ${rolesKnown.join(", ") || "(none)"}. ` +
+            `Missing/blocked fromRoles: ${missing.join(", ") || "(unknown)"}.`,
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      for (const j of passPicked) {
+        ordered.push(j);
+        const toRole = norm(j.toRole);
+        if (toRole) available.add(toRole);
+      }
+
+      remaining = passLeft;
+    }
+
+    return ordered;
+  };
+
+  // --- Postgres join SQL debug helpers (for logging only, not execution) ---
+  const _sqlIdent = (name) => `"${String(name).replace(/"/g, '""')}"`;
+
+  const _sqlLiteral = (v) => {
+    if (v == null) return "NULL";
+    const s = String(v);
+    return `'${s.replace(/'/g, "''")}'`;
+  };
+
+  const _getTableName = (model) => {
+    try {
+      const tn =
+        model && typeof model.getTableName === "function"
+          ? model.getTableName()
+          : null;
+      if (typeof tn === "string") return tn;
+      if (tn && typeof tn === "object" && tn.tableName)
+        return tn.schema ? `${tn.schema}.${tn.tableName}` : tn.tableName;
+    } catch (_) {}
+    return model && model.tableName ? model.tableName : null;
+  };
+
+  const _normSql = (exprSql) => `lower(btrim(coalesce(${exprSql}, '')))`;
+
+  const _isMainRoleSql = (role) => {
+    const r = String(role || "")
+      .trim()
+      .toLowerCase();
+    return r === "main" || r.startsWith("main_");
+  };
+
+  const buildJoinDebugSql = () => {
+    const importTable = _getTableName(db.PtrsImportRaw) || "PtrsImportRaw";
+    const datasetTable = _getTableName(db.PtrsDataset) || "PtrsDataset";
+
+    // Use only joins that target a supporting role, and group by toRole (one LATERAL join per supporting role).
+    const byToRole = new Map();
+    for (const j of normalisedJoins || []) {
+      if (!j || !j.toRole) continue;
+      const toRole = String(j.toRole || "")
+        .trim()
+        .toLowerCase();
+      if (!toRole || _isMainRoleSql(toRole)) continue;
+      if (!byToRole.has(toRole)) byToRole.set(toRole, []);
+      byToRole.get(toRole).push(j);
+    }
+
+    const mAlias = "m";
+    let selectJson = `${mAlias}.${_sqlIdent("data")}`;
+    const joinClauses = [];
+
+    // Build deterministic matching: first match wins (ORDER BY rowNo ASC LIMIT 1)
+    for (const [toRole, joinsForRole] of byToRole.entries()) {
+      const alias = `j_${toRole.replace(/[^a-z0-9_]/g, "_")}`; // safe-ish alias
+
+      // Build OR-of-ANDs: any join condition can match (consistent with "first wins" semantics in JS index).
+      // Each condition compares normalised join keys.
+      const condSqlParts = [];
+      for (const j of joinsForRole) {
+        const fromRole = String(j.fromRole || "")
+          .trim()
+          .toLowerCase();
+        const fromCol = String(j.fromColumn || "");
+        const toCol = String(j.toColumn || "");
+        if (!fromRole || !fromCol || !toCol) continue;
+
+        const lhsExpr = _isMainRoleSql(fromRole)
+          ? `${mAlias}.${_sqlIdent("data")}->>${_sqlLiteral(fromCol)}`
+          : `${mAlias}.${_sqlIdent("data")}->>${_sqlLiteral(`${fromRole}__${fromCol}`)}`;
+
+        const rhsExpr = `${alias}.${_sqlIdent("data")}->>${_sqlLiteral(toCol)}`;
+
+        condSqlParts.push(`${_normSql(lhsExpr)} = ${_normSql(rhsExpr)}`);
+      }
+
+      const whereMatch = condSqlParts.length
+        ? `(${condSqlParts.join(" OR ")})`
+        : "FALSE";
+
+      // Resolve datasetId by role for this ptrs run.
+      const datasetIdSql = `(SELECT d.${_sqlIdent("id")} FROM ${datasetTable.startsWith('"') ? datasetTable : _sqlIdent(datasetTable)} d WHERE d.${_sqlIdent("customerId")} = ${_sqlLiteral(customerId)} AND d.${_sqlIdent("ptrsId")} = ${_sqlLiteral(ptrsId)} AND lower(btrim(coalesce(d.${_sqlIdent("role")}, ''))) = ${_sqlLiteral(toRole)} LIMIT 1)`;
+
+      const lateral = `
+LEFT JOIN LATERAL (
+  SELECT s.${_sqlIdent("data")}
+  FROM ${importTable.startsWith('"') ? importTable : _sqlIdent(importTable)} s
+  WHERE s.${_sqlIdent("customerId")} = ${_sqlLiteral(customerId)}
+    AND s.${_sqlIdent("datasetId")} = ${datasetIdSql}
+    AND ${whereMatch}
+  ORDER BY s.${_sqlIdent("rowNo")} ASC
+  LIMIT 1
+) ${alias} ON TRUE`.trim();
+
+      joinClauses.push(lateral);
+
+      // Prefix keys from joined JSON into the merged JSON result, e.g. vendormaster__Tax number
+      const prefixedJson = `
+COALESCE((
+  SELECT jsonb_object_agg(${_sqlLiteral(`${toRole}__`)} || e.key, e.value)
+  FROM jsonb_each(${alias}.${_sqlIdent("data")}) e
+), '{}'::jsonb)`.trim();
+
+      selectJson = `(${selectJson} || ${prefixedJson})`;
+    }
+
+    const sql = `
+/* PTRS v2 debug join SQL (generated) */
+SELECT
+  ${mAlias}.${_sqlIdent("rowNo")} AS row_no,
+  ${selectJson} AS joined_data
+FROM ${importTable.startsWith('"') ? importTable : _sqlIdent(importTable)} ${mAlias}
+${joinClauses.join("\n")}
+WHERE ${mAlias}.${_sqlIdent("customerId")} = ${_sqlLiteral(customerId)}
+  AND ${mAlias}.${_sqlIdent("ptrsId")} = ${_sqlLiteral(ptrsId)}
+ORDER BY ${mAlias}.${_sqlIdent("rowNo")} ASC
+LIMIT ${Number.isFinite(Number(limit)) ? Math.max(1, Number(limit)) : 50}
+OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
+`.trim();
+
+    return sql;
+  };
+
+  // Log generated join SQL early (before join ordering / execution) for crash diagnostics
+  try {
+    if (logger && logger.info && normalisedJoins.length) {
+      const debugSql = buildJoinDebugSql();
+      slog.info(
+        "PTRS v2 composeMappedRowsForPtrs: generated join SQL (early debug)",
+        safeMeta({
+          customerId,
+          ptrsId,
+          joinsCount: normalisedJoins.length,
+          sql: debugSql,
+        }),
+      );
+    }
+  } catch (e) {
+    slog.warn(
+      "PTRS v2 composeMappedRowsForPtrs: failed to generate early debug join SQL",
+      safeMeta({ customerId, ptrsId, error: e.message }),
+    );
+  }
+
+  const orderedJoins = orderJoinsForExecution(normalisedJoins);
 
   // ---------------- Payment terms (effective-dated) enrichment ----------------
   // We treat payment terms changes as a supporting dataset with an effective-from date.
@@ -1489,11 +1696,15 @@ async function composeMappedRowsForPtrs({
       pickFromRowLoose(row, "Vendor Account") ??
       pickFromRowLoose(row, "Vendor Account No") ??
       pickFromRowLoose(row, "Vendor Account: Name 1") ??
+      pickNamespacedAnyRole(row, "Supplier") ??
+      pickNamespacedAnyRole(row, "Vendor") ??
       null;
 
     const company =
       pickFromRowLoose(row, "Company Code") ??
       pickFromRowLoose(row, "company_code") ??
+      pickNamespacedAnyRole(row, "Company Code") ??
+      pickNamespacedAnyRole(row, "company_code") ??
       null;
 
     const invDateRaw =
@@ -1624,47 +1835,137 @@ async function composeMappedRowsForPtrs({
     paymentTermsHistoryIndex = null;
   }
 
-  // Build indexes for each supporting dataset role referenced in joins
-  const roleIndexes = new Map();
-  for (const j of normalisedJoins) {
-    if (!j.otherRole || !j.otherColumn) continue;
-    if (roleIndexes.has(j.otherRole)) continue;
+  const isMainRole = (role) => {
+    const r = String(role || "").toLowerCase();
+    return r === "main" || r.startsWith("main_");
+  };
 
-    const idx = await buildDatasetIndexByRole({
-      customerId,
-      ptrsId,
-      role: j.otherRole,
-      keyColumn: j.otherColumn,
+  const nsKey = (role, col) => `${String(role)}__${String(col)}`;
+
+  const getJoinLhsValue = (row, role, col) => {
+    if (!row) return undefined;
+    const r = String(role || "").toLowerCase();
+    if (isMainRole(r)) {
+      return pickFromRowLoose(row, col);
+    }
+    // Supporting roles are always namespaced to avoid collisions.
+    return pickFromRowLoose(row, nsKey(r, col));
+  };
+
+  const mergeRoleRowNamespaced = (row, role, joined) => {
+    const r = String(role || "").toLowerCase();
+    if (!joined || typeof joined !== "object") return row;
+    const out = { ...(row || {}) };
+    for (const [k, v] of Object.entries(joined)) {
+      out[nsKey(r, k)] = v;
+    }
+    return out;
+  };
+
+  const hasRoleInRow = (row, role) => {
+    const r = String(role || "").toLowerCase();
+    if (isMainRole(r)) return true;
+    const prefix = `${r}__`;
+    return Object.keys(row || {}).some((k) => String(k).startsWith(prefix));
+  };
+
+  const pickNamespacedAnyRole = (row, col) => {
+    if (!row || !col) return null;
+    const suffix = `__${String(col)}`;
+    const keys = Object.keys(row).filter((k) => String(k).endsWith(suffix));
+    if (!keys.length) return null;
+    keys.sort((a, b) => String(a).localeCompare(String(b)));
+    return pickFromRowLoose(row, keys[0]);
+  };
+
+  // ---------------- Transform-aware join indexing (per-condition) ----------------
+  // We cannot rely on buildDatasetIndexByRole because join keys may require per-condition transforms
+  // (digits_only, strip_prefix, lpad, etc.) and joins must be applied sequentially.
+  const joinIndexCache = new Map(); // Map<cacheKey, Map<joinKey, row>>
+  const datasetRowsCache = new Map(); // Map<role, Array<rowObject>>
+
+  const joinIndexKey = (role, column, transform) => {
+    const op = transform?.op ? String(transform.op) : "";
+    const arg = transform?.arg != null ? String(transform.arg) : "";
+    return `${role}|${column}|${op}|${arg}`;
+  };
+
+  const loadRowsForRole = async (role) => {
+    const r = String(role || "").toLowerCase();
+    if (!r) return [];
+    if (datasetRowsCache.has(r)) return datasetRowsCache.get(r);
+
+    const ds = await db.PtrsDataset.findOne({
+      where: { customerId, ptrsId, role: r },
+      attributes: ["id"],
+      raw: true,
       transaction,
     });
 
-    roleIndexes.set(
-      j.otherRole,
-      idx || { map: new Map(), headers: [], rowsIndexed: 0 },
-    );
-  }
-
-  if (logger && logger.info) {
-    const rolesMeta = [];
-    for (const [role, idx] of roleIndexes.entries()) {
-      rolesMeta.push({
-        role,
-        rowsIndexed:
-          idx && typeof idx.rowsIndexed === "number"
-            ? idx.rowsIndexed
-            : idx && idx.map && idx.map.size
-              ? idx.map.size
-              : 0,
-        headersCount: Array.isArray(idx && idx.headers)
-          ? idx.headers.length
-          : 0,
-      });
+    if (!ds || !ds.id) {
+      datasetRowsCache.set(r, []);
+      return [];
     }
-    slog.info(
-      "PTRS v2 composeMappedRowsForPtrs: role indexes built",
-      safeMeta({ customerId, ptrsId, rolesMeta }),
-    );
-  }
+
+    const where = { customerId, datasetId: ds.id };
+    if (
+      db.PtrsImportRaw.rawAttributes &&
+      db.PtrsImportRaw.rawAttributes.ptrsDatasetId
+    ) {
+      delete where.datasetId;
+      where.datasetId = ds.id;
+    }
+
+    const rows = await db.PtrsImportRaw.findAll({
+      where,
+      order: [["rowNo", "ASC"]],
+      attributes: ["data"],
+      raw: true,
+      transaction,
+    });
+
+    const parsed = (rows || []).map((x) => {
+      let d = x?.data || {};
+      if (typeof d === "string") {
+        try {
+          d = JSON.parse(d);
+        } catch {
+          d = {};
+        }
+      }
+      return d && typeof d === "object" ? d : {};
+    });
+
+    datasetRowsCache.set(r, parsed);
+    return parsed;
+  };
+
+  const getJoinIndex = async ({ role, column, transform }) => {
+    const r = String(role || "").toLowerCase();
+    if (!r) return new Map();
+    if (isMainRole(r)) {
+      throw new Error(
+        `Invalid join target role '${r}' — cannot build an index for main roles`,
+      );
+    }
+
+    const cacheKey = joinIndexKey(r, column, transform);
+    if (joinIndexCache.has(cacheKey)) return joinIndexCache.get(cacheKey);
+
+    const rows = await loadRowsForRole(r);
+    const idx = new Map();
+
+    for (const row of rows) {
+      const rawVal = pickFromRowLoose(row, column);
+      const k = normalizeJoinKeyValue(rawVal, transform);
+      if (!k) continue;
+      // Deterministic: first row wins for a given key.
+      if (!idx.has(k)) idx.set(k, row);
+    }
+
+    joinIndexCache.set(cacheKey, idx);
+    return idx;
+  };
 
   // Read main rows
   const findOpts = {
@@ -1694,16 +1995,40 @@ async function composeMappedRowsForPtrs({
     const base = r.data || {};
     let srcRow = base;
 
-    // Apply each join in turn, merging any matched supporting-row data
-    if (normalisedJoins.length && roleIndexes.size) {
-      for (const j of normalisedJoins) {
-        const idx = roleIndexes.get(j.otherRole);
-        if (!idx || !idx.map || !idx.map.size) {
-          continue;
+    // Apply joins sequentially, supporting main->supporting and supporting->supporting joins.
+    // Supporting role columns are merged into the working row using role namespaces to avoid collisions.
+    if (orderedJoins.length) {
+      let workingRow = srcRow;
+
+      for (const j of orderedJoins) {
+        const fromRole = String(j.fromRole || "").toLowerCase();
+        const toRole = String(j.toRole || "").toLowerCase();
+
+        const fromCol = j.fromColumn;
+        const toCol = j.toColumn;
+
+        const fromTransform = j.fromTransform || null;
+        const toTransform = j.toTransform || null;
+
+        if (!fromRole || !toRole || !fromCol || !toCol) continue;
+
+        // Enforce join order strictly: if the join reads from a supporting role that hasn't been merged yet, fail loudly.
+        if (!isMainRole(fromRole) && !hasRoleInRow(workingRow, fromRole)) {
+          throw new Error(
+            `Invalid join order: join references fromRole '${fromRole}' before it has been merged. ` +
+              `Move the join that brings '${fromRole}' earlier in the list.`,
+          );
         }
 
-        const lhsVal = pickFromRowLoose(base, j.mainColumn);
-        const key = normalizeJoinKeyValue(lhsVal);
+        // Do not allow indexing main roles as targets.
+        if (isMainRole(toRole)) {
+          throw new Error(
+            `Invalid join target: toRole '${toRole}' must be a supporting dataset role`,
+          );
+        }
+
+        const lhsVal = getJoinLhsValue(workingRow, fromRole, fromCol);
+        const key = normalizeJoinKeyValue(lhsVal, fromTransform);
 
         if (!key) {
           if (!loggedJoinProbe && logger && logger.debug) {
@@ -1722,9 +2047,17 @@ async function composeMappedRowsForPtrs({
           continue;
         }
 
-        const joined = idx.map.get(key);
+        const idx = await getJoinIndex({
+          role: toRole,
+          column: toCol,
+          transform: toTransform,
+        });
+
+        const joined = idx.get(key);
+
         if (joined) {
-          srcRow = mergeJoinedRow(srcRow, joined);
+          workingRow = mergeRoleRowNamespaced(workingRow, toRole, joined);
+
           if (!loggedJoinProbe && logger && logger.debug) {
             loggedJoinProbe = true;
             slog.debug(
@@ -1753,6 +2086,8 @@ async function composeMappedRowsForPtrs({
           );
         }
       }
+
+      srcRow = workingRow;
     }
 
     const rawPaymentTerms = pickFromRowLoose(srcRow, "Payment terms");

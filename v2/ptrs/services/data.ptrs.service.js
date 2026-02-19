@@ -7,7 +7,11 @@ const fs = require("fs");
 const { Worker } = require("worker_threads");
 
 const { logger } = require("@/helpers/logger");
-const { normalizeJoinKeyValue, toSnake } = require("./ptrs.service");
+const {
+  normalizeJoinKeyValue,
+  toSnake,
+  importDatasetCsvStreamToImportRaw,
+} = require("./ptrs.service");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -513,11 +517,36 @@ async function addDataset({
       { storageRef: storagePath, rowsCount, meta },
       { transaction: t },
     );
+    const plain = row.get({ plain: true });
 
     // Commit the dataset upload first; the subsequent import runs its own txn.
     await t.commit();
 
-    const plain = row.get({ plain: true });
+    // Import this dataset into tbl_ptrs_import_raw so joins can be executed in SQL.
+    try {
+      await importDatasetCsvStreamToImportRaw({
+        customerId,
+        ptrsId,
+        datasetId: plain.id,
+        role: normalisedRole,
+        sourceType: dsCandidate.sourceType,
+        stream: fs.createReadStream(storagePath),
+      });
+    } catch (e) {
+      e.statusCode = e.statusCode || 500;
+      logger?.error?.(
+        "PTRS v2 addDataset: failed to import dataset into import_raw",
+        {
+          action: "PtrsV2AddDatasetImportToRawFailed",
+          customerId,
+          ptrsId,
+          datasetId: plain.id,
+          role: normalisedRole,
+          error: e?.message,
+        },
+      );
+      throw e;
+    }
 
     // Log info about the dataset and whether it will trigger term changes import
     logger?.info?.("PTRS v2 addDataset: uploaded dataset", {
