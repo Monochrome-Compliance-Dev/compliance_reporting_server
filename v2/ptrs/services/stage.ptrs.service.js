@@ -26,13 +26,31 @@ module.exports = {
 };
 
 // --- Payment time (regulator-aligned) helpers ---
+
+// Helper: get the first present value from a list of candidate keys in a row
+function getFirstRowValue(row, keys) {
+  if (!row || typeof row !== "object" || !Array.isArray(keys)) return null;
+  for (const k of keys) {
+    if (!k) continue;
+    if (!Object.prototype.hasOwnProperty.call(row, k)) continue;
+    const v = row[k];
+    if (v == null) continue;
+    const s = String(v).trim();
+    if (s) return v;
+  }
+  return null;
+}
 function parseISODateOnly(value) {
   if (!value) return null;
   const s = String(value).trim();
   if (!s) return null;
 
   // Accept YYYY-MM-DD or full ISO; we only care about the date portion.
-  const datePart = s.includes("T") ? s.split("T")[0] : s;
+  const datePart = s.includes("T")
+    ? s.split("T")[0]
+    : s.includes(" ")
+      ? s.split(" ")[0]
+      : s;
   const m = /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
   if (!m) return null;
 
@@ -74,16 +92,46 @@ function computePaymentTimeRegulator(row) {
   if (!row || typeof row !== "object")
     return { days: null, referenceDate: null, referenceKind: null };
 
-  const payment = parseISODateOnly(row.payment_date);
+  const paymentRaw = getFirstRowValue(row, [
+    "payment_date",
+    "paymentDate",
+    "payment_date_iso",
+    "paymentDateIso",
+  ]);
+  const payment = parseISODateOnly(paymentRaw);
   if (!payment) return { days: null, referenceDate: null, referenceKind: null };
 
-  const issue = parseISODateOnly(row.invoice_issue_date);
-  const receipt = parseISODateOnly(row.invoice_receipt_date);
-  const notice = parseISODateOnly(row.notice_for_payment_issue_date);
-  const supply = parseISODateOnly(row.supply_date);
-  const due = parseISODateOnly(row.invoice_due_date);
+  const issueRaw = getFirstRowValue(row, [
+    "invoice_issue_date",
+    "invoiceIssueDate",
+  ]);
+  const issue = parseISODateOnly(issueRaw);
 
-  const rcti = isRctiYes(row.rcti);
+  const receiptRaw = getFirstRowValue(row, [
+    "invoice_receipt_date",
+    "invoiceReceiptDate",
+  ]);
+  const receipt = parseISODateOnly(receiptRaw);
+
+  const noticeRaw = getFirstRowValue(row, [
+    "notice_for_payment_issue_date",
+    "noticeForPaymentIssueDate",
+  ]);
+  const notice = parseISODateOnly(noticeRaw);
+
+  const supplyRaw = getFirstRowValue(row, ["supply_date", "supplyDate"]);
+  const supply = parseISODateOnly(supplyRaw);
+
+  const dueRaw = getFirstRowValue(row, [
+    "invoice_due_date",
+    "invoiceDueDate",
+    "due_date",
+    "dueDate",
+  ]);
+  const due = parseISODateOnly(dueRaw);
+
+  const rctiRaw = getFirstRowValue(row, ["rcti", "RCTI"]);
+  const rcti = isRctiYes(rctiRaw);
 
   let calc = null;
   let ref = null;

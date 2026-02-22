@@ -18,6 +18,18 @@ function model(sequelize) {
       allowNull: false,
     },
 
+    // Optional: link cached records to a specific PTRS run (useful during dev / MVP)
+    ptrsId: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+
+    // Optional: stable import session identifier (preferred over timestamps)
+    importRunId: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+
     xeroTenantId: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -53,6 +65,16 @@ function model(sequelize) {
       allowNull: false,
     },
 
+    createdBy: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+
+    updatedBy: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+
     fetchedAt: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -72,6 +94,14 @@ function model(sequelize) {
       {
         fields: ["customerId", "xeroTenantId"],
         name: "ix_ptrs_xero_contact_customer_tenant",
+      },
+      {
+        fields: ["customerId", "ptrsId"],
+        name: "ix_ptrs_xero_contact_customer_ptrs",
+      },
+      {
+        fields: ["customerId", "importRunId"],
+        name: "ix_ptrs_xero_contact_customer_import_run",
       },
       {
         fields: ["customerId", "xeroTenantId", "xeroContactId"],

@@ -566,19 +566,25 @@ WHERE
           FROM keyed k
           WHERE k.group_key IS NOT NULL AND k.group_key <> '|'
         ),
-        grouped AS (
+        agg AS (
           SELECT
-            g.*,
-            COUNT(*) OVER (PARTITION BY g.group_key) AS grp_count
+            g.group_key,
+            COUNT(*) AS grp_count,
+            SUM(g.pay_amt_raw) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) AS sign_count
           FROM groups g
+          GROUP BY g.group_key
+          HAVING COUNT(*) > 1
         ),
         eligible AS (
           SELECT
             g.*,
-            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
-            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
-          FROM grouped g
-          WHERE g.grp_count > 1
+            a.net_sum,
+            a.sign_count,
+            a.grp_count
+          FROM groups g
+          JOIN agg a
+            ON a.group_key = g.group_key
         ),
         filtered AS (
           SELECT *
@@ -1493,20 +1499,30 @@ LIMIT :limit;
             END AS is_multiple_mode
           FROM base b
         ),
-        grouped AS (
-          SELECT
-            k.*,
-            COUNT(*) OVER (PARTITION BY k.group_key) AS grp_count
+        groups AS (
+          SELECT k.*
           FROM keyed k
           WHERE k.group_key IS NOT NULL AND k.group_key <> '|'
+        ),
+        agg AS (
+          SELECT
+            g.group_key,
+            COUNT(*) AS grp_count,
+            SUM(g.pay_amt_raw) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) AS sign_count
+          FROM groups g
+          GROUP BY g.group_key
+          HAVING COUNT(*) > 1
         ),
         eligible AS (
           SELECT
             g.*,
-            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
-            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
-          FROM grouped g
-          WHERE g.grp_count > 1
+            a.net_sum,
+            a.sign_count,
+            a.grp_count
+          FROM groups g
+          JOIN agg a
+            ON a.group_key = g.group_key
         ),
         filtered AS (
           SELECT *
@@ -1642,20 +1658,30 @@ LIMIT :limit;
             END AS is_multiple_mode
           FROM base b
         ),
-        grouped AS (
-          SELECT
-            k.*,
-            COUNT(*) OVER (PARTITION BY k.group_key) AS grp_count
+        groups AS (
+          SELECT k.*
           FROM keyed k
           WHERE k.group_key IS NOT NULL AND k.group_key <> '|'
+        ),
+        agg AS (
+          SELECT
+            g.group_key,
+            COUNT(*) AS grp_count,
+            SUM(g.pay_amt_raw) AS net_sum,
+            COUNT(DISTINCT SIGN(g.pay_amt_raw)) AS sign_count
+          FROM groups g
+          GROUP BY g.group_key
+          HAVING COUNT(*) > 1
         ),
         eligible AS (
           SELECT
             g.*,
-            SUM(g.pay_amt_raw) OVER (PARTITION BY g.group_key) AS net_sum,
-            COUNT(DISTINCT SIGN(g.pay_amt_raw)) OVER (PARTITION BY g.group_key) AS sign_count
-          FROM grouped g
-          WHERE g.grp_count > 1
+            a.net_sum,
+            a.sign_count,
+            a.grp_count
+          FROM groups g
+          JOIN agg a
+            ON a.group_key = g.group_key
         ),
         filtered AS (
           SELECT *

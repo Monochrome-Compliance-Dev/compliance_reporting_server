@@ -34,6 +34,12 @@ function model(sequelize) {
       allowNull: true,
     },
 
+    // Optional: stable import session identifier (preferred over timestamps)
+    importRunId: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+
     // Xero connections tenantId
     xeroTenantId: {
       type: DataTypes.UUID,
@@ -122,8 +128,13 @@ function model(sequelize) {
           unique: false,
           fields: ["customerId", "ptrsId"],
         },
+        {
+          name: "ix_ptrs_xero_org_customer_import_run",
+          unique: false,
+          fields: ["customerId", "importRunId"],
+        },
       ],
-    }
+    },
   );
 
   return PtrsXeroOrganisation;

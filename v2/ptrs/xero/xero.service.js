@@ -3,6 +3,7 @@ const { logger } = require("@/helpers/logger");
 const fs = require("fs");
 const path = require("path");
 const { Op } = require("sequelize");
+
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -796,6 +797,15 @@ function requireEnv(name) {
   return v;
 }
 
+function generateImportRunId(ptrsId) {
+  // 20 chars max target. Example: "CCsXE5cRwU_kq9x2n7f4p"
+  const ts = Date.now().toString(36);
+  const rnd = Math.random().toString(36).slice(2, 10);
+  const prefix = ptrsId ? String(ptrsId).slice(0, 10) : "run";
+  const raw = `${prefix}_${ts}${rnd}`;
+  return raw.slice(0, 20);
+}
+
 function statusKey(customerId, ptrsId) {
   return `${customerId}::${ptrsId}`;
 }
@@ -1004,9 +1014,11 @@ function deriveXeroPaymentTermsConfig({
 async function persistPayments({
   customerId,
   ptrsId,
+  importRunId,
   tenantId,
   payments,
   fetchedAt,
+  userId,
 }) {
   const PtrsXeroPayment = getModel("PtrsXeroPayment");
   if (!PtrsXeroPayment) {
@@ -1053,7 +1065,10 @@ async function persistPayments({
         "paymentDate",
         "payment_date",
       ]);
-      const paymentDate = paymentDateRaw ? new Date(paymentDateRaw) : null;
+
+      // Xero commonly returns .NET-style dates like "/Date(1718582400000+0000)/".
+      // `new Date("/Date(...)/")` yields Invalid Date, so we must parse it.
+      const paymentDate = parseXeroDotNetDate(paymentDateRaw);
 
       const amountRaw = getFirstKey(p, ["Amount", "amount"]);
       const amount =
@@ -1069,6 +1084,13 @@ async function persistPayments({
       const candidate = {
         customerId,
         ptrsId,
+        importRunId,
+        ...(PtrsXeroPayment.rawAttributes?.createdBy
+          ? { createdBy: userId || null }
+          : {}),
+        ...(PtrsXeroPayment.rawAttributes?.updatedBy
+          ? { updatedBy: userId || null }
+          : {}),
         xeroTenantId: tenantId,
         xeroPaymentId: paymentId,
         invoiceId,
@@ -1087,10 +1109,7 @@ async function persistPayments({
 
       try {
         // Prefer upsert if supported and if we have some kind of stable identifier.
-        if (
-          typeof PtrsXeroPayment.upsert === "function" &&
-          (row.xeroPaymentId || row.xeroPaymentID || row.xeroPaymentIdRaw)
-        ) {
+        if (typeof PtrsXeroPayment.upsert === "function" && row.xeroPaymentId) {
           await PtrsXeroPayment.upsert(row, { transaction: t });
         } else {
           await PtrsXeroPayment.create(row, { transaction: t });
@@ -1106,6 +1125,13 @@ async function persistPayments({
             action: "PtrsV2XeroPersistPaymentFailed",
             customerId,
             ptrsId,
+            importRunId,
+            ...(PtrsXeroPayment.rawAttributes?.createdBy
+              ? { createdBy: userId || null }
+              : {}),
+            ...(PtrsXeroPayment.rawAttributes?.updatedBy
+              ? { updatedBy: userId || null }
+              : {}),
             xeroTenantId: tenantId,
             xeroPaymentId: paymentId,
             error: e?.message,
@@ -1126,9 +1152,11 @@ async function persistPayments({
 async function persistInvoices({
   customerId,
   ptrsId,
+  importRunId,
   tenantId,
   invoices,
   fetchedAt,
+  userId,
 }) {
   const PtrsXeroInvoice = getModel("PtrsXeroInvoice");
   if (!PtrsXeroInvoice) {
@@ -1167,15 +1195,23 @@ async function persistInvoices({
           "id",
         ]) || null;
 
+      // Invoice date: use parseXeroDotNetDate and support DateString
       const invoiceDateRaw = getFirstKey(inv, [
         "Date",
+        "DateString",
         "invoiceDate",
         "invoice_date",
       ]);
-      const invoiceDate = invoiceDateRaw ? new Date(invoiceDateRaw) : null;
+      const invoiceDate = parseXeroDotNetDate(invoiceDateRaw);
 
-      const dueDateRaw = getFirstKey(inv, ["DueDate", "dueDate", "due_date"]);
-      const dueDate = dueDateRaw ? new Date(dueDateRaw) : null;
+      // Due date: use parseXeroDotNetDate and support DueDateString
+      const dueDateRaw = getFirstKey(inv, [
+        "DueDate",
+        "DueDateString",
+        "dueDate",
+        "due_date",
+      ]);
+      const dueDate = parseXeroDotNetDate(dueDateRaw);
 
       const status = getFirstKey(inv, ["Status", "status"]) || null;
 
@@ -1191,6 +1227,13 @@ async function persistInvoices({
       const candidate = {
         customerId,
         ptrsId,
+        importRunId,
+        ...(PtrsXeroInvoice.rawAttributes?.createdBy
+          ? { createdBy: userId || null }
+          : {}),
+        ...(PtrsXeroInvoice.rawAttributes?.updatedBy
+          ? { updatedBy: userId || null }
+          : {}),
         xeroTenantId: tenantId,
         xeroInvoiceId,
         invoiceNumber,
@@ -1225,6 +1268,13 @@ async function persistInvoices({
           logger?.error?.("PTRS v2 Xero invoice persist failed (first error)", {
             action: "PtrsV2XeroPersistInvoiceFailed",
             customerId,
+            importRunId,
+            ...(PtrsXeroInvoice.rawAttributes?.createdBy
+              ? { createdBy: userId || null }
+              : {}),
+            ...(PtrsXeroInvoice.rawAttributes?.updatedBy
+              ? { updatedBy: userId || null }
+              : {}),
             xeroTenantId: tenantId,
             xeroInvoiceId,
             error: e?.message,
@@ -1245,9 +1295,11 @@ async function persistInvoices({
 async function persistContacts({
   customerId,
   ptrsId,
+  importRunId,
   tenantId,
   contacts,
   fetchedAt,
+  userId,
 }) {
   const PtrsXeroContact = getModel("PtrsXeroContact");
   if (!PtrsXeroContact) {
@@ -1295,6 +1347,13 @@ async function persistContacts({
       const candidate = {
         customerId,
         ptrsId,
+        importRunId,
+        ...(PtrsXeroContact.rawAttributes?.createdBy
+          ? { createdBy: userId || null }
+          : {}),
+        ...(PtrsXeroContact.rawAttributes?.updatedBy
+          ? { updatedBy: userId || null }
+          : {}),
         xeroTenantId: tenantId,
         xeroContactId,
         contactName,
@@ -1323,6 +1382,13 @@ async function persistContacts({
           logger?.error?.("PTRS v2 Xero contact persist failed (first error)", {
             action: "PtrsV2XeroPersistContactFailed",
             customerId,
+            importRunId,
+            ...(PtrsXeroContact.rawAttributes?.createdBy
+              ? { createdBy: userId || null }
+              : {}),
+            ...(PtrsXeroContact.rawAttributes?.updatedBy
+              ? { updatedBy: userId || null }
+              : {}),
             xeroTenantId: tenantId,
             xeroContactId,
             error: e?.message,
@@ -1343,9 +1409,11 @@ async function persistContacts({
 async function persistBankTransactions({
   customerId,
   ptrsId,
+  importRunId,
   tenantId,
   bankTransactions,
   fetchedAt,
+  userId,
 }) {
   const PtrsXeroBankTransaction = getModel("PtrsXeroBankTransaction");
   if (!PtrsXeroBankTransaction) {
@@ -1398,6 +1466,13 @@ async function persistBankTransactions({
       const candidate = {
         customerId,
         ptrsId,
+        importRunId,
+        ...(PtrsXeroBankTransaction.rawAttributes?.createdBy
+          ? { createdBy: userId || null }
+          : {}),
+        ...(PtrsXeroBankTransaction.rawAttributes?.updatedBy
+          ? { updatedBy: userId || null }
+          : {}),
         xeroTenantId: tenantId,
         xeroBankTransactionId,
         bankTransactionType: btType || null,
@@ -1431,9 +1506,11 @@ async function persistBankTransactions({
 async function persistOrganisation({
   customerId,
   ptrsId,
+  importRunId,
   tenantId,
   organisation,
   fetchedAt,
+  userId,
 }) {
   const PtrsXeroOrganisation = getModel("PtrsXeroOrganisation");
   if (!PtrsXeroOrganisation) {
@@ -1470,6 +1547,13 @@ async function persistOrganisation({
   const candidate = {
     customerId,
     ptrsId,
+    importRunId,
+    ...(PtrsXeroOrganisation.rawAttributes?.createdBy
+      ? { createdBy: userId || null }
+      : {}),
+    ...(PtrsXeroOrganisation.rawAttributes?.updatedBy
+      ? { updatedBy: userId || null }
+      : {}),
     xeroTenantId: tenantId,
     xeroOrganisationId,
     name,
@@ -1504,6 +1588,13 @@ async function persistOrganisation({
         action: "PtrsV2XeroPersistOrganisationFailed",
         customerId,
         ptrsId,
+        importRunId,
+        ...(PtrsXeroOrganisation.rawAttributes?.createdBy
+          ? { createdBy: userId || null }
+          : {}),
+        ...(PtrsXeroOrganisation.rawAttributes?.updatedBy
+          ? { updatedBy: userId || null }
+          : {}),
         xeroTenantId: tenantId,
         xeroOrganisationId,
         error: e?.message,
@@ -1521,6 +1612,7 @@ async function persistOrganisation({
 async function buildRawDatasetFromXeroCache({
   customerId,
   ptrsId,
+  importRunId,
   tenantIds,
   importStartedAt,
   limit,
@@ -1602,18 +1694,70 @@ async function buildRawDatasetFromXeroCache({
 
   // 🔐 Everything must run inside customer-context txn to satisfy RLS
   return await withCustomerTxn(customerId, async (t) => {
-    // Ensure a dataset row exists for this Xero main import so raw rows can be scoped.
-    // We use role `main` for multi-main support.
+    // Ensure a single MAIN dataset row exists for Xero imports. We do not create a separate
+    // "xero" dataset row because that makes the FE think there are supporting datasets.
     let datasetId = null;
 
+    // Serialise synthetic main dataset creation across concurrent callers (e.g. FE listDatasets
+    // calling upsertMainDatasetFromRaw while the import transaction is still running).
+    // Must use the exact same lock key as upsertMainDatasetFromRaw.
+    try {
+      const key = `${customerId}:${ptrsId}:ptrs_dataset:main`;
+      if (db?.sequelize?.query) {
+        await db.sequelize.query(
+          "SELECT pg_advisory_xact_lock(hashtext(:key))",
+          {
+            replacements: { key },
+            transaction: t,
+          },
+        );
+      }
+    } catch (_) {
+      // Best-effort; never fail the import just because the lock couldn't be taken.
+    }
+
     const existing = await PtrsDataset.findOne({
-      where: { customerId, ptrsId, role: "main" },
+      where: {
+        customerId,
+        ptrsId,
+        role: "main",
+        ...(PtrsDataset.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+      },
       order: [["createdAt", "DESC"]],
       transaction: t,
     });
 
+    const desiredMeta = {
+      source: "xero",
+      createdFrom: "xero_import",
+      displayName: "Xero import",
+      tenantIds: Array.isArray(tenantIds) ? tenantIds : [],
+      importStartedAt: importStartedAt
+        ? new Date(importStartedAt).toISOString()
+        : null,
+      importRunId: importRunId || null,
+    };
+
     if (existing) {
       datasetId = existing.id;
+
+      // Best-effort: keep dataset presentation consistent with the canonical working shape.
+      // Do not clobber meta; merge instead.
+      const currentMeta =
+        existing?.meta && typeof existing.meta === "object"
+          ? existing.meta
+          : {};
+
+      await existing.update(
+        pickModelFields(PtrsDataset, {
+          fileName: "Xero import",
+          status: "uploaded",
+          sourceType: "xero",
+          meta: { ...currentMeta, ...desiredMeta },
+          updatedAt: new Date(),
+        }),
+        { transaction: t },
+      );
     } else {
       const created = await PtrsDataset.create(
         pickModelFields(PtrsDataset, {
@@ -1626,13 +1770,7 @@ async function buildRawDatasetFromXeroCache({
           storageRef: null,
           rowsCount: null,
           status: "uploaded",
-          meta: {
-            createdFrom: "xero_import",
-            tenantIds: Array.isArray(tenantIds) ? tenantIds : [],
-            importStartedAt: importStartedAt
-              ? new Date(importStartedAt).toISOString()
-              : null,
-          },
+          meta: desiredMeta,
         }),
         { transaction: t },
       );
@@ -1653,9 +1791,24 @@ async function buildRawDatasetFromXeroCache({
       ? { fetchedAt: { [Op.gte]: importStartedAt } }
       : {};
 
+    // Prefer importRunId for cache scoping if present on the model; otherwise fall back to ptrsId.
+    const buildScopeFilter = (Model) => {
+      if (!Model || !Model.rawAttributes) return {};
+
+      if (importRunId && Model.rawAttributes.importRunId) {
+        return { importRunId };
+      }
+
+      if (ptrsId && Model.rawAttributes.ptrsId) {
+        return { ptrsId };
+      }
+
+      return {};
+    };
+
     const paymentWhere = {
       ...whereBase,
-      ...(PtrsXeroPayment.rawAttributes?.ptrsId ? { ptrsId } : {}),
+      ...buildScopeFilter(PtrsXeroPayment),
       ...dateWhere,
     };
 
@@ -1673,7 +1826,7 @@ async function buildRawDatasetFromXeroCache({
     if (PtrsXeroBankTransaction) {
       const bankTxWhere = {
         ...whereBase,
-        ...(PtrsXeroBankTransaction.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...buildScopeFilter(PtrsXeroBankTransaction),
         ...dateWhere,
       };
 
@@ -1695,7 +1848,7 @@ async function buildRawDatasetFromXeroCache({
     if (PtrsXeroInvoice && invoiceIds.length) {
       const invoiceWhere = {
         ...whereBase,
-        ...(PtrsXeroInvoice.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...buildScopeFilter(PtrsXeroInvoice),
         xeroInvoiceId: invoiceIds,
         ...dateWhere,
       };
@@ -1749,7 +1902,7 @@ async function buildRawDatasetFromXeroCache({
     if (PtrsXeroContact && contactIds.length) {
       const contactWhere = {
         ...whereBase,
-        ...(PtrsXeroContact.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...buildScopeFilter(PtrsXeroContact),
         xeroContactId: contactIds,
         ...dateWhere,
       };
@@ -1772,7 +1925,7 @@ async function buildRawDatasetFromXeroCache({
     if (PtrsXeroOrganisation) {
       const orgWhere = {
         ...whereBase,
-        ...(PtrsXeroOrganisation.rawAttributes?.ptrsId ? { ptrsId } : {}),
+        ...buildScopeFilter(PtrsXeroOrganisation),
         ...dateWhere,
       };
 
@@ -2084,12 +2237,34 @@ async function buildRawDatasetFromXeroCache({
       await PtrsImportRaw.bulkCreate(rowsToInsert, { transaction: t });
     }
 
-    // Best-effort: update dataset rowsCount
+    // (Removed upsertMainDatasetFromRaw call per Option A: direct dataset create/update above)
+
+    // Best-effort: update dataset rowsCount and keep meta aligned.
     try {
-      await PtrsDataset.update(
-        { rowsCount: rowsToInsert.length, updatedAt: new Date() },
-        { where: { id: datasetId, customerId, ptrsId }, transaction: t },
-      );
+      const row = await PtrsDataset.findOne({
+        where: { id: datasetId, customerId, ptrsId },
+        transaction: t,
+      });
+
+      if (row) {
+        const currentMeta =
+          row?.meta && typeof row.meta === "object" ? row.meta : {};
+        await row.update(
+          pickModelFields(PtrsDataset, {
+            rowsCount: rowsToInsert.length,
+            meta: {
+              ...currentMeta,
+              source: "xero",
+              displayName: "Xero import",
+              rowsCount: rowsToInsert.length,
+              updatedAt: new Date().toISOString(),
+              importRunId: importRunId || currentMeta.importRunId || null,
+            },
+            updatedAt: new Date(),
+          }),
+          { transaction: t },
+        );
+      }
     } catch (_) {}
 
     return { insertedRows: rowsToInsert.length, datasetId };
@@ -2473,6 +2648,7 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
 
 async function startImport({ customerId, ptrsId, userId }) {
   const importStartedAt = new Date();
+  const importRunId = generateImportRunId(ptrsId);
 
   // Source of truth: the PTRS run itself (periodStart/periodEnd)
   const Ptrs = getModel("Ptrs");
@@ -2499,7 +2675,7 @@ async function startImport({ customerId, ptrsId, userId }) {
       status: "FAILED",
       message:
         "PTRS reporting period is not set (periodStart/periodEnd). Please set the reporting period in step 1 and try again.",
-      progress: { extractedCount: 0, insertedCount: 0 },
+      progress: { extractedCount: 0, insertedCount: 0, importRunId },
     });
     return failed;
   }
@@ -2540,6 +2716,7 @@ async function startImport({ customerId, ptrsId, userId }) {
       extractedCount: 0,
       tenantCount: selectedTenantIds.length,
       currentTenantIndex: 0,
+      importRunId,
     },
   });
 
@@ -2581,6 +2758,7 @@ async function startImport({ customerId, ptrsId, userId }) {
           action: "PtrsV2XeroImportHeartbeat",
           customerId,
           ptrsId,
+          importRunId,
           message,
           ...progressPatch,
           tookMs: now - startedMs,
@@ -2591,6 +2769,7 @@ async function startImport({ customerId, ptrsId, userId }) {
         action: "PtrsV2XeroImportRunnerStart",
         customerId,
         ptrsId,
+        importRunId,
         userId,
         periodStart,
         periodEnd,
@@ -2621,13 +2800,6 @@ async function startImport({ customerId, ptrsId, userId }) {
       const invoiceFetchFailedSample = [];
       const contactFetchFailedSample = [];
       const bankTxFetchFailedSample = [];
-
-      const addSample = (arr, value, max = 10) => {
-        if (!value) return;
-        if (arr.length >= max) return;
-        if (arr.includes(value)) return;
-        arr.push(value);
-      };
 
       const getErrStatusCode = (e) =>
         e?.statusCode || e?.response?.status || e?.response?.statusCode || null;
@@ -2724,9 +2896,11 @@ async function startImport({ customerId, ptrsId, userId }) {
             await persistOrganisation({
               customerId,
               ptrsId,
+              importRunId,
               tenantId,
               organisation,
               fetchedAt: orgFetchedAt,
+              userId,
             });
 
             heartbeat(
@@ -2850,6 +3024,7 @@ async function startImport({ customerId, ptrsId, userId }) {
           const persistPaymentsTmr = phaseTimer({
             customerId,
             ptrsId,
+            importRunId,
             tenantId,
             phase: "tenant:persistPayments",
           });
@@ -2858,9 +3033,11 @@ async function startImport({ customerId, ptrsId, userId }) {
           const payPersist = await persistPayments({
             customerId,
             ptrsId,
+            importRunId,
             tenantId,
             payments: tenantPaymentItems,
             fetchedAt: importStartedAt,
+            userId,
           });
 
           persistPaymentsTmr.end("ok", {
@@ -2897,6 +3074,7 @@ async function startImport({ customerId, ptrsId, userId }) {
               extractedCount: counter.count,
               insertedCount,
               lastTenantId: tenantId,
+              importRunId,
             },
           });
 
@@ -2939,8 +3117,10 @@ async function startImport({ customerId, ptrsId, userId }) {
             customerId,
             tenantId,
             ptrsId,
+            importRunId,
             invoices,
             fetchedAt: importStartedAt,
+            userId,
           });
 
           invoicesInserted += invPersist.inserted || 0;
@@ -2968,6 +3148,7 @@ async function startImport({ customerId, ptrsId, userId }) {
               extractedCount: counter.count,
               insertedCount,
               lastTenantId: tenantId,
+              importRunId,
             },
           });
 
@@ -3014,6 +3195,12 @@ async function startImport({ customerId, ptrsId, userId }) {
                 action: "PtrsV2XeroFetchContactsBatchFailed",
                 customerId,
                 ptrsId,
+                ...(PtrsXeroPayment.rawAttributes?.createdBy
+                  ? { createdBy: userId || null }
+                  : {}),
+                ...(PtrsXeroPayment.rawAttributes?.updatedBy
+                  ? { updatedBy: userId || null }
+                  : {}),
                 xeroTenantId: tenantId,
                 error: e?.message,
                 statusCode: sc,
@@ -3028,6 +3215,7 @@ async function startImport({ customerId, ptrsId, userId }) {
                   insertedCount,
                   lastTenantId: tenantId,
                   contactFetchFailedCount,
+                  importRunId,
                 },
               });
             }
@@ -3036,9 +3224,11 @@ async function startImport({ customerId, ptrsId, userId }) {
           const contactPersist = await persistContacts({
             customerId,
             ptrsId,
+            importRunId,
             tenantId,
             contacts,
             fetchedAt: importStartedAt,
+            userId,
           });
 
           contactsInserted += contactPersist.inserted || 0;
@@ -3047,68 +3237,66 @@ async function startImport({ customerId, ptrsId, userId }) {
           // For MVP we only cache a small sample and do not interpret allocations yet.
           const bankTxItems = [];
           try {
-            if (extractLimit) {
-              const btCounter = { count: 0 };
-              let btEmpty = false;
+            const btCounter = { count: 0 };
+            let btEmpty = false;
 
-              await paginateXeroApi(
-                async (pageNum) => {
-                  const btPageRes = await fetchBankTransactionsPage({
-                    customerId,
-                    tokenRow,
+            await paginateXeroApi(
+              async (pageNum) => {
+                const btPageRes = await fetchBankTransactionsPage({
+                  customerId,
+                  tokenRow,
+                  tenantId,
+                  periodStart,
+                  periodEnd,
+                  page: pageNum,
+                });
+                tokenRow = btPageRes.tokenRow;
+                tenantBankTxPagesFetched = pageNum;
+                bankTxPagesFetched = pageNum;
+                return {
+                  data: { BankTransactions: btPageRes.items },
+                  headers: {},
+                  status: 200,
+                };
+              },
+              async (response) => {
+                const pageItems = Array.isArray(
+                  response?.data?.BankTransactions,
+                )
+                  ? response.data.BankTransactions
+                  : [];
+                if (!pageItems.length) {
+                  btEmpty = true;
+                  return;
+                }
+
+                const { items: limitedItems, done } = applyExtractLimit(
+                  pageItems,
+                  extractLimit,
+                  btCounter,
+                );
+
+                bankTxItems.push(...limitedItems);
+                tenantBankTxFetched += limitedItems.length;
+                bankTxFetched = tenantBankTxFetched;
+                heartbeat(
+                  `Tenant ${i + 1}/${selectedTenantIds.length}: fetching bank transactions… (${tenantBankTxFetched} so far, page ${tenantBankTxPagesFetched})`,
+                  {
                     tenantId,
-                    periodStart,
-                    periodEnd,
-                    page: pageNum,
-                  });
-                  tokenRow = btPageRes.tokenRow;
-                  tenantBankTxPagesFetched = pageNum;
-                  bankTxPagesFetched = pageNum;
-                  return {
-                    data: { BankTransactions: btPageRes.items },
-                    headers: {},
-                    status: 200,
-                  };
-                },
-                async (response) => {
-                  const pageItems = Array.isArray(
-                    response?.data?.BankTransactions,
-                  )
-                    ? response.data.BankTransactions
-                    : [];
-                  if (!pageItems.length) {
-                    btEmpty = true;
-                    return;
-                  }
+                    currentTenantIndex: i + 1,
+                    bankTxPagesFetched: tenantBankTxPagesFetched,
+                    bankTxFetched: tenantBankTxFetched,
+                  },
+                  "info",
+                );
 
-                  const { items: limitedItems, done } = applyExtractLimit(
-                    pageItems,
-                    extractLimit,
-                    btCounter,
-                  );
-
-                  bankTxItems.push(...limitedItems);
-                  tenantBankTxFetched += limitedItems.length;
-                  bankTxFetched = tenantBankTxFetched;
-                  heartbeat(
-                    `Tenant ${i + 1}/${selectedTenantIds.length}: fetching bank transactions… (${tenantBankTxFetched} so far, page ${tenantBankTxPagesFetched})`,
-                    {
-                      tenantId,
-                      currentTenantIndex: i + 1,
-                      bankTxPagesFetched: tenantBankTxPagesFetched,
-                      bankTxFetched: tenantBankTxFetched,
-                    },
-                    "info",
-                  );
-
-                  if (done) btEmpty = true;
-                },
-                {
-                  startPage: 1,
-                  hasMoreFn: () => !btEmpty,
-                },
-              );
-            }
+                if (done) btEmpty = true;
+              },
+              {
+                startPage: 1,
+                hasMoreFn: () => !btEmpty,
+              },
+            );
           } catch (e) {
             bankTxFetchFailedCount++;
             const sc = getErrStatusCode(e);
@@ -3118,6 +3306,12 @@ async function startImport({ customerId, ptrsId, userId }) {
               action: "PtrsV2XeroFetchBankTransactionsFailed",
               customerId,
               ptrsId,
+              ...(PtrsXeroPayment.rawAttributes?.createdBy
+                ? { createdBy: userId || null }
+                : {}),
+              ...(PtrsXeroPayment.rawAttributes?.updatedBy
+                ? { updatedBy: userId || null }
+                : {}),
               xeroTenantId: tenantId,
               error: e?.message,
               statusCode: sc,
@@ -3134,6 +3328,7 @@ async function startImport({ customerId, ptrsId, userId }) {
                 lastTenantId: tenantId,
                 bankTxFetchFailedCount,
                 bankTxFetchFailedSample,
+                importRunId,
               },
             });
           }
@@ -3141,9 +3336,11 @@ async function startImport({ customerId, ptrsId, userId }) {
           const bankPersist = await persistBankTransactions({
             customerId,
             ptrsId,
+            importRunId,
             tenantId,
             bankTransactions: bankTxItems,
             fetchedAt: importStartedAt,
+            userId,
           });
 
           bankTxInserted += bankPersist.inserted || 0;
@@ -3161,6 +3358,7 @@ async function startImport({ customerId, ptrsId, userId }) {
               contactFetchFailedSample,
               bankTxFetchFailedCount,
               bankTxFetchFailedSample,
+              importRunId,
             },
           });
 
@@ -3190,12 +3388,14 @@ async function startImport({ customerId, ptrsId, userId }) {
             invoicesInserted,
             contactsInserted,
             bankTxInserted,
+            importRunId,
           },
         });
 
         const rawBuild = await buildRawDatasetFromXeroCache({
           customerId,
           ptrsId,
+          importRunId,
           tenantIds: selectedTenantIds,
           importStartedAt,
           limit: extractLimit || null,
@@ -3215,6 +3415,7 @@ async function startImport({ customerId, ptrsId, userId }) {
             const candidate = {
               customerId,
               ptrsId,
+              importRunId,
               role: "main",
               fileName: "Xero import",
               storageRef: null,
@@ -3279,6 +3480,7 @@ async function startImport({ customerId, ptrsId, userId }) {
             contactFetchFailedSample,
             bankTxFetchFailedCount,
             bankTxFetchFailedSample,
+            importRunId,
           },
         });
         // --- Socket push (MVP): notify subscribed clients of status changes ---
@@ -3304,6 +3506,7 @@ async function startImport({ customerId, ptrsId, userId }) {
                 contactFetchFailedSample,
                 bankTxFetchFailedCount,
                 bankTxFetchFailedSample,
+                importRunId,
               },
               updatedAt: new Date().toISOString(),
             });
@@ -3336,7 +3539,11 @@ async function startImport({ customerId, ptrsId, userId }) {
         updateStatus(customerId, ptrsId, {
           status: "FAILED",
           message: `${err?.message || "Xero import failed."}${hint}${extra}`,
-          progress: { extractedCount: counter.count, insertedCount },
+          progress: {
+            extractedCount: counter.count,
+            insertedCount,
+            importRunId,
+          },
         });
 
         const phaseTimer = ({

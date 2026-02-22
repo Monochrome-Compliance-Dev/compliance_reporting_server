@@ -319,6 +319,32 @@ function ensureCanonicalRowShape(row) {
   return out;
 }
 
+// Postgres JSONB will reject strings containing NUL (\u0000) bytes.
+// Also, JSON cannot represent `undefined` values.
+function sanitizeForJsonbDeep(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+
+  if (typeof value === "string") {
+    // Remove any NUL bytes which Postgres rejects.
+    return value.includes("\u0000") ? value.replace(/\u0000/g, "") : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((v) => sanitizeForJsonbDeep(v));
+  }
+
+  if (typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = sanitizeForJsonbDeep(v);
+    }
+    return out;
+  }
+
+  return value;
+}
+
 async function loadMappedRowsForPtrs({
   customerId,
   ptrsId,
@@ -1060,11 +1086,26 @@ async function buildMappedDatasetForPtrs({
       }),
     );
 
-    // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot
+    // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot.
+    // IMPORTANT: PtrsMappedRow is paranoid/soft-delete in some environments; a soft delete will NOT
+    // remove the (customerId, ptrsId, rowNo) unique constraint conflicts. Force a hard delete.
     await db.PtrsMappedRow.destroy({
+      where: { customerId, ptrsId },
+      force: true,
+      transaction: t,
+    });
+
+    const existingCount = await db.PtrsMappedRow.count({
       where: { customerId, ptrsId },
       transaction: t,
     });
+
+    if (existingCount) {
+      slog.warn(
+        "PTRS v2 buildMappedDatasetForPtrs: mapped rows still exist after destroy (possible unexpected constraint/paranoid behaviour)",
+        safeMeta({ customerId, ptrsId, existingCount }),
+      );
+    }
 
     let offset = 0;
     let totalPersisted = 0;
@@ -1100,7 +1141,7 @@ async function buildMappedDatasetForPtrs({
       const payload = [];
       for (let i = 0; i < rows.length; ++i) {
         const row = rows[i];
-        const canonicalRow = ensureCanonicalRowShape(row);
+        const canonicalRow = sanitizeForJsonbDeep(ensureCanonicalRowShape(row));
         if (isFirstBatch) {
           // Collect header keys from first batch only
           for (const k of Object.keys(canonicalRow)) {
@@ -1115,18 +1156,40 @@ async function buildMappedDatasetForPtrs({
               ? row.row_no
               : offset + i + 1,
           data: canonicalRow,
-          meta: {
+          meta: sanitizeForJsonbDeep({
             stage: "ptrs.v2.mapped",
             builtAt: nowIso,
             builtBy: actorId || null,
-          },
+          }),
         });
       }
 
-      await db.PtrsMappedRow.bulkCreate(payload, {
-        transaction: t,
-        validate: false,
-      });
+      try {
+        await db.PtrsMappedRow.bulkCreate(payload, {
+          transaction: t,
+          validate: false,
+        });
+      } catch (e) {
+        // Surface the underlying Postgres error detail so we can fix the real cause.
+        slog.error(
+          "PTRS v2 buildMappedDatasetForPtrs: bulkCreate failed",
+          safeMeta({
+            customerId,
+            ptrsId,
+            offset,
+            batchSize: payload.length,
+            message: e?.message || null,
+            name: e?.name || null,
+            pgMessage: e?.parent?.message || e?.original?.message || null,
+            pgDetail: e?.parent?.detail || null,
+            pgCode: e?.parent?.code || null,
+            errors: Array.isArray(e?.errors)
+              ? e.errors.map((x) => ({ message: x?.message, path: x?.path }))
+              : null,
+          }),
+        );
+        throw e;
+      }
       totalPersisted += payload.length;
       if (isFirstBatch) {
         canonicalHeaders = Array.from(headersSet);
@@ -1967,9 +2030,56 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     return idx;
   };
 
+  // ---------------- Determine anchor/main dataset for this ptrs run ----------------
+  // IMPORTANT: PtrsImportRaw contains rows for *all* datasets (main + supporting).
+  // Mapped rows must be built from the anchor/main dataset only, otherwise rowNo will collide.
+  let mainDatasetId = null;
+  try {
+    const dsRows = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId },
+      attributes: ["id", "role", "createdAt"],
+      raw: true,
+      transaction,
+    });
+
+    const normRole = (r) =>
+      String(r || "")
+        .trim()
+        .toLowerCase();
+    const byRole = (role) =>
+      (dsRows || []).find((d) => normRole(d.role) === role);
+
+    const main = byRole("main");
+    const anchor = byRole("anchor");
+
+    if (main && main.id) mainDatasetId = main.id;
+    else if (anchor && anchor.id) mainDatasetId = anchor.id;
+    else if (Array.isArray(dsRows) && dsRows.length === 1)
+      mainDatasetId = dsRows[0].id;
+
+    slog.info(
+      "PTRS v2 composeMappedRowsForPtrs: resolved main dataset",
+      safeMeta({
+        customerId,
+        ptrsId,
+        mainDatasetId,
+        datasetCount: Array.isArray(dsRows) ? dsRows.length : 0,
+        roles: Array.isArray(dsRows) ? dsRows.map((d) => d.role) : [],
+      }),
+    );
+  } catch (e) {
+    slog.warn(
+      "PTRS v2 composeMappedRowsForPtrs: failed to resolve main dataset; falling back to unscoped import_raw",
+      safeMeta({ customerId, ptrsId, error: e.message }),
+    );
+    mainDatasetId = null;
+  }
+
   // Read main rows
   const findOpts = {
-    where: { customerId, ptrsId },
+    where: mainDatasetId
+      ? { customerId, ptrsId, datasetId: mainDatasetId }
+      : { customerId, ptrsId },
     order: [["rowNo", "ASC"]],
     attributes: ["rowNo", "data"],
     raw: true,
@@ -1985,6 +2095,21 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
   }
 
   const mainRows = await db.PtrsImportRaw.findAll(findOpts);
+
+  if (!mainDatasetId) {
+    try {
+      const dsCount = await db.PtrsDataset.count({
+        where: { customerId, ptrsId },
+        transaction,
+      });
+      if (dsCount > 1) {
+        slog.warn(
+          "PTRS v2 composeMappedRowsForPtrs: mainDatasetId not resolved while multiple datasets exist; mapped rows may include supporting datasets",
+          safeMeta({ customerId, ptrsId, datasetCount: dsCount }),
+        );
+      }
+    } catch (_) {}
+  }
 
   const composed = [];
 
@@ -2012,12 +2137,25 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
 
         if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
-        // Enforce join order strictly: if the join reads from a supporting role that hasn't been merged yet, fail loudly.
+        // If a join reads from a supporting role that isn't present on this row yet,
+        // it usually means the earlier join that would have brought that role in
+        // simply didn't match for this specific record.
+        // That's not a global "invalid join order" — it's a per-row absence.
+        // In that case we skip this join for this row.
         if (!isMainRole(fromRole) && !hasRoleInRow(workingRow, fromRole)) {
-          throw new Error(
-            `Invalid join order: join references fromRole '${fromRole}' before it has been merged. ` +
-              `Move the join that brings '${fromRole}' earlier in the list.`,
-          );
+          if (!loggedJoinProbe && logger && logger.debug) {
+            loggedJoinProbe = true;
+            slog.debug(
+              "PTRS v2 composeMappedRowsForPtrs: join probe (missing fromRole on row; skipping)",
+              safeMeta({
+                customerId,
+                ptrsId,
+                join: j,
+                fromRole,
+              }),
+            );
+          }
+          continue;
         }
 
         // Do not allow indexing main roles as targets.
