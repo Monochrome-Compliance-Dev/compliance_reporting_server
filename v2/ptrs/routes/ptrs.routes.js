@@ -63,7 +63,8 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 
 // New sub routes
 const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
-const tablesAndmapsRoutes = require("@/v2/ptrs/routes/tablesAndmaps.ptrs.routes");
+const joinsRoutes = require("@/v2/ptrs/routes/joins.ptrs.routes");
+const mapsRoutes = require("@/v2/ptrs/routes/maps.ptrs.routes");
 const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
 const exclusionsRoutes = require("@/v2/ptrs/routes/exclusions.ptrs.routes");
 const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
@@ -76,8 +77,11 @@ const reportRoutes = require("@/v2/ptrs/routes/report.ptrs.routes");
 // datasets (supporting files)
 router.use("/", dataRoutes);
 
-// tables + map (mappings, joins, header meta)
-router.use("/", tablesAndmapsRoutes);
+// joins + custom fields
+router.use("/", joinsRoutes);
+
+// tables + map (mappings, header meta)
+router.use("/", mapsRoutes);
 
 // staging
 router.use("/", stageRoutes);

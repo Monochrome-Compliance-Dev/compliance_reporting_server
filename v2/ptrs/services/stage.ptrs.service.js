@@ -11,14 +11,13 @@ const {
 } = require("./ptrs.service");
 
 const { applyRules } = require("./rules.ptrs.service");
-const {
-  loadMappedRowsForPtrs,
-  getColumnMap,
-} = require("./tablesAndMaps.ptrs.service");
+const { loadMappedRowsForPtrs, getColumnMap } = require("./maps.ptrs.service");
 const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+
+const { createPtrsTrace, hrMsSince } = require("@/helpers/ptrsTrackerLog");
 
 module.exports = {
   stagePtrs,
@@ -924,6 +923,32 @@ async function stagePtrs({
   const started = Date.now();
   const t = await beginTransactionWithCustomerContext(customerId);
 
+  const trace = createPtrsTrace({
+    customerId,
+    ptrsId,
+    actorId: userId || null,
+    logInfo: (msg, meta) => slog.info(msg, meta),
+    meta: safeMeta,
+  });
+
+  const jobStartNs = process.hrtime.bigint();
+  const stageStart = (name) => ({ name, startNs: process.hrtime.bigint() });
+  const stageEnd = (s, extra = {}) => {
+    if (!s) return;
+    trace?.write("stage_stage_end", {
+      stage: s.name,
+      durationMs: hrMsSince(s.startNs),
+      ...extra,
+    });
+  };
+
+  trace?.write("stage_begin", {
+    persist: !!persist,
+    limit: limit == null ? null : Number(limit),
+    stepsCount: Array.isArray(steps) ? steps.length : 0,
+    hasProfileId: !!profileId,
+  });
+
   try {
     // --- Execution run tracking (only for persist runs) ---
 
@@ -1120,8 +1145,15 @@ async function stagePtrs({
             existingStageCount,
           },
         );
+        trace?.write("stage_skip_input_unchanged", {
+          inputHash,
+          previousRunId: previous.id || null,
+          existingStageCount,
+          totalMs: hrMsSince(jobStartNs),
+        });
 
         await t.commit();
+        if (trace) await trace.close();
         return {
           skipped: true,
           reason: "INPUT_UNCHANGED",
@@ -1165,11 +1197,15 @@ async function stagePtrs({
     }
 
     // 1) Compose mapped rows for this ptrs (import + joins + column map)
+    const sLoadMapped = stageStart("load_mapped_rows");
     const { rows: baseRows } = await loadMappedRowsForPtrs({
       customerId,
       ptrsId,
       limit: null,
       transaction: t,
+    });
+    stageEnd(sLoadMapped, {
+      rowsCount: Array.isArray(baseRows) ? baseRows.length : 0,
     });
 
     // Canonical fields are already materialised on mapped rows before staging.
@@ -1186,11 +1222,17 @@ async function stagePtrs({
 
     // Load the column map once; used by rules + term-change joins
     let mapRow = null;
+    const sLoadMap = stageStart("load_column_map");
     try {
       mapRow = await getColumnMap({ customerId, ptrsId, transaction: t });
     } catch (_) {
       mapRow = null;
     }
+    stageEnd(sLoadMap, {
+      hasMap: !!mapRow,
+      hasRowRules: !!(mapRow && mapRow.rowRules),
+      hasJoins: !!(mapRow && mapRow.joins),
+    });
 
     // 2) Apply row-level rules (if any) independently of preview
     let stagedRows = rows;
@@ -1206,12 +1248,18 @@ async function stagePtrs({
         }
       }
 
+      const sRules = stageStart("apply_row_rules");
       const rulesResult = applyRules(
         stagedRows,
         Array.isArray(rowRules) ? rowRules : [],
       );
       stagedRows = rulesResult.rows || stagedRows;
       rulesStats = rulesResult.stats || null;
+      stageEnd(sRules, {
+        rowsOut: Array.isArray(stagedRows) ? stagedRows.length : 0,
+        rulesCount: Array.isArray(rowRules) ? rowRules.length : 0,
+        rulesStats: rulesResult.stats || null,
+      });
     } catch (err) {
       slog.warn("PTRS v2 stagePtrs: failed to apply row rules", {
         action: "PtrsV2StagePtrsApplyRules",
@@ -1226,6 +1274,7 @@ async function stagePtrs({
     let paymentTermChangeStats = null;
     try {
       if (profileId) {
+        const sTermChanges = stageStart("apply_payment_term_changes");
         const changeMap = await loadEffectiveTermChangesForRows({
           customerId,
           profileId,
@@ -1241,6 +1290,12 @@ async function stagePtrs({
         );
         stagedRows = changeResult.rows || stagedRows;
         paymentTermChangeStats = changeResult.stats || null;
+
+        stageEnd(sTermChanges, {
+          applied: Number(changeResult?.stats?.applied) || 0,
+          considered: Number(changeResult?.stats?.considered) || 0,
+          missingKey: Number(changeResult?.stats?.missingKey) || 0,
+        });
 
         if (paymentTermChangeStats?.applied) {
           slog.info(
@@ -1271,6 +1326,10 @@ async function stagePtrs({
         }
       }
     } catch (err) {
+      trace?.write("stage_payment_term_changes_error", {
+        message: err?.message || null,
+        statusCode: err?.statusCode || null,
+      });
       slog.warn("PTRS v2 stagePtrs: failed to apply payment term changes", {
         action: "PtrsV2StagePtrsPaymentTermChangesFailed",
         customerId,
@@ -1285,6 +1344,7 @@ async function stagePtrs({
     let paymentTermStats = null;
     try {
       if (profileId) {
+        const sTermMap = stageStart("apply_payment_term_map");
         const termMap = await loadPaymentTermMap({
           customerId,
           profileId,
@@ -1294,6 +1354,12 @@ async function stagePtrs({
         const termResult = applyPaymentTermDaysFromMap(stagedRows, termMap);
         stagedRows = termResult.rows;
         paymentTermStats = termResult.stats;
+        stageEnd(sTermMap, {
+          lookedUp: Number(termResult?.stats?.lookedUp) || 0,
+          filled: Number(termResult?.stats?.filled) || 0,
+          missing: Number(termResult?.stats?.missing) || 0,
+          unmapped: Number(termResult?.stats?.unmapped) || 0,
+        });
 
         if (
           paymentTermStats?.missing ||
@@ -1319,6 +1385,10 @@ async function stagePtrs({
         );
       }
     } catch (err) {
+      trace?.write("stage_payment_term_map_error", {
+        message: err?.message || null,
+        statusCode: err?.statusCode || null,
+      });
       slog.warn("PTRS v2 stagePtrs: failed to apply payment term mapping", {
         action: "PtrsV2StagePtrsPaymentTermMapFailed",
         customerId,
@@ -1331,6 +1401,9 @@ async function stagePtrs({
     // 2c) Derive payment_time_days according to regulator worked-example logic
     // We do this in staging so Metrics can remain dumb and deterministic.
     try {
+      const sPaymentTime = stageStart("derive_payment_time_days");
+      let derivedCount = 0;
+      let underivedCount = 0;
       for (const r of stagedRows) {
         if (!r || typeof r !== "object") continue;
 
@@ -1347,16 +1420,27 @@ async function stagePtrs({
               value: null,
             });
           }
+          underivedCount += 1;
           continue;
         }
 
+        derivedCount += 1;
         r.payment_time_days = res.days;
         if (res.referenceDate)
           r.payment_time_reference_date = res.referenceDate;
         if (res.referenceKind)
           r.payment_time_reference_kind = res.referenceKind;
       }
+      stageEnd(sPaymentTime, {
+        derivedCount,
+        underivedCount,
+        rows: Array.isArray(stagedRows) ? stagedRows.length : 0,
+      });
     } catch (err) {
+      trace?.write("stage_payment_time_error", {
+        message: err?.message || null,
+        statusCode: err?.statusCode || null,
+      });
       slog.warn("PTRS v2 stagePtrs: failed to derive payment_time_days", {
         action: "PtrsV2StagePtrsPaymentTimeDerivationFailed",
         customerId,
@@ -1542,10 +1626,12 @@ async function stagePtrs({
       });
 
       // Clear existing active stage rows for this ptrsId/customerId (full rebuild)
+      const sPersistClear = stageStart("persist_stage_clear");
       const clearedCount = await db.PtrsStageRow.destroy({
         where: { customerId, ptrsId },
         transaction: t,
       });
+      stageEnd(sPersistClear, { clearedCount: Number(clearedCount) || 0 });
 
       slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
         action: "PtrsV2StagePtrsClearActive",
@@ -1555,12 +1641,18 @@ async function stagePtrs({
       });
 
       try {
+        const sPersistInsert = stageStart("persist_stage_bulk_create");
         await db.PtrsStageRow.bulkCreate(rowsToInsert, {
           transaction: t,
           validate: false,
         });
+        stageEnd(sPersistInsert, { inserted: rowsToInsert.length });
         persistedCount = rowsToInsert.length;
       } catch (err) {
+        trace?.write("stage_persist_bulk_create_error", {
+          message: err?.message || null,
+          statusCode: err?.statusCode || null,
+        });
         slog.error("PTRS v2 stagePtrs: bulkCreate failed", {
           action: "PtrsV2StagePtrsBulkCreateFailed",
           customerId,
@@ -1597,6 +1689,7 @@ async function stagePtrs({
 
     if (executionRun?.id) {
       try {
+        const sRunUpdate = stageStart("execution_run_update_success");
         await updateExecutionRun({
           customerId,
           executionRunId: executionRun.id,
@@ -1613,7 +1706,12 @@ async function stagePtrs({
           updatedBy: userId || null,
           transaction: t,
         });
+        stageEnd(sRunUpdate, { executionRunId: executionRun.id || null });
       } catch (e) {
+        trace?.write("execution_run_update_error", {
+          executionRunId: executionRun.id || null,
+          message: e?.message || null,
+        });
         slog.warn(
           "PTRS v2 stagePtrs: failed to update execution run (non-fatal)",
           {
@@ -1627,7 +1725,16 @@ async function stagePtrs({
       }
     }
 
+    trace?.write("stage_before_commit", {
+      rowsIn: stagedRows.length,
+      rowsOut: stagedRows.length,
+      persistedCount,
+      totalMs: hrMsSince(jobStartNs),
+      tookMs: Date.now() - started,
+    });
     await t.commit();
+    trace?.write("stage_committed", { totalMs: hrMsSince(jobStartNs) });
+    if (trace) await trace.close();
 
     return {
       rowsIn: stagedRows.length,
@@ -1642,6 +1749,11 @@ async function stagePtrs({
       },
     };
   } catch (err) {
+    trace?.write("stage_error", {
+      message: err?.message || null,
+      statusCode: err?.statusCode || null,
+      totalMs: hrMsSince(jobStartNs),
+    });
     if (executionRun?.id) {
       try {
         await updateExecutionRun({
@@ -1665,6 +1777,7 @@ async function stagePtrs({
         // ignore rollback errors
       }
     }
+    if (trace) await trace.close();
     throw err;
   }
 }
@@ -1686,6 +1799,16 @@ async function getStagePreview({
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
+
+  const trace = createPtrsTrace({
+    customerId,
+    ptrsId,
+    actorId: null,
+    logInfo: (msg, meta) => slog.info(msg, meta),
+    meta: safeMeta,
+  });
+  const startNs = process.hrtime.bigint();
+  trace?.write("stage_preview_begin", { limit });
 
   let canon = [];
   try {
@@ -1770,7 +1893,15 @@ async function getStagePreview({
       headers = Array.from(headerSet);
     }
 
+    trace?.write("stage_preview_before_commit", {
+      rows: Array.isArray(rowsRaw) ? rowsRaw.length : 0,
+      totalRows,
+      headersCount: Array.isArray(headers) ? headers.length : 0,
+      totalMs: hrMsSince(startNs),
+    });
     await t.commit();
+    trace?.write("stage_preview_committed", { totalMs: hrMsSince(startNs) });
+    if (trace) await trace.close();
 
     return {
       headers,
@@ -1779,6 +1910,11 @@ async function getStagePreview({
       stats: null,
     };
   } catch (err) {
+    trace?.write("stage_preview_error", {
+      message: err?.message || null,
+      statusCode: err?.statusCode || null,
+      totalMs: hrMsSince(startNs),
+    });
     if (!t.finished) {
       try {
         await t.rollback();
@@ -1786,6 +1922,7 @@ async function getStagePreview({
         // ignore rollback errors
       }
     }
+    if (trace) await trace.close();
     throw err;
   }
 }

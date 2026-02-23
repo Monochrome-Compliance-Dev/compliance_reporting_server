@@ -23,7 +23,7 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { slog, safeMeta } = require("./ptrs.service");
-const { loadMappedRowsForPtrs } = require("./tablesAndMaps.ptrs.service");
+const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
 
 module.exports = {
   applyRules,

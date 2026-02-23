@@ -20,6 +20,8 @@ const { normalizeAmountLike } = require("@/helpers/amountNormaliser");
 
 const { Op } = require("sequelize");
 
+const { createPtrsTrace, hrMsSince } = require("@/helpers/ptrsTrackerLog");
+
 // --- Map compatibility helpers ---
 function normHeaderKey(s) {
   return String(s || "")
@@ -121,7 +123,103 @@ module.exports = {
   getFieldMap,
   saveFieldMap,
   listCompatibleMaps,
+  getMainDatasetHeaderInfo,
 };
+/**
+ * Cheap header + example extraction for the MAIN dataset.
+ *
+ * This is intentionally lightweight and should NOT touch PtrsImportRaw.
+ * It prefers PtrsDataset.meta.headers and only falls back to a small dataset sample.
+ */
+async function getMainDatasetHeaderInfo({
+  customerId,
+  ptrsId,
+  limit = 5,
+  offset = 0,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const isExternalTx = !!transaction;
+
+  const isMainRole = (role) => {
+    const r = String(role || "").toLowerCase();
+    return r === "main" || r.startsWith("main_");
+  };
+
+  try {
+    const dsRows = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId },
+      attributes: ["id", "meta", "role"],
+      raw: true,
+      transaction: t,
+    });
+
+    const datasets = Array.isArray(dsRows) ? dsRows : [];
+    const main =
+      datasets.find((d) => isMainRole(d?.role)) || datasets[0] || null;
+
+    const datasetId = main?.id || null;
+    const meta = main?.meta && typeof main.meta === "object" ? main.meta : {};
+
+    // Prefer precomputed headers from dataset metadata
+    let headers = Array.isArray(meta.headers) ? meta.headers : [];
+
+    // Build examples by sampling a few rows from the dataset sample endpoint.
+    // This is the same lightweight mechanism used in the joins step.
+    let examplesByHeader = {};
+
+    try {
+      const sample = datasetId
+        ? await getDatasetSample({
+            customerId,
+            datasetId,
+            limit,
+            offset,
+          })
+        : null;
+
+      if (sample) {
+        if (!headers.length && Array.isArray(sample.headers)) {
+          headers = sample.headers;
+        }
+
+        const rows = Array.isArray(sample.rows) ? sample.rows : [];
+        for (const row of rows) {
+          for (const [k, v] of Object.entries(row || {})) {
+            if (examplesByHeader[k] != null) continue;
+            if (v == null) continue;
+            const s = String(v).trim();
+            if (!s) continue;
+            examplesByHeader[k] = v;
+          }
+        }
+      }
+    } catch (_) {
+      // ignore sample failures; headers/examples are best-effort
+    }
+
+    if (!isExternalTx && !t.finished) {
+      await t.commit();
+    }
+
+    return {
+      datasetId,
+      headers: Array.isArray(headers) ? headers.map((h) => String(h)) : [],
+      examplesByHeader,
+    };
+  } catch (err) {
+    if (!isExternalTx && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
 
 const {
   PTRS_CANONICAL_CONTRACT,
@@ -434,9 +532,7 @@ async function getMap({ customerId, ptrsId }) {
   map.extras = maybeParse(map.extras);
   map.fallbacks = maybeParse(map.fallbacks);
   map.defaults = maybeParse(map.defaults);
-  map.joins = maybeParse(map.joins);
   map.rowRules = maybeParse(map.rowRules);
-  map.customFields = maybeParse(map.customFields);
   return map;
 }
 
@@ -647,10 +743,6 @@ async function saveFieldMap({
   }
 }
 
-/**
- * Return a small window of staged rows plus count and inferred headers.
- * Also returns headerMeta: sources and example values per header.
- */
 async function getImportSample({
   customerId,
   ptrsId,
@@ -915,10 +1007,12 @@ async function saveColumnMap({
   extras = null,
   fallbacks = null,
   defaults = null,
-  joins = null,
+  // IMPORTANT: no default. `undefined` means "no change"; `null` means "clear".
+  joins,
   rowRules = null,
   profileId = null,
-  customFields = null,
+  // IMPORTANT: no default. `undefined` means "no change"; `null` means "clear".
+  customFields,
   userId,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -968,18 +1062,9 @@ async function saveColumnMap({
     const resolveField = (incoming, existingValue) =>
       typeof incoming === "undefined" ? existingValue : incoming;
 
-    // Special handling for joins:
-    // - Joins saved via the JoinsDesigner are sent as an object (e.g. { conditions: [...] })
-    // - Calls that don't intend to touch joins (e.g. MapPanel) currently send a bare []
-    //   due to controller defaults. Treat that bare [] as "no change", not "clear joins".
-    let nextJoins;
-    if (Array.isArray(joins)) {
-      // If the UI really wants to clear joins, it should send an explicit object,
-      // e.g. { conditions: [] }. A naked [] here is treated as "no joins payload".
-      nextJoins = existing ? existing.joins : null;
-    } else {
-      nextJoins = resolveField(joins, existing ? existing.joins : null);
-    }
+    // Joins can be provided in either legacy array form or the new object form
+    // (e.g. { conditions: [...] }). Treat `undefined` as "no change".
+    const nextJoins = resolveField(joins, existing ? existing.joins : null);
 
     const payload = {
       mappings: resolveField(mappings, existing?.mappings || null),
@@ -1077,6 +1162,21 @@ async function buildMappedDatasetForPtrs({
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
+  slog.info("PTRS_TRACE maps", {
+    PTRS_TRACE: process.env.PTRS_TRACE,
+    PTRS_TRACE_DIR: process.env.PTRS_TRACE_DIR,
+  });
+
+  const trace = createPtrsTrace({
+    customerId,
+    ptrsId,
+    actorId,
+    logInfo: (msg, meta) => slog.info(msg, meta),
+    meta: safeMeta,
+  });
+  const jobStartNs = process.hrtime.bigint();
+  trace?.write("build_begin", { batchSize: BATCH_SIZE });
+
   try {
     slog.info(
       "PTRS v2 buildMappedDatasetForPtrs: begin",
@@ -1089,16 +1189,22 @@ async function buildMappedDatasetForPtrs({
     // Clear any existing mapped rows for this ptrs run so we keep exactly one snapshot.
     // IMPORTANT: PtrsMappedRow is paranoid/soft-delete in some environments; a soft delete will NOT
     // remove the (customerId, ptrsId, rowNo) unique constraint conflicts. Force a hard delete.
+    const destroyStartNs = process.hrtime.bigint();
+    trace?.write("mapped_rows_destroy_begin");
     await db.PtrsMappedRow.destroy({
       where: { customerId, ptrsId },
       force: true,
       transaction: t,
+    });
+    trace?.write("mapped_rows_destroy_end", {
+      durationMs: hrMsSince(destroyStartNs),
     });
 
     const existingCount = await db.PtrsMappedRow.count({
       where: { customerId, ptrsId },
       transaction: t,
     });
+    trace?.write("mapped_rows_post_destroy_count", { existingCount });
 
     if (existingCount) {
       slog.warn(
@@ -1115,23 +1221,39 @@ async function buildMappedDatasetForPtrs({
     const nowIso = new Date().toISOString();
 
     while (true) {
+      const batchStartNs = process.hrtime.bigint();
+      trace?.write("batch_begin", { offset, limit: BATCH_SIZE });
       // Compose mapped rows for this batch
+      const composeStartNs = process.hrtime.bigint();
       const { rows } = await composeMappedRowsForPtrs({
         customerId,
         ptrsId,
         limit: BATCH_SIZE,
         offset,
         transaction: t,
+        trace,
       });
+      trace?.write("batch_compose_end", {
+        offset,
+        durationMs: hrMsSince(composeStartNs),
+        rowsComposed: Array.isArray(rows) ? rows.length : 0,
+      });
+
+      // If we got fewer than BATCH_SIZE rows, we know there cannot be another page.
+      // This avoids a useless second compose call that returns 0 rows.
+      const isLastBatch =
+        Array.isArray(rows) && rows.length > 0 && rows.length < BATCH_SIZE;
 
       if (!rows || !rows.length) {
         if (isFirstBatch) {
           // No rows at all
+          trace?.write("build_no_rows", { totalMs: hrMsSince(jobStartNs) });
           slog.info(
             "PTRS v2 buildMappedDatasetForPtrs: no rows composed, nothing persisted",
             safeMeta({ customerId, ptrsId }),
           );
           await t.commit();
+          if (trace) await trace.close();
           return { count: 0, headers: [] };
         }
         break;
@@ -1165,9 +1287,19 @@ async function buildMappedDatasetForPtrs({
       }
 
       try {
+        const persistStartNs = process.hrtime.bigint();
+        trace?.write("batch_persist_begin", {
+          offset,
+          batchSize: payload.length,
+        });
         await db.PtrsMappedRow.bulkCreate(payload, {
           transaction: t,
           validate: false,
+        });
+        trace?.write("batch_persist_end", {
+          offset,
+          batchSize: payload.length,
+          durationMs: hrMsSince(persistStartNs),
         });
       } catch (e) {
         // Surface the underlying Postgres error detail so we can fix the real cause.
@@ -1195,7 +1327,15 @@ async function buildMappedDatasetForPtrs({
         canonicalHeaders = Array.from(headersSet);
         isFirstBatch = false;
       }
+      trace?.write("batch_end", {
+        offset,
+        persistedSoFar: totalPersisted,
+        durationMs: hrMsSince(batchStartNs),
+      });
       offset += BATCH_SIZE;
+
+      // Stop after the last partial page to avoid an empty follow-up batch.
+      if (isLastBatch) break;
     }
 
     slog.info(
@@ -1210,18 +1350,35 @@ async function buildMappedDatasetForPtrs({
       }),
     );
 
+    trace?.write("build_before_commit", {
+      rowsPersisted: totalPersisted,
+      headersCount: Array.isArray(canonicalHeaders)
+        ? canonicalHeaders.length
+        : 0,
+      totalMs: hrMsSince(jobStartNs),
+    });
+
     await t.commit();
+
+    trace?.write("build_committed", { totalMs: hrMsSince(jobStartNs) });
+    if (trace) await trace.close();
 
     return {
       count: totalPersisted,
       headers: canonicalHeaders || [],
     };
   } catch (err) {
+    trace?.write("build_error", {
+      message: err?.message || null,
+      statusCode: err?.statusCode || null,
+      totalMs: hrMsSince(jobStartNs),
+    });
     if (!t.finished) {
       try {
         await t.rollback();
       } catch (_) {}
     }
+    if (trace) await trace.close();
     throw err;
   }
 }
@@ -1233,17 +1390,44 @@ async function composeMappedRowsForPtrs({
   limit = 50,
   offset = 0,
   transaction = null,
+  trace = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
+  const composeStartNs = process.hrtime.bigint();
+
+  const stageStart = (name) => ({
+    name,
+    startNs: process.hrtime.bigint(),
+  });
+
+  const stageEnd = (s, extra = {}) => {
+    if (!s) return;
+    trace?.write("compose_stage_end", {
+      stage: s.name,
+      durationMs: hrMsSince(s.startNs),
+      ...extra,
+    });
+  };
+
+  trace?.write("compose_begin", { limit, offset });
+
   // Load column map (with joins + rowRules etc.)
+  const sLoadMap = stageStart("load_column_map");
   const mapRow = await getColumnMap({ customerId, ptrsId, transaction });
+  stageEnd(sLoadMap, {
+    hasMap: !!mapRow,
+    hasMappings: !!(mapRow && mapRow.mappings),
+    hasJoins: !!(mapRow && mapRow.joins),
+    hasCustomFields: !!(mapRow && mapRow.customFields),
+  });
   const map = mapRow || {};
   const mappings = map.mappings || {};
 
   // Canonical field map is profile-scoped. We use the profileId saved on the column map.
   const profileId = map.profileId || null;
+  const sFieldMap = stageStart("load_field_map");
   let fieldMapRows = [];
   try {
     if (profileId) {
@@ -1262,6 +1446,10 @@ async function composeMappedRowsForPtrs({
     );
     fieldMapRows = [];
   }
+  stageEnd(sFieldMap, {
+    profileId,
+    fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
+  });
 
   if (logger && logger.info) {
     slog.info(
@@ -1330,6 +1518,10 @@ async function composeMappedRowsForPtrs({
       toTransform: to.transform || null,
     });
   }
+  trace?.write("compose_joins_normalised", {
+    joinsRawType: joins == null ? null : typeof joins,
+    joinsCount: normalisedJoins.length,
+  });
 
   // Defensive log for debugging joins, if logger.info is available
   if (logger && logger.info) {
@@ -1351,6 +1543,11 @@ async function composeMappedRowsForPtrs({
   if (!Array.isArray(customFields)) {
     customFields = [];
   }
+  trace?.write("compose_custom_fields_normalised", {
+    customFieldsRawType:
+      map.customFields == null ? null : typeof map.customFields,
+    customFieldsCount: Array.isArray(customFields) ? customFields.length : 0,
+  });
 
   if (logger && logger.info) {
     slog.info(
@@ -1579,6 +1776,9 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
   }
 
   const orderedJoins = orderJoinsForExecution(normalisedJoins);
+  trace?.write("compose_joins_ordered", {
+    orderedJoinsCount: orderedJoins.length,
+  });
 
   // ---------------- Payment terms (effective-dated) enrichment ----------------
   // We treat payment terms changes as a supporting dataset with an effective-from date.
@@ -1871,6 +2071,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
   };
 
   // Build payment terms history index once (if a suitable dataset exists)
+  const sPaymentTerms = stageStart("build_payment_terms_history_index");
   let paymentTermsHistoryIndex = null;
   try {
     const paymentDs = await getPaymentTermsDataset();
@@ -1897,6 +2098,11 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     );
     paymentTermsHistoryIndex = null;
   }
+  stageEnd(sPaymentTerms, {
+    paymentTermsKeysCount: paymentTermsHistoryIndex
+      ? paymentTermsHistoryIndex.size
+      : 0,
+  });
 
   const isMainRole = (role) => {
     const r = String(role || "").toLowerCase();
@@ -2015,6 +2221,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     const cacheKey = joinIndexKey(r, column, transform);
     if (joinIndexCache.has(cacheKey)) return joinIndexCache.get(cacheKey);
 
+    const sIdx = stageStart("build_join_index");
     const rows = await loadRowsForRole(r);
     const idx = new Map();
 
@@ -2026,6 +2233,14 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
       if (!idx.has(k)) idx.set(k, row);
     }
 
+    stageEnd(sIdx, {
+      role: r,
+      column,
+      transform: transform || null,
+      rowsScanned: Array.isArray(rows) ? rows.length : 0,
+      indexSize: idx.size,
+    });
+
     joinIndexCache.set(cacheKey, idx);
     return idx;
   };
@@ -2034,6 +2249,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
   // IMPORTANT: PtrsImportRaw contains rows for *all* datasets (main + supporting).
   // Mapped rows must be built from the anchor/main dataset only, otherwise rowNo will collide.
   let mainDatasetId = null;
+  const sMainDataset = stageStart("resolve_main_dataset");
   try {
     const dsRows = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId },
@@ -2074,6 +2290,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     );
     mainDatasetId = null;
   }
+  stageEnd(sMainDataset, { mainDatasetId });
 
   // Read main rows
   const findOpts = {
@@ -2094,7 +2311,11 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     findOpts.offset = offset;
   }
 
+  const sLoadMain = stageStart("load_main_rows");
   const mainRows = await db.PtrsImportRaw.findAll(findOpts);
+  stageEnd(sLoadMain, {
+    rowsLoaded: Array.isArray(mainRows) ? mainRows.length : 0,
+  });
 
   if (!mainDatasetId) {
     try {
@@ -2111,6 +2332,22 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     } catch (_) {}
   }
 
+  const loopStartNs = process.hrtime.bigint();
+
+  const counters = {
+    rowsInput: Array.isArray(mainRows) ? mainRows.length : 0,
+    joinsOrdered: Array.isArray(orderedJoins) ? orderedJoins.length : 0,
+    joinAttempts: 0,
+    joinSkippedMissingFromRole: 0,
+    joinNoKey: 0,
+    joinIndexLookups: 0,
+    joinMatched: 0,
+    joinNoMatch: 0,
+    customFieldsApplied: 0,
+    canonicalProjectionApplied: 0,
+    paymentTermsEffectiveApplied: 0,
+  };
+
   const composed = [];
 
   let loggedFirst = false;
@@ -2126,6 +2363,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
       let workingRow = srcRow;
 
       for (const j of orderedJoins) {
+        counters.joinAttempts += 1;
         const fromRole = String(j.fromRole || "").toLowerCase();
         const toRole = String(j.toRole || "").toLowerCase();
 
@@ -2143,6 +2381,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
         // That's not a global "invalid join order" — it's a per-row absence.
         // In that case we skip this join for this row.
         if (!isMainRole(fromRole) && !hasRoleInRow(workingRow, fromRole)) {
+          counters.joinSkippedMissingFromRole += 1;
           if (!loggedJoinProbe && logger && logger.debug) {
             loggedJoinProbe = true;
             slog.debug(
@@ -2169,6 +2408,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
         const key = normalizeJoinKeyValue(lhsVal, fromTransform);
 
         if (!key) {
+          counters.joinNoKey += 1;
           if (!loggedJoinProbe && logger && logger.debug) {
             loggedJoinProbe = true;
             slog.debug(
@@ -2185,6 +2425,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
           continue;
         }
 
+        counters.joinIndexLookups += 1;
         const idx = await getJoinIndex({
           role: toRole,
           column: toCol,
@@ -2194,6 +2435,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
         const joined = idx.get(key);
 
         if (joined) {
+          counters.joinMatched += 1;
           workingRow = mergeRoleRowNamespaced(workingRow, toRole, joined);
 
           if (!loggedJoinProbe && logger && logger.debug) {
@@ -2211,6 +2453,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
             );
           }
         } else if (!loggedJoinProbe && logger && logger.debug) {
+          counters.joinNoMatch += 1;
           loggedJoinProbe = true;
           slog.debug(
             "PTRS v2 composeMappedRowsForPtrs: join probe (no match)",
@@ -2239,6 +2482,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
       effectivePaymentTerms != null &&
       String(effectivePaymentTerms).trim() !== ""
     ) {
+      counters.paymentTermsEffectiveApplied += 1;
       srcRow = {
         ...srcRow,
         "Payment terms": effectivePaymentTerms,
@@ -2261,6 +2505,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
         rawRow: srcRow,
         customFields,
       });
+      counters.customFieldsApplied += 1;
     }
     out.row_no = r.rowNo;
 
@@ -2271,6 +2516,7 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     // Project canonical fields onto the mapped row using the profile-scoped field map.
     // We MERGE (non-breaking) so existing mapped keys remain available during MVP.
     if (Array.isArray(fieldMapRows) && fieldMapRows.length) {
+      counters.canonicalProjectionApplied += 1;
       const canonicalOut = {};
       for (const fm of fieldMapRows) {
         if (!fm || typeof fm !== "object") continue;
@@ -2315,6 +2561,11 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     composed.push(out);
   }
 
+  trace?.write("compose_loop_complete", {
+    durationMs: hrMsSince(loopStartNs),
+    ...counters,
+  });
+
   // Sample-based header computation: scan up to first 200 rows, cap at 2000 headers
   const headerSet = new Set();
   for (let i = 0; i < composed.length && i < 200; ++i) {
@@ -2325,6 +2576,15 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     if (headerSet.size >= 2000) break;
   }
   const headers = Array.from(headerSet);
+
+  trace?.write("compose_headers_built", {
+    headersCount: Array.isArray(headers) ? headers.length : 0,
+  });
+
+  trace?.write("compose_end", {
+    rowsOut: Array.isArray(composed) ? composed.length : 0,
+    totalMs: hrMsSince(composeStartNs),
+  });
 
   return { rows: composed, headers };
 }

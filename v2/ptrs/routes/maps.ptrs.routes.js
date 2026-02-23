@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const authorise = require("@/middleware/authorise");
-const tmController = require("@/v2/ptrs/controllers/tablesAndMaps.ptrs.controller");
+const tmController = require("@/v2/ptrs/controllers/maps.ptrs.controller");
 
 // Restrict to users who have the ptrs feature (same as v1)
 const requirePtrs = authorise({
@@ -17,16 +17,13 @@ router.post("/:id/map", requirePtrs, tmController.saveMap);
 router.post(
   "/:id/map/build-mapped",
   requirePtrs,
-  tmController.buildMappedDataset
+  tmController.buildMappedDataset,
 );
 // Find compatible maps for this PTRS run
 router.get("/compatible-maps", requirePtrs, tmController.listPtrsWithMap);
 
 // Peek at staged rows
 router.get("/:id/sample", requirePtrs, tmController.getSample);
-
-// Unified headers + examples across main and supporting datasets
-// router.get("/:id/unified-sample", requirePtrs, tmController.getUnifiedSample);
 
 // Canonical field mapping (profile-scoped)
 router.get("/:id/field-map", requirePtrs, tmController.getFieldMap);
