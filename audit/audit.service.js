@@ -36,6 +36,21 @@ async function logEvent({
   transaction = null,
 }) {
   try {
+    // Fail-safe: some endpoints (e.g. revoke-token) can be hit without an authenticated user
+    // or a resolved tenant context. The DB schema requires these fields, so skip creating
+    // an AuditEvent rather than throwing a 500 from audit logging.
+    if (!customerId || !userId) {
+      logger.warn("Skipping audit event (missing customerId or userId)", {
+        action,
+        entity,
+        entityId,
+        customerId: customerId || null,
+        userId: userId || null,
+        ip,
+        device,
+      });
+      return null;
+    }
     if (
       action === "Update" &&
       details &&
@@ -45,7 +60,7 @@ async function logEvent({
       details = generateDiff(
         details.before,
         details.after,
-        auditFieldConfig[entity]
+        auditFieldConfig[entity],
       );
     }
     const auditRecord = await db.AuditEvent.create(
@@ -60,7 +75,7 @@ async function logEvent({
         ip,
         device,
       },
-      { transaction }
+      { transaction },
     );
 
     logger.info("Audit event created", {
@@ -149,7 +164,7 @@ function auditGet(action, entity) {
       }).catch((err) =>
         logger.error("Audit log failed from auditGet middleware", {
           error: err.message,
-        })
+        }),
       );
     };
     next();

@@ -72,6 +72,36 @@ function pickModelFields(model, candidate) {
   return out;
 }
 
+// Helper: derive headers from ImportRaw rows for main dataset
+async function deriveMainDatasetHeadersFromImportRaw({
+  customerId,
+  ptrsId,
+  transaction,
+  sampleLimit = 200,
+}) {
+  const items = await db.PtrsImportRaw.findAll({
+    where: { customerId, ptrsId },
+    order: [["rowNo", "ASC"]],
+    limit: Math.min(Math.max(Number(sampleLimit) || 200, 1), 1000),
+    raw: true,
+    transaction,
+  });
+
+  const headerSet = new Set();
+  for (const item of items || []) {
+    const row =
+      item?.data || item?.payload || item?.rawPayload || item?.raw || {};
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    for (const key of Object.keys(row)) {
+      if (key != null && String(key).trim() !== "") {
+        headerSet.add(String(key));
+      }
+    }
+  }
+
+  return Array.from(headerSet.values());
+}
+
 /**
  * Ensure a PTRS run has a \"main\" dataset row in tbl_ptrs_dataset when raw rows exist.
  * This is required for the standard Step 2 FE flow (datasets list) to work for non-file ingests like Xero.
@@ -87,6 +117,30 @@ async function upsertMainDatasetFromRaw({
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+
+  const debugStack = (() => {
+    try {
+      return new Error().stack
+        ?.split("\n")
+        .slice(1, 7)
+        .map((s) => s.trim())
+        .join(" | ");
+    } catch {
+      return null;
+    }
+  })();
+
+  logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: start", {
+    action: "PtrsV2UpsertMainDatasetFromRawStart",
+    customerId,
+    ptrsId,
+    source,
+    userId: userId || null,
+    ownsTxn: !transaction,
+    hasExternalTransaction: Boolean(transaction),
+    metaKeys: Object.keys(meta || {}),
+    stack: debugStack,
+  });
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
@@ -114,7 +168,27 @@ async function upsertMainDatasetFromRaw({
       transaction: t,
     });
 
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: raw count resolved", {
+      action: "PtrsV2UpsertMainDatasetFromRawRawCount",
+      customerId,
+      ptrsId,
+      source,
+      rawCount,
+      ownsTxn,
+    });
+
     if (!rawCount || rawCount <= 0) {
+      logger?.warn?.(
+        "PTRS v2 upsertMainDatasetFromRaw: no raw rows, skipping",
+        {
+          action: "PtrsV2UpsertMainDatasetFromRawNoRawRows",
+          customerId,
+          ptrsId,
+          source,
+          rawCount,
+          ownsTxn,
+        },
+      );
       if (ownsTxn) await t.commit();
       return { ok: true, rowsCount: 0, dataset: null };
     }
@@ -126,10 +200,17 @@ async function upsertMainDatasetFromRaw({
           ? "CSV upload"
           : "Main input";
 
+    const derivedHeaders = await deriveMainDatasetHeadersFromImportRaw({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
+
     const candidate = {
       customerId,
       ptrsId,
       role: "main",
+      sourceType: source === "xero" ? "xero" : source === "csv" ? "csv" : null,
       // PtrsDataset.fileName is NOT NULL. For non-file ingests (e.g. Xero), we still need a label.
       fileName: displayName,
       storageRef: null,
@@ -138,6 +219,7 @@ async function upsertMainDatasetFromRaw({
       meta: {
         ...(meta || {}),
         source,
+        headers: derivedHeaders,
         rowsCount: rawCount,
         displayName,
         updatedAt: new Date().toISOString(),
@@ -150,37 +232,216 @@ async function upsertMainDatasetFromRaw({
 
     // De-dupe: only one synthetic "main" dataset should exist for a PTRS run.
     // If multiple exist (e.g. legacy code paths), keep the newest and remove the rest.
+    const dsWhere = {
+      customerId,
+      ptrsId,
+      role: "main",
+      ...(db.PtrsDataset?.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+    };
+
     const existingRows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId, role: "main" },
+      where: dsWhere,
       order: [["createdAt", "DESC"]],
       transaction: t,
       raw: false,
     });
 
-    const canonical =
-      Array.isArray(existingRows) && existingRows.length
-        ? existingRows[0]
-        : null;
+    logger?.warn?.(
+      "PTRS v2 upsertMainDatasetFromRaw: existing main dataset rows",
+      {
+        action: "PtrsV2UpsertMainDatasetFromRawExistingRows",
+        customerId,
+        ptrsId,
+        source,
+        existingCount: Array.isArray(existingRows) ? existingRows.length : 0,
+        existingRows: (existingRows || []).map((r) => ({
+          id: r?.id,
+          role: r?.role,
+          sourceType: r?.sourceType || null,
+          fileName: r?.fileName || null,
+          createdAt: r?.createdAt || null,
+          updatedAt: r?.updatedAt || null,
+          deletedAt: r?.deletedAt || null,
+          meta: {
+            source: r?.meta?.source || null,
+            importRunId: r?.meta?.importRunId || null,
+            createdFrom: r?.meta?.createdFrom || null,
+            updatedAt: r?.meta?.updatedAt || null,
+            rowsCount: r?.meta?.rowsCount || null,
+          },
+        })),
+      },
+    );
 
-    // Best-effort cleanup of duplicates.
+    // Pick canonical "main" dataset safely.
+    // Prefer the dataset that is actually referenced by tbl_ptrs_import_raw rows.
+    // This prevents deleting the real dataset and leaving raw rows orphaned.
+    const existingIds = (existingRows || []).map((r) => r?.id).filter(Boolean);
+
+    // Count raw rows per datasetId for these candidates
+    const rawCounts = new Map();
+    if (existingIds.length) {
+      const rawAgg = await db.PtrsImportRaw.findAll({
+        attributes: [
+          "datasetId",
+          [db.sequelize.fn("COUNT", db.sequelize.col("id")), "cnt"],
+        ],
+        where: {
+          customerId,
+          ptrsId,
+          datasetId: existingIds,
+        },
+        group: ["datasetId"],
+        transaction: t,
+        raw: true,
+      });
+
+      for (const r of rawAgg || []) {
+        const did = r?.datasetId;
+        const c = Number(r?.cnt || 0);
+        if (did) rawCounts.set(did, Number.isFinite(c) ? c : 0);
+      }
+      logger?.warn?.(
+        "PTRS v2 upsertMainDatasetFromRaw: raw row counts by dataset",
+        {
+          action: "PtrsV2UpsertMainDatasetFromRawRawCountsByDataset",
+          customerId,
+          ptrsId,
+          source,
+          existingIds,
+          rawCounts: Array.from(rawCounts.entries()).map(
+            ([datasetId, count]) => ({
+              datasetId,
+              count,
+            }),
+          ),
+        },
+      );
+    }
+
+    const getScore = (row) => {
+      const id = row?.id;
+      const cnt = rawCounts.get(id) || 0;
+      // Secondary preference: rows with an importRunId / createdFrom marker.
+      const meta = row?.meta || {};
+      const hasImportRun = Boolean(meta?.importRunId || meta?.createdFrom);
+      const importBoost = hasImportRun ? 1 : 0;
+      // Newest wins only as a last tie-break.
+      const createdAtMs = row?.createdAt
+        ? new Date(row.createdAt).getTime()
+        : 0;
+      return { cnt, importBoost, createdAtMs };
+    };
+
+    let canonical = null;
+    if (Array.isArray(existingRows) && existingRows.length) {
+      canonical = existingRows.slice().sort((a, b) => {
+        const sa = getScore(a);
+        const sb = getScore(b);
+        if (sb.cnt !== sa.cnt) return sb.cnt - sa.cnt;
+        if (sb.importBoost !== sa.importBoost)
+          return sb.importBoost - sa.importBoost;
+        return sb.createdAtMs - sa.createdAtMs;
+      })[0];
+    }
+
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: canonical selection", {
+      action: "PtrsV2UpsertMainDatasetFromRawCanonicalSelection",
+      customerId,
+      ptrsId,
+      source,
+      canonicalId: canonical?.id || null,
+      canonicalScore: canonical ? getScore(canonical) : null,
+      scoredRows: (existingRows || []).map((r) => ({
+        id: r?.id,
+        score: getScore(r),
+      })),
+    });
+
+    // Best-effort cleanup of duplicates:
+    // only delete rows that are NOT canonical and have zero raw rows.
     if (Array.isArray(existingRows) && existingRows.length > 1) {
-      for (const dup of existingRows.slice(1)) {
+      for (const dup of existingRows) {
+        if (!dup || dup.id === canonical?.id) continue;
+        const cnt = rawCounts.get(dup.id) || 0;
+        if (cnt > 0) {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: duplicate retained because raw rows reference it",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDuplicateRetained",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              rawRowCount: cnt,
+            },
+          );
+          continue; // never delete a row that owns raw data
+        }
         try {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: deleting duplicate dataset row",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDeleteDuplicate",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              rawRowCount: cnt,
+            },
+          );
           await dup.destroy({ transaction: t });
-        } catch (_) {
+        } catch (cleanupErr) {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: failed to delete duplicate dataset row",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDeleteDuplicateFailed",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              error: cleanupErr?.message || null,
+            },
+          );
           // never fail the request due to cleanup
         }
       }
     }
 
     let saved;
+    let writeMode = null;
     if (canonical) {
+      writeMode = "update";
       saved = await canonical.update(rowToWrite, { transaction: t });
     } else {
+      writeMode = "create";
       saved = await db.PtrsDataset.create(rowToWrite, { transaction: t });
     }
 
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: write completed", {
+      action: "PtrsV2UpsertMainDatasetFromRawWriteCompleted",
+      customerId,
+      ptrsId,
+      source,
+      writeMode,
+      datasetId: saved?.id || null,
+      rowsCount: rawCount,
+      fileName: rowToWrite?.fileName || null,
+      sourceType: rowToWrite?.sourceType || null,
+      headersCount: Array.isArray(derivedHeaders) ? derivedHeaders.length : 0,
+    });
+
     if (ownsTxn) await t.commit();
+
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: success", {
+      action: "PtrsV2UpsertMainDatasetFromRawSuccess",
+      customerId,
+      ptrsId,
+      source,
+      datasetId: saved?.id || null,
+      rowsCount: rawCount,
+      ownsTxn,
+    });
 
     return {
       ok: true,
@@ -193,6 +454,15 @@ async function upsertMainDatasetFromRaw({
         await t.rollback();
       } catch (_) {}
     }
+    logger?.error?.("PTRS v2 upsertMainDatasetFromRaw: failed", {
+      action: "PtrsV2UpsertMainDatasetFromRawFailed",
+      customerId,
+      ptrsId,
+      source,
+      ownsTxn,
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
     throw err;
   }
 }
@@ -690,11 +960,39 @@ async function listDatasets({ customerId, ptrsId }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const where = {
+      customerId,
+      ptrsId,
+      ...(db.PtrsDataset?.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+    };
+
     const rows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId },
+      where,
       order: [["createdAt", "DESC"]],
       raw: true,
       transaction: t,
+    });
+
+    logger?.warn?.("PTRS v2 listDatasets: initial rows loaded", {
+      action: "PtrsV2ListDatasetsInitialRows",
+      customerId,
+      ptrsId,
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      rows: (rows || []).map((r) => ({
+        id: r?.id,
+        role: r?.role,
+        sourceType: r?.sourceType || null,
+        fileName: r?.fileName || null,
+        createdAt: r?.createdAt || null,
+        updatedAt: r?.updatedAt || null,
+        deletedAt: r?.deletedAt || null,
+        meta: {
+          source: r?.meta?.source || null,
+          importRunId: r?.meta?.importRunId || null,
+          createdFrom: r?.meta?.createdFrom || null,
+          rowsCount: r?.meta?.rowsCount || null,
+        },
+      })),
     });
 
     // Safety: if we ever end up with multiple "main" datasets (from older code paths),
@@ -719,7 +1017,7 @@ async function listDatasets({ customerId, ptrsId }) {
 
       // Refresh list after cleanup.
       const refreshed = await db.PtrsDataset.findAll({
-        where: { customerId, ptrsId },
+        where,
         order: [["createdAt", "DESC"]],
         raw: true,
         transaction: t,
@@ -727,6 +1025,25 @@ async function listDatasets({ customerId, ptrsId }) {
 
       rows.length = 0;
       rows.push(...refreshed);
+
+      logger?.warn?.(
+        "PTRS v2 listDatasets: rows after duplicate-main refresh",
+        {
+          action: "PtrsV2ListDatasetsRowsAfterRefresh",
+          customerId,
+          ptrsId,
+          rowCount: Array.isArray(rows) ? rows.length : 0,
+          rows: (rows || []).map((r) => ({
+            id: r?.id,
+            role: r?.role,
+            sourceType: r?.sourceType || null,
+            fileName: r?.fileName || null,
+            createdAt: r?.createdAt || null,
+            updatedAt: r?.updatedAt || null,
+            deletedAt: r?.deletedAt || null,
+          })),
+        },
+      );
     }
 
     const hasMain = rows.some((r) => {
@@ -738,9 +1055,21 @@ async function listDatasets({ customerId, ptrsId }) {
       );
     });
 
+    logger?.warn?.("PTRS v2 listDatasets: main dataset presence evaluated", {
+      action: "PtrsV2ListDatasetsHasMainEvaluated",
+      customerId,
+      ptrsId,
+      hasMain,
+    });
+
     if (!hasMain) {
       // Only `upsertMainDatasetFromRaw` is allowed to create the synthetic "main" dataset.
       // Keep it inside this transaction to avoid extra round trips and to preserve RLS context.
+      logger?.warn?.("PTRS v2 listDatasets: ensuring main dataset exists", {
+        action: "PtrsV2ListDatasetsEnsuringMainDataset",
+        customerId,
+        ptrsId,
+      });
       const ensured = await upsertMainDatasetFromRaw({
         customerId,
         ptrsId,
@@ -753,7 +1082,7 @@ async function listDatasets({ customerId, ptrsId }) {
       if (ensured?.dataset) {
         // Refresh list so FE sees it immediately
         const refreshed = await db.PtrsDataset.findAll({
-          where: { customerId, ptrsId },
+          where,
           order: [["createdAt", "DESC"]],
           raw: true,
           transaction: t,
@@ -761,6 +1090,22 @@ async function listDatasets({ customerId, ptrsId }) {
 
         rows.length = 0;
         rows.push(...refreshed);
+        logger?.warn?.("PTRS v2 listDatasets: rows after ensure-main refresh", {
+          action: "PtrsV2ListDatasetsRowsAfterEnsureMain",
+          customerId,
+          ptrsId,
+          ensuredDatasetId: ensured?.dataset?.id || null,
+          rowCount: Array.isArray(rows) ? rows.length : 0,
+          rows: (rows || []).map((r) => ({
+            id: r?.id,
+            role: r?.role,
+            sourceType: r?.sourceType || null,
+            fileName: r?.fileName || null,
+            createdAt: r?.createdAt || null,
+            updatedAt: r?.updatedAt || null,
+            deletedAt: r?.deletedAt || null,
+          })),
+        });
       }
     }
 

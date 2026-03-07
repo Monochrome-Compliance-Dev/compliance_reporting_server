@@ -14,6 +14,9 @@ const {
   paginateXeroApi,
   callXeroApiWithAutoRefresh,
 } = require("@/v2/core/xero/xeroApiUtils");
+const {
+  upsertMainDatasetFromRaw,
+} = require("@/v2/ptrs/services/data.ptrs.service");
 
 module.exports = {
   connect,
@@ -1727,14 +1730,21 @@ async function buildRawDatasetFromXeroCache({
       transaction: t,
     });
 
+    const selectedTenantIds = Array.isArray(tenantIds) ? tenantIds : [];
+
     const desiredMeta = {
       source: "xero",
       createdFrom: "xero_import",
       displayName: "Xero import",
-      tenantIds: Array.isArray(tenantIds) ? tenantIds : [],
+      tenantIds: selectedTenantIds,
+      selectedTenantIds,
+      extractLimit: limit ?? null,
       importStartedAt: importStartedAt
         ? new Date(importStartedAt).toISOString()
         : null,
+      importedAt: importStartedAt
+        ? new Date(importStartedAt).toISOString()
+        : new Date().toISOString(),
       importRunId: importRunId || null,
     };
 
@@ -2236,8 +2246,6 @@ async function buildRawDatasetFromXeroCache({
     if (rowsToInsert.length) {
       await PtrsImportRaw.bulkCreate(rowsToInsert, { transaction: t });
     }
-
-    // (Removed upsertMainDatasetFromRaw call per Option A: direct dataset create/update above)
 
     // Best-effort: update dataset rowsCount and keep meta aligned.
     try {
@@ -3407,61 +3415,28 @@ async function startImport({ customerId, ptrsId, userId }) {
           "info",
         );
 
-        // Ensure the standard PTRS flow can proceed: create/update a "main" dataset row
-        // even when the main input was Xero (i.e. no uploaded CSV file).
-        const PtrsDataset = getModel("PtrsDataset");
-        if (PtrsDataset) {
-          await withCustomerTxn(customerId, async (t) => {
-            const candidate = {
-              customerId,
-              ptrsId,
-              importRunId,
-              role: "main",
-              fileName: "Xero import",
-              storageRef: null,
-              rowsCount: rawBuild?.insertedRows ?? null,
-              status: "uploaded",
-              meta: {
-                source: "xero",
-                selectedTenantIds: selectedTenantIds,
-                extractLimit: extractLimit ?? null,
-                importedAt: importStartedAt?.toISOString?.()
-                  ? importStartedAt.toISOString()
-                  : new Date().toISOString(),
-              },
-              createdBy: userId || null,
-              updatedBy: userId || null,
-            };
-
-            const row = pickModelFields(PtrsDataset, candidate);
-
-            // Prefer upsert; otherwise emulate it (role is expected to be unique per ptrsId).
-            if (typeof PtrsDataset.upsert === "function") {
-              await PtrsDataset.upsert(row, { transaction: t });
-              return;
-            }
-
-            const existing = await PtrsDataset.findOne({
-              where: { customerId, ptrsId, role: "main" },
-              transaction: t,
-            });
-
-            if (existing) {
-              await existing.update(row, { transaction: t });
-            } else {
-              await PtrsDataset.create(row, { transaction: t });
-            }
-          });
-        } else {
-          logger?.warn?.(
-            "PtrsDataset model not loaded; cannot create main dataset for Xero run",
-            {
-              action: "PtrsV2XeroMainDatasetMissing",
-              customerId,
-              ptrsId,
-            },
-          );
-        }
+        // Ensure the standard PTRS flow can proceed: funnel Xero main-dataset creation
+        // through the shared PTRS upsert path instead of writing PtrsDataset directly here.
+        await upsertMainDatasetFromRaw({
+          customerId,
+          ptrsId,
+          source: "xero",
+          userId,
+          meta: {
+            importRunId,
+            createdFrom: "xero_import",
+            displayName: "Xero import",
+            selectedTenantIds,
+            tenantIds: selectedTenantIds,
+            extractLimit: extractLimit ?? null,
+            importStartedAt: importStartedAt?.toISOString?.()
+              ? importStartedAt.toISOString()
+              : null,
+            importedAt: importStartedAt?.toISOString?.()
+              ? importStartedAt.toISOString()
+              : new Date().toISOString(),
+          },
+        });
 
         updateStatus(customerId, ptrsId, {
           status: "COMPLETE",
