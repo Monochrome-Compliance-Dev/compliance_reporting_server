@@ -124,6 +124,7 @@ module.exports = {
   saveFieldMap,
   listCompatibleMaps,
   getMainDatasetHeaderInfo,
+  getAllDatasetHeaderInfo,
 };
 /**
  * Cheap header + example extraction for the MAIN dataset.
@@ -211,6 +212,49 @@ async function getMainDatasetHeaderInfo({
       headers: Array.isArray(headers) ? headers.map((h) => String(h)) : [],
       examplesByHeader,
     };
+  } catch (err) {
+    if (!isExternalTx && !t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+async function getAllDatasetHeaderInfo({
+  customerId,
+  ptrsId,
+  transaction = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const isExternalTx = !!transaction;
+
+  try {
+    const dsRows = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId },
+      attributes: ["id", "role", "meta"],
+      raw: true,
+      transaction: t,
+    });
+
+    const headers = Array.from(
+      new Set(
+        (Array.isArray(dsRows) ? dsRows : []).flatMap((d) =>
+          Array.isArray(d?.meta?.headers) ? d.meta.headers.map(String) : [],
+        ),
+      ),
+    );
+
+    if (!isExternalTx && !t.finished) {
+      await t.commit();
+    }
+
+    return { headers };
   } catch (err) {
     if (!isExternalTx && !t.finished) {
       try {
@@ -481,6 +525,7 @@ async function loadMappedRowsForPtrs({
 
   const composed = rows.map((r) => {
     let base = r.data || {};
+
     // If data was accidentally stored as a JSON string, try to parse it defensively
     if (typeof base === "string") {
       try {
@@ -492,9 +537,19 @@ async function loadMappedRowsForPtrs({
         // leave base as-is if parsing fails
       }
     }
+
+    // --- Normalise keys to snake_case to avoid camelCase + snake_case duplicates ---
+    const normalised = {};
+    for (const [k, v] of Object.entries(base || {})) {
+      const key = toSnake(k);
+      if (!key) continue;
+      normalised[key] = v;
+    }
+
     // ensure row_no is present for downstream logic
-    const withRowNo = { ...base, row_no: r.rowNo };
-    return ensureCanonicalRowShape(withRowNo);
+    normalised.row_no = r.rowNo;
+
+    return ensureCanonicalRowShape(normalised);
   });
 
   // Simple header inference from the mapped rows
@@ -617,8 +672,42 @@ async function listCompatibleMaps({ customerId }) {
       transaction: t,
     });
 
+    const dsRows = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId: { [Op.in]: ptrsIds } },
+      attributes: ["ptrsId", "role", "fileName", "createdAt"],
+      order: [
+        ["ptrsId", "ASC"],
+        ["createdAt", "ASC"],
+      ],
+      raw: true,
+      transaction: t,
+    });
+
+    const byPtrsId = new Map();
+    for (const ds of dsRows || []) {
+      const key = String(ds?.ptrsId || "");
+      if (!key) continue;
+      if (!byPtrsId.has(key)) byPtrsId.set(key, []);
+      byPtrsId.get(key).push(ds);
+    }
+
+    const isMainRole = (role) => {
+      const r = String(role || "")
+        .trim()
+        .toLowerCase();
+      return r === "main" || r.startsWith("main_");
+    };
+
+    const pickDisplayFileName = (ptrsId) => {
+      const list = byPtrsId.get(String(ptrsId || "")) || [];
+      const main = list.find((d) => isMainRole(d?.role));
+      const chosen = main || list[0] || null;
+      return chosen?.fileName || null;
+    };
+
     const items = (ptrsRows || []).map((r) => ({
       ...r,
+      fileName: pickDisplayFileName(r.id),
       mapMeta: metaByPtrsId.get(r.id) || null,
     }));
 
@@ -695,6 +784,7 @@ async function saveFieldMap({
   try {
     await db.PtrsFieldMap.destroy({
       where: { customerId, ptrsId, profileId },
+      force: true,
       transaction: t,
     });
 
@@ -716,6 +806,30 @@ async function saveFieldMap({
         updatedBy: actor,
       }))
       .filter((r) => r.canonicalField && r.sourceRole);
+
+    // Defensive dedupe: DB only allows one row per canonical field per customer/ptrs/profile.
+    const seenCanonicalFields = new Set();
+    const duplicateCanonicalFields = new Set();
+
+    for (const row of payload) {
+      const key = String(row.canonicalField || "").trim();
+      if (!key) continue;
+      if (seenCanonicalFields.has(key)) {
+        duplicateCanonicalFields.add(key);
+        continue;
+      }
+      seenCanonicalFields.add(key);
+    }
+
+    if (duplicateCanonicalFields.size) {
+      const err = new Error(
+        `Duplicate canonical field mappings are not allowed: ${Array.from(
+          duplicateCanonicalFields,
+        ).join(", ")}`,
+      );
+      err.statusCode = 400;
+      throw err;
+    }
 
     if (payload.length) {
       await db.PtrsFieldMap.bulkCreate(payload, {
@@ -1439,17 +1553,28 @@ async function composeMappedRowsForPtrs({
       });
     }
   } catch (e) {
-    // Non-fatal for MVP: fall back to non-canonical output
-    slog.warn(
-      "PTRS v2 composeMappedRowsForPtrs: failed to load field map",
+    slog.error(
+      "PTRS v2 composeMappedRowsForPtrs: failed to load field map for profiled run",
       safeMeta({ customerId, ptrsId, profileId, error: e.message }),
     );
-    fieldMapRows = [];
+    e.statusCode = e.statusCode || 500;
+    throw e;
   }
   stageEnd(sFieldMap, {
     profileId,
     fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
   });
+
+  if (
+    profileId &&
+    (!Array.isArray(fieldMapRows) || fieldMapRows.length === 0)
+  ) {
+    const e = new Error(
+      "Profile-backed mapped dataset build requires at least one canonical field mapping.",
+    );
+    e.statusCode = 400;
+    throw e;
+  }
 
   if (logger && logger.info) {
     slog.info(
@@ -1579,7 +1704,7 @@ async function composeMappedRowsForPtrs({
     let guard = 0;
     while (remaining.length) {
       guard += 1;
-      if (guard > list.length + 5) break;
+      if (guard > list.length + 10) break;
 
       const passPicked = [];
       const passLeft = [];
@@ -1594,7 +1719,11 @@ async function composeMappedRowsForPtrs({
           continue;
         }
 
-        if (fromRole === "main" || available.has(fromRole)) {
+        const fromAvailable = fromRole === "main" || available.has(fromRole);
+        const toAvailable = toRole === "main" || available.has(toRole);
+
+        // Supporting-to-supporting joins are valid when either side is already reachable.
+        if (fromAvailable || toAvailable) {
           passPicked.push(j);
         } else {
           passLeft.push(j);
@@ -1606,7 +1735,7 @@ async function composeMappedRowsForPtrs({
         const missing = Array.from(
           new Set(
             passLeft
-              .map((j) => norm(j.fromRole))
+              .flatMap((j) => [norm(j.fromRole), norm(j.toRole)])
               .filter((r) => r && r !== "main" && !available.has(r)),
           ),
         );
@@ -1614,7 +1743,7 @@ async function composeMappedRowsForPtrs({
         const e = new Error(
           `Invalid join dependency chain: cannot resolve join order. ` +
             `Roles available: ${rolesKnown.join(", ") || "(none)"}. ` +
-            `Missing/blocked fromRoles: ${missing.join(", ") || "(unknown)"}.`,
+            `Missing/blocked roles: ${missing.join(", ") || "(unknown)"}.`,
         );
         e.statusCode = 400;
         throw e;
@@ -1622,7 +1751,9 @@ async function composeMappedRowsForPtrs({
 
       for (const j of passPicked) {
         ordered.push(j);
+        const fromRole = norm(j.fromRole);
         const toRole = norm(j.toRole);
+        if (fromRole) available.add(fromRole);
         if (toRole) available.add(toRole);
       }
 
@@ -2051,23 +2182,33 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     const col = sourceColumn;
     if (!col) return null;
 
+    const role = String(sourceRole || "")
+      .trim()
+      .toLowerCase();
     const colSnake = toSnake(col);
 
-    // Deterministic key lookup only: exact key, then its snake_case form.
-    // Prefer already-mapped output row first (because mappings are stored in snake_case),
-    // then fall back to merged source row.
+    // Strict future-state resolution:
+    // - supporting roles must resolve only from namespaced keys
+    // - main/blank roles must resolve only from unnamespaced keys
+    const candidateKeys =
+      role && !isMainRole(role)
+        ? [nsKey(role, col), colSnake ? nsKey(role, colSnake) : null].filter(
+            Boolean,
+          )
+        : [col, colSnake].filter(Boolean);
 
-    const fromOut =
-      pickFromRowLoose(outRow, col) ??
-      (colSnake ? pickFromRowLoose(outRow, colSnake) : null);
+    // Prefer already-built output row first, then fall back to the merged source row.
+    for (const key of candidateKeys) {
+      const fromOut = pickFromRowLoose(outRow, key);
+      if (fromOut != null && String(fromOut).trim() !== "") return fromOut;
+    }
 
-    if (fromOut != null && String(fromOut).trim() !== "") return fromOut;
+    for (const key of candidateKeys) {
+      const fromSrc = pickFromRowLoose(srcRow, key);
+      if (fromSrc != null && String(fromSrc).trim() !== "") return fromSrc;
+    }
 
-    const fromSrc =
-      pickFromRowLoose(srcRow, col) ??
-      (colSnake ? pickFromRowLoose(srcRow, colSnake) : null);
-
-    return fromSrc;
+    return null;
   };
 
   // Build payment terms history index once (if a suitable dataset exists)
@@ -2354,7 +2495,20 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
   let loggedJoinProbe = false;
 
   for (const r of mainRows) {
-    const base = r.data || {};
+    let base = r.data || {};
+    if (typeof base === "string") {
+      try {
+        const parsed = JSON.parse(base);
+        if (parsed && typeof parsed === "object") {
+          base = parsed;
+        }
+      } catch {
+        base = {};
+      }
+    }
+    if (!base || typeof base !== "object") {
+      base = {};
+    }
     let srcRow = base;
 
     // Apply joins sequentially, supporting main->supporting and supporting->supporting joins.
@@ -2375,37 +2529,68 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
 
         if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
-        // If a join reads from a supporting role that isn't present on this row yet,
-        // it usually means the earlier join that would have brought that role in
-        // simply didn't match for this specific record.
-        // That's not a global "invalid join order" — it's a per-row absence.
-        // In that case we skip this join for this row.
-        if (!isMainRole(fromRole) && !hasRoleInRow(workingRow, fromRole)) {
+        const fromPresent =
+          isMainRole(fromRole) || hasRoleInRow(workingRow, fromRole);
+        const toPresent =
+          isMainRole(toRole) || hasRoleInRow(workingRow, toRole);
+
+        // Resolve joins from whichever side is already present on this row.
+        // This allows supporting-to-supporting joins such as termschanges <-> vendormaster
+        // to execute once either supporting role has already been attached.
+        let sourceRole = null;
+        let sourceCol = null;
+        let sourceTransform = null;
+        let lookupRole = null;
+        let lookupCol = null;
+        let lookupTransform = null;
+        let mergeRole = null;
+
+        if (fromPresent && !toPresent) {
+          sourceRole = fromRole;
+          sourceCol = fromCol;
+          sourceTransform = fromTransform;
+          lookupRole = toRole;
+          lookupCol = toCol;
+          lookupTransform = toTransform;
+          mergeRole = toRole;
+        } else if (!fromPresent && toPresent) {
+          sourceRole = toRole;
+          sourceCol = toCol;
+          sourceTransform = toTransform;
+          lookupRole = fromRole;
+          lookupCol = fromCol;
+          lookupTransform = fromTransform;
+          mergeRole = fromRole;
+        } else if (fromPresent && toPresent) {
+          // Both sides are already present on this row. Nothing new to attach.
+          continue;
+        } else {
           counters.joinSkippedMissingFromRole += 1;
           if (!loggedJoinProbe && logger && logger.debug) {
             loggedJoinProbe = true;
             slog.debug(
-              "PTRS v2 composeMappedRowsForPtrs: join probe (missing fromRole on row; skipping)",
+              "PTRS v2 composeMappedRowsForPtrs: join probe (neither side present on row; skipping)",
               safeMeta({
                 customerId,
                 ptrsId,
                 join: j,
                 fromRole,
+                toRole,
               }),
             );
           }
           continue;
         }
 
-        // Do not allow indexing main roles as targets.
-        if (isMainRole(toRole)) {
+        // Do not allow indexing main roles as lookup targets.
+        if (isMainRole(lookupRole)) {
           throw new Error(
-            `Invalid join target: toRole '${toRole}' must be a supporting dataset role`,
+            `Invalid join target: lookupRole '${lookupRole}' must be a supporting dataset role`,
           );
         }
 
-        const lhsVal = getJoinLhsValue(workingRow, fromRole, fromCol);
-        const key = normalizeJoinKeyValue(lhsVal, fromTransform);
+        const lhsVal = getJoinLhsValue(workingRow, sourceRole, sourceCol);
+        const key = normalizeJoinKeyValue(lhsVal, sourceTransform);
 
         if (!key) {
           counters.joinNoKey += 1;
@@ -2417,6 +2602,8 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
                 customerId,
                 ptrsId,
                 join: j,
+                sourceRole,
+                sourceCol,
                 rawValue: lhsVal,
                 normalisedKey: key,
               }),
@@ -2427,16 +2614,16 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
 
         counters.joinIndexLookups += 1;
         const idx = await getJoinIndex({
-          role: toRole,
-          column: toCol,
-          transform: toTransform,
+          role: lookupRole,
+          column: lookupCol,
+          transform: lookupTransform,
         });
 
         const joined = idx.get(key);
 
         if (joined) {
           counters.joinMatched += 1;
-          workingRow = mergeRoleRowNamespaced(workingRow, toRole, joined);
+          workingRow = mergeRoleRowNamespaced(workingRow, mergeRole, joined);
 
           if (!loggedJoinProbe && logger && logger.debug) {
             loggedJoinProbe = true;
@@ -2446,25 +2633,37 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
                 customerId,
                 ptrsId,
                 join: j,
+                sourceRole,
+                sourceCol,
+                lookupRole,
+                lookupCol,
+                mergeRole,
                 rawValue: lhsVal,
                 normalisedKey: key,
                 joinedKeys: Object.keys(joined || {}),
               }),
             );
           }
-        } else if (!loggedJoinProbe && logger && logger.debug) {
+        } else {
           counters.joinNoMatch += 1;
-          loggedJoinProbe = true;
-          slog.debug(
-            "PTRS v2 composeMappedRowsForPtrs: join probe (no match)",
-            safeMeta({
-              customerId,
-              ptrsId,
-              join: j,
-              rawValue: lhsVal,
-              normalisedKey: key,
-            }),
-          );
+          if (!loggedJoinProbe && logger && logger.debug) {
+            loggedJoinProbe = true;
+            slog.debug(
+              "PTRS v2 composeMappedRowsForPtrs: join probe (no match)",
+              safeMeta({
+                customerId,
+                ptrsId,
+                join: j,
+                sourceRole,
+                sourceCol,
+                lookupRole,
+                lookupCol,
+                mergeRole,
+                rawValue: lhsVal,
+                normalisedKey: key,
+              }),
+            );
+          }
         }
       }
 
@@ -2497,8 +2696,17 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
       };
     }
 
-    let out = applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
-    // Apply custom fields at this point, so mapped dataset includes them
+    const hasCanonicalFieldMap =
+      Array.isArray(fieldMapRows) && fieldMapRows.length > 0;
+
+    // Future-state authority model:
+    // - canonical field-map present => build from canonical projection + custom fields only
+    // - no canonical field-map => fall back to legacy header-keyed mappings
+    let out = hasCanonicalFieldMap
+      ? {}
+      : applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
+
+    // Apply custom fields in both modes so non-canonical derived values remain available.
     if (Array.isArray(customFields) && customFields.length) {
       out = applyCustomFields({
         row: out,
@@ -2513,9 +2721,8 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
     out.invoice_payment_terms_effective = srcRow.__ptrs_payment_terms_effective;
 
     // ---------------- Canonical projection ----------------
-    // Project canonical fields onto the mapped row using the profile-scoped field map.
-    // We MERGE (non-breaking) so existing mapped keys remain available during MVP.
-    if (Array.isArray(fieldMapRows) && fieldMapRows.length) {
+    // When a profile-scoped field map exists, it is the authoritative source for canonical fields.
+    if (hasCanonicalFieldMap) {
       counters.canonicalProjectionApplied += 1;
       const canonicalOut = {};
       for (const fm of fieldMapRows) {
@@ -2536,11 +2743,10 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
           transformConfig: fm.transformConfig,
         });
 
-        // Always set the key (even null) so downstream headers are stable
+        // Always set the key (even null) so downstream headers are stable.
         canonicalOut[canonicalKey] = transformed == null ? null : transformed;
       }
 
-      // Canonical values win if there is a collision.
       out = { ...out, ...canonicalOut };
     }
 
@@ -2736,18 +2942,42 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
 
 function applyColumnMappingsToRow({ mappings, sourceRow }) {
   const out = {};
+
+  const isMainRole = (role) => {
+    const r = String(role || "")
+      .trim()
+      .toLowerCase();
+    return r === "main" || r.startsWith("main_");
+  };
+
+  const nsKey = (role, col) => `${String(role)}__${String(col)}`;
+
   for (const [sourceHeader, cfg] of Object.entries(mappings || {})) {
     if (!cfg) continue;
+
     const target = cfg.field || cfg.target;
     if (!target) continue;
+
     let value;
     if (Object.prototype.hasOwnProperty.call(cfg, "value")) {
       value = cfg.value;
     } else {
-      value = pickFromRowLoose(sourceRow, sourceHeader);
+      const role = String(cfg.sourceRole || cfg.role || "")
+        .trim()
+        .toLowerCase();
+
+      if (role && !isMainRole(role)) {
+        value =
+          pickFromRowLoose(sourceRow, nsKey(role, sourceHeader)) ??
+          pickFromRowLoose(sourceRow, sourceHeader);
+      } else {
+        value = pickFromRowLoose(sourceRow, sourceHeader);
+      }
     }
+
     out[toSnake(target)] = value ?? null;
   }
+
   return out;
 }
 

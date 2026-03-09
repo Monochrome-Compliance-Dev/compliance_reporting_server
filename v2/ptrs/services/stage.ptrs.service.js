@@ -1133,10 +1133,46 @@ async function stagePtrs({
           transaction: t,
         });
 
+        if (Number(existingStageCount) > 0) {
+          slog.info(
+            "PTRS v2 stagePtrs: inputs unchanged; skipping persist staging",
+            {
+              action: "PtrsV2StagePtrsSkipped",
+              customerId,
+              ptrsId,
+              profileId: profileId || null,
+              inputHash,
+              previousRunId: previous.id || null,
+              existingStageCount,
+            },
+          );
+          trace?.write("stage_skip_input_unchanged", {
+            inputHash,
+            previousRunId: previous.id || null,
+            existingStageCount,
+            totalMs: hrMsSince(jobStartNs),
+          });
+
+          await t.commit();
+          if (trace) await trace.close();
+          return {
+            skipped: true,
+            reason: "INPUT_UNCHANGED",
+            inputHash,
+            previousRunId: previous.id || null,
+            persistedCount: existingStageCount,
+            rowsIn: null,
+            rowsOut: null,
+            tookMs: Date.now() - started,
+            sample: null,
+            stats: null,
+          };
+        }
+
         slog.info(
-          "PTRS v2 stagePtrs: inputs unchanged; skipping persist staging",
+          "PTRS v2 stagePtrs: inputs unchanged but no staged rows exist; forcing rebuild",
           {
-            action: "PtrsV2StagePtrsSkipped",
+            action: "PtrsV2StagePtrsSkipBypassedNoRows",
             customerId,
             ptrsId,
             profileId: profileId || null,
@@ -1145,27 +1181,12 @@ async function stagePtrs({
             existingStageCount,
           },
         );
-        trace?.write("stage_skip_input_unchanged", {
+        trace?.write("stage_skip_bypassed_no_rows", {
           inputHash,
           previousRunId: previous.id || null,
           existingStageCount,
           totalMs: hrMsSince(jobStartNs),
         });
-
-        await t.commit();
-        if (trace) await trace.close();
-        return {
-          skipped: true,
-          reason: "INPUT_UNCHANGED",
-          inputHash,
-          previousRunId: previous.id || null,
-          persistedCount: existingStageCount,
-          rowsIn: null,
-          rowsOut: null,
-          tookMs: Date.now() - started,
-          sample: null,
-          stats: null,
-        };
       }
 
       slog.info("PTRS v2 stagePtrs: execution input hash", {

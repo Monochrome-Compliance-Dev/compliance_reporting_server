@@ -155,22 +155,19 @@ async function saveMap(req, res, next) {
     rowRules = null,
   } = body;
 
+  const hasProfileId = !!profileId;
+  const hasMappingsObject =
+    mappings && typeof mappings === "object" && !Array.isArray(mappings);
+
   // Only update joins/customFields when explicitly provided.
   // Prevent MapPanel saves from stomping joins/customFields.
-  const hasJoins = Object.prototype.hasOwnProperty.call(body, "joins");
-  const hasCustomFields = Object.prototype.hasOwnProperty.call(
-    body,
-    "customFields",
-  );
-
-  const joins = hasJoins ? body.joins : undefined;
-  const customFields = hasCustomFields ? body.customFields : undefined;
 
   slog.info(
     "[PTRS v2 saveMap] body",
     safeMeta({
       ptrsId,
-      mappingsKeys: Object.keys(req.body.mappings || {}),
+      mappingsKeys: hasMappingsObject ? Object.keys(mappings) : [],
+      hasProfileId,
     }),
   );
 
@@ -180,10 +177,18 @@ async function saveMap(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Customer ID missing" });
     }
-    if (!mappings || typeof mappings !== "object" || Array.isArray(mappings)) {
+
+    if (!hasProfileId && !hasMappingsObject) {
       return res
         .status(400)
         .json({ status: "error", message: "mappings object is required" });
+    }
+
+    if (hasProfileId && mappings !== null && !hasMappingsObject) {
+      return res.status(400).json({
+        status: "error",
+        message: "mappings must be an object or null for profile-backed saves",
+      });
     }
 
     // Confirm the PTRS run exists and belongs to this tenant
@@ -194,36 +199,36 @@ async function saveMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    // Best-effort validation: warn but don't block if headers slightly differ (case/space)
-    // IMPORTANT: do NOT call getImportSample here (it is expensive). Prefer dataset meta + a tiny dataset sample.
-    const { headers } = await tmPtrsService.getMainDatasetHeaderInfo({
-      customerId,
-      ptrsId,
-      limit: 5,
-      offset: 0,
-    });
+    if (hasMappingsObject) {
+      // Best-effort validation: warn but don't block if headers slightly differ (case/space)
+      // IMPORTANT: do NOT call getImportSample here (it is expensive).
+      // Validate against dataset metadata across all datasets instead.
+      const { headers } = await tmPtrsService.getAllDatasetHeaderInfo({
+        customerId,
+        ptrsId,
+      });
 
-    const norm = (s) =>
-      String(s || "")
-        .toLowerCase()
-        .replace(/\s+/g, "");
+      const norm = (s) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/\s+/g, "");
 
-    const headerSet = new Set((headers || []).map(norm));
-    const missing = Object.keys(mappings).filter(
-      (src) => !headerSet.has(norm(src)),
-    );
-
-    if (missing.length) {
-      // Include a hint but allow save (front-end will reconcile via tolerant matching)
-      logger.info(
-        "PTRS v2 saveMap: some mapping headers not found exactly in main dataset headers",
-        {
-          action: "PtrsV2SaveMap",
-          ptrsId,
-          customerId,
-          missing,
-        },
+      const headerSet = new Set((headers || []).map(norm));
+      const missing = Object.keys(mappings).filter(
+        (src) => !headerSet.has(norm(src)),
       );
+
+      if (missing.length) {
+        logger.info(
+          "PTRS v2 saveMap: some mapping headers not found exactly in dataset headers",
+          {
+            action: "PtrsV2SaveMap",
+            ptrsId,
+            customerId,
+            missing,
+          },
+        );
+      }
     }
 
     const saved = await tmPtrsService.saveColumnMap({
@@ -246,7 +251,7 @@ async function saveMap(req, res, next) {
       action: "PtrsV2SaveMap",
       entity: "PtrsUpload",
       entityId: ptrsId,
-      details: { keys: Object.keys(mappings).length },
+      details: { keys: hasMappingsObject ? Object.keys(mappings).length : 0 },
     });
 
     res.status(200).json({ status: "success", data: saved });

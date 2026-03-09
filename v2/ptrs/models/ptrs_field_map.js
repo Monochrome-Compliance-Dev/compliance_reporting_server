@@ -21,7 +21,15 @@ function model(sequelize) {
       allowNull: false,
     },
 
-    // Profile-scoped mappings are required (different report entities can have different mappings)
+    // Profile-scoped mappings are required (different report entities can have different mappings).
+    // IMPORTANT:
+    // - The live foreign key for `profileId` currently points to `tbl_customer_profile(id)`.
+    // - `tbl_ptrs_profile` exists but is not currently populated/used by the application.
+    // - Do NOT repoint this field back to `tbl_ptrs_profile` unless the application is fully migrated
+    //   to create and use real PTRS profile rows.
+    // - Longer term, we should decide whether to:
+    //     1) keep using `tbl_customer_profile` as the source of truth, or
+    //     2) properly adopt `tbl_ptrs_profile` and migrate all callers/data.
     profileId: {
       type: DataTypes.STRING(10),
       allowNull: false,
@@ -83,6 +91,12 @@ function model(sequelize) {
   };
 
   const PtrsFieldMap = sequelize.define("PtrsFieldMap", attributes, {
+    // NOTE:
+    // This model represents `tbl_ptrs_field_map` only.
+    // The database-level foreign key for `profileId` is currently expected to reference
+    // `tbl_customer_profile(id)` in the live environment.
+    // If a future migration reintroduces `tbl_ptrs_profile` as the real parent table,
+    // update the database constraint and this model commentary together.
     tableName: "tbl_ptrs_field_map",
     timestamps: true,
     paranoid: true,
