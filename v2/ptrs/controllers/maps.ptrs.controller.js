@@ -582,6 +582,7 @@ async function listPtrsWithMap(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
+  const profileId = req.query.profileId || null;
 
   try {
     if (!customerId) {
@@ -590,7 +591,15 @@ async function listPtrsWithMap(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const items = await tmPtrsService.listCompatibleMaps({ customerId });
+    const result = await tmPtrsService.listCompatibleMaps({
+      customerId,
+      profileId,
+    });
+    const items = Array.isArray(result?.items)
+      ? result.items
+      : Array.isArray(result)
+        ? result
+        : [];
 
     await auditService.logEvent({
       customerId,
@@ -600,7 +609,7 @@ async function listPtrsWithMap(req, res, next) {
       action: "PtrsV2ListCompatibleMaps",
       entity: "Ptrs",
       entityId: null,
-      details: { count: Array.isArray(items) ? items.length : 0 },
+      details: { profileId, count: Array.isArray(items) ? items.length : 0 },
     });
 
     return res.status(200).json({ status: "success", data: { items } });

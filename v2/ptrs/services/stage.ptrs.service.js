@@ -14,6 +14,9 @@ const { applyRules } = require("./rules.ptrs.service");
 const { loadMappedRowsForPtrs, getColumnMap } = require("./maps.ptrs.service");
 const { logger } = require("@/helpers/logger");
 const {
+  PTRS_CANONICAL_CONTRACT,
+} = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
+const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
@@ -25,6 +28,75 @@ module.exports = {
 };
 
 // --- Payment time (regulator-aligned) helpers ---
+
+function snakeToCamel(value) {
+  if (!value) return "";
+  return String(value).replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+}
+
+function toSnakeCase(value) {
+  if (!value) return "";
+  return String(value)
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+}
+
+function collectCanonicalContractFields(contract) {
+  if (!contract || typeof contract !== "object") return [];
+
+  const sections = [
+    contract.identity,
+    contract.transaction,
+    contract.dates,
+    contract.terms,
+    contract.regulator_flags,
+  ];
+
+  const out = [];
+  const seen = new Set();
+
+  for (const section of sections) {
+    if (!section || typeof section !== "object") continue;
+    for (const key of Object.keys(section)) {
+      const field = toSnakeCase(key);
+      if (!field || seen.has(field)) continue;
+      seen.add(field);
+      out.push(field);
+    }
+  }
+
+  return out;
+}
+
+function readStageFieldValue(row, field) {
+  if (!row || typeof row !== "object" || !field) return undefined;
+
+  if (Object.prototype.hasOwnProperty.call(row, field)) {
+    return row[field];
+  }
+
+  const camel = snakeToCamel(field);
+  if (camel && Object.prototype.hasOwnProperty.call(row, camel)) {
+    return row[camel];
+  }
+
+  return undefined;
+}
+
+function buildPersistedStageRow(row, allowedFields) {
+  const out = {};
+  const fields = Array.isArray(allowedFields) ? allowedFields : [];
+
+  for (const field of fields) {
+    if (!field) continue;
+    const value = readStageFieldValue(row, field);
+    out[field] = typeof value === "undefined" ? null : value;
+  }
+
+  return out;
+}
 
 // Helper: get the first present value from a list of candidate keys in a row
 function getFirstRowValue(row, keys) {
@@ -241,6 +313,19 @@ function deriveTermReferenceDate(row) {
 
   return null;
 }
+
+function normaliseHeaderToRowField(header) {
+  if (!header) return null;
+  const s = String(header).trim();
+  if (!s) return null;
+
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+}
+
 function normaliseHeaderToDbColumn(header) {
   // Convert dataset header -> camelCase DB column name (matches tbl_ptrs_payment_term_change columns)
   // e.g. "Company Code" -> "companyCode", "Purch. organization" -> "purchOrganization"
@@ -305,8 +390,10 @@ function getCanonicalFieldForMainHeader(mapRow, header) {
     }
   }
 
-  // No fallbacks. If the join field isn't mapped, the user must fix the map.
-  return null;
+  // Profile-backed runs no longer persist legacy `mappings`, so stage logic must be
+  // able to fall back to the raw normalized main-row field name when the richer mapped
+  // row preserves helper fields from the joined source row.
+  return normaliseHeaderToRowField(h);
 }
 
 function extractTermChangesJoinSpec(mapRow) {
@@ -331,7 +418,8 @@ function extractTermChangesJoinSpec(mapRow) {
       c.to &&
       c.from &&
       c.to.role === "termschanges" &&
-      c.from.role === "main" &&
+      c.from.role &&
+      c.from.role !== "termschanges" &&
       c.to.column &&
       c.from.column,
   );
@@ -713,8 +801,12 @@ function deriveTermCode(row) {
     // Invoice-derived fields first (preferred)
     row.invoice_payment_terms_effective,
     row.invoice_payment_terms_raw,
+    row.invoice_payment_terms,
     row.payment_term,
     row.paymentTerm,
+
+    // Supporting dataset fallbacks
+    row["vendormaster__Payment terms"],
 
     // System/user default fallback (e.g. "30")
     row.default_payment_term,
@@ -906,6 +998,7 @@ async function stagePtrs({
   limit = null,
   userId,
   profileId = null,
+  force = false,
 }) {
   let executionRun = null;
   let inputHash = null;
@@ -944,6 +1037,7 @@ async function stagePtrs({
 
   trace?.write("stage_begin", {
     persist: !!persist,
+    force: !!force,
     limit: limit == null ? null : Number(limit),
     stepsCount: Array.isArray(steps) ? steps.length : 0,
     hasProfileId: !!profileId,
@@ -1124,6 +1218,7 @@ async function stagePtrs({
       });
 
       if (
+        !force &&
         previous &&
         previous.status === "success" &&
         previous.inputHash === inputHash
@@ -1471,6 +1566,58 @@ async function stagePtrs({
     }
 
     // 3) Persist into tbl_ptrs_stage_row if requested
+    const contractStageFields = collectCanonicalContractFields(
+      PTRS_CANONICAL_CONTRACT,
+    );
+
+    const derivedStageFields = [
+      "payment_term_days",
+      "payment_time_days",
+      "payment_time_reference_date",
+      "payment_time_reference_kind",
+      "contract_po_payment_terms_effective",
+      "contract_po_payment_terms_effective_source",
+      "contract_po_payment_terms_effective_changed_at",
+    ];
+
+    let mappedExtraStageFields = [];
+    try {
+      if (profileId && db.PtrsFieldMap) {
+        const fieldMapRows = await db.PtrsFieldMap.findAll({
+          where: { customerId, ptrsId, profileId },
+          attributes: ["canonicalField"],
+          raw: true,
+          transaction: t,
+        });
+
+        mappedExtraStageFields = Array.from(
+          new Set(
+            (fieldMapRows || [])
+              .map((r) => toSnakeCase(r?.canonicalField))
+              .filter(Boolean),
+          ),
+        );
+      }
+    } catch (err) {
+      slog.warn(
+        "PTRS v2 stagePtrs: failed to load canonical field-map rows for persisted stage shape",
+        {
+          action: "PtrsV2StagePtrsPersistShapeFieldMapLoadFailed",
+          customerId,
+          ptrsId,
+          profileId: profileId || null,
+          error: err?.message,
+        },
+      );
+    }
+
+    const persistedStageFields = Array.from(
+      new Set([
+        ...contractStageFields,
+        ...mappedExtraStageFields,
+        ...derivedStageFields,
+      ]),
+    );
     let persistedCount = null;
 
     // tbl_ptrs_stage_row requires datasetId (NOT NULL).
@@ -1613,7 +1760,10 @@ async function stagePtrs({
           profileId: profileId || null,
           datasetId: rowDatasetId,
           rowNo: deriveRowNoForStage(r, idx),
-          data: stripInternalStageKeys(r),
+          data: buildPersistedStageRow(
+            stripInternalStageKeys(r),
+            persistedStageFields,
+          ),
           errors: extractStageErrors(r),
           meta: {
             ...(extractExistingStageMeta(r) || {}),
@@ -1644,6 +1794,7 @@ async function stagePtrs({
         sampleRow: rowsToInsert[0] || null,
         defaultDatasetId,
         missingDatasetIdCount,
+        persistedStageFields,
       });
 
       // Clear existing active stage rows for this ptrsId/customerId (full rebuild)

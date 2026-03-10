@@ -148,6 +148,12 @@ async function getMainDatasetHeaderInfo({
 
   const isMainRole = (role) => {
     const r = String(role || "").toLowerCase();
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[PTRS:getMainDatasetHeaderInfo] dataset role check", {
+        originalRole: role,
+        normalisedRole: r,
+      });
+    }
     return r === "main" || r.startsWith("main_");
   };
 
@@ -639,7 +645,7 @@ async function getColumnMap({ customerId, ptrsId, transaction = null }) {
  * List PTRS runs that have a saved column map, including mapMeta extracted from map.extras.
  * Used by the FE to show compatible maps without N+1 getMap calls.
  */
-async function listCompatibleMaps({ customerId }) {
+async function listCompatibleMaps({ customerId, profileId = null }) {
   if (!customerId) throw new Error("customerId is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
@@ -651,15 +657,67 @@ async function listCompatibleMaps({ customerId }) {
       transaction: t,
     });
 
-    const ptrsIds = maps.map((m) => m.ptrsId).filter(Boolean);
+    const fieldMaps = await db.PtrsFieldMap.findAll({
+      where: {
+        customerId,
+        ...(profileId ? { profileId } : {}),
+      },
+      attributes: ["ptrsId", "canonicalField", "updatedAt", "createdAt"],
+      raw: true,
+      transaction: t,
+    });
+
+    const ptrsIds = Array.from(
+      new Set(
+        [...maps, ...fieldMaps].map((row) => row?.ptrsId).filter(Boolean),
+      ),
+    );
+
     if (!ptrsIds.length) {
       await t.commit();
-      return [];
+      return { items: [] };
     }
 
     const metaByPtrsId = new Map();
     for (const m of maps) {
       metaByPtrsId.set(m.ptrsId, extractMapMetaFromExtras(m.extras));
+    }
+
+    const fieldMapStatsByPtrsId = new Map();
+    for (const row of fieldMaps || []) {
+      const key = String(row?.ptrsId || "");
+      if (!key) continue;
+
+      const stat = fieldMapStatsByPtrsId.get(key) || {
+        mappedFieldsCount: 0,
+        fieldMapUpdatedAt: null,
+        fieldMapCreatedAt: null,
+      };
+
+      stat.mappedFieldsCount += 1;
+
+      const updatedAt = row?.updatedAt || null;
+      const createdAt = row?.createdAt || null;
+
+      if (
+        updatedAt &&
+        (!stat.fieldMapUpdatedAt ||
+          new Date(updatedAt).getTime() >
+            new Date(stat.fieldMapUpdatedAt).getTime())
+      ) {
+        stat.fieldMapUpdatedAt = updatedAt;
+      }
+
+      if (
+        createdAt &&
+        (!stat.fieldMapCreatedAt ||
+          new Date(createdAt).getTime() >
+            new Date(stat.fieldMapCreatedAt).getTime())
+      ) {
+        stat.fieldMapCreatedAt = createdAt;
+      }
+
+      fieldMapStatsByPtrsId.set(key, stat);
     }
 
     const ptrsRows = await db.Ptrs.findAll({
@@ -705,14 +763,40 @@ async function listCompatibleMaps({ customerId }) {
       return chosen?.fileName || null;
     };
 
-    const items = (ptrsRows || []).map((r) => ({
-      ...r,
-      fileName: pickDisplayFileName(r.id),
-      mapMeta: metaByPtrsId.get(r.id) || null,
-    }));
+    const items = (ptrsRows || [])
+      .map((r) => {
+        const fieldMapStats = fieldMapStatsByPtrsId.get(String(r.id || "")) || {
+          mappedFieldsCount: 0,
+          fieldMapUpdatedAt: null,
+          fieldMapCreatedAt: null,
+        };
+
+        return {
+          ...r,
+          fileName: pickDisplayFileName(r.id),
+          mapMeta: metaByPtrsId.get(r.id) || null,
+          mappedFieldsCount: fieldMapStats.mappedFieldsCount,
+          fieldMapUpdatedAt: fieldMapStats.fieldMapUpdatedAt,
+          fieldMapCreatedAt: fieldMapStats.fieldMapCreatedAt,
+        };
+      })
+      .sort((a, b) => {
+        const countDiff =
+          Number(b?.mappedFieldsCount || 0) - Number(a?.mappedFieldsCount || 0);
+        if (countDiff !== 0) return countDiff;
+
+        const aTime = new Date(
+          a?.fieldMapUpdatedAt || a?.updatedAt || a?.createdAt || 0,
+        ).getTime();
+        const bTime = new Date(
+          b?.fieldMapUpdatedAt || b?.updatedAt || b?.createdAt || 0,
+        ).getTime();
+
+        return bTime - aTime;
+      });
 
     await t.commit();
-    return items;
+    return { items };
   } catch (err) {
     if (!t.finished) {
       try {
@@ -2700,10 +2784,13 @@ OFFSET ${Number.isFinite(Number(offset)) ? Math.max(0, Number(offset)) : 0};
       Array.isArray(fieldMapRows) && fieldMapRows.length > 0;
 
     // Future-state authority model:
-    // - canonical field-map present => build from canonical projection + custom fields only
+    // - canonical field-map present => preserve the richer joined/raw working row so
+    //   downstream stage logic can still use helper keys (e.g. company_code for
+    //   effective-dated payment term joins), while canonical projection remains the
+    //   authority for canonical fields.
     // - no canonical field-map => fall back to legacy header-keyed mappings
     let out = hasCanonicalFieldMap
-      ? {}
+      ? { ...(srcRow && typeof srcRow === "object" ? srcRow : {}) }
       : applyColumnMappingsToRow({ mappings, sourceRow: srcRow });
 
     // Apply custom fields in both modes so non-canonical derived values remain available.

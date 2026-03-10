@@ -25,6 +25,8 @@ async function stagePtrs(req, res, next) {
     persist = false,
     limit = 50,
     profileId = null,
+
+    force = false,
   } = req.body || {};
 
   safeLog("[PTRS controller.stagePtrs] received", {
@@ -46,6 +48,7 @@ async function stagePtrs(req, res, next) {
       persist,
       limit,
       profileId,
+      force,
     });
 
     // Confirm the PTRS run exists and belongs to this tenant
@@ -64,6 +67,7 @@ async function stagePtrs(req, res, next) {
       limit: Math.min(Number(limit) || 50, 500),
       userId,
       profileId,
+      force: Boolean(force),
     });
 
     safeLog("[PTRS controller.stagePtrs] result", result);
@@ -114,7 +118,7 @@ async function getStagePreview(req, res, next) {
 
   const limit = Math.min(
     Number(req.body?.limit ?? req.query?.limit ?? 50) || 50,
-    500
+    500,
   );
 
   const profileId = req.body?.profileId ?? req.query?.profileId ?? null;

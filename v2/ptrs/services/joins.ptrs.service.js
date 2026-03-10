@@ -1,4 +1,5 @@
 const db = require("@/db/database");
+const { Op } = require("sequelize");
 
 const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const {
@@ -10,6 +11,7 @@ const { createPtrsTrace, hrMsSince } = require("@/helpers/ptrsTrackerLog");
 module.exports = {
   getJoins,
   saveJoins,
+  listCompatibleJoins,
 };
 
 // Postgres JSONB will reject strings containing NUL (\u0000) bytes.
@@ -286,6 +288,117 @@ async function saveJoins({
     );
 
     if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
+  if (!customerId) throw new Error("customerId is required");
+
+  const t =
+    transaction || (await beginTransactionWithCustomerContext(customerId));
+  const isExternalTx = !!transaction;
+
+  try {
+    const rows = await db.PtrsColumnMap.findAll({
+      where: {
+        customerId,
+        ...(ptrsId ? { ptrsId: { [Op.ne]: ptrsId } } : {}),
+      },
+      attributes: [
+        "ptrsId",
+        "joins",
+        "customFields",
+        "profileId",
+        "updatedAt",
+        "createdAt",
+      ],
+      order: [
+        ["updatedAt", "DESC"],
+        ["createdAt", "DESC"],
+      ],
+      raw: true,
+      transaction: t,
+    });
+
+    const eligible = (rows || []).filter((row) => {
+      const joinsCount = Array.isArray(row?.joins?.conditions)
+        ? row.joins.conditions.length
+        : 0;
+      const customFieldsCount = Array.isArray(row?.customFields)
+        ? row.customFields.length
+        : 0;
+      return joinsCount > 0 || customFieldsCount > 0;
+    });
+
+    const ptrsIds = Array.from(
+      new Set(
+        eligible.map((row) => String(row?.ptrsId || "").trim()).filter(Boolean),
+      ),
+    );
+
+    let byPtrsId = new Map();
+
+    if (ptrsIds.length) {
+      const dsRows = await db.PtrsDataset.findAll({
+        where: { customerId, ptrsId: { [Op.in]: ptrsIds } },
+        attributes: ["ptrsId", "role", "fileName", "createdAt"],
+        order: [
+          ["ptrsId", "ASC"],
+          ["createdAt", "ASC"],
+        ],
+        raw: true,
+        transaction: t,
+      });
+
+      for (const ds of dsRows || []) {
+        const key = String(ds?.ptrsId || "");
+        if (!key) continue;
+        if (!byPtrsId.has(key)) byPtrsId.set(key, []);
+        byPtrsId.get(key).push(ds);
+      }
+    }
+
+    const isMainRole = (role) => {
+      const r = String(role || "")
+        .trim()
+        .toLowerCase();
+      return r === "main" || r.startsWith("main_");
+    };
+
+    const pickDisplayFileName = (candidatePtrsId) => {
+      const list = byPtrsId.get(String(candidatePtrsId || "")) || [];
+      const main = list.find((d) => isMainRole(d?.role));
+      const chosen = main || list[0] || null;
+      return chosen?.fileName || null;
+    };
+
+    const items = eligible.map((row) => ({
+      id: row.ptrsId,
+      ptrsId: row.ptrsId,
+      fileName: pickDisplayFileName(row.ptrsId),
+      joinsCount: Array.isArray(row?.joins?.conditions)
+        ? row.joins.conditions.length
+        : 0,
+      customFieldsCount: Array.isArray(row?.customFields)
+        ? row.customFields.length
+        : 0,
+      profileId: row?.profileId || null,
+      updatedAt: row?.updatedAt || null,
+      createdAt: row?.createdAt || null,
+    }));
+
+    if (!isExternalTx && !t.finished) {
+      await t.commit();
+    }
+
+    return { items };
+  } catch (err) {
+    if (!isExternalTx && !t.finished) {
       try {
         await t.rollback();
       } catch (_) {}

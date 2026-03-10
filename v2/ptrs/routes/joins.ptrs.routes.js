@@ -12,6 +12,11 @@ const requirePtrs = authorise({
 
 // Joins + custom fields (get/save) - persisted to tbl_ptrs_column_map.joins/customFields
 router.get("/:id/joins", requirePtrs, joinsController.getJoins);
+router.get(
+  "/:id/compatible-joins",
+  requirePtrs,
+  joinsController.listCompatibleJoins,
+);
 router.put("/:id/joins", requirePtrs, joinsController.saveJoins);
 
 module.exports = router;
