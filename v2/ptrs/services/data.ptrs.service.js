@@ -7,11 +7,7 @@ const fs = require("fs");
 const { Worker } = require("worker_threads");
 
 const { logger } = require("@/helpers/logger");
-const {
-  normalizeJoinKeyValue,
-  toSnake,
-  importDatasetCsvStreamToImportRaw,
-} = require("./ptrs.service");
+
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -26,6 +22,9 @@ module.exports = {
   importPaymentTermChangesFromDataset,
   listPaymentTermChanges,
   upsertMainDatasetFromRaw,
+  emitCsvUploadStatus,
+  importCsvStream,
+  importDatasetCsvStreamToImportRaw,
 };
 
 const PAYMENT_TERM_CHANGE_ROLES = new Set([
@@ -54,6 +53,21 @@ function isPaymentTermChangeRole(role) {
   return compact.includes("term") && compact.includes("change");
 }
 
+function emitCsvUploadStatus(ptrsId, payload) {
+  try {
+    const io = global.__socketio;
+    if (!io || !ptrsId) return;
+
+    io.to(`ptrs:${ptrsId}`).emit("ptrs:csvUploadStatus", {
+      ptrsId,
+      ...payload,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (_) {
+    // Never break ingest due to websocket failure
+  }
+}
+
 function modelHasField(model, field) {
   try {
     return Boolean(model?.rawAttributes && model.rawAttributes[field]);
@@ -70,6 +84,229 @@ function pickModelFields(model, candidate) {
     if (allowed.has(k)) out[k] = v;
   }
   return out;
+}
+
+async function importDatasetCsvStreamToImportRaw({
+  customerId,
+  ptrsId,
+  datasetId,
+  role = null,
+  stream,
+  sourceType = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+  if (!stream) throw new Error("stream is required");
+
+  // Buffer once so we can safely read/repair header row.
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV splitter for the header line
+  const splitCsvHeaderLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < String(line || "").length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const rawHeaders = splitCsvHeaderLine(headerLine).map((s) =>
+    String(s || "").trim(),
+  );
+  if (!rawHeaders.length || rawHeaders.every((h) => h === "")) {
+    const e = new Error("CSV appears to have no header row");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  // Deduplicate/repair headers
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
+
+  const totalRows = await countCsvRowsFromBufferedText(text, headersArray);
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  emitCsvUploadStatus(ptrsId, {
+    customerId,
+    datasetId,
+    role,
+    sourceType,
+    status: "uploading",
+    rowsInserted: 0,
+    totalRows,
+  });
+
+  let rowNo = 0;
+  let rowsInserted = 0;
+  const BATCH_SIZE = 1000;
+  const batch = [];
+
+  const fixedStream = Readable.from(text);
+
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      await db.PtrsImportRaw.bulkCreate(batch, {
+        validate: false,
+        transaction: t,
+      });
+      rowsInserted += batch.length;
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId,
+        role,
+        sourceType,
+        status: "uploading",
+        rowsInserted,
+        totalRows,
+      });
+    } finally {
+      batch.length = 0;
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const handleFatal = (err) => {
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId,
+        role,
+        sourceType,
+        status: "failed",
+        rowsInserted,
+        totalRows,
+        error: err?.message || "CSV import failed",
+      });
+      (t.finished ? Promise.resolve() : t.rollback())
+        .catch(() => {})
+        .finally(() => reject(err));
+    };
+
+    const parser = csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+        skipLines: 1,
+        discardUnmappedColumns: true,
+      })
+      .on("error", (err) => handleFatal(err))
+      .on("data", (row) => {
+        rowNo += 1;
+        batch.push({
+          customerId,
+          ptrsId,
+          datasetId,
+          rowNo,
+          data: row,
+          errors: null,
+        });
+
+        if (batch.length >= BATCH_SIZE) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch((err) => handleFatal(err));
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
+
+          emitCsvUploadStatus(ptrsId, {
+            customerId,
+            datasetId,
+            role,
+            sourceType,
+            status: "complete",
+            rowsInserted,
+            totalRows,
+          });
+
+          // Update dataset stats/meta, but DO NOT touch PtrsUpload here.
+          const ds = await db.PtrsDataset.findOne({
+            where: { id: datasetId, customerId, ptrsId },
+            transaction: t,
+          });
+
+          if (ds) {
+            const currentMeta = ds.get("meta") || {};
+            await ds.update(
+              {
+                rowsCount: rowsInserted,
+                meta: {
+                  ...currentMeta,
+                  headers: headersArray,
+                  rowsCount: rowsInserted,
+                  sourceType: sourceType || ds.get("sourceType") || null,
+                  importedToRawAt: new Date().toISOString(),
+                  role: role || ds.get("role") || null,
+                },
+              },
+              { transaction: t },
+            );
+          }
+
+          await t.commit();
+
+          logger?.info?.("PTRS v2 importDatasetCsvStreamToImportRaw: done", {
+            action: "PtrsV2ImportDatasetToRaw",
+            customerId,
+            ptrsId,
+            datasetId,
+            role: role || null,
+            rowsInserted,
+          });
+
+          resolve({ ok: true, rowsInserted, headers: headersArray });
+        } catch (e) {
+          handleFatal(e);
+        }
+      });
+
+    try {
+      fixedStream.pipe(parser);
+    } catch (e) {
+      handleFatal(e);
+    }
+  });
 }
 
 // Helper: derive headers from ImportRaw rows for main dataset
@@ -100,6 +337,294 @@ async function deriveMainDatasetHeadersFromImportRaw({
   }
 
   return Array.from(headerSet.values());
+}
+
+/**
+ * Stream a CSV into tbl_ptrs_import_raw as JSONB rows
+ * - stream: Readable of CSV
+ * - returns rowsInserted (int)
+ */
+async function importCsvStream({
+  customerId,
+  ptrsId,
+  stream,
+  fileMeta = null,
+  datasetId = null,
+  sourceType = null,
+}) {
+  console.log("PTRS v2 importCsvStream: begin", {
+    action: "PtrsV2ImportCsvStream",
+    customerId,
+    ptrsId,
+    fileMeta,
+    stream,
+  });
+  let rowNo = 0;
+  let rowsInserted = 0;
+
+  const BATCH_SIZE = 1000;
+  const batch = [];
+
+  // Buffer once so we can synthesise headers
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  // First line = header
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV splitter for one line
+  const splitCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const rawHeaders = splitCsvLine(headerLine).map((s) =>
+    String(s || "").trim(),
+  );
+  if (!rawHeaders.length) {
+    const err = new Error("CSV appears to have no header row");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Synthesize blanks + dedupe
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
+
+  const totalRows = await countCsvRowsFromBufferedText(text, headersArray);
+
+  // Ensure there is a dataset row for this main upload so we can scope raw rows.
+  // If caller provided datasetId, we trust it (strictly) and do not attempt to infer.
+  let effectiveDatasetId = datasetId || null;
+
+  // Begin a customer-scoped transaction for all DB writes (RLS-safe)
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  emitCsvUploadStatus(ptrsId, {
+    customerId,
+    datasetId: effectiveDatasetId,
+    sourceType,
+    status: "uploading",
+    rowsInserted: 0,
+    totalRows,
+  });
+
+  try {
+    if (!effectiveDatasetId) {
+      const originalName = fileMeta?.originalName || null;
+      const displayName = originalName || "Main input";
+
+      const ds = await db.PtrsDataset.create(
+        {
+          customerId,
+          ptrsId,
+          role: "main",
+          sourceType: sourceType || "csv",
+          fileName: displayName,
+          storageRef: null,
+          rowsCount: null,
+          status: "uploaded",
+          meta: {
+            headers: headersArray,
+            source: "csv",
+            originalName,
+          },
+          createdBy: null,
+          updatedBy: null,
+        },
+        { transaction: t },
+      );
+
+      effectiveDatasetId = ds.id;
+    }
+  } catch (e) {
+    // If we fail to create a dataset row, abort loudly.
+    await t.rollback().catch(() => {});
+    throw e;
+  }
+
+  const fixedStream = Readable.from(text);
+
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      await db.PtrsImportRaw.bulkCreate(batch, {
+        validate: false,
+        transaction: t,
+      });
+      rowsInserted += batch.length;
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId: effectiveDatasetId,
+        sourceType,
+        status: "uploading",
+        rowsInserted,
+        totalRows,
+      });
+    } finally {
+      batch.length = 0;
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const handleFatal = (err) => {
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId: effectiveDatasetId,
+        sourceType,
+        status: "failed",
+        rowsInserted,
+        totalRows,
+        error: err?.message || "CSV import failed",
+      });
+      // Ensure we rollback the transaction on any fatal error
+      (t.finished ? Promise.resolve() : t.rollback())
+        .catch(() => {})
+        .finally(() => {
+          reject(err);
+        });
+    };
+
+    const parser = csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+        skipLines: 1, // skip original header row
+        discardUnmappedColumns: true,
+      })
+      .on("error", (err) => {
+        handleFatal(err);
+      })
+      .on("data", (row) => {
+        rowNo += 1;
+        batch.push({
+          customerId,
+          ptrsId,
+          datasetId: effectiveDatasetId,
+          rowNo,
+          data: row,
+          errors: null,
+        });
+        if (batch.length >= BATCH_SIZE) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch((err) => handleFatal(err));
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
+
+          // Ensure there is a PtrsUpload record for this run, and update its status/row count.
+          const uploadWhere = { customerId, ptrsId };
+          const defaults = {
+            customerId,
+            ptrsId,
+            originalName: fileMeta?.originalName || null,
+            mimeType: fileMeta?.mimeType || null,
+            sizeBytes: fileMeta?.sizeBytes ?? null,
+            storagePath: uploadWhere.storagePath || null,
+          };
+
+          console.log("About to findOrCreate PtrsUpload");
+          const [upload, created] = await db.PtrsUpload.findOrCreate({
+            where: uploadWhere,
+            defaults,
+            transaction: t,
+          });
+
+          if (!created) {
+            const updatePayload = {
+              status: "Ingested",
+              rowCount: rowsInserted,
+              originalName: fileMeta?.originalName || null,
+              mimeType: fileMeta?.mimeType || null,
+              sizeBytes: fileMeta?.sizeBytes ?? null,
+            };
+            await upload.update(updatePayload, { transaction: t });
+          }
+
+          // Update dataset row stats for the main upload
+          if (effectiveDatasetId) {
+            const ds = await db.PtrsDataset.findOne({
+              where: { id: effectiveDatasetId, customerId, ptrsId },
+              transaction: t,
+            });
+            if (ds) {
+              const currentMeta = ds.get("meta") || {};
+              await ds.update(
+                {
+                  rowsCount: rowsInserted,
+                  meta: {
+                    ...currentMeta,
+                    headers: headersArray,
+                    rowsCount: rowsInserted,
+                    updatedAt: new Date().toISOString(),
+                  },
+                },
+                { transaction: t },
+              );
+            }
+          }
+
+          emitCsvUploadStatus(ptrsId, {
+            customerId,
+            datasetId: effectiveDatasetId,
+            sourceType,
+            status: "complete",
+            rowsInserted,
+            totalRows,
+          });
+          await t.commit();
+          resolve(rowsInserted);
+        } catch (e) {
+          handleFatal(e);
+        }
+      });
+
+    try {
+      fixedStream.pipe(parser);
+    } catch (e) {
+      handleFatal(e);
+    }
+  });
 }
 
 /**
@@ -1925,4 +2450,82 @@ async function importPaymentTermChangesFromDataset({
     });
     throw err;
   }
+}
+
+function toSnake(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/^_+|_+$/g, "")
+    .replace(/_{2,}/g, "_");
+}
+
+function applyJoinTransform(value, transform) {
+  const v = value == null ? "" : String(value);
+
+  const op =
+    transform && typeof transform === "object"
+      ? String(transform.op || "")
+      : "";
+  const arg =
+    transform && typeof transform === "object" ? transform.arg : undefined;
+
+  if (!op || op === "trim_upper") return v.trim().toUpperCase();
+
+  switch (op) {
+    case "digits_only":
+      return v.replace(/[^0-9]/g, "");
+    case "remove_spaces_punct":
+      return v
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .trim()
+        .toUpperCase();
+    case "strip_prefix": {
+      const p = arg == null ? "" : String(arg);
+      if (!p) return v.trim().toUpperCase();
+      const t = v.trim();
+      return t.startsWith(p)
+        ? t.slice(p.length).trim().toUpperCase()
+        : t.toUpperCase();
+    }
+    case "lpad": {
+      const len = Number(arg);
+      const t = v.trim();
+      if (!Number.isFinite(len) || len <= 0) return t.toUpperCase();
+      return t.padStart(len, "0").toUpperCase();
+    }
+    default:
+      return v.trim().toUpperCase();
+  }
+}
+
+function normalizeJoinKeyValue(v, transform = null) {
+  return applyJoinTransform(v, transform);
+}
+
+async function countCsvRowsFromBufferedText(text, headersArray) {
+  const fixedStream = Readable.from(text);
+  return new Promise((resolve, reject) => {
+    let count = 0;
+
+    fixedStream
+      .pipe(
+        csv.parse({
+          headers: headersArray,
+          renameHeaders: false,
+          ignoreEmpty: true,
+          trim: true,
+          strictColumnHandling: false,
+          skipLines: 1,
+          discardUnmappedColumns: true,
+        }),
+      )
+      .on("error", (err) => reject(err))
+      .on("data", () => {
+        count += 1;
+      })
+      .on("end", () => resolve(count));
+  });
 }

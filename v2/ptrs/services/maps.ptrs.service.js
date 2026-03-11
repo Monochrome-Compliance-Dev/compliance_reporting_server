@@ -958,6 +958,17 @@ async function getImportSample({
     });
   }
 
+  const stack = new Error().stack?.split("\n").slice(1, 8).join("\n");
+
+  slog.warn("PTRS v2 getImportSample: caller trace", {
+    action: "PtrsV2GetImportSampleCallerTrace",
+    customerId,
+    ptrsId,
+    limit,
+    offset,
+    stack,
+  });
+
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     // rows
