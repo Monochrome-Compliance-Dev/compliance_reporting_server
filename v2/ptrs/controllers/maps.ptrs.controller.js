@@ -3,7 +3,9 @@ const { logger } = require("@/helpers/logger");
 const { safeLog } = require("@/v2/ptrs/controllers/ptrs.controller");
 const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
-const tmPtrsService = require("@/v2/ptrs/services/maps.ptrs.service");
+const mapsRuntimeService = require("@/v2/ptrs/services/maps.ptrs.service");
+const mapsConfigService = require("@/v2/ptrs/services/maps.config.ptrs.service");
+const mapsHeadersService = require("@/v2/ptrs/services/maps.headers.ptrs.service");
 
 module.exports = {
   getMap,
@@ -59,7 +61,7 @@ async function getMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const map = await tmPtrsService.getMap({ customerId, ptrsId });
+    const map = await mapsConfigService.getMap({ customerId, ptrsId });
 
     if (map) {
       map.extras = maybeParse(map.extras);
@@ -67,12 +69,29 @@ async function getMap(req, res, next) {
       map.defaults = maybeParse(map.defaults);
       map.rowRules = maybeParse(map.rowRules);
     }
-    const { headers, total, headerMeta } = await tmPtrsService.getImportSample({
+    const sampleResult = await mapsHeadersService.getImportSample({
       customerId,
       ptrsId,
       limit: 10,
       offset: 0,
     });
+
+    const datasets = Array.isArray(sampleResult?.datasets)
+      ? sampleResult.datasets
+      : [];
+    const mainDataset =
+      datasets.find((d) => d?.isMain) ||
+      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
+      datasets[0] ||
+      null;
+
+    const headers = Array.isArray(mainDataset?.headers)
+      ? mainDataset.headers
+      : [];
+    const total = datasets.length;
+    const headerMeta = {
+      datasets,
+    };
 
     // slog.info("getColumnMap", {
     //   id: map?.id,
@@ -203,7 +222,7 @@ async function saveMap(req, res, next) {
       // Best-effort validation: warn but don't block if headers slightly differ (case/space)
       // IMPORTANT: do NOT call getImportSample here (it is expensive).
       // Validate against dataset metadata across all datasets instead.
-      const { headers } = await tmPtrsService.getAllDatasetHeaderInfo({
+      const { headers } = await mapsHeadersService.getAllDatasetHeaderInfo({
         customerId,
         ptrsId,
       });
@@ -231,7 +250,7 @@ async function saveMap(req, res, next) {
       }
     }
 
-    const saved = await tmPtrsService.saveColumnMap({
+    const saved = await mapsConfigService.saveSupportConfig({
       customerId,
       ptrsId,
       mappings,
@@ -300,7 +319,7 @@ async function getFieldMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const fieldMap = await tmPtrsService.getFieldMap({
+    const fieldMap = await mapsConfigService.getFieldMap({
       customerId,
       ptrsId,
       profileId,
@@ -386,7 +405,7 @@ async function saveFieldMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const saved = await tmPtrsService.saveFieldMap({
+    const saved = await mapsConfigService.saveFieldMap({
       customerId,
       ptrsId,
       profileId,
@@ -456,7 +475,7 @@ async function buildMappedDataset(req, res, next) {
       safeMeta({ customerId, ptrsId, userId }),
     );
 
-    const result = await tmPtrsService.buildMappedDatasetForPtrs({
+    const result = await mapsRuntimeService.buildMappedDatasetForPtrs({
       customerId,
       ptrsId,
       actorId: userId || null,
@@ -536,13 +555,28 @@ async function getSample(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const { rows, total, headers, headerMeta } =
-      await tmPtrsService.getImportSample({
-        customerId,
-        ptrsId,
-        limit,
-        offset,
-      });
+    const sampleResult = await mapsHeadersService.getImportSample({
+      customerId,
+      ptrsId,
+      limit,
+      offset,
+    });
+
+    const datasets = Array.isArray(sampleResult?.datasets)
+      ? sampleResult.datasets
+      : [];
+    const mainDataset =
+      datasets.find((d) => d?.isMain) ||
+      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
+      datasets[0] ||
+      null;
+
+    const rows = mainDataset?.sampleRow ? [mainDataset.sampleRow] : [];
+    const total = datasets.length;
+    const headers = Array.isArray(mainDataset?.headers)
+      ? mainDataset.headers
+      : [];
+    const headerMeta = { datasets };
 
     await auditService.logEvent({
       customerId,
@@ -591,7 +625,7 @@ async function listPtrsWithMap(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const result = await tmPtrsService.listCompatibleMaps({
+    const result = await mapsConfigService.listCompatibleMaps({
       customerId,
       profileId,
     });
