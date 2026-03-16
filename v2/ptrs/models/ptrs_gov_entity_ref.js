@@ -12,7 +12,7 @@ function model(sequelize) {
     },
     abn: {
       type: DataTypes.STRING(14),
-      allowNull: true,
+      allowNull: false,
     },
     name: {
       type: DataTypes.STRING(255),
@@ -20,7 +20,7 @@ function model(sequelize) {
     },
     category: {
       type: DataTypes.STRING(64),
-      allowNull: true,
+      allowNull: false,
     },
     createdBy: {
       type: DataTypes.STRING(10),

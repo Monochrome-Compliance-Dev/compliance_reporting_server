@@ -111,25 +111,42 @@ async function buildMapInputSnapshot({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  const [supportConfig, fieldMapUpdatedAt, fieldMapCount, datasets] =
+  const supportConfig = await getSupportConfigForSnapshot({
+    customerId,
+    ptrsId,
+    transaction,
+  });
+
+  const resolvedProfileId = profileId || supportConfig?.profileId || null;
+
+  const [fieldMapUpdatedAt, fieldMapCount, columnMapUpdatedAt, datasets] =
     await Promise.all([
-      getSupportConfigForSnapshot({
-        customerId,
-        ptrsId,
-        transaction,
-      }),
-      profileId && db.PtrsFieldMap
+      resolvedProfileId && db.PtrsFieldMap
         ? db.PtrsFieldMap.max("updatedAt", {
-            where: { customerId, ptrsId, profileId },
+            where: {
+              customerId,
+              ptrsId,
+              profileId: resolvedProfileId,
+            },
             transaction,
           })
         : Promise.resolve(null),
-      profileId && db.PtrsFieldMap
+      resolvedProfileId && db.PtrsFieldMap
         ? db.PtrsFieldMap.count({
-            where: { customerId, ptrsId, profileId },
+            where: {
+              customerId,
+              ptrsId,
+              profileId: resolvedProfileId,
+            },
             transaction,
           })
         : Promise.resolve(0),
+      db.PtrsColumnMap
+        ? db.PtrsColumnMap.max("updatedAt", {
+            where: { customerId, ptrsId },
+            transaction,
+          })
+        : Promise.resolve(null),
       db.PtrsDataset
         ? db.PtrsDataset.findAll({
             where: { customerId, ptrsId },
@@ -144,11 +161,9 @@ async function buildMapInputSnapshot({
         : Promise.resolve([]),
     ]);
 
-  const resolvedProfileId = profileId || supportConfig?.profileId || null;
-
   const supportConfigSignature = supportConfig
     ? buildMaterialMapSignature({
-        mappings: null,
+        mappings: supportConfig.mappings || null,
         joins: supportConfig.joins || null,
         customFields: supportConfig.customFields || null,
       })
@@ -160,7 +175,7 @@ async function buildMapInputSnapshot({
     profileId: resolvedProfileId,
     supportConfig: {
       id: supportConfig?.id || null,
-      updatedAt: supportConfig?.updatedAt || null,
+      updatedAt: columnMapUpdatedAt || supportConfig?.updatedAt || null,
       signature: supportConfigSignature,
       hasJoins: !!supportConfig?.joins,
       hasCustomFields: !!supportConfig?.customFields,

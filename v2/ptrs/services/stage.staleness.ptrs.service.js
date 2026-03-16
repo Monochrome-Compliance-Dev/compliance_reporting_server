@@ -1,5 +1,6 @@
 const db = require("@/db/database");
 const { QueryTypes } = require("sequelize");
+const { logger } = require("@/helpers/logger");
 const {
   buildStableInputHash,
   getLatestExecutionRun,
@@ -19,6 +20,7 @@ async function buildStageInputSnapshot({
   if (!profileId) throw new Error("profileId is required");
 
   const [
+    latestSuccessfulMapRun,
     mappedRowCount,
     mappedRowMaxUpdatedAt,
     paymentTermMapUpdatedAt,
@@ -26,6 +28,22 @@ async function buildStageInputSnapshot({
     paymentTermChangeUpdatedAt,
     paymentTermChangeCount,
   ] = await Promise.all([
+    db.PtrsExecutionRun.findOne({
+      where: {
+        customerId,
+        ptrsId,
+        profileId,
+        step: "map",
+        status: "success",
+      },
+      attributes: ["id", "inputHash", "finishedAt"],
+      order: [
+        ["startedAt", "DESC"],
+        ["id", "DESC"],
+      ],
+      raw: true,
+      transaction,
+    }),
     db.PtrsMappedRow.count({
       where: { customerId, ptrsId },
       transaction,
@@ -108,6 +126,11 @@ async function buildStageInputSnapshot({
     ptrsId,
     customerId,
     profileId: profileId || null,
+    latestSuccessfulMapRun: {
+      id: latestSuccessfulMapRun?.id || null,
+      inputHash: latestSuccessfulMapRun?.inputHash || null,
+      finishedAt: latestSuccessfulMapRun?.finishedAt || null,
+    },
     mappedRows: {
       rowCount: Number(mappedRowCount) || 0,
       maxUpdatedAt: mappedRowMaxUpdatedAt || null,
@@ -173,6 +196,31 @@ async function getStageStaleness({
       snapshot,
     };
 
+    logger.info("PTRS v2 stage staleness evaluated", {
+      action: "PtrsV2StageStalenessEvaluated",
+      customerId,
+      ptrsId,
+      profileId,
+      inputHash,
+      previousHash,
+      hasChanged,
+      previousRunId: previous?.id || null,
+      existingStageCount: Number(existingStageCount) || 0,
+      latestSuccessfulMapRunId: snapshot?.latestSuccessfulMapRun?.id || null,
+      latestSuccessfulMapInputHash:
+        snapshot?.latestSuccessfulMapRun?.inputHash || null,
+      latestSuccessfulMapFinishedAt:
+        snapshot?.latestSuccessfulMapRun?.finishedAt || null,
+      mappedRowCount: Number(snapshot?.mappedRows?.rowCount) || 0,
+      mappedRowMaxUpdatedAt: snapshot?.mappedRows?.maxUpdatedAt || null,
+      paymentTermMapCount: Number(snapshot?.paymentTermMap?.count) || 0,
+      paymentTermMapMaxUpdatedAt:
+        snapshot?.paymentTermMap?.maxUpdatedAt || null,
+      paymentTermChangeCount: Number(snapshot?.paymentTermChanges?.count) || 0,
+      paymentTermChangeMaxUpdatedAt:
+        snapshot?.paymentTermChanges?.maxUpdatedAt || null,
+    });
+
     if (!isExternalTx && !t.finished) {
       await t.commit();
     }
@@ -204,7 +252,25 @@ async function getStageCompletionGate({
   const hasRows = Number(staleness?.existingStageCount || 0) > 0;
   const stale = !!staleness?.hasChanged;
 
+  const gateMeta = {
+    action: "PtrsV2StageCompletionGateEvaluated",
+    customerId,
+    ptrsId,
+    profileId,
+    hasRows,
+    stale,
+    existingStageCount: Number(staleness?.existingStageCount || 0),
+    previousRunId: staleness?.previousRunId || null,
+    inputHash: staleness?.inputHash || null,
+    previousHash: staleness?.previousHash || null,
+  };
+
   if (!hasRows) {
+    logger.info("PTRS v2 stage completion gate: missing stage", {
+      ...gateMeta,
+      ready: false,
+      reason: "missing-stage",
+    });
     return {
       ready: false,
       reason: "missing-stage",
@@ -219,6 +285,11 @@ async function getStageCompletionGate({
   }
 
   if (stale) {
+    logger.info("PTRS v2 stage completion gate: stale", {
+      ...gateMeta,
+      ready: false,
+      reason: "stale",
+    });
     return {
       ready: false,
       reason: "stale",
@@ -232,6 +303,11 @@ async function getStageCompletionGate({
     };
   }
 
+  logger.info("PTRS v2 stage completion gate: ready", {
+    ...gateMeta,
+    ready: true,
+    reason: "ready",
+  });
   return {
     ready: true,
     reason: "ready",

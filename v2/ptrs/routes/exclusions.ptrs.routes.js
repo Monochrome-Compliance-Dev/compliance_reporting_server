@@ -25,6 +25,12 @@ router.get(
 );
 
 router.get(
+  "/:id/exclusions/summary",
+  requirePtrs,
+  exclusionsController.exclusionsSummary,
+);
+
+router.get(
   "/:id/exclusions/keywords",
   requirePtrs,
   exclusionsController.exclusionKeywordsList,

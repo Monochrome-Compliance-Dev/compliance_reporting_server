@@ -1,3 +1,21 @@
+const db = require("@/db/database");
+
+const {
+  beginTransactionWithCustomerContext,
+} = require("@/helpers/setCustomerIdRLS");
+const { slog, safeMeta } = require("./ptrs.service");
+const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
+
+module.exports = {
+  applyRules,
+  getRulesPreview,
+  applyRulesAndPersist,
+  updateRulesOnly,
+  getRules,
+  getProfileRules,
+  sandboxRulesPreview,
+};
+
 // Helper to ensure cross-row rules are not dangerously broad
 function validateCrossRowRule(rule) {
   const match = Array.isArray(rule?.target?.match) ? rule.target.match : [];
@@ -17,23 +35,6 @@ function validateCrossRowRule(rule) {
     throw err;
   }
 }
-const db = require("@/db/database");
-
-const {
-  beginTransactionWithCustomerContext,
-} = require("@/helpers/setCustomerIdRLS");
-const { slog, safeMeta } = require("./ptrs.service");
-const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
-
-module.exports = {
-  applyRules,
-  getRulesPreview,
-  applyRulesAndPersist,
-  updateRulesOnly,
-  getRules,
-  getProfileRules,
-  sandboxRulesPreview,
-};
 
 function applyRules(rows, rules = []) {
   const enabled = (rules || []).filter((r) => r && r.enabled !== false);
@@ -136,6 +137,15 @@ function _matches(row, cond) {
     default:
       return true;
   }
+}
+
+function _appendRuleComment(existing, next) {
+  const current = String(existing ?? "").trim();
+  const incoming = String(next ?? "").trim();
+
+  if (!incoming) return current;
+  if (!current) return incoming;
+  return `${current} | ${incoming}`;
 }
 
 function _toNumLoose(v) {
@@ -280,6 +290,14 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
 
         target[targetAmountField] = _round(next, dp);
 
+        if (action.comment || action.note) {
+          const nextComment = action.comment || action.note;
+          target.exclude_comment = _appendRuleComment(
+            target.exclude_comment,
+            nextComment,
+          );
+        }
+
         // Mark applied on target only once
         const tApplied = Array.isArray(target._appliedRules)
           ? target._appliedRules.slice()
@@ -301,8 +319,10 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
           current._appliedRules = cApplied;
           current.exclude = true;
           current.exclude_from_metrics = true;
-          if (!current.exclude_comment)
-            current.exclude_comment = "Excluded by cross-row rule";
+          current.exclude_comment = _appendRuleComment(
+            current.exclude_comment,
+            "Excluded by cross-row rule",
+          );
         }
       }
     }
