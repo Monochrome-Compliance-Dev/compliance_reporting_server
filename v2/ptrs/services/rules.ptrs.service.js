@@ -5,6 +5,11 @@ const {
 } = require("@/helpers/setCustomerIdRLS");
 const { slog, safeMeta } = require("./ptrs.service");
 const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
+const {
+  applyRowRulesSql,
+  buildRowRulesProjectionSql: importedBuildRowRulesProjectionSql,
+} = require("./rules.row.sql");
+const { applyCrossRowRulesSql } = require("./rules.crossRow.sql");
 
 module.exports = {
   applyRules,
@@ -34,6 +39,46 @@ function validateCrossRowRule(rule) {
     err.statusCode = 400;
     throw err;
   }
+}
+
+function buildPreviewRowProjectionSql({ rules = [], sourceExpr = "data" }) {
+  if (typeof importedBuildRowRulesProjectionSql === "function") {
+    return importedBuildRowRulesProjectionSql({ rules, sourceExpr });
+  }
+
+  let expr = sourceExpr;
+
+  const jsonPathFor = (field) => `'{${String(field || "").trim()}}'`;
+  const textExprFor = (field, currentExpr) =>
+    `COALESCE(${currentExpr}->>'${String(field || "").trim()}', '')`;
+
+  for (const rule of Array.isArray(rules) ? rules : []) {
+    const actions = Array.isArray(rule?.then) ? rule.then : [];
+    for (const action of actions) {
+      if (!action || action.op !== "concat_fields") continue;
+
+      const targetField = String(action.field || "").trim();
+      const segments = Array.isArray(action.segments) ? action.segments : [];
+      if (!targetField || !segments.length) continue;
+
+      const concatSql = segments
+        .map((seg) => {
+          if (seg?.kind === "literal") {
+            return db.sequelize.escape(String(seg?.value || ""));
+          }
+          const fieldName = String(seg?.name || "").trim();
+          if (!fieldName) {
+            return db.sequelize.escape("");
+          }
+          return textExprFor(fieldName, expr);
+        })
+        .join(" || ");
+
+      expr = `jsonb_set(${expr}, ${jsonPathFor(targetField)}, to_jsonb(${concatSql}), true)`;
+    }
+  }
+
+  return expr;
 }
 
 function applyRules(rows, rules = []) {
@@ -157,6 +202,57 @@ function _toNumLoose(v) {
 function _round(n, dp = 2) {
   const f = Math.pow(10, dp);
   return Math.round(n * f) / f;
+}
+
+function _applyAction(row, act) {
+  if (!row || !act || typeof act !== "object") return;
+
+  if (act?.op === "concat_fields") {
+    const targetField = String(act.field || "").trim();
+    const segments = Array.isArray(act.segments)
+      ? act.segments
+      : Array.isArray(act.fields)
+        ? act.fields.map((name) => ({ kind: "field", name }))
+        : [];
+
+    if (!targetField || !segments.length) return;
+
+    row[targetField] = segments
+      .map((seg) => {
+        if (seg?.kind === "literal") return String(seg?.value || "");
+        const fieldName = String(seg?.name || "").trim();
+        return fieldName ? String(row?.[fieldName] ?? "") : "";
+      })
+      .join("");
+    return;
+  }
+
+  const op = String(act.op || "assign").toLowerCase();
+  const targetField = String(act.field || "").trim();
+  const sourceField = String(
+    act.valueField || act.valueFieldFromCurrent || "",
+  ).trim();
+  const dp = typeof act.round === "number" ? act.round : 2;
+
+  if (!targetField) return;
+
+  if (op === "assign") {
+    row[targetField] = sourceField ? (row?.[sourceField] ?? null) : null;
+    return;
+  }
+
+  const currentVal = _toNumLoose(row?.[targetField]);
+  const sourceVal = sourceField ? _toNumLoose(row?.[sourceField]) : 0;
+
+  let next = currentVal;
+  if (op === "add") next = currentVal + sourceVal;
+  else if (op === "sub") next = currentVal - sourceVal;
+  else if (op === "mul") next = currentVal * sourceVal;
+  else if (op === "div")
+    next = sourceVal === 0 ? currentVal : currentVal / sourceVal;
+  else return;
+
+  row[targetField] = _round(next, dp);
 }
 
 function applyCrossRowRules(rows, rules = [], statsRef = null) {
@@ -334,7 +430,7 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
 // --- Helper: load row-level rules from PtrsRuleset ---
 async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
   const rulesets = await db.PtrsRuleset.findAll({
-    where: { customerId, ptrsId },
+    where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
@@ -364,7 +460,7 @@ async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
 // --- NEW: load both row and cross-row rules for a PTRS run ---
 async function loadRulesForPtrs({ customerId, ptrsId, transaction }) {
   const rulesets = await db.PtrsRuleset.findAll({
-    where: { customerId, ptrsId },
+    where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
@@ -393,6 +489,8 @@ async function loadRulesForPtrs({ customerId, ptrsId, transaction }) {
 
   return { rowRules, crossRowRules };
 }
+
+// -----------------------------------------------------------------------------
 
 async function getRulesPreview({
   customerId,
@@ -486,6 +584,15 @@ async function getRulesPreview({
       crossRowRules.length
     ) {
       const rule = crossRowRules[0]; // MVP: preview the first cross-row rule
+      const helperRowRules = Array.isArray(rowRules)
+        ? rowRules.filter(
+            (r) =>
+              r &&
+              (r.type || "row") !== "crossRow" &&
+              Array.isArray(r.then) &&
+              r.then.some((a) => a && a.op === "concat_fields"),
+          )
+        : [];
 
       // Validate up-front (same semantics as apply/save)
       try {
@@ -546,6 +653,38 @@ async function getRulesPreview({
         customerId: String(customerId),
         ptrsId: String(ptrsId),
       };
+      const helperProjectionSql = buildPreviewRowProjectionSql({
+        rules: helperRowRules,
+        sourceExpr: 's."data"',
+      });
+
+      const baseRowsCteSql = helperProjectionSql
+        ? `
+base_rows AS (
+  SELECT
+    s."id",
+    s."rowNo",
+    ${helperProjectionSql} AS data,
+    s."meta",
+    s."updatedAt"
+  FROM "tbl_ptrs_stage_row" s
+  WHERE s."customerId" = :customerId
+    AND s."ptrsId" = :ptrsId
+    AND s."deletedAt" IS NULL
+),`
+        : `
+base_rows AS (
+  SELECT
+    s."id",
+    s."rowNo",
+    s."data",
+    s."meta",
+    s."updatedAt"
+  FROM "tbl_ptrs_stage_row" s
+  WHERE s."customerId" = :customerId
+    AND s."ptrsId" = :ptrsId
+    AND s."deletedAt" IS NULL
+),`;
 
       for (const c of when) {
         const frag = buildJsonbCond("c", c);
@@ -592,13 +731,13 @@ async function getRulesPreview({
                   : `(${tgtAmtExpr} + curr.delta)`;
 
       const sqlCount = `
-WITH curr AS (
+WITH ${baseRowsCteSql}
+curr AS (
   SELECT
     ${currKeyExpr} AS k,
     SUM(COALESCE(${currAmtExpr}, 0)) AS delta
-  FROM "tbl_ptrs_stage_row" c
-  WHERE c."customerId" = :customerId
-    AND c."ptrsId" = :ptrsId
+  FROM base_rows c
+  WHERE 1=1
     ${currWhereSql}
     AND COALESCE(${currKeyExpr}, '') <> ''
   GROUP BY 1
@@ -612,10 +751,9 @@ impacted AS (
     COALESCE(${tgtAmtExpr}, 0) AS base_before,
     curr.delta AS expected_delta,
     ROUND(${opSql}::numeric, ${dp}) AS would_be
-  FROM "tbl_ptrs_stage_row" t
+  FROM base_rows t
   JOIN curr ON curr.k = ${tgtKeyExpr}
-  WHERE t."customerId" = :customerId
-    AND t."ptrsId" = :ptrsId
+  WHERE 1=1
     ${tgtWhereSql}
 )
 SELECT COUNT(*)::int AS count
@@ -623,13 +761,13 @@ FROM impacted;
 `;
 
       const sqlExamples = `
-WITH curr AS (
+WITH ${baseRowsCteSql}
+curr AS (
   SELECT
     ${currKeyExpr} AS k,
     SUM(COALESCE(${currAmtExpr}, 0)) AS delta
-  FROM "tbl_ptrs_stage_row" c
-  WHERE c."customerId" = :customerId
-    AND c."ptrsId" = :ptrsId
+  FROM base_rows c
+  WHERE 1=1
     ${currWhereSql}
     AND COALESCE(${currKeyExpr}, '') <> ''
   GROUP BY 1
@@ -643,10 +781,9 @@ impacted AS (
     curr.delta AS expected_delta,
     ROUND(${opSql}::numeric, ${dp}) AS would_be,
     t."updatedAt"
-  FROM "tbl_ptrs_stage_row" t
+  FROM base_rows t
   JOIN curr ON curr.k = ${tgtKeyExpr}
-  WHERE t."customerId" = :customerId
-    AND t."ptrsId" = :ptrsId
+  WHERE 1=1
     ${tgtWhereSql}
 )
 SELECT *
@@ -675,6 +812,7 @@ LIMIT 20;
           mode,
           elapsedMs: Date.now() - started,
           isPartial: false,
+          helperRowRulesMaterialised: helperRowRules.length,
         },
         summary: {
           rulesTried: crossRowRules.length,
@@ -814,13 +952,17 @@ async function sandboxRulesPreview({
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const effectiveLimit = Math.min(Number(limit) || 50, 500);
+  const SANDBOX_ROW_CAP = 10000;
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
     // Load staged rows from tbl_ptrs_stage_row as the canonical dataset
     const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
+      attributes: ["data", "rowNo"],
+      order: [["rowNo", "ASC"]],
+      limit: SANDBOX_ROW_CAP,
       transaction: t,
       raw: true,
     });
@@ -842,7 +984,8 @@ async function sandboxRulesPreview({
       safeMeta({
         customerId,
         ptrsId,
-        stageRows: stageRows.length,
+        sampledStageRows: stageRows.length,
+        sandboxRowCap: SANDBOX_ROW_CAP,
         filters: Array.isArray(filters) ? filters.length : 0,
         totalMatching: filteredRows.length,
         returned: limitedRows.length,
@@ -857,6 +1000,8 @@ async function sandboxRulesPreview({
       stats: {
         totalMatching: filteredRows.length,
         returned: limitedRows.length,
+        sampledStageRows: stageRows.length,
+        sandboxRowCap: SANDBOX_ROW_CAP,
       },
     };
   } catch (err) {
@@ -979,7 +1124,7 @@ async function getRules({ customerId, ptrsId }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rulesets = await db.PtrsRuleset.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       transaction: t,
       raw: true,
     });
@@ -1025,7 +1170,7 @@ async function getRules({ customerId, ptrsId }) {
 async function getProfileRules({ customerId, profileId = null }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const where = { customerId };
+    const where = { customerId, deletedAt: null };
     if (profileId) where.profileId = profileId;
 
     const rulesets = await db.PtrsRuleset.findAll({
@@ -1065,9 +1210,9 @@ async function applyRulesAndPersist({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  // If limit is provided (for diagnostics), respect it with a sane cap.
-  // If null/undefined, we pass null through, which loadMappedRowsForPtrs
-  // interprets as "no limit" (full dataset).
+  // Current implementation applies rules in memory via loadMappedRowsForPtrs.
+  // That is acceptable only for explicitly limited diagnostic runs.
+  // Full dataset runs must use a SQL-based implementation instead.
   const effectiveLimit =
     limit == null || typeof limit === "undefined"
       ? null
@@ -1086,10 +1231,12 @@ async function applyRulesAndPersist({
   // 🔐 RLS-safe tenant-scoped transaction for reading import + writing stage
   const t = await beginTransactionWithCustomerContext(customerId);
 
-  // ------------------------------------------------------------
-  // SAFETY GUARD — prevent rules apply on enormous datasets
-  // ------------------------------------------------------------
-  const HARD_ROW_CAP = 500000;
+  // Load rules early so we can decide whether the run can stay in SQL.
+  const { rowRules, crossRowRules } = await loadRulesForPtrs({
+    customerId,
+    ptrsId,
+    transaction: t,
+  });
 
   const totalRows = await db.PtrsImportRaw.count({
     where: { customerId, ptrsId },
@@ -1101,153 +1248,64 @@ async function applyRulesAndPersist({
     customerId,
     ptrsId,
     totalRows,
-    hardRowCap: HARD_ROW_CAP,
     effectiveLimit,
+    sqlImplementation: true,
+    rowRuleCount: Array.isArray(rowRules) ? rowRules.length : 0,
+    crossRowRuleCount: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
   });
 
-  // Only enforce the cap when NO explicit limit is provided.
-  // If a limit is passed, caller is intentionally working on a subset.
-  if (!effectiveLimit && totalRows > HARD_ROW_CAP) {
-    const err = new Error(
-      `PTRS v2 rules apply aborted: dataset has ${totalRows} rows which exceeds the safety limit of ${HARD_ROW_CAP}.`,
-    );
-    err.statusCode = 413; // FE-friendly soft-failure
-    throw err;
-  }
-  // ------------------------------------------------------------
-
   try {
-    // 1) Load row-level rules from tbl_ptrs_ruleset
-    // 1) Load rules (row + cross-row) from tbl_ptrs_ruleset
-    const { rowRules, crossRowRules } = await loadRulesForPtrs({
+    const rowStats = await applyRowRulesSql({
       customerId,
       ptrsId,
+      rules: rowRules,
       transaction: t,
-    });
-
-    // 2) Compose mapped rows (main import + joins)
-    const { rows: baseRows } = await loadMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      // null => no limit, process full dataset; otherwise use capped preview limit
       limit: effectiveLimit,
-      transaction: t,
     });
 
-    slog.info("PTRS v2 applyRulesAndPersist: composed base rows", {
-      action: "PtrsV2RulesApplyComposed",
+    const crossRowStats = await applyCrossRowRulesSql({
       customerId,
       ptrsId,
-      baseRowCount: Array.isArray(baseRows) ? baseRows.length : 0,
-      rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
-      crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
+      rules: crossRowRules,
+      transaction: t,
+      limit: effectiveLimit,
     });
 
-    // 3) Apply row rules first, then cross-row adjustments
-    const rowResult = applyRules(baseRows, rowRules);
-    const rulesResult = applyCrossRowRules(
-      rowResult.rows || baseRows,
-      crossRowRules,
-      rowResult.stats,
-    );
-
-    const rows = rulesResult.rows || baseRows;
-
-    // 4) Prepare payload for tbl_ptrs_stage_row (mirrors stagePtrs persist logic)
-    const basePayload = rows.map((r) => {
-      const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
-      const dataObj =
-        r && typeof r === "object" && Object.keys(r).length
-          ? r
-          : { _warning: "⚠️ No mapped data for this row" };
-
-      return {
-        customerId: String(customerId),
-        ptrsId: String(ptrsId),
-        rowNo: rowNoVal,
-        data: dataObj,
-        errors: null,
-        standard: null,
-        custom: null,
-        meta: {
-          _stage: "ptrs.v2.rulesApply",
-          at: new Date().toISOString(),
-          profileId: profileId || null,
-          rules: {
-            applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
-            exclude: !!r.exclude,
-            // Captures baseline values used to keep cross-row rules idempotent.
-            // Safe to omit when not present.
-            baseline:
-              r && typeof r === "object" && r._rulesBaseline
-                ? r._rulesBaseline
-                : null,
-          },
-        },
-      };
-    });
-
-    const isEmptyPlain = (v) =>
-      v &&
-      typeof v === "object" &&
-      !Array.isArray(v) &&
-      Object.keys(v).length === 0;
-
-    const insertWarning = (obj) => {
-      if (!obj || typeof obj !== "object") return obj;
-      for (const key of ["data", "errors", "standard", "custom", "meta"]) {
-        if (isEmptyPlain(obj[key])) {
-          obj[key] = {
-            _warning: "⚠️ Empty JSONB payload — nothing to insert",
-          };
-        }
-        if (typeof obj[key] === "undefined") {
-          obj[key] = null;
-        }
-      }
-      return obj;
+    const combinedStats = {
+      rulesTried:
+        Number(rowStats?.rulesTried ?? 0) +
+        Number(crossRowStats?.rulesTried ?? 0),
+      rowsAffected:
+        Number(rowStats?.rowsAffected ?? 0) +
+        Number(crossRowStats?.rowsAffected ?? 0),
+      actions:
+        Number(rowStats?.actions ?? 0) + Number(crossRowStats?.actions ?? 0),
+      currentExcluded:
+        Number(rowStats?.currentExcluded ?? 0) +
+        Number(crossRowStats?.currentExcluded ?? 0),
     };
 
-    const safePayload = basePayload.map(insertWarning);
-
-    slog.info("PTRS v2 applyRulesAndPersist: preparing to insert", {
-      action: "PtrsV2RulesApplyPersist",
-      customerId,
-      ptrsId,
-      batchSize: safePayload.length,
-      sampleRow: safeMeta(safePayload[0] || {}),
-    });
-
-    // 5) Clear previous stage rows for this run, then bulk insert
-    await db.PtrsStageRow.destroy({
-      where: { customerId, ptrsId },
-      transaction: t,
-    });
-
-    if (safePayload.length) {
-      await db.PtrsStageRow.bulkCreate(safePayload, {
-        validate: false,
-        returning: false,
-        transaction: t,
-      });
-    }
-
     const tookMs = Date.now() - started;
-
     await t.commit();
 
-    slog.info("PTRS v2 applyRulesAndPersist: done", {
-      action: "PtrsV2RulesApplyDone",
+    slog.info("PTRS v2 applyRulesAndPersist: SQL path done", {
+      action: "PtrsV2RulesApplySqlDone",
       customerId,
       ptrsId,
-      persisted: safePayload.length,
       tookMs,
+      rowStats,
+      crossRowStats,
+      combinedStats,
     });
 
     return {
-      persisted: safePayload.length,
+      persisted: combinedStats.rowsAffected,
       tookMs,
-      stats: { rules: rulesResult.stats || null },
+      stats: {
+        rowRules: rowStats,
+        crossRowRules: crossRowStats,
+        rules: combinedStats,
+      },
     };
   } catch (err) {
     if (!t.finished) {

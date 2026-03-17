@@ -13,7 +13,7 @@ module.exports = {
 };
 
 /**
- * GET /api/v2/ptrs/:id/rules/preview?limit=50
+ * GET /api/v2/ptrs/:id/rules/preview?mode=sample|full&limit=50
  */
 async function rulesPreview(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -21,6 +21,8 @@ async function rulesPreview(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+  const requestedMode = String(req.query.mode || "sample").toLowerCase();
+  const mode = requestedMode === "full" ? "full" : "sample";
   const limit = Math.min(parseInt(req.query.limit || "50", 10), 500);
   try {
     if (!customerId) {
@@ -38,6 +40,7 @@ async function rulesPreview(req, res, next) {
     const out = await rulesService.getRulesPreview({
       customerId,
       ptrsId,
+      mode,
       limit,
     });
     await auditService.logEvent({
@@ -49,6 +52,7 @@ async function rulesPreview(req, res, next) {
       entity: "PtrsUpload",
       entityId: ptrsId,
       details: {
+        mode,
         limit,
         returned: Array.isArray(out?.rows) ? out.rows.length : 0,
       },
@@ -60,6 +64,7 @@ async function rulesPreview(req, res, next) {
       ptrsId,
       customerId,
       userId,
+      mode,
       error: error.message,
       statusCode: error.statusCode || 500,
     });
@@ -81,7 +86,7 @@ async function rulesSandboxPreview(req, res, next) {
   const filters = Array.isArray(req.body?.filters) ? req.body.filters : [];
   const limit = Math.min(
     parseInt(req.body?.limit != null ? String(req.body.limit) : "50", 10),
-    500
+    500,
   );
 
   try {
