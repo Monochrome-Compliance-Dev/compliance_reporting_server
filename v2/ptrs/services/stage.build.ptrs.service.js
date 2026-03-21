@@ -503,6 +503,8 @@ async function stagePtrs({
     void persistedStageFields;
 
     let persistedCount = null;
+    let persistedRowsIn = null;
+    let persistedRowsOut = null;
 
     const resolveDefaultDatasetId = async () => {
       if (!db.PtrsDataset) {
@@ -588,7 +590,7 @@ async function stagePtrs({
 
       const sPersistClear = stageStart("persist_stage_clear");
       const clearedCount = await db.PtrsStageRow.destroy({
-        where: { customerId, ptrsId },
+        where: { customerId, ptrsId, profileId },
         transaction: t,
       });
       stageEnd(sPersistClear, { clearedCount: Number(clearedCount) || 0 });
@@ -661,8 +663,39 @@ async function stagePtrs({
       });
 
       try {
+        const countMappedSql = `
+          SELECT COUNT(*)::int AS "count"
+          FROM "tbl_ptrs_mapped_row" m
+          WHERE m."customerId" = :customerId
+            AND m."ptrsId" = :ptrsId
+        `;
+
+        const countStageSql = `
+          SELECT COUNT(*)::int AS "count"
+          FROM "tbl_ptrs_stage_row" s
+          WHERE s."customerId" = :customerId
+            AND s."ptrsId" = :ptrsId
+            AND s."profileId" = :profileId
+            AND s."deletedAt" IS NULL
+        `;
+
+        const sPersistCountMapped = stageStart(
+          "persist_stage_count_mapped_rows",
+        );
+        const [mappedCountRows] = await db.sequelize.query(countMappedSql, {
+          transaction: t,
+          replacements: {
+            customerId,
+            ptrsId,
+          },
+        });
+        persistedRowsIn = Number(mappedCountRows?.[0]?.count || 0);
+        stageEnd(sPersistCountMapped, {
+          mappedRowsIn: persistedRowsIn,
+        });
+
         const sPersistInsert = stageStart("persist_stage_insert_select");
-        const [, insertMeta] = await db.sequelize.query(insertSql, {
+        await db.sequelize.query(insertSql, {
           transaction: t,
           replacements: {
             customerId,
@@ -673,8 +706,24 @@ async function stagePtrs({
             rulesStats: JSON.stringify(rulesStats || null),
           },
         });
-        persistedCount = Number(insertMeta?.rowCount || 0);
-        stageEnd(sPersistInsert, { inserted: persistedCount });
+
+        const sPersistCountStage = stageStart(
+          "persist_stage_count_active_rows",
+        );
+        const [stageCountRows] = await db.sequelize.query(countStageSql, {
+          transaction: t,
+          replacements: {
+            customerId,
+            ptrsId,
+            profileId,
+          },
+        });
+        persistedRowsOut = Number(stageCountRows?.[0]?.count || 0);
+        persistedCount = persistedRowsOut;
+        stageEnd(sPersistCountStage, {
+          activeStageRows: persistedRowsOut,
+        });
+        stageEnd(sPersistInsert, { inserted: persistedRowsOut });
 
         const sPaymentTimeUpdate = stageStart(
           "persist_stage_update_payment_time",
@@ -810,6 +859,7 @@ async function stagePtrs({
             FROM "tbl_ptrs_stage_row" s
             WHERE s."customerId" = :customerId
               AND s."ptrsId" = :ptrsId
+              AND s."profileId" = :profileId
               AND s."deletedAt" IS NULL
           )
           UPDATE "tbl_ptrs_stage_row" s
@@ -826,6 +876,7 @@ async function stagePtrs({
             "updatedAt" = NOW()
           FROM payment_time pt
           WHERE s."id" = pt."id"
+            AND s."profileId" = :profileId
             AND s."deletedAt" IS NULL
         `;
 
@@ -834,6 +885,7 @@ async function stagePtrs({
           replacements: {
             customerId,
             ptrsId,
+            profileId,
             userId: userId || null,
           },
         });
@@ -861,8 +913,11 @@ async function stagePtrs({
     if (executionRun?.id) {
       try {
         const sRunUpdate = stageStart("execution_run_update_success");
-        const effectiveRows = persist
-          ? Number(persistedCount || 0)
+        const effectiveRowsIn = persist
+          ? Number(persistedRowsIn || 0)
+          : stagedRows.length;
+        const effectiveRowsOut = persist
+          ? Number(persistedRowsOut || 0)
           : stagedRows.length;
 
         await updateExecutionRun({
@@ -870,8 +925,8 @@ async function stagePtrs({
           executionRunId: executionRun.id,
           status: "success",
           finishedAt: new Date(),
-          rowsIn: effectiveRows,
-          rowsOut: effectiveRows,
+          rowsIn: effectiveRowsIn,
+          rowsOut: effectiveRowsOut,
           stats: {
             rules: rulesStats,
             paymentTerms: paymentTermStats,
@@ -900,13 +955,16 @@ async function stagePtrs({
       }
     }
 
-    const effectiveRows = persist
-      ? Number(persistedCount || 0)
+    const effectiveRowsIn = persist
+      ? Number(persistedRowsIn || 0)
+      : stagedRows.length;
+    const effectiveRowsOut = persist
+      ? Number(persistedRowsOut || 0)
       : stagedRows.length;
 
     trace?.write("stage_before_commit", {
-      rowsIn: effectiveRows,
-      rowsOut: effectiveRows,
+      rowsIn: effectiveRowsIn,
+      rowsOut: effectiveRowsOut,
       persistedCount,
       totalMs: hrMsSince(jobStartNs),
       tookMs: Date.now() - started,
@@ -917,8 +975,8 @@ async function stagePtrs({
     if (trace) await trace.close();
 
     return {
-      rowsIn: persist ? Number(persistedCount || 0) : stagedRows.length,
-      rowsOut: persist ? Number(persistedCount || 0) : stagedRows.length,
+      rowsIn: persist ? Number(persistedRowsIn || 0) : stagedRows.length,
+      rowsOut: persist ? Number(persistedRowsOut || 0) : stagedRows.length,
       persistedCount,
       tookMs,
       sample: persist ? null : stagedRows[0] || null,

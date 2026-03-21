@@ -179,7 +179,7 @@ async function getStageStaleness({
     });
 
     const existingStageCount = await db.PtrsStageRow.count({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       transaction: t,
     });
 

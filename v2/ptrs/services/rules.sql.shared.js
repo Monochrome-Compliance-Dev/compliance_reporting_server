@@ -11,7 +11,7 @@ function buildJsonbNumericExpr(field, alias = null) {
   return `NULLIF(regexp_replace(${expr}, '[^0-9\\.\\-]', '', 'g'), '')::numeric`;
 }
 
-function buildRuleWhereSql(conds = [], replacements = {}) {
+function buildRuleWhereSql(conds = [], replacements = {}, alias = null) {
   const clauses = [];
 
   for (const c of conds || []) {
@@ -21,7 +21,7 @@ function buildRuleWhereSql(conds = [], replacements = {}) {
     const op = String(c.op || "").trim();
     if (!field || !op) continue;
 
-    const expr = buildJsonbTextExpr(field);
+    const expr = buildJsonbTextExpr(field, alias);
     const key = `r_${field}_${clauses.length}`;
 
     switch (op) {
@@ -35,6 +35,16 @@ function buildRuleWhereSql(conds = [], replacements = {}) {
         replacements[key] = c.value ?? "";
         break;
 
+      case "starts_with":
+        clauses.push(`${expr} LIKE :${key}`);
+        replacements[key] = `${c.value ?? ""}%`;
+        break;
+
+      case "ends_with":
+        clauses.push(`${expr} LIKE :${key}`);
+        replacements[key] = `%${c.value ?? ""}`;
+        break;
+
       case "is_null":
         clauses.push(`(${expr} IS NULL OR ${expr} = '')`);
         break;
@@ -44,22 +54,22 @@ function buildRuleWhereSql(conds = [], replacements = {}) {
         break;
 
       case "gt":
-        clauses.push(`${buildJsonbNumericExpr(field)} > :${key}`);
+        clauses.push(`${buildJsonbNumericExpr(field, alias)} > :${key}`);
         replacements[key] = c.value ?? 0;
         break;
 
       case "gte":
-        clauses.push(`${buildJsonbNumericExpr(field)} >= :${key}`);
+        clauses.push(`${buildJsonbNumericExpr(field, alias)} >= :${key}`);
         replacements[key] = c.value ?? 0;
         break;
 
       case "lt":
-        clauses.push(`${buildJsonbNumericExpr(field)} < :${key}`);
+        clauses.push(`${buildJsonbNumericExpr(field, alias)} < :${key}`);
         replacements[key] = c.value ?? 0;
         break;
 
       case "lte":
-        clauses.push(`${buildJsonbNumericExpr(field)} <= :${key}`);
+        clauses.push(`${buildJsonbNumericExpr(field, alias)} <= :${key}`);
         replacements[key] = c.value ?? 0;
         break;
 

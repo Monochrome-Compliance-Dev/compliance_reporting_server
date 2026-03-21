@@ -117,7 +117,11 @@ async function buildMapInputSnapshot({
     transaction,
   });
 
-  const resolvedProfileId = profileId || supportConfig?.profileId || null;
+  if (!profileId) {
+    throw new Error("profileId is required for map staleness snapshot");
+  }
+
+  const resolvedProfileId = profileId;
 
   const [fieldMapUpdatedAt, fieldMapCount, columnMapUpdatedAt, datasets] =
     await Promise.all([

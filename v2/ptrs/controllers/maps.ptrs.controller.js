@@ -454,6 +454,7 @@ async function buildMappedDataset(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+  const profileId = req.query.profileId || req.body?.profileId || null;
 
   try {
     if (!customerId) {
@@ -478,6 +479,7 @@ async function buildMappedDataset(req, res, next) {
     const result = await mapsRuntimeService.buildMappedDatasetForPtrs({
       customerId,
       ptrsId,
+      profileId,
       actorId: userId || null,
     });
 
@@ -490,10 +492,15 @@ async function buildMappedDataset(req, res, next) {
       entity: "PtrsUpload",
       entityId: ptrsId,
       details: {
+        profileId,
         rowsPersisted: result?.count || 0,
         headersCount: Array.isArray(result?.headers)
           ? result.headers.length
           : 0,
+        skipped: !!result?.skipped,
+        reason: result?.reason || null,
+        inputHash: result?.inputHash || null,
+        previousRunId: result?.previousRunId || null,
       },
     });
 
@@ -511,6 +518,11 @@ async function buildMappedDataset(req, res, next) {
       data: {
         count: result?.count || 0,
         headers: result?.headers || [],
+        skipped: !!result?.skipped,
+        reason: result?.reason || null,
+        inputHash: result?.inputHash || null,
+        previousRunId: result?.previousRunId || null,
+        profileId,
       },
     });
   } catch (error) {

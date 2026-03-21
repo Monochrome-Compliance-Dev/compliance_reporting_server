@@ -160,6 +160,7 @@ async function persistMappedRowsInBatches({
 async function buildMappedDatasetForPtrs({
   customerId,
   ptrsId,
+  profileId = null,
   actorId = null,
   beginTransactionWithCustomerContext,
   createPtrsTrace,
@@ -203,10 +204,12 @@ async function buildMappedDatasetForPtrs({
   const staleness = await getMapStaleness({
     customerId,
     ptrsId,
+    profileId,
     transaction: t,
   });
   trace?.write("build_staleness_checked", {
     durationMs: hrMsSince(sStaleness),
+    profileId: profileId || staleness?.snapshot?.profileId || null,
     hasChanged: !!staleness?.hasChanged,
     existingMappedRowCount: Number(staleness?.existingMappedRowCount) || 0,
     previousRunId: staleness?.previousRunId || null,
@@ -216,7 +219,7 @@ async function buildMappedDatasetForPtrs({
   executionRun = await createExecutionRun({
     customerId,
     ptrsId,
-    profileId: staleness?.snapshot?.profileId || null,
+    profileId: profileId || staleness?.snapshot?.profileId || null,
     step: "map",
     inputHash: staleness?.inputHash || null,
     status: "running",
@@ -247,7 +250,7 @@ async function buildMappedDatasetForPtrs({
     const gate = await getMapCompletionGate({
       customerId,
       ptrsId,
-      profileId: staleness?.snapshot?.profileId || null,
+      profileId: profileId || staleness?.snapshot?.profileId || null,
       transaction: t,
     });
 
@@ -291,27 +294,25 @@ async function buildMappedDatasetForPtrs({
 
     const destroyStartNs = process.hrtime.bigint();
     trace?.write("mapped_rows_destroy_begin");
-    await db.PtrsMappedRow.destroy({
-      where: { customerId, ptrsId },
-      force: true,
-      transaction: t,
-    });
+
+    const deleteResult = await db.sequelize.query(
+      `
+      DELETE FROM "tbl_ptrs_mapped_row"
+      WHERE "customerId" = :customerId
+        AND "ptrsId" = :ptrsId
+      `,
+      {
+        replacements: { customerId, ptrsId },
+        transaction: t,
+      },
+    );
+
     trace?.write("mapped_rows_destroy_end", {
       durationMs: hrMsSince(destroyStartNs),
+      deleteResult: Array.isArray(deleteResult)
+        ? deleteResult[1] || null
+        : null,
     });
-
-    const existingCount = await db.PtrsMappedRow.count({
-      where: { customerId, ptrsId },
-      transaction: t,
-    });
-    trace?.write("mapped_rows_post_destroy_count", { existingCount });
-
-    if (existingCount) {
-      slog.warn(
-        "PTRS v2 buildMappedDatasetForPtrs: mapped rows still exist after destroy (possible unexpected constraint/paranoid behaviour)",
-        safeMeta({ customerId, ptrsId, existingCount }),
-      );
-    }
 
     const { totalPersisted, canonicalHeaders, hadRows } =
       await persistMappedRowsInBatches({
@@ -356,7 +357,7 @@ async function buildMappedDatasetForPtrs({
     const gate = await getMapCompletionGate({
       customerId,
       ptrsId,
-      profileId: staleness?.snapshot?.profileId || null,
+      profileId: profileId || staleness?.snapshot?.profileId || null,
       transaction: t,
     });
 

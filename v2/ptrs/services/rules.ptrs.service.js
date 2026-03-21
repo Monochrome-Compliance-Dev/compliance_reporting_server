@@ -41,6 +41,37 @@ function validateCrossRowRule(rule) {
   }
 }
 
+function normaliseSelectedGroupNames(groupName = null) {
+  if (Array.isArray(groupName)) {
+    return groupName.map((v) => String(v || "").trim()).filter(Boolean);
+  }
+
+  const single = String(groupName || "").trim();
+  return single ? [single] : [];
+}
+
+function ruleMatchesSelectedGroups(rule, selectedGroupNames = []) {
+  if (!Array.isArray(selectedGroupNames) || !selectedGroupNames.length) {
+    return true;
+  }
+
+  const ruleGroupName = String(rule?.groupName || "").trim();
+  return selectedGroupNames.includes(ruleGroupName);
+}
+
+function collectSubmittedGroupNames({ rowRules = [], crossRowRules = [] }) {
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray(rowRules) ? rowRules : []),
+        ...(Array.isArray(crossRowRules) ? crossRowRules : []),
+      ]
+        .map((rule) => String(rule?.groupName || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 function buildPreviewRowProjectionSql({ rules = [], sourceExpr = "data" }) {
   if (typeof importedBuildRowRulesProjectionSql === "function") {
     return importedBuildRowRulesProjectionSql({ rules, sourceExpr });
@@ -79,6 +110,26 @@ function buildPreviewRowProjectionSql({ rules = [], sourceExpr = "data" }) {
   }
 
   return expr;
+}
+
+// Merge preview headers from both the existing headers and the preview rows
+function mergePreviewHeadersFromRows(existingHeaders = [], rows = []) {
+  const base = Array.isArray(existingHeaders) ? existingHeaders : [];
+  const seen = new Set(base.map((h) => String(h || "")).filter(Boolean));
+  const merged = [...base];
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== "object") continue;
+
+    for (const key of Object.keys(row)) {
+      const nextKey = String(key || "").trim();
+      if (!nextKey || seen.has(nextKey)) continue;
+      seen.add(nextKey);
+      merged.push(nextKey);
+    }
+  }
+
+  return merged;
 }
 
 function applyRules(rows, rules = []) {
@@ -153,6 +204,8 @@ function _matches(row, cond) {
       return s === v;
     case "neq":
       return s !== v;
+    case "starts_with":
+      return s.startsWith(v);
     case "gt":
       return toNum(raw) > toNum(v);
     case "gte":
@@ -428,19 +481,26 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
 }
 
 // --- Helper: load row-level rules from PtrsRuleset ---
-async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
+async function loadRowRulesForPtrs({
+  customerId,
+  ptrsId,
+  transaction,
+  groupName = null,
+}) {
   const rulesets = await db.PtrsRuleset.findAll({
     where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
 
+  const selectedGroupNames = normaliseSelectedGroupNames(groupName);
   const rowRules = [];
   for (const rs of rulesets || []) {
     const def = rs.definition;
     if (!def || typeof def !== "object") continue;
     const type = def.type || rs.scope || "row";
     if (type === "crossRow") continue;
+    if (!ruleMatchesSelectedGroups(def, selectedGroupNames)) continue;
     rowRules.push(def);
   }
 
@@ -458,19 +518,26 @@ async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
 }
 
 // --- NEW: load both row and cross-row rules for a PTRS run ---
-async function loadRulesForPtrs({ customerId, ptrsId, transaction }) {
+async function loadRulesForPtrs({
+  customerId,
+  ptrsId,
+  transaction,
+  groupName = null,
+}) {
   const rulesets = await db.PtrsRuleset.findAll({
     where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
 
+  const selectedGroupNames = normaliseSelectedGroupNames(groupName);
   const rowRules = [];
   const crossRowRules = [];
 
   for (const rs of rulesets || []) {
     const def = rs.definition;
     if (!def || typeof def !== "object") continue;
+    if (!ruleMatchesSelectedGroups(def, selectedGroupNames)) continue;
     const type = def.type || rs.scope || "row";
     if (type === "crossRow") crossRowRules.push(def);
     else rowRules.push(def);
@@ -497,6 +564,7 @@ async function getRulesPreview({
   ptrsId,
   limit = 50,
   mode = "sample",
+  groupName = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -511,7 +579,7 @@ async function getRulesPreview({
     `NULLIF(regexp_replace(${jsonbExpr}, '[^0-9\\.\\-]', '', 'g'), '')::numeric`;
 
   // Helper to build a WHERE clause fragment for JSONB "data" fields
-  const buildJsonbCond = (prefix, cond) => {
+  const buildJsonbCond = (prefix, cond, key) => {
     if (!cond || typeof cond !== "object") return null;
     const field = String(cond.field || "").trim();
     const op = String(cond.op || "").trim();
@@ -521,34 +589,32 @@ async function getRulesPreview({
 
     switch (op) {
       case "eq":
-        return `${expr} = :w_${field}`;
+        return `${expr} = :${key}`;
       case "neq":
-        return `${expr} <> :w_${field}`;
+        return `${expr} <> :${key}`;
+      case "starts_with":
+        return `${expr} LIKE :${key}`;
+      case "ends_with":
+        return `${expr} LIKE :${key}`;
       case "in":
-        return `${expr} = ANY(:w_${field})`;
+        return `${expr} = ANY(:${key})`;
       case "nin":
-        return `NOT (${expr} = ANY(:w_${field}))`;
-      case "is_null":
-        return `(${expr} IS NULL OR ${expr} = '')`;
-      case "not_null":
-        return `(${expr} IS NOT NULL AND ${expr} <> '')`;
+        return `NOT (${expr} = ANY(:${key}))`;
       case "gt":
-        return `${numExpr(expr)} > :w_${field}`;
+        return `${numExpr(expr)} > :${key}`;
       case "gte":
-        return `${numExpr(expr)} >= :w_${field}`;
+        return `${numExpr(expr)} >= :${key}`;
       case "lt":
-        return `${numExpr(expr)} < :w_${field}`;
+        return `${numExpr(expr)} < :${key}`;
       case "lte":
-        return `${numExpr(expr)} <= :w_${field}`;
+        return `${numExpr(expr)} <= :${key}`;
       default:
         return null;
     }
   };
 
-  const bindValueFor = (cond) => {
-    const field = String(cond.field || "").trim();
+  const bindValueFor = (cond, key) => {
     const op = String(cond.op || "").trim();
-    const key = `w_${field}`;
 
     if (op === "in" || op === "nin") {
       const arr = String(cond.value || "")
@@ -562,6 +628,14 @@ async function getRulesPreview({
       return null;
     }
 
+    if (op === "starts_with") {
+      return { key, value: `${cond.value != null ? cond.value : ""}%` };
+    }
+
+    if (op === "ends_with") {
+      return { key, value: `%${cond.value != null ? cond.value : ""}` };
+    }
+
     return { key, value: cond.value != null ? cond.value : "" };
   };
 
@@ -571,6 +645,7 @@ async function getRulesPreview({
       customerId,
       ptrsId,
       transaction: t,
+      groupName,
     });
 
     // ------------------------------------------------------------------
@@ -609,6 +684,10 @@ async function getRulesPreview({
       const match0 = match[0] || {};
       const currentField = String(match0.currentField || "").trim();
       const targetField = String(match0.targetField || "").trim();
+      const targetSelection = String(rule?.target?.selection || "")
+        .trim()
+        .toLowerCase();
+      const requireTargetMatch = rule?.target?.requireMatch !== false;
 
       const action = rule.action || {};
       const op = String(action.op || "add").toLowerCase();
@@ -686,20 +765,22 @@ base_rows AS (
     AND s."deletedAt" IS NULL
 ),`;
 
-      for (const c of when) {
-        const frag = buildJsonbCond("c", c);
+      for (const [idx, c] of when.entries()) {
+        const key = `w_curr_${idx}`;
+        const frag = buildJsonbCond("c", c, key);
         if (frag) {
           wherePartsCurr.push(frag);
-          const bind = bindValueFor(c);
+          const bind = bindValueFor(c, key);
           if (bind) replacements[bind.key] = bind.value;
         }
       }
 
-      for (const c of where) {
-        const frag = buildJsonbCond("t", c);
+      for (const [idx, c] of where.entries()) {
+        const key = `w_tgt_${idx}`;
+        const frag = buildJsonbCond("t", c, key);
         if (frag) {
           wherePartsTgt.push(frag);
-          const bind = bindValueFor(c);
+          const bind = bindValueFor(c, key);
           if (bind) replacements[bind.key] = bind.value;
         }
       }
@@ -730,7 +811,97 @@ base_rows AS (
                   ? `curr.delta`
                   : `(${tgtAmtExpr} + curr.delta)`;
 
-      const sqlCount = `
+      const strictOpSql =
+        op === "add"
+          ? `(m.base_before + m.delta)`
+          : op === "sub"
+            ? `(m.base_before - m.delta)`
+            : op === "mul"
+              ? `(m.base_before * m.delta)`
+              : op === "div"
+                ? `CASE WHEN m.delta = 0 THEN m.base_before ELSE (m.base_before / m.delta) END`
+                : op === "assign"
+                  ? `m.delta`
+                  : `(m.base_before + m.delta)`;
+
+      const sqlCount =
+        targetSelection === "single_per_key"
+          ? `
+WITH ${baseRowsCteSql}
+curr AS (
+  SELECT
+    ${currKeyExpr} AS k,
+    SUM(COALESCE(${currAmtExpr}, 0)) AS delta
+  FROM base_rows c
+  WHERE 1=1
+    ${currWhereSql}
+    AND COALESCE(${currKeyExpr}, '') <> ''
+  GROUP BY 1
+),
+eligible_targets AS (
+  SELECT
+    t."id",
+    t."rowNo",
+    t.data->>'document_type' AS document_type,
+    ${tgtKeyExpr} AS k,
+    COALESCE(${tgtAmtExpr}, 0) AS base_before,
+    t."updatedAt"
+  FROM base_rows t
+  WHERE 1=1
+    ${tgtWhereSql}
+    AND COALESCE(${tgtKeyExpr}, '') <> ''
+),
+matched AS (
+  SELECT
+    et."id",
+    et."rowNo",
+    et.document_type,
+    et.k,
+    et.base_before,
+    et."updatedAt",
+    curr.delta
+  FROM eligible_targets et
+  JOIN curr ON curr.k = et.k
+),
+target_counts AS (
+  SELECT
+    k,
+    COUNT(*)::int AS target_count
+  FROM matched
+  GROUP BY 1
+),
+impacted AS (
+  SELECT
+    m."id",
+    m."rowNo",
+    m.document_type,
+    m.k AS ref,
+    m.base_before,
+    m.delta AS expected_delta,
+    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be
+  FROM matched m
+  JOIN target_counts tc ON tc.k = m.k
+  WHERE tc.target_count = 1
+),
+ambiguous AS (
+  SELECT COUNT(*)::int AS count
+  FROM target_counts
+  WHERE target_count > 1
+),
+unmatched AS (
+  SELECT COUNT(*)::int AS count
+  FROM curr c
+  LEFT JOIN target_counts tc ON tc.k = c.k
+  WHERE tc.k IS NULL
+)
+SELECT
+  (SELECT COUNT(*)::int FROM impacted) AS count,
+  (SELECT COALESCE(SUM(target_count - 1), 0)::int FROM target_counts WHERE target_count > 1) AS ambiguousTargetRows,
+  (SELECT COALESCE(COUNT(*), 0)::int FROM target_counts WHERE target_count > 1) AS ambiguousKeys,
+  (SELECT count FROM unmatched) AS unmatchedKeys
+FROM ambiguous;
+`
+          : `
 WITH ${baseRowsCteSql}
 curr AS (
   SELECT
@@ -756,11 +927,79 @@ impacted AS (
   WHERE 1=1
     ${tgtWhereSql}
 )
-SELECT COUNT(*)::int AS count
+SELECT
+  COUNT(*)::int AS count,
+  0::int AS "ambiguousTargetRows",
+  0::int AS "ambiguousKeys",
+  0::int AS "unmatchedKeys"
 FROM impacted;
 `;
 
-      const sqlExamples = `
+      const sqlExamples =
+        targetSelection === "single_per_key"
+          ? `
+WITH ${baseRowsCteSql}
+curr AS (
+  SELECT
+    ${currKeyExpr} AS k,
+    SUM(COALESCE(${currAmtExpr}, 0)) AS delta
+  FROM base_rows c
+  WHERE 1=1
+    ${currWhereSql}
+    AND COALESCE(${currKeyExpr}, '') <> ''
+  GROUP BY 1
+),
+eligible_targets AS (
+  SELECT
+    t."id",
+    t."rowNo",
+    t.data->>'document_type' AS document_type,
+    ${tgtKeyExpr} AS k,
+    COALESCE(${tgtAmtExpr}, 0) AS base_before,
+    t."updatedAt"
+  FROM base_rows t
+  WHERE 1=1
+    ${tgtWhereSql}
+    AND COALESCE(${tgtKeyExpr}, '') <> ''
+),
+matched AS (
+  SELECT
+    et."id",
+    et."rowNo",
+    et.document_type,
+    et.k,
+    et.base_before,
+    et."updatedAt",
+    curr.delta
+  FROM eligible_targets et
+  JOIN curr ON curr.k = et.k
+),
+target_counts AS (
+  SELECT
+    k,
+    COUNT(*)::int AS target_count
+  FROM matched
+  GROUP BY 1
+),
+impacted AS (
+  SELECT
+    m."rowNo",
+    m.document_type,
+    m.k AS ref,
+    m.base_before,
+    m.delta AS expected_delta,
+    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be,
+    m."updatedAt"
+  FROM matched m
+  JOIN target_counts tc ON tc.k = m.k
+  WHERE tc.target_count = 1
+)
+SELECT *
+FROM impacted
+ORDER BY "updatedAt" DESC
+LIMIT 20;
+`
+          : `
 WITH ${baseRowsCteSql}
 curr AS (
   SELECT
@@ -792,7 +1031,14 @@ ORDER BY "updatedAt" DESC
 LIMIT 20;
 `;
 
-      const [{ count } = { count: 0 }] = await db.sequelize.query(sqlCount, {
+      const [
+        countRow = {
+          count: 0,
+          ambiguousTargetRows: 0,
+          ambiguousKeys: 0,
+          unmatchedKeys: 0,
+        },
+      ] = await db.sequelize.query(sqlCount, {
         transaction: t,
         replacements,
         type: db.sequelize.QueryTypes.SELECT,
@@ -810,15 +1056,27 @@ LIMIT 20;
         meta: {
           ptrsId,
           mode,
+          groupName,
           elapsedMs: Date.now() - started,
           isPartial: false,
           helperRowRulesMaterialised: helperRowRules.length,
+          targetSelection: targetSelection || "first_match",
+          requireTargetMatch,
         },
         summary: {
           rulesTried: crossRowRules.length,
-          rowsAffected: Number(count || 0),
-          actions: Number(count || 0),
+          rowsAffected: Number(countRow?.count || 0),
+          actions: Number(countRow?.count || 0),
+          ambiguousTargetRows: Number(countRow?.ambiguousTargetRows || 0),
+          ambiguousKeys: Number(countRow?.ambiguousKeys || 0),
+          unmatchedKeys: Number(countRow?.unmatchedKeys || 0),
         },
+        warning:
+          targetSelection === "single_per_key" &&
+          requireTargetMatch &&
+          Number(countRow?.ambiguousKeys || 0) > 0
+            ? "Some matched keys have multiple eligible target rows and are excluded from strict preview results."
+            : null,
         headers: [],
         rows: [],
         byRule: {},
@@ -860,16 +1118,19 @@ LIMIT 20;
         ? rowResult.rows
         : baseRows;
 
+    const previewHeaders = mergePreviewHeadersFromRows(headers, previewRows);
+
     return {
       meta: {
         ptrsId,
         mode,
+        groupName,
         previewLimit: effectiveLimit,
         elapsedMs: Date.now() - started,
         isPartial: true,
       },
       summary,
-      headers,
+      headers: previewHeaders,
       rows: previewRows,
       byRule: {},
       examples: [],
@@ -905,6 +1166,10 @@ function applySandboxFilter(rows, { field, op, value }) {
         return s === val;
       case "neq":
         return s !== val;
+      case "starts_with":
+        return s.startsWith(val);
+      case "ends_with":
+        return s.endsWith(val);
       case "gt":
         return toNum(raw) > toNum(val);
       case "gte":
@@ -954,30 +1219,180 @@ async function sandboxRulesPreview({
   const effectiveLimit = Math.min(Number(limit) || 50, 500);
   const SANDBOX_ROW_CAP = 10000;
 
+  const numExpr = (jsonbExpr) =>
+    `NULLIF(regexp_replace(${jsonbExpr}, '[^0-9\\.\\-]', '', 'g'), '')::numeric`;
+
+  const buildJsonbCond = (prefix, cond, key) => {
+    if (!cond || typeof cond !== "object") return null;
+    const field = String(cond.field || "").trim();
+    const op = String(cond.op || "").trim();
+    if (!field || !op) return null;
+
+    const expr = `${prefix}."data"->>'${field}'`;
+
+    switch (op) {
+      case "eq":
+        return `${expr} = :${key}`;
+      case "neq":
+        return `${expr} <> :${key}`;
+      case "starts_with":
+        return `${expr} LIKE :${key}`;
+      case "ends_with":
+        return `${expr} LIKE :${key}`;
+      case "in":
+        return `${expr} = ANY(:${key})`;
+      case "nin":
+        return `NOT (${expr} = ANY(:${key}))`;
+      case "gt":
+        return `${numExpr(expr)} > :${key}`;
+      case "gte":
+        return `${numExpr(expr)} >= :${key}`;
+      case "lt":
+        return `${numExpr(expr)} < :${key}`;
+      case "lte":
+        return `${numExpr(expr)} <= :${key}`;
+      case "is_null":
+        return `(${expr} IS NULL OR ${expr} = '')`;
+      case "not_null":
+        return `(${expr} IS NOT NULL AND ${expr} <> '')`;
+      default:
+        return null;
+    }
+  };
+
+  const bindValueFor = (cond, key) => {
+    const op = String(cond?.op || "").trim();
+
+    if (op === "in" || op === "nin") {
+      return {
+        key,
+        value: String(cond?.value || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+    }
+
+    if (op === "is_null" || op === "not_null") {
+      return null;
+    }
+
+    if (op === "starts_with") {
+      return { key, value: `${cond?.value != null ? cond.value : ""}%` };
+    }
+
+    if (op === "ends_with") {
+      return { key, value: `%${cond?.value != null ? cond.value : ""}` };
+    }
+
+    return { key, value: cond?.value != null ? cond.value : "" };
+  };
+
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Load staged rows from tbl_ptrs_stage_row as the canonical dataset
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      attributes: ["data", "rowNo"],
-      order: [["rowNo", "ASC"]],
-      limit: SANDBOX_ROW_CAP,
-      transaction: t,
-      raw: true,
+    const validFilters = Array.isArray(filters)
+      ? filters.filter((f) => {
+          const field = String(f?.field || "").trim();
+          const op = String(f?.op || "").trim();
+          if (!field || !op) return false;
+          if (op === "is_null" || op === "not_null") return true;
+          return String(f?.value ?? "").trim() !== "";
+        })
+      : [];
+
+    const whereParts = [
+      `s."customerId" = :customerId`,
+      `s."ptrsId" = :ptrsId`,
+      `s."deletedAt" IS NULL`,
+    ];
+
+    const replacements = {
+      customerId: String(customerId),
+      ptrsId: String(ptrsId),
+      sandboxRowCap: SANDBOX_ROW_CAP,
+      effectiveLimit,
+    };
+
+    validFilters.forEach((filter, idx) => {
+      const key = `sandbox_filter_${idx}`;
+      const frag = buildJsonbCond("s", filter, key);
+      if (frag) {
+        whereParts.push(frag);
+        const bind = bindValueFor(filter, key);
+        if (bind) {
+          replacements[bind.key] = bind.value;
+        }
+      }
     });
 
-    // Flatten JSONB data for preview; assume "data" holds the mapped row
-    const baseRows = (stageRows || []).map((r) => {
+    const whereSql = whereParts.join("\n        AND ");
+
+    const rowsSql = `
+      WITH filtered_rows AS (
+        SELECT
+          s."rowNo",
+          s."data"
+        FROM "tbl_ptrs_stage_row" s
+        WHERE ${whereSql}
+        ORDER BY s."rowNo" ASC
+        LIMIT :sandboxRowCap
+      )
+      SELECT
+        "rowNo",
+        "data"
+      FROM filtered_rows
+      ORDER BY "rowNo" ASC
+      LIMIT :effectiveLimit;
+    `;
+
+    const countSql = `
+      SELECT COUNT(*)::int AS count
+      FROM "tbl_ptrs_stage_row" s
+      WHERE ${whereSql};
+    `;
+
+    const headersSql = `
+      WITH filtered_rows AS (
+        SELECT s."data"
+        FROM "tbl_ptrs_stage_row" s
+        WHERE ${whereSql}
+        ORDER BY s."rowNo" ASC
+        LIMIT :sandboxRowCap
+      )
+      SELECT DISTINCT jsonb_object_keys("data") AS header
+      FROM filtered_rows
+      ORDER BY header;
+    `;
+
+    const stageRows = await db.sequelize.query(rowsSql, {
+      transaction: t,
+      replacements,
+      type: db.sequelize.QueryTypes.SELECT,
+    });
+
+    const [{ count: totalMatching = 0 } = { count: 0 }] =
+      await db.sequelize.query(countSql, {
+        transaction: t,
+        replacements,
+        type: db.sequelize.QueryTypes.SELECT,
+      });
+
+    const headerRows = await db.sequelize.query(headersSql, {
+      transaction: t,
+      replacements,
+      type: db.sequelize.QueryTypes.SELECT,
+    });
+
+    const limitedRows = (stageRows || []).map((r) => {
       const data =
         r && typeof r.data === "object" && r.data !== null ? r.data : {};
       return data;
     });
 
-    const filteredRows = applySandboxFilters(baseRows, filters);
-    const limitedRows = filteredRows.slice(0, effectiveLimit);
-
-    const headers = baseRows.length > 0 ? Object.keys(baseRows[0]) : [];
+    const headers = (headerRows || [])
+      .map((r) => String(r?.header || "").trim())
+      .filter(Boolean);
 
     slog.info(
       "PTRS v2 sandboxRulesPreview",
@@ -986,9 +1401,10 @@ async function sandboxRulesPreview({
         ptrsId,
         sampledStageRows: stageRows.length,
         sandboxRowCap: SANDBOX_ROW_CAP,
-        filters: Array.isArray(filters) ? filters.length : 0,
-        totalMatching: filteredRows.length,
+        filters: validFilters.length,
+        totalMatching: Number(totalMatching || 0),
         returned: limitedRows.length,
+        headersCount: headers.length,
       }),
     );
 
@@ -998,10 +1414,11 @@ async function sandboxRulesPreview({
       headers,
       rows: limitedRows,
       stats: {
-        totalMatching: filteredRows.length,
+        totalMatching: Number(totalMatching || 0),
         returned: limitedRows.length,
         sampledStageRows: stageRows.length,
         sandboxRowCap: SANDBOX_ROW_CAP,
+        headersCount: headers.length,
       },
     };
   } catch (err) {
@@ -1049,10 +1466,9 @@ async function updateRulesOnly({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Blow away any existing rulesets for this run
-    await db.PtrsRuleset.destroy({
-      where: { customerId, ptrsId },
-      transaction: t,
+    const submittedGroupNames = collectSubmittedGroupNames({
+      rowRules,
+      crossRowRules,
     });
 
     const payloads = [];
@@ -1095,6 +1511,30 @@ async function updateRulesOnly({
       }
     }
 
+    if (submittedGroupNames.length) {
+      const existingRulesets = await db.PtrsRuleset.findAll({
+        where: { customerId, ptrsId, deletedAt: null },
+        attributes: ["id", "definition"],
+        transaction: t,
+        raw: true,
+      });
+
+      const idsToDelete = (existingRulesets || [])
+        .filter((rs) => {
+          const groupName = String(rs?.definition?.groupName || "").trim();
+          return submittedGroupNames.includes(groupName);
+        })
+        .map((rs) => rs.id)
+        .filter(Boolean);
+
+      if (idsToDelete.length) {
+        await db.PtrsRuleset.destroy({
+          where: { id: idsToDelete },
+          transaction: t,
+        });
+      }
+    }
+
     if (payloads.length) {
       await db.PtrsRuleset.bulkCreate(payloads, {
         transaction: t,
@@ -1106,6 +1546,7 @@ async function updateRulesOnly({
     await t.commit();
 
     return {
+      groupNames: collectSubmittedGroupNames({ rowRules, crossRowRules }),
       rowRules: Array.isArray(rowRules) ? rowRules : [],
       crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
     };
@@ -1206,6 +1647,7 @@ async function applyRulesAndPersist({
   ptrsId,
   profileId = null,
   limit = null, // null = process ALL rows for this ptrsId
+  groupName = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -1224,6 +1666,7 @@ async function applyRulesAndPersist({
     action: "PtrsV2RulesApplyStart",
     customerId,
     ptrsId,
+    groupName,
     requestedLimit: limit,
     effectiveLimit,
   });
@@ -1236,6 +1679,7 @@ async function applyRulesAndPersist({
     customerId,
     ptrsId,
     transaction: t,
+    groupName,
   });
 
   const totalRows = await db.PtrsImportRaw.count({
@@ -1247,6 +1691,7 @@ async function applyRulesAndPersist({
     action: "PtrsV2RulesApplyRowCapCheck",
     customerId,
     ptrsId,
+    groupName,
     totalRows,
     effectiveLimit,
     sqlImplementation: true,
@@ -1299,6 +1744,7 @@ async function applyRulesAndPersist({
     });
 
     return {
+      groupName,
       persisted: combinedStats.rowsAffected,
       tookMs,
       stats: {

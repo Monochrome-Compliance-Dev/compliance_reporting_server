@@ -365,11 +365,13 @@ async function loadMappedRowsForPtrs({
 async function buildMappedDatasetForPtrs({
   customerId,
   ptrsId,
+  profileId = null,
   actorId = null,
 }) {
   return buildMappedDatasetForPtrsImpl({
     customerId,
     ptrsId,
+    profileId,
     actorId,
     beginTransactionWithCustomerContext,
     createPtrsTrace,

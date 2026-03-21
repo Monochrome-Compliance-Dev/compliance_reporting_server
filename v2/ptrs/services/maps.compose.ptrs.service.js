@@ -35,32 +35,71 @@ function applyCustomFields({ row, rawRow, customFields }) {
   for (const cf of Array.isArray(customFields) ? customFields : []) {
     if (!cf || typeof cf !== "object") continue;
 
-    const target = cf.field || cf.target || cf.name;
+    const target = cf.key || cf.field || cf.target || cf.name;
     if (!target) continue;
 
     let value = null;
 
-    if (Object.prototype.hasOwnProperty.call(cf, "value")) {
-      value = cf.value;
-    } else {
-      const sourceRole = String(cf.sourceRole || cf.role || "")
+    const resolveFieldValue = (sourceRole, sourceColumn) => {
+      const role = String(sourceRole || cf.role || "")
         .trim()
         .toLowerCase();
 
+      if (!sourceColumn) return null;
+
+      if (isMainRole(role)) {
+        return (
+          pickFromRowLoose(out, sourceColumn) ??
+          pickFromRowLoose(source, sourceColumn)
+        );
+      }
+
+      return (
+        pickFromRowLoose(out, nsKey(role, sourceColumn)) ??
+        pickFromRowLoose(source, nsKey(role, sourceColumn)) ??
+        pickFromRowLoose(out, sourceColumn) ??
+        pickFromRowLoose(source, sourceColumn)
+      );
+    };
+
+    if (Object.prototype.hasOwnProperty.call(cf, "value")) {
+      value = cf.value;
+    } else if (
+      String(cf.type || "")
+        .trim()
+        .toLowerCase() === "concat"
+    ) {
+      const segments = Array.isArray(cf.segments) ? cf.segments : [];
+      const parts = [];
+
+      for (const segment of segments) {
+        if (!segment || typeof segment !== "object") continue;
+
+        const kind = String(segment.kind || "field")
+          .trim()
+          .toLowerCase();
+
+        if (kind === "literal") {
+          parts.push(segment.value == null ? "" : String(segment.value));
+          continue;
+        }
+
+        const fieldName =
+          segment.name || segment.field || segment.column || null;
+        const fieldRole = segment.role || cf.role || cf.sourceRole || null;
+        const fieldValue = resolveFieldValue(fieldRole, fieldName);
+
+        parts.push(fieldValue == null ? "" : String(fieldValue));
+      }
+
+      value = parts.join("");
+    } else {
       const sourceColumn =
         cf.sourceColumn || cf.column || cf.sourceHeader || cf.header || null;
 
       if (!sourceColumn) continue;
 
-      if (isMainRole(sourceRole)) {
-        value =
-          pickFromRowLoose(out, sourceColumn) ??
-          pickFromRowLoose(source, sourceColumn);
-      } else {
-        value =
-          pickFromRowLoose(out, nsKey(sourceRole, sourceColumn)) ??
-          pickFromRowLoose(source, nsKey(sourceRole, sourceColumn));
-      }
+      value = resolveFieldValue(cf.sourceRole || cf.role || "", sourceColumn);
     }
 
     out[target] = value == null ? null : value;
@@ -161,7 +200,16 @@ async function composeSingleMappedRow({
   if (!base || typeof base !== "object") {
     base = {};
   }
-  let srcRow = base;
+  const baseWithCustomFields =
+    Array.isArray(customFields) && customFields.length
+      ? applyCustomFields({
+          row: base,
+          rawRow: base,
+          customFields,
+        })
+      : { ...(base || {}) };
+
+  let srcRow = baseWithCustomFields;
 
   if (orderedJoins.length) {
     let workingRow = srcRow;
@@ -322,11 +370,6 @@ async function composeSingleMappedRow({
   let out = { ...(srcRow && typeof srcRow === "object" ? srcRow : {}) };
 
   if (Array.isArray(customFields) && customFields.length) {
-    out = applyCustomFields({
-      row: out,
-      rawRow: srcRow,
-      customFields,
-    });
     counters.customFieldsApplied += 1;
   }
 
@@ -406,6 +449,22 @@ async function composeMappedRowsForPtrs({
     customerId,
     ptrsId,
     trace,
+  });
+
+  trace?.write("compose_custom_fields_loaded", {
+    customFieldsCount: Array.isArray(customFields) ? customFields.length : 0,
+    customFieldTargets: Array.isArray(customFields)
+      ? customFields
+          .map((cf) => cf?.key || cf?.field || cf?.target || cf?.name || null)
+          .filter(Boolean)
+          .slice(0, 20)
+      : [],
+    customFieldTypes: Array.isArray(customFields)
+      ? customFields
+          .map((cf) => String(cf?.type || ""))
+          .filter(Boolean)
+          .slice(0, 20)
+      : [],
   });
 
   const orderJoinsForExecution = (joins) => {
@@ -698,7 +757,16 @@ async function composeMappedRowsForPtrs({
           d = {};
         }
       }
-      return d && typeof d === "object" ? d : {};
+
+      const baseRow = d && typeof d === "object" ? d : {};
+
+      return Array.isArray(customFields) && customFields.length
+        ? applyCustomFields({
+            row: baseRow,
+            rawRow: baseRow,
+            customFields,
+          })
+        : baseRow;
     });
 
     datasetRowsCache.set(r, parsed);
@@ -833,7 +901,6 @@ async function composeMappedRowsForPtrs({
 
   const composed = [];
 
-  let loggedFirst = false;
   const loggedJoinProbeRef = { logged: false };
 
   for (const r of mainRows) {
@@ -859,21 +926,6 @@ async function composeMappedRowsForPtrs({
       normalizeJoinKeyValue,
       logComposeJoinProbeOnce,
     });
-
-    if (!loggedFirst && logger && logger.debug) {
-      loggedFirst = true;
-      slog.debug(
-        "PTRS v2 composeMappedRowsForPtrs: sample composed row",
-        safeMeta({
-          customerId,
-          ptrsId,
-          sampleRowKeys: Object.keys(out || {}),
-          hasCustomFieldsApplied:
-            Array.isArray(customFields) && customFields.length > 0,
-        }),
-      );
-    }
-
     composed.push(out);
   }
 

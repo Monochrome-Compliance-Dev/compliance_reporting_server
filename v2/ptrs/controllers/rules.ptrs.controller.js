@@ -24,6 +24,8 @@ async function rulesPreview(req, res, next) {
   const requestedMode = String(req.query.mode || "sample").toLowerCase();
   const mode = requestedMode === "full" ? "full" : "sample";
   const limit = Math.min(parseInt(req.query.limit || "50", 10), 500);
+  const groupName =
+    typeof req.query.groupName === "string" ? req.query.groupName.trim() : "";
   try {
     if (!customerId) {
       return res
@@ -42,6 +44,7 @@ async function rulesPreview(req, res, next) {
       ptrsId,
       mode,
       limit,
+      groupName: groupName || null,
     });
     await auditService.logEvent({
       customerId,
@@ -54,6 +57,7 @@ async function rulesPreview(req, res, next) {
       details: {
         mode,
         limit,
+        groupName: groupName || null,
         returned: Array.isArray(out?.rows) ? out.rows.length : 0,
       },
     });
@@ -65,6 +69,7 @@ async function rulesPreview(req, res, next) {
       customerId,
       userId,
       mode,
+      groupName: groupName || null,
       error: error.message,
       statusCode: error.statusCode || 500,
     });
@@ -151,6 +156,8 @@ async function rulesApply(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
   const profileId = req.body?.profileId || null;
+  const groupName =
+    typeof req.body?.groupName === "string" ? req.body.groupName.trim() : "";
   try {
     if (!customerId) {
       return res
@@ -168,6 +175,7 @@ async function rulesApply(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      groupName: groupName || null,
     });
     await auditService.logEvent({
       customerId,
@@ -177,7 +185,10 @@ async function rulesApply(req, res, next) {
       action: "PtrsV2RulesApply",
       entity: "PtrsUpload",
       entityId: ptrsId,
-      details: { persisted: out?.persisted ?? 0 },
+      details: {
+        groupName: groupName || null,
+        persisted: out?.persisted ?? 0,
+      },
     });
     return res.status(200).json({ status: "success", data: out });
   } catch (error) {
@@ -186,6 +197,7 @@ async function rulesApply(req, res, next) {
       ptrsId,
       customerId,
       userId,
+      groupName: groupName || null,
       error: error.message,
       statusCode: error.statusCode || 500,
     });
@@ -225,7 +237,7 @@ async function saveRules(req, res, next) {
     const profileId = ptrs.profileId || null;
 
     // Persist rules only into tbl_ptrs_ruleset
-    await rulesService.updateRulesOnly({
+    const saved = await rulesService.updateRulesOnly({
       customerId,
       ptrsId,
       profileId,
@@ -233,6 +245,17 @@ async function saveRules(req, res, next) {
       crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
       userId,
     });
+
+    const submittedGroupNames = Array.from(
+      new Set(
+        [
+          ...(Array.isArray(rowRules) ? rowRules : []),
+          ...(Array.isArray(crossRowRules) ? crossRowRules : []),
+        ]
+          .map((rule) => String(rule?.groupName || "").trim())
+          .filter(Boolean),
+      ),
+    );
 
     await auditService.logEvent({
       customerId,
@@ -243,6 +266,7 @@ async function saveRules(req, res, next) {
       entity: "PtrsUpload",
       entityId: ptrsId,
       details: {
+        groupNames: submittedGroupNames,
         rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
         crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
       },
@@ -251,6 +275,7 @@ async function saveRules(req, res, next) {
     return res.status(200).json({
       status: "success",
       data: {
+        groupNames: Array.isArray(saved?.groupNames) ? saved.groupNames : [],
         rowRules: Array.isArray(rowRules) ? rowRules : [],
         crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
       },

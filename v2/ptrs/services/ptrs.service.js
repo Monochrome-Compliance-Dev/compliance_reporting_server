@@ -68,28 +68,77 @@ function toSnake(str) {
 function buildStableInputHash(input) {
   const seen = new WeakSet();
 
-  const stableStringify = (value) => {
-    if (value === null || typeof value !== "object") {
-      return JSON.stringify(value);
+  const normalizeForStableHash = (value) => {
+    if (value === null || value === undefined) {
+      return value;
     }
 
-    if (seen.has(value)) {
-      return '"[Circular]"';
+    if (typeof value === "bigint") {
+      return value.toString();
     }
-    seen.add(value);
+
+    if (value instanceof Date) {
+      const time = value.getTime();
+
+      if (Number.isNaN(time)) {
+        throw new Error("buildStableInputHash received invalid Date");
+      }
+
+      return value.toISOString();
+    }
+
+    if (value instanceof Set) {
+      return Array.from(value, (entry) => normalizeForStableHash(entry));
+    }
+
+    if (value instanceof Map) {
+      return Array.from(value.entries())
+        .map(([mapKey, mapValue]) => [
+          normalizeForStableHash(mapKey),
+          normalizeForStableHash(mapValue),
+        ])
+        .sort((a, b) =>
+          JSON.stringify(a[0]).localeCompare(JSON.stringify(b[0])),
+        );
+    }
+
+    if (Buffer.isBuffer(value)) {
+      return {
+        __type: "Buffer",
+        data: value.toString("base64"),
+      };
+    }
+
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      };
+    }
 
     if (Array.isArray(value)) {
-      return "[" + value.map((v) => stableStringify(v)).join(",") + "]";
+      return value.map((entry) => normalizeForStableHash(entry));
     }
 
-    const keys = Object.keys(value).sort();
-    const entries = keys.map(
-      (k) => JSON.stringify(k) + ":" + stableStringify(value[k]),
-    );
-    return "{" + entries.join(",") + "}";
+    if (typeof value === "object") {
+      if (seen.has(value)) {
+        return "[Circular]";
+      }
+      seen.add(value);
+
+      return Object.keys(value)
+        .sort()
+        .reduce((acc, key) => {
+          acc[key] = normalizeForStableHash(value[key]);
+          return acc;
+        }, {});
+    }
+
+    return value;
   };
 
-  const canonical = stableStringify(input);
+  const canonical = JSON.stringify(normalizeForStableHash(input));
   return crypto.createHash("sha256").update(canonical).digest("hex");
 }
 
