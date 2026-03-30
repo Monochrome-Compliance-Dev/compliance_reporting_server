@@ -1985,6 +1985,13 @@ async function buildRawDatasetFromXeroCache({
       const rawContact = c?.rawPayload || null;
       const rawOrganisation = org?.rawPayload || null;
 
+      if (
+        rawInvoice &&
+        getFirstKey(rawInvoice, ["Type", "type"]) !== "ACCPAY"
+      ) {
+        continue;
+      }
+
       const invoiceIssueDate = toIsoDateOnlyUtc(
         parseXeroDotNetDate(rawInvoice?.Date || rawInvoice?.DateString),
       );
@@ -2137,6 +2144,11 @@ async function buildRawDatasetFromXeroCache({
     for (let i = 0; i < bankTxRows.length; i++) {
       const bt = bankTxRows[i];
       const rawBankTransaction = bt?.rawPayload || null;
+      const type = getFirstKey(rawBankTransaction, ["Type", "type"]);
+
+      if (type !== "SPEND") {
+        continue;
+      }
 
       const org = bt?.xeroTenantId ? orgByTenantId.get(bt.xeroTenantId) : null;
       const rawOrganisation = org?.rawPayload || null;

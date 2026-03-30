@@ -732,7 +732,7 @@ async function stagePtrs({
           CASE
             WHEN NULLIF(s."data"->>'${jsonKey}', '') IS NULL THEN NULL
             WHEN (s."data"->>'${jsonKey}') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (s."data"->>'${jsonKey}')::date
-            WHEN (s."data"->>'${jsonKey}') ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(s."data"->>'${jsonKey}', 'DD/MM/YYYY')
+            WHEN (s."data"->>'${jsonKey}') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(s."data"->>'${jsonKey}', 'DD/MM/YYYY')
             ELSE (
               SELECT pg_catalog.to_date('__INVALID__', 'YYYY-MM-DD')
               FROM pg_catalog.pg_class
