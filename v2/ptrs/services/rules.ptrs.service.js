@@ -1,3 +1,26 @@
+const db = require("@/db/database");
+
+const {
+  beginTransactionWithCustomerContext,
+} = require("@/helpers/setCustomerIdRLS");
+const { slog, safeMeta } = require("./ptrs.service");
+const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
+const {
+  applyRowRulesSql,
+  buildRowRulesProjectionSql: importedBuildRowRulesProjectionSql,
+} = require("./rules.row.sql");
+const { applyCrossRowRulesSql } = require("./rules.crossRow.sql");
+
+module.exports = {
+  applyRules,
+  getRulesPreview,
+  applyRulesAndPersist,
+  updateRulesOnly,
+  getRules,
+  getProfileRules,
+  sandboxRulesPreview,
+};
+
 // Helper to ensure cross-row rules are not dangerously broad
 function validateCrossRowRule(rule) {
   const match = Array.isArray(rule?.target?.match) ? rule.target.match : [];
@@ -17,23 +40,97 @@ function validateCrossRowRule(rule) {
     throw err;
   }
 }
-const db = require("@/db/database");
 
-const {
-  beginTransactionWithCustomerContext,
-} = require("@/helpers/setCustomerIdRLS");
-const { slog, safeMeta } = require("./ptrs.service");
-const { loadMappedRowsForPtrs } = require("./tablesAndMaps.ptrs.service");
+function normaliseSelectedGroupNames(groupName = null) {
+  if (Array.isArray(groupName)) {
+    return groupName.map((v) => String(v || "").trim()).filter(Boolean);
+  }
 
-module.exports = {
-  applyRules,
-  getRulesPreview,
-  applyRulesAndPersist,
-  updateRulesOnly,
-  getRules,
-  getProfileRules,
-  sandboxRulesPreview,
-};
+  const single = String(groupName || "").trim();
+  return single ? [single] : [];
+}
+
+function ruleMatchesSelectedGroups(rule, selectedGroupNames = []) {
+  if (!Array.isArray(selectedGroupNames) || !selectedGroupNames.length) {
+    return true;
+  }
+
+  const ruleGroupName = String(rule?.groupName || "").trim();
+  return selectedGroupNames.includes(ruleGroupName);
+}
+
+function collectSubmittedGroupNames({ rowRules = [], crossRowRules = [] }) {
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray(rowRules) ? rowRules : []),
+        ...(Array.isArray(crossRowRules) ? crossRowRules : []),
+      ]
+        .map((rule) => String(rule?.groupName || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function buildPreviewRowProjectionSql({ rules = [], sourceExpr = "data" }) {
+  if (typeof importedBuildRowRulesProjectionSql === "function") {
+    return importedBuildRowRulesProjectionSql({ rules, sourceExpr });
+  }
+
+  let expr = sourceExpr;
+
+  const jsonPathFor = (field) => `'{${String(field || "").trim()}}'`;
+  const textExprFor = (field, currentExpr) =>
+    `COALESCE(${currentExpr}->>'${String(field || "").trim()}', '')`;
+
+  for (const rule of Array.isArray(rules) ? rules : []) {
+    const actions = Array.isArray(rule?.then) ? rule.then : [];
+    for (const action of actions) {
+      if (!action || action.op !== "concat_fields") continue;
+
+      const targetField = String(action.field || "").trim();
+      const segments = Array.isArray(action.segments) ? action.segments : [];
+      if (!targetField || !segments.length) continue;
+
+      const concatSql = segments
+        .map((seg) => {
+          if (seg?.kind === "literal") {
+            return db.sequelize.escape(String(seg?.value || ""));
+          }
+          const fieldName = String(seg?.name || "").trim();
+          if (!fieldName) {
+            return db.sequelize.escape("");
+          }
+          return textExprFor(fieldName, expr);
+        })
+        .join(" || ");
+
+      expr = `jsonb_set(${expr}, ${jsonPathFor(targetField)}, to_jsonb(${concatSql}), true)`;
+    }
+  }
+
+  return expr;
+}
+
+// Merge preview headers from both the existing headers and the preview rows
+function mergePreviewHeadersFromRows(existingHeaders = [], rows = []) {
+  const base = Array.isArray(existingHeaders) ? existingHeaders : [];
+  const seen = new Set(base.map((h) => String(h || "")).filter(Boolean));
+  const merged = [...base];
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row !== "object") continue;
+
+    for (const key of Object.keys(row)) {
+      const nextKey = String(key || "").trim();
+      if (!nextKey || seen.has(nextKey)) continue;
+      seen.add(nextKey);
+      merged.push(nextKey);
+    }
+  }
+
+  return merged;
+}
 
 function applyRules(rows, rules = []) {
   const enabled = (rules || []).filter((r) => r && r.enabled !== false);
@@ -107,6 +204,8 @@ function _matches(row, cond) {
       return s === v;
     case "neq":
       return s !== v;
+    case "starts_with":
+      return s.startsWith(v);
     case "gt":
       return toNum(raw) > toNum(v);
     case "gte":
@@ -138,6 +237,15 @@ function _matches(row, cond) {
   }
 }
 
+function _appendRuleComment(existing, next) {
+  const current = String(existing ?? "").trim();
+  const incoming = String(next ?? "").trim();
+
+  if (!incoming) return current;
+  if (!current) return incoming;
+  return `${current} | ${incoming}`;
+}
+
 function _toNumLoose(v) {
   if (v == null || v === "") return 0;
   const n = Number(String(v).replace(/[, ]+/g, ""));
@@ -147,6 +255,57 @@ function _toNumLoose(v) {
 function _round(n, dp = 2) {
   const f = Math.pow(10, dp);
   return Math.round(n * f) / f;
+}
+
+function _applyAction(row, act) {
+  if (!row || !act || typeof act !== "object") return;
+
+  if (act?.op === "concat_fields") {
+    const targetField = String(act.field || "").trim();
+    const segments = Array.isArray(act.segments)
+      ? act.segments
+      : Array.isArray(act.fields)
+        ? act.fields.map((name) => ({ kind: "field", name }))
+        : [];
+
+    if (!targetField || !segments.length) return;
+
+    row[targetField] = segments
+      .map((seg) => {
+        if (seg?.kind === "literal") return String(seg?.value || "");
+        const fieldName = String(seg?.name || "").trim();
+        return fieldName ? String(row?.[fieldName] ?? "") : "";
+      })
+      .join("");
+    return;
+  }
+
+  const op = String(act.op || "assign").toLowerCase();
+  const targetField = String(act.field || "").trim();
+  const sourceField = String(
+    act.valueField || act.valueFieldFromCurrent || "",
+  ).trim();
+  const dp = typeof act.round === "number" ? act.round : 2;
+
+  if (!targetField) return;
+
+  if (op === "assign") {
+    row[targetField] = sourceField ? (row?.[sourceField] ?? null) : null;
+    return;
+  }
+
+  const currentVal = _toNumLoose(row?.[targetField]);
+  const sourceVal = sourceField ? _toNumLoose(row?.[sourceField]) : 0;
+
+  let next = currentVal;
+  if (op === "add") next = currentVal + sourceVal;
+  else if (op === "sub") next = currentVal - sourceVal;
+  else if (op === "mul") next = currentVal * sourceVal;
+  else if (op === "div")
+    next = sourceVal === 0 ? currentVal : currentVal / sourceVal;
+  else return;
+
+  row[targetField] = _round(next, dp);
 }
 
 function applyCrossRowRules(rows, rules = [], statsRef = null) {
@@ -280,6 +439,14 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
 
         target[targetAmountField] = _round(next, dp);
 
+        if (action.comment || action.note) {
+          const nextComment = action.comment || action.note;
+          target.exclude_comment = _appendRuleComment(
+            target.exclude_comment,
+            nextComment,
+          );
+        }
+
         // Mark applied on target only once
         const tApplied = Array.isArray(target._appliedRules)
           ? target._appliedRules.slice()
@@ -301,8 +468,10 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
           current._appliedRules = cApplied;
           current.exclude = true;
           current.exclude_from_metrics = true;
-          if (!current.exclude_comment)
-            current.exclude_comment = "Excluded by cross-row rule";
+          current.exclude_comment = _appendRuleComment(
+            current.exclude_comment,
+            "Excluded by cross-row rule",
+          );
         }
       }
     }
@@ -312,19 +481,26 @@ function applyCrossRowRules(rows, rules = [], statsRef = null) {
 }
 
 // --- Helper: load row-level rules from PtrsRuleset ---
-async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
+async function loadRowRulesForPtrs({
+  customerId,
+  ptrsId,
+  transaction,
+  groupName = null,
+}) {
   const rulesets = await db.PtrsRuleset.findAll({
-    where: { customerId, ptrsId },
+    where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
 
+  const selectedGroupNames = normaliseSelectedGroupNames(groupName);
   const rowRules = [];
   for (const rs of rulesets || []) {
     const def = rs.definition;
     if (!def || typeof def !== "object") continue;
     const type = def.type || rs.scope || "row";
     if (type === "crossRow") continue;
+    if (!ruleMatchesSelectedGroups(def, selectedGroupNames)) continue;
     rowRules.push(def);
   }
 
@@ -342,19 +518,26 @@ async function loadRowRulesForPtrs({ customerId, ptrsId, transaction }) {
 }
 
 // --- NEW: load both row and cross-row rules for a PTRS run ---
-async function loadRulesForPtrs({ customerId, ptrsId, transaction }) {
+async function loadRulesForPtrs({
+  customerId,
+  ptrsId,
+  transaction,
+  groupName = null,
+}) {
   const rulesets = await db.PtrsRuleset.findAll({
-    where: { customerId, ptrsId },
+    where: { customerId, ptrsId, deletedAt: null },
     transaction,
     raw: true,
   });
 
+  const selectedGroupNames = normaliseSelectedGroupNames(groupName);
   const rowRules = [];
   const crossRowRules = [];
 
   for (const rs of rulesets || []) {
     const def = rs.definition;
     if (!def || typeof def !== "object") continue;
+    if (!ruleMatchesSelectedGroups(def, selectedGroupNames)) continue;
     const type = def.type || rs.scope || "row";
     if (type === "crossRow") crossRowRules.push(def);
     else rowRules.push(def);
@@ -374,11 +557,14 @@ async function loadRulesForPtrs({ customerId, ptrsId, transaction }) {
   return { rowRules, crossRowRules };
 }
 
+// -----------------------------------------------------------------------------
+
 async function getRulesPreview({
   customerId,
   ptrsId,
   limit = 50,
   mode = "sample",
+  groupName = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -393,7 +579,7 @@ async function getRulesPreview({
     `NULLIF(regexp_replace(${jsonbExpr}, '[^0-9\\.\\-]', '', 'g'), '')::numeric`;
 
   // Helper to build a WHERE clause fragment for JSONB "data" fields
-  const buildJsonbCond = (prefix, cond) => {
+  const buildJsonbCond = (prefix, cond, key) => {
     if (!cond || typeof cond !== "object") return null;
     const field = String(cond.field || "").trim();
     const op = String(cond.op || "").trim();
@@ -403,34 +589,32 @@ async function getRulesPreview({
 
     switch (op) {
       case "eq":
-        return `${expr} = :w_${field}`;
+        return `${expr} = :${key}`;
       case "neq":
-        return `${expr} <> :w_${field}`;
+        return `${expr} <> :${key}`;
+      case "starts_with":
+        return `${expr} LIKE :${key}`;
+      case "ends_with":
+        return `${expr} LIKE :${key}`;
       case "in":
-        return `${expr} = ANY(:w_${field})`;
+        return `${expr} = ANY(:${key})`;
       case "nin":
-        return `NOT (${expr} = ANY(:w_${field}))`;
-      case "is_null":
-        return `(${expr} IS NULL OR ${expr} = '')`;
-      case "not_null":
-        return `(${expr} IS NOT NULL AND ${expr} <> '')`;
+        return `NOT (${expr} = ANY(:${key}))`;
       case "gt":
-        return `${numExpr(expr)} > :w_${field}`;
+        return `${numExpr(expr)} > :${key}`;
       case "gte":
-        return `${numExpr(expr)} >= :w_${field}`;
+        return `${numExpr(expr)} >= :${key}`;
       case "lt":
-        return `${numExpr(expr)} < :w_${field}`;
+        return `${numExpr(expr)} < :${key}`;
       case "lte":
-        return `${numExpr(expr)} <= :w_${field}`;
+        return `${numExpr(expr)} <= :${key}`;
       default:
         return null;
     }
   };
 
-  const bindValueFor = (cond) => {
-    const field = String(cond.field || "").trim();
+  const bindValueFor = (cond, key) => {
     const op = String(cond.op || "").trim();
-    const key = `w_${field}`;
 
     if (op === "in" || op === "nin") {
       const arr = String(cond.value || "")
@@ -444,6 +628,14 @@ async function getRulesPreview({
       return null;
     }
 
+    if (op === "starts_with") {
+      return { key, value: `${cond.value != null ? cond.value : ""}%` };
+    }
+
+    if (op === "ends_with") {
+      return { key, value: `%${cond.value != null ? cond.value : ""}` };
+    }
+
     return { key, value: cond.value != null ? cond.value : "" };
   };
 
@@ -453,6 +645,7 @@ async function getRulesPreview({
       customerId,
       ptrsId,
       transaction: t,
+      groupName,
     });
 
     // ------------------------------------------------------------------
@@ -466,6 +659,15 @@ async function getRulesPreview({
       crossRowRules.length
     ) {
       const rule = crossRowRules[0]; // MVP: preview the first cross-row rule
+      const helperRowRules = Array.isArray(rowRules)
+        ? rowRules.filter(
+            (r) =>
+              r &&
+              (r.type || "row") !== "crossRow" &&
+              Array.isArray(r.then) &&
+              r.then.some((a) => a && a.op === "concat_fields"),
+          )
+        : [];
 
       // Validate up-front (same semantics as apply/save)
       try {
@@ -482,6 +684,10 @@ async function getRulesPreview({
       const match0 = match[0] || {};
       const currentField = String(match0.currentField || "").trim();
       const targetField = String(match0.targetField || "").trim();
+      const targetSelection = String(rule?.target?.selection || "")
+        .trim()
+        .toLowerCase();
+      const requireTargetMatch = rule?.target?.requireMatch !== false;
 
       const action = rule.action || {};
       const op = String(action.op || "add").toLowerCase();
@@ -526,21 +732,55 @@ async function getRulesPreview({
         customerId: String(customerId),
         ptrsId: String(ptrsId),
       };
+      const helperProjectionSql = buildPreviewRowProjectionSql({
+        rules: helperRowRules,
+        sourceExpr: 's."data"',
+      });
 
-      for (const c of when) {
-        const frag = buildJsonbCond("c", c);
+      const baseRowsCteSql = helperProjectionSql
+        ? `
+base_rows AS (
+  SELECT
+    s."id",
+    s."rowNo",
+    ${helperProjectionSql} AS data,
+    s."meta",
+    s."updatedAt"
+  FROM "tbl_ptrs_stage_row" s
+  WHERE s."customerId" = :customerId
+    AND s."ptrsId" = :ptrsId
+    AND s."deletedAt" IS NULL
+),`
+        : `
+base_rows AS (
+  SELECT
+    s."id",
+    s."rowNo",
+    s."data",
+    s."meta",
+    s."updatedAt"
+  FROM "tbl_ptrs_stage_row" s
+  WHERE s."customerId" = :customerId
+    AND s."ptrsId" = :ptrsId
+    AND s."deletedAt" IS NULL
+),`;
+
+      for (const [idx, c] of when.entries()) {
+        const key = `w_curr_${idx}`;
+        const frag = buildJsonbCond("c", c, key);
         if (frag) {
           wherePartsCurr.push(frag);
-          const bind = bindValueFor(c);
+          const bind = bindValueFor(c, key);
           if (bind) replacements[bind.key] = bind.value;
         }
       }
 
-      for (const c of where) {
-        const frag = buildJsonbCond("t", c);
+      for (const [idx, c] of where.entries()) {
+        const key = `w_tgt_${idx}`;
+        const frag = buildJsonbCond("t", c, key);
         if (frag) {
           wherePartsTgt.push(frag);
-          const bind = bindValueFor(c);
+          const bind = bindValueFor(c, key);
           if (bind) replacements[bind.key] = bind.value;
         }
       }
@@ -571,14 +811,104 @@ async function getRulesPreview({
                   ? `curr.delta`
                   : `(${tgtAmtExpr} + curr.delta)`;
 
-      const sqlCount = `
-WITH curr AS (
+      const strictOpSql =
+        op === "add"
+          ? `(m.base_before + m.delta)`
+          : op === "sub"
+            ? `(m.base_before - m.delta)`
+            : op === "mul"
+              ? `(m.base_before * m.delta)`
+              : op === "div"
+                ? `CASE WHEN m.delta = 0 THEN m.base_before ELSE (m.base_before / m.delta) END`
+                : op === "assign"
+                  ? `m.delta`
+                  : `(m.base_before + m.delta)`;
+
+      const sqlCount =
+        targetSelection === "single_per_key"
+          ? `
+WITH ${baseRowsCteSql}
+curr AS (
   SELECT
     ${currKeyExpr} AS k,
     SUM(COALESCE(${currAmtExpr}, 0)) AS delta
-  FROM "tbl_ptrs_stage_row" c
-  WHERE c."customerId" = :customerId
-    AND c."ptrsId" = :ptrsId
+  FROM base_rows c
+  WHERE 1=1
+    ${currWhereSql}
+    AND COALESCE(${currKeyExpr}, '') <> ''
+  GROUP BY 1
+),
+eligible_targets AS (
+  SELECT
+    t."id",
+    t."rowNo",
+    t.data->>'document_type' AS document_type,
+    ${tgtKeyExpr} AS k,
+    COALESCE(${tgtAmtExpr}, 0) AS base_before,
+    t."updatedAt"
+  FROM base_rows t
+  WHERE 1=1
+    ${tgtWhereSql}
+    AND COALESCE(${tgtKeyExpr}, '') <> ''
+),
+matched AS (
+  SELECT
+    et."id",
+    et."rowNo",
+    et.document_type,
+    et.k,
+    et.base_before,
+    et."updatedAt",
+    curr.delta
+  FROM eligible_targets et
+  JOIN curr ON curr.k = et.k
+),
+target_counts AS (
+  SELECT
+    k,
+    COUNT(*)::int AS target_count
+  FROM matched
+  GROUP BY 1
+),
+impacted AS (
+  SELECT
+    m."id",
+    m."rowNo",
+    m.document_type,
+    m.k AS ref,
+    m.base_before,
+    m.delta AS expected_delta,
+    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be
+  FROM matched m
+  JOIN target_counts tc ON tc.k = m.k
+  WHERE tc.target_count = 1
+),
+ambiguous AS (
+  SELECT COUNT(*)::int AS count
+  FROM target_counts
+  WHERE target_count > 1
+),
+unmatched AS (
+  SELECT COUNT(*)::int AS count
+  FROM curr c
+  LEFT JOIN target_counts tc ON tc.k = c.k
+  WHERE tc.k IS NULL
+)
+SELECT
+  (SELECT COUNT(*)::int FROM impacted) AS count,
+  (SELECT COALESCE(SUM(target_count - 1), 0)::int FROM target_counts WHERE target_count > 1) AS ambiguousTargetRows,
+  (SELECT COALESCE(COUNT(*), 0)::int FROM target_counts WHERE target_count > 1) AS ambiguousKeys,
+  (SELECT count FROM unmatched) AS unmatchedKeys
+FROM ambiguous;
+`
+          : `
+WITH ${baseRowsCteSql}
+curr AS (
+  SELECT
+    ${currKeyExpr} AS k,
+    SUM(COALESCE(${currAmtExpr}, 0)) AS delta
+  FROM base_rows c
+  WHERE 1=1
     ${currWhereSql}
     AND COALESCE(${currKeyExpr}, '') <> ''
   GROUP BY 1
@@ -592,24 +922,91 @@ impacted AS (
     COALESCE(${tgtAmtExpr}, 0) AS base_before,
     curr.delta AS expected_delta,
     ROUND(${opSql}::numeric, ${dp}) AS would_be
-  FROM "tbl_ptrs_stage_row" t
+  FROM base_rows t
   JOIN curr ON curr.k = ${tgtKeyExpr}
-  WHERE t."customerId" = :customerId
-    AND t."ptrsId" = :ptrsId
+  WHERE 1=1
     ${tgtWhereSql}
 )
-SELECT COUNT(*)::int AS count
+SELECT
+  COUNT(*)::int AS count,
+  0::int AS "ambiguousTargetRows",
+  0::int AS "ambiguousKeys",
+  0::int AS "unmatchedKeys"
 FROM impacted;
 `;
 
-      const sqlExamples = `
-WITH curr AS (
+      const sqlExamples =
+        targetSelection === "single_per_key"
+          ? `
+WITH ${baseRowsCteSql}
+curr AS (
   SELECT
     ${currKeyExpr} AS k,
     SUM(COALESCE(${currAmtExpr}, 0)) AS delta
-  FROM "tbl_ptrs_stage_row" c
-  WHERE c."customerId" = :customerId
-    AND c."ptrsId" = :ptrsId
+  FROM base_rows c
+  WHERE 1=1
+    ${currWhereSql}
+    AND COALESCE(${currKeyExpr}, '') <> ''
+  GROUP BY 1
+),
+eligible_targets AS (
+  SELECT
+    t."id",
+    t."rowNo",
+    t.data->>'document_type' AS document_type,
+    ${tgtKeyExpr} AS k,
+    COALESCE(${tgtAmtExpr}, 0) AS base_before,
+    t."updatedAt"
+  FROM base_rows t
+  WHERE 1=1
+    ${tgtWhereSql}
+    AND COALESCE(${tgtKeyExpr}, '') <> ''
+),
+matched AS (
+  SELECT
+    et."id",
+    et."rowNo",
+    et.document_type,
+    et.k,
+    et.base_before,
+    et."updatedAt",
+    curr.delta
+  FROM eligible_targets et
+  JOIN curr ON curr.k = et.k
+),
+target_counts AS (
+  SELECT
+    k,
+    COUNT(*)::int AS target_count
+  FROM matched
+  GROUP BY 1
+),
+impacted AS (
+  SELECT
+    m."rowNo",
+    m.document_type,
+    m.k AS ref,
+    m.base_before,
+    m.delta AS expected_delta,
+    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be,
+    m."updatedAt"
+  FROM matched m
+  JOIN target_counts tc ON tc.k = m.k
+  WHERE tc.target_count = 1
+)
+SELECT *
+FROM impacted
+ORDER BY "updatedAt" DESC
+LIMIT 20;
+`
+          : `
+WITH ${baseRowsCteSql}
+curr AS (
+  SELECT
+    ${currKeyExpr} AS k,
+    SUM(COALESCE(${currAmtExpr}, 0)) AS delta
+  FROM base_rows c
+  WHERE 1=1
     ${currWhereSql}
     AND COALESCE(${currKeyExpr}, '') <> ''
   GROUP BY 1
@@ -623,10 +1020,9 @@ impacted AS (
     curr.delta AS expected_delta,
     ROUND(${opSql}::numeric, ${dp}) AS would_be,
     t."updatedAt"
-  FROM "tbl_ptrs_stage_row" t
+  FROM base_rows t
   JOIN curr ON curr.k = ${tgtKeyExpr}
-  WHERE t."customerId" = :customerId
-    AND t."ptrsId" = :ptrsId
+  WHERE 1=1
     ${tgtWhereSql}
 )
 SELECT *
@@ -635,7 +1031,14 @@ ORDER BY "updatedAt" DESC
 LIMIT 20;
 `;
 
-      const [{ count } = { count: 0 }] = await db.sequelize.query(sqlCount, {
+      const [
+        countRow = {
+          count: 0,
+          ambiguousTargetRows: 0,
+          ambiguousKeys: 0,
+          unmatchedKeys: 0,
+        },
+      ] = await db.sequelize.query(sqlCount, {
         transaction: t,
         replacements,
         type: db.sequelize.QueryTypes.SELECT,
@@ -653,14 +1056,27 @@ LIMIT 20;
         meta: {
           ptrsId,
           mode,
+          groupName,
           elapsedMs: Date.now() - started,
           isPartial: false,
+          helperRowRulesMaterialised: helperRowRules.length,
+          targetSelection: targetSelection || "first_match",
+          requireTargetMatch,
         },
         summary: {
           rulesTried: crossRowRules.length,
-          rowsAffected: Number(count || 0),
-          actions: Number(count || 0),
+          rowsAffected: Number(countRow?.count || 0),
+          actions: Number(countRow?.count || 0),
+          ambiguousTargetRows: Number(countRow?.ambiguousTargetRows || 0),
+          ambiguousKeys: Number(countRow?.ambiguousKeys || 0),
+          unmatchedKeys: Number(countRow?.unmatchedKeys || 0),
         },
+        warning:
+          targetSelection === "single_per_key" &&
+          requireTargetMatch &&
+          Number(countRow?.ambiguousKeys || 0) > 0
+            ? "Some matched keys have multiple eligible target rows and are excluded from strict preview results."
+            : null,
         headers: [],
         rows: [],
         byRule: {},
@@ -702,16 +1118,19 @@ LIMIT 20;
         ? rowResult.rows
         : baseRows;
 
+    const previewHeaders = mergePreviewHeadersFromRows(headers, previewRows);
+
     return {
       meta: {
         ptrsId,
         mode,
+        groupName,
         previewLimit: effectiveLimit,
         elapsedMs: Date.now() - started,
         isPartial: true,
       },
       summary,
-      headers,
+      headers: previewHeaders,
       rows: previewRows,
       byRule: {},
       examples: [],
@@ -747,6 +1166,10 @@ function applySandboxFilter(rows, { field, op, value }) {
         return s === val;
       case "neq":
         return s !== val;
+      case "starts_with":
+        return s.startsWith(val);
+      case "ends_with":
+        return s.endsWith(val);
       case "gt":
         return toNum(raw) > toNum(val);
       case "gte":
@@ -794,38 +1217,194 @@ async function sandboxRulesPreview({
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const effectiveLimit = Math.min(Number(limit) || 50, 500);
+  const SANDBOX_ROW_CAP = 10000;
+
+  const numExpr = (jsonbExpr) =>
+    `NULLIF(regexp_replace(${jsonbExpr}, '[^0-9\\.\\-]', '', 'g'), '')::numeric`;
+
+  const buildJsonbCond = (prefix, cond, key) => {
+    if (!cond || typeof cond !== "object") return null;
+    const field = String(cond.field || "").trim();
+    const op = String(cond.op || "").trim();
+    if (!field || !op) return null;
+
+    const expr = `${prefix}."data"->>'${field}'`;
+
+    switch (op) {
+      case "eq":
+        return `${expr} = :${key}`;
+      case "neq":
+        return `${expr} <> :${key}`;
+      case "starts_with":
+        return `${expr} LIKE :${key}`;
+      case "ends_with":
+        return `${expr} LIKE :${key}`;
+      case "in":
+        return `${expr} = ANY(:${key})`;
+      case "nin":
+        return `NOT (${expr} = ANY(:${key}))`;
+      case "gt":
+        return `${numExpr(expr)} > :${key}`;
+      case "gte":
+        return `${numExpr(expr)} >= :${key}`;
+      case "lt":
+        return `${numExpr(expr)} < :${key}`;
+      case "lte":
+        return `${numExpr(expr)} <= :${key}`;
+      case "is_null":
+        return `(${expr} IS NULL OR ${expr} = '')`;
+      case "not_null":
+        return `(${expr} IS NOT NULL AND ${expr} <> '')`;
+      default:
+        return null;
+    }
+  };
+
+  const bindValueFor = (cond, key) => {
+    const op = String(cond?.op || "").trim();
+
+    if (op === "in" || op === "nin") {
+      return {
+        key,
+        value: String(cond?.value || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+    }
+
+    if (op === "is_null" || op === "not_null") {
+      return null;
+    }
+
+    if (op === "starts_with") {
+      return { key, value: `${cond?.value != null ? cond.value : ""}%` };
+    }
+
+    if (op === "ends_with") {
+      return { key, value: `%${cond?.value != null ? cond.value : ""}` };
+    }
+
+    return { key, value: cond?.value != null ? cond.value : "" };
+  };
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Load staged rows from tbl_ptrs_stage_row as the canonical dataset
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId },
-      transaction: t,
-      raw: true,
+    const validFilters = Array.isArray(filters)
+      ? filters.filter((f) => {
+          const field = String(f?.field || "").trim();
+          const op = String(f?.op || "").trim();
+          if (!field || !op) return false;
+          if (op === "is_null" || op === "not_null") return true;
+          return String(f?.value ?? "").trim() !== "";
+        })
+      : [];
+
+    const whereParts = [
+      `s."customerId" = :customerId`,
+      `s."ptrsId" = :ptrsId`,
+      `s."deletedAt" IS NULL`,
+    ];
+
+    const replacements = {
+      customerId: String(customerId),
+      ptrsId: String(ptrsId),
+      sandboxRowCap: SANDBOX_ROW_CAP,
+      effectiveLimit,
+    };
+
+    validFilters.forEach((filter, idx) => {
+      const key = `sandbox_filter_${idx}`;
+      const frag = buildJsonbCond("s", filter, key);
+      if (frag) {
+        whereParts.push(frag);
+        const bind = bindValueFor(filter, key);
+        if (bind) {
+          replacements[bind.key] = bind.value;
+        }
+      }
     });
 
-    // Flatten JSONB data for preview; assume "data" holds the mapped row
-    const baseRows = (stageRows || []).map((r) => {
+    const whereSql = whereParts.join("\n        AND ");
+
+    const rowsSql = `
+      WITH filtered_rows AS (
+        SELECT
+          s."rowNo",
+          s."data"
+        FROM "tbl_ptrs_stage_row" s
+        WHERE ${whereSql}
+        ORDER BY s."rowNo" ASC
+        LIMIT :sandboxRowCap
+      )
+      SELECT
+        "rowNo",
+        "data"
+      FROM filtered_rows
+      ORDER BY "rowNo" ASC
+      LIMIT :effectiveLimit;
+    `;
+
+    const countSql = `
+      SELECT COUNT(*)::int AS count
+      FROM "tbl_ptrs_stage_row" s
+      WHERE ${whereSql};
+    `;
+
+    const headersSql = `
+      WITH filtered_rows AS (
+        SELECT s."data"
+        FROM "tbl_ptrs_stage_row" s
+        WHERE ${whereSql}
+        ORDER BY s."rowNo" ASC
+        LIMIT :sandboxRowCap
+      )
+      SELECT DISTINCT jsonb_object_keys("data") AS header
+      FROM filtered_rows
+      ORDER BY header;
+    `;
+
+    const stageRows = await db.sequelize.query(rowsSql, {
+      transaction: t,
+      replacements,
+      type: db.sequelize.QueryTypes.SELECT,
+    });
+
+    const [{ count: totalMatching = 0 } = { count: 0 }] =
+      await db.sequelize.query(countSql, {
+        transaction: t,
+        replacements,
+        type: db.sequelize.QueryTypes.SELECT,
+      });
+
+    const headerRows = await db.sequelize.query(headersSql, {
+      transaction: t,
+      replacements,
+      type: db.sequelize.QueryTypes.SELECT,
+    });
+
+    const limitedRows = (stageRows || []).map((r) => {
       const data =
         r && typeof r.data === "object" && r.data !== null ? r.data : {};
       return data;
     });
 
-    const filteredRows = applySandboxFilters(baseRows, filters);
-    const limitedRows = filteredRows.slice(0, effectiveLimit);
-
-    const headers = baseRows.length > 0 ? Object.keys(baseRows[0]) : [];
+    const headers = (headerRows || [])
+      .map((r) => String(r?.header || "").trim())
+      .filter(Boolean);
 
     slog.info(
       "PTRS v2 sandboxRulesPreview",
       safeMeta({
         customerId,
         ptrsId,
-        stageRows: stageRows.length,
-        filters: Array.isArray(filters) ? filters.length : 0,
-        totalMatching: filteredRows.length,
+        sampledStageRows: stageRows.length,
+        sandboxRowCap: SANDBOX_ROW_CAP,
+        filters: validFilters.length,
+        totalMatching: Number(totalMatching || 0),
         returned: limitedRows.length,
+        headersCount: headers.length,
       }),
     );
 
@@ -835,8 +1414,11 @@ async function sandboxRulesPreview({
       headers,
       rows: limitedRows,
       stats: {
-        totalMatching: filteredRows.length,
+        totalMatching: Number(totalMatching || 0),
         returned: limitedRows.length,
+        sampledStageRows: stageRows.length,
+        sandboxRowCap: SANDBOX_ROW_CAP,
+        headersCount: headers.length,
       },
     };
   } catch (err) {
@@ -884,10 +1466,9 @@ async function updateRulesOnly({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    // Blow away any existing rulesets for this run
-    await db.PtrsRuleset.destroy({
-      where: { customerId, ptrsId },
-      transaction: t,
+    const submittedGroupNames = collectSubmittedGroupNames({
+      rowRules,
+      crossRowRules,
     });
 
     const payloads = [];
@@ -930,6 +1511,30 @@ async function updateRulesOnly({
       }
     }
 
+    if (submittedGroupNames.length) {
+      const existingRulesets = await db.PtrsRuleset.findAll({
+        where: { customerId, ptrsId, deletedAt: null },
+        attributes: ["id", "definition"],
+        transaction: t,
+        raw: true,
+      });
+
+      const idsToDelete = (existingRulesets || [])
+        .filter((rs) => {
+          const groupName = String(rs?.definition?.groupName || "").trim();
+          return submittedGroupNames.includes(groupName);
+        })
+        .map((rs) => rs.id)
+        .filter(Boolean);
+
+      if (idsToDelete.length) {
+        await db.PtrsRuleset.destroy({
+          where: { id: idsToDelete },
+          transaction: t,
+        });
+      }
+    }
+
     if (payloads.length) {
       await db.PtrsRuleset.bulkCreate(payloads, {
         transaction: t,
@@ -941,6 +1546,7 @@ async function updateRulesOnly({
     await t.commit();
 
     return {
+      groupNames: collectSubmittedGroupNames({ rowRules, crossRowRules }),
       rowRules: Array.isArray(rowRules) ? rowRules : [],
       crossRowRules: Array.isArray(crossRowRules) ? crossRowRules : [],
     };
@@ -959,7 +1565,7 @@ async function getRules({ customerId, ptrsId }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
     const rulesets = await db.PtrsRuleset.findAll({
-      where: { customerId, ptrsId },
+      where: { customerId, ptrsId, deletedAt: null },
       transaction: t,
       raw: true,
     });
@@ -1005,7 +1611,7 @@ async function getRules({ customerId, ptrsId }) {
 async function getProfileRules({ customerId, profileId = null }) {
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
-    const where = { customerId };
+    const where = { customerId, deletedAt: null };
     if (profileId) where.profileId = profileId;
 
     const rulesets = await db.PtrsRuleset.findAll({
@@ -1041,13 +1647,14 @@ async function applyRulesAndPersist({
   ptrsId,
   profileId = null,
   limit = null, // null = process ALL rows for this ptrsId
+  groupName = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  // If limit is provided (for diagnostics), respect it with a sane cap.
-  // If null/undefined, we pass null through, which loadMappedRowsForPtrs
-  // interprets as "no limit" (full dataset).
+  // Current implementation applies rules in memory via loadMappedRowsForPtrs.
+  // That is acceptable only for explicitly limited diagnostic runs.
+  // Full dataset runs must use a SQL-based implementation instead.
   const effectiveLimit =
     limit == null || typeof limit === "undefined"
       ? null
@@ -1059,6 +1666,7 @@ async function applyRulesAndPersist({
     action: "PtrsV2RulesApplyStart",
     customerId,
     ptrsId,
+    groupName,
     requestedLimit: limit,
     effectiveLimit,
   });
@@ -1066,10 +1674,13 @@ async function applyRulesAndPersist({
   // 🔐 RLS-safe tenant-scoped transaction for reading import + writing stage
   const t = await beginTransactionWithCustomerContext(customerId);
 
-  // ------------------------------------------------------------
-  // SAFETY GUARD — prevent rules apply on enormous datasets
-  // ------------------------------------------------------------
-  const HARD_ROW_CAP = 500000;
+  // Load rules early so we can decide whether the run can stay in SQL.
+  const { rowRules, crossRowRules } = await loadRulesForPtrs({
+    customerId,
+    ptrsId,
+    transaction: t,
+    groupName,
+  });
 
   const totalRows = await db.PtrsImportRaw.count({
     where: { customerId, ptrsId },
@@ -1080,154 +1691,67 @@ async function applyRulesAndPersist({
     action: "PtrsV2RulesApplyRowCapCheck",
     customerId,
     ptrsId,
+    groupName,
     totalRows,
-    hardRowCap: HARD_ROW_CAP,
     effectiveLimit,
+    sqlImplementation: true,
+    rowRuleCount: Array.isArray(rowRules) ? rowRules.length : 0,
+    crossRowRuleCount: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
   });
 
-  // Only enforce the cap when NO explicit limit is provided.
-  // If a limit is passed, caller is intentionally working on a subset.
-  if (!effectiveLimit && totalRows > HARD_ROW_CAP) {
-    const err = new Error(
-      `PTRS v2 rules apply aborted: dataset has ${totalRows} rows which exceeds the safety limit of ${HARD_ROW_CAP}.`,
-    );
-    err.statusCode = 413; // FE-friendly soft-failure
-    throw err;
-  }
-  // ------------------------------------------------------------
-
   try {
-    // 1) Load row-level rules from tbl_ptrs_ruleset
-    // 1) Load rules (row + cross-row) from tbl_ptrs_ruleset
-    const { rowRules, crossRowRules } = await loadRulesForPtrs({
+    const rowStats = await applyRowRulesSql({
       customerId,
       ptrsId,
+      rules: rowRules,
       transaction: t,
-    });
-
-    // 2) Compose mapped rows (main import + joins)
-    const { rows: baseRows } = await loadMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      // null => no limit, process full dataset; otherwise use capped preview limit
       limit: effectiveLimit,
-      transaction: t,
     });
 
-    slog.info("PTRS v2 applyRulesAndPersist: composed base rows", {
-      action: "PtrsV2RulesApplyComposed",
+    const crossRowStats = await applyCrossRowRulesSql({
       customerId,
       ptrsId,
-      baseRowCount: Array.isArray(baseRows) ? baseRows.length : 0,
-      rowRules: Array.isArray(rowRules) ? rowRules.length : 0,
-      crossRowRules: Array.isArray(crossRowRules) ? crossRowRules.length : 0,
+      rules: crossRowRules,
+      transaction: t,
+      limit: effectiveLimit,
     });
 
-    // 3) Apply row rules first, then cross-row adjustments
-    const rowResult = applyRules(baseRows, rowRules);
-    const rulesResult = applyCrossRowRules(
-      rowResult.rows || baseRows,
-      crossRowRules,
-      rowResult.stats,
-    );
-
-    const rows = rulesResult.rows || baseRows;
-
-    // 4) Prepare payload for tbl_ptrs_stage_row (mirrors stagePtrs persist logic)
-    const basePayload = rows.map((r) => {
-      const rowNoVal = Number(r?.row_no ?? r?.rowNo ?? 0) || 0;
-      const dataObj =
-        r && typeof r === "object" && Object.keys(r).length
-          ? r
-          : { _warning: "⚠️ No mapped data for this row" };
-
-      return {
-        customerId: String(customerId),
-        ptrsId: String(ptrsId),
-        rowNo: rowNoVal,
-        data: dataObj,
-        errors: null,
-        standard: null,
-        custom: null,
-        meta: {
-          _stage: "ptrs.v2.rulesApply",
-          at: new Date().toISOString(),
-          profileId: profileId || null,
-          rules: {
-            applied: Array.isArray(r._appliedRules) ? r._appliedRules : [],
-            exclude: !!r.exclude,
-            // Captures baseline values used to keep cross-row rules idempotent.
-            // Safe to omit when not present.
-            baseline:
-              r && typeof r === "object" && r._rulesBaseline
-                ? r._rulesBaseline
-                : null,
-          },
-        },
-      };
-    });
-
-    const isEmptyPlain = (v) =>
-      v &&
-      typeof v === "object" &&
-      !Array.isArray(v) &&
-      Object.keys(v).length === 0;
-
-    const insertWarning = (obj) => {
-      if (!obj || typeof obj !== "object") return obj;
-      for (const key of ["data", "errors", "standard", "custom", "meta"]) {
-        if (isEmptyPlain(obj[key])) {
-          obj[key] = {
-            _warning: "⚠️ Empty JSONB payload — nothing to insert",
-          };
-        }
-        if (typeof obj[key] === "undefined") {
-          obj[key] = null;
-        }
-      }
-      return obj;
+    const combinedStats = {
+      rulesTried:
+        Number(rowStats?.rulesTried ?? 0) +
+        Number(crossRowStats?.rulesTried ?? 0),
+      rowsAffected:
+        Number(rowStats?.rowsAffected ?? 0) +
+        Number(crossRowStats?.rowsAffected ?? 0),
+      actions:
+        Number(rowStats?.actions ?? 0) + Number(crossRowStats?.actions ?? 0),
+      currentExcluded:
+        Number(rowStats?.currentExcluded ?? 0) +
+        Number(crossRowStats?.currentExcluded ?? 0),
     };
 
-    const safePayload = basePayload.map(insertWarning);
-
-    slog.info("PTRS v2 applyRulesAndPersist: preparing to insert", {
-      action: "PtrsV2RulesApplyPersist",
-      customerId,
-      ptrsId,
-      batchSize: safePayload.length,
-      sampleRow: safeMeta(safePayload[0] || {}),
-    });
-
-    // 5) Clear previous stage rows for this run, then bulk insert
-    await db.PtrsStageRow.destroy({
-      where: { customerId, ptrsId },
-      transaction: t,
-    });
-
-    if (safePayload.length) {
-      await db.PtrsStageRow.bulkCreate(safePayload, {
-        validate: false,
-        returning: false,
-        transaction: t,
-      });
-    }
-
     const tookMs = Date.now() - started;
-
     await t.commit();
 
-    slog.info("PTRS v2 applyRulesAndPersist: done", {
-      action: "PtrsV2RulesApplyDone",
+    slog.info("PTRS v2 applyRulesAndPersist: SQL path done", {
+      action: "PtrsV2RulesApplySqlDone",
       customerId,
       ptrsId,
-      persisted: safePayload.length,
       tookMs,
+      rowStats,
+      crossRowStats,
+      combinedStats,
     });
 
     return {
-      persisted: safePayload.length,
+      groupName,
+      persisted: combinedStats.rowsAffected,
       tookMs,
-      stats: { rules: rulesResult.stats || null },
+      stats: {
+        rowRules: rowStats,
+        crossRowRules: crossRowStats,
+        rules: combinedStats,
+      },
     };
   } catch (err) {
     if (!t.finished) {

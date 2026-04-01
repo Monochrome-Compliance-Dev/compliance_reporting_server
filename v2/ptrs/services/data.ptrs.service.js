@@ -7,11 +7,7 @@ const fs = require("fs");
 const { Worker } = require("worker_threads");
 
 const { logger } = require("@/helpers/logger");
-const {
-  normalizeJoinKeyValue,
-  toSnake,
-  importDatasetCsvStreamToImportRaw,
-} = require("./ptrs.service");
+
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
@@ -26,6 +22,9 @@ module.exports = {
   importPaymentTermChangesFromDataset,
   listPaymentTermChanges,
   upsertMainDatasetFromRaw,
+  emitCsvUploadStatus,
+  importCsvStream,
+  importDatasetCsvStreamToImportRaw,
 };
 
 const PAYMENT_TERM_CHANGE_ROLES = new Set([
@@ -54,6 +53,21 @@ function isPaymentTermChangeRole(role) {
   return compact.includes("term") && compact.includes("change");
 }
 
+function emitCsvUploadStatus(ptrsId, payload) {
+  try {
+    const io = global.__socketio;
+    if (!io || !ptrsId) return;
+
+    io.to(`ptrs:${ptrsId}`).emit("ptrs:csvUploadStatus", {
+      ptrsId,
+      ...payload,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (_) {
+    // Never break ingest due to websocket failure
+  }
+}
+
 function modelHasField(model, field) {
   try {
     return Boolean(model?.rawAttributes && model.rawAttributes[field]);
@@ -72,6 +86,547 @@ function pickModelFields(model, candidate) {
   return out;
 }
 
+async function importDatasetCsvStreamToImportRaw({
+  customerId,
+  ptrsId,
+  datasetId,
+  role = null,
+  stream,
+  sourceType = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+  if (!stream) throw new Error("stream is required");
+
+  // Buffer once so we can safely read/repair header row.
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV splitter for the header line
+  const splitCsvHeaderLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < String(line || "").length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const rawHeaders = splitCsvHeaderLine(headerLine).map((s) =>
+    String(s || "").trim(),
+  );
+  if (!rawHeaders.length || rawHeaders.every((h) => h === "")) {
+    const e = new Error("CSV appears to have no header row");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  // Deduplicate/repair headers
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
+
+  const totalRows = await countCsvRowsFromBufferedText(text, headersArray);
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  emitCsvUploadStatus(ptrsId, {
+    customerId,
+    datasetId,
+    role,
+    sourceType,
+    status: "uploading",
+    rowsInserted: 0,
+    totalRows,
+  });
+
+  let rowNo = 0;
+  let rowsInserted = 0;
+  const BATCH_SIZE = 1000;
+  const batch = [];
+
+  const fixedStream = Readable.from(text);
+
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      await db.PtrsImportRaw.bulkCreate(batch, {
+        validate: false,
+        transaction: t,
+      });
+      rowsInserted += batch.length;
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId,
+        role,
+        sourceType,
+        status: "uploading",
+        rowsInserted,
+        totalRows,
+      });
+    } finally {
+      batch.length = 0;
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const handleFatal = (err) => {
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId,
+        role,
+        sourceType,
+        status: "failed",
+        rowsInserted,
+        totalRows,
+        error: err?.message || "CSV import failed",
+      });
+      (t.finished ? Promise.resolve() : t.rollback())
+        .catch(() => {})
+        .finally(() => reject(err));
+    };
+
+    const parser = csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+        skipLines: 1,
+        discardUnmappedColumns: true,
+      })
+      .on("error", (err) => handleFatal(err))
+      .on("data", (row) => {
+        rowNo += 1;
+        batch.push({
+          customerId,
+          ptrsId,
+          datasetId,
+          rowNo,
+          data: row,
+          errors: null,
+        });
+
+        if (batch.length >= BATCH_SIZE) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch((err) => handleFatal(err));
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
+
+          emitCsvUploadStatus(ptrsId, {
+            customerId,
+            datasetId,
+            role,
+            sourceType,
+            status: "complete",
+            rowsInserted,
+            totalRows,
+          });
+
+          // Update dataset stats/meta, but DO NOT touch PtrsUpload here.
+          const ds = await db.PtrsDataset.findOne({
+            where: { id: datasetId, customerId, ptrsId },
+            transaction: t,
+          });
+
+          if (ds) {
+            const currentMeta = ds.get("meta") || {};
+            await ds.update(
+              {
+                rowsCount: rowsInserted,
+                meta: {
+                  ...currentMeta,
+                  headers: headersArray,
+                  rowsCount: rowsInserted,
+                  sourceType: sourceType || ds.get("sourceType") || null,
+                  importedToRawAt: new Date().toISOString(),
+                  role: role || ds.get("role") || null,
+                },
+              },
+              { transaction: t },
+            );
+          }
+
+          await t.commit();
+
+          logger?.info?.("PTRS v2 importDatasetCsvStreamToImportRaw: done", {
+            action: "PtrsV2ImportDatasetToRaw",
+            customerId,
+            ptrsId,
+            datasetId,
+            role: role || null,
+            rowsInserted,
+          });
+
+          resolve({ ok: true, rowsInserted, headers: headersArray });
+        } catch (e) {
+          handleFatal(e);
+        }
+      });
+
+    try {
+      fixedStream.pipe(parser);
+    } catch (e) {
+      handleFatal(e);
+    }
+  });
+}
+
+// Helper: derive headers from ImportRaw rows for main dataset
+async function deriveMainDatasetHeadersFromImportRaw({
+  customerId,
+  ptrsId,
+  transaction,
+  sampleLimit = 200,
+}) {
+  const items = await db.PtrsImportRaw.findAll({
+    where: { customerId, ptrsId },
+    order: [["rowNo", "ASC"]],
+    limit: Math.min(Math.max(Number(sampleLimit) || 200, 1), 1000),
+    raw: true,
+    transaction,
+  });
+
+  const headerSet = new Set();
+  for (const item of items || []) {
+    const row =
+      item?.data || item?.payload || item?.rawPayload || item?.raw || {};
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    for (const key of Object.keys(row)) {
+      if (key != null && String(key).trim() !== "") {
+        headerSet.add(String(key));
+      }
+    }
+  }
+
+  return Array.from(headerSet.values());
+}
+
+/**
+ * Stream a CSV into tbl_ptrs_import_raw as JSONB rows
+ * - stream: Readable of CSV
+ * - returns rowsInserted (int)
+ */
+async function importCsvStream({
+  customerId,
+  ptrsId,
+  stream,
+  fileMeta = null,
+  datasetId = null,
+  sourceType = null,
+}) {
+  console.log("PTRS v2 importCsvStream: begin", {
+    action: "PtrsV2ImportCsvStream",
+    customerId,
+    ptrsId,
+    fileMeta,
+    stream,
+  });
+  let rowNo = 0;
+  let rowsInserted = 0;
+
+  const BATCH_SIZE = 1000;
+  const batch = [];
+
+  // Buffer once so we can synthesise headers
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  let text = chunks.join("");
+  text = text.replace(/^\uFEFF/, ""); // strip BOM
+  text = text.replace(/^\s*[\r\n]+/, ""); // strip leading blank lines
+
+  // First line = header
+  const firstNewlineIdx = text.search(/\r?\n/);
+  const headerLine =
+    firstNewlineIdx >= 0 ? text.slice(0, firstNewlineIdx) : text;
+
+  // Minimal CSV splitter for one line
+  const splitCsvLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === "," && !inQuotes) {
+        out.push(cur);
+        cur = "";
+      } else if ((ch === "\r" || ch === "\n") && !inQuotes) {
+        /* ignore */
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur);
+    return out;
+  };
+
+  const rawHeaders = splitCsvLine(headerLine).map((s) =>
+    String(s || "").trim(),
+  );
+  if (!rawHeaders.length) {
+    const err = new Error("CSV appears to have no header row");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Synthesize blanks + dedupe
+  const seen = new Map();
+  const headersArray = rawHeaders.map((h, i) => {
+    const label = h && h.length ? h : `column_${i + 1}`;
+    const n = (seen.get(label) || 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label}_${n}`;
+  });
+
+  const totalRows = await countCsvRowsFromBufferedText(text, headersArray);
+
+  // Ensure there is a dataset row for this main upload so we can scope raw rows.
+  // If caller provided datasetId, we trust it (strictly) and do not attempt to infer.
+  let effectiveDatasetId = datasetId || null;
+
+  // Begin a customer-scoped transaction for all DB writes (RLS-safe)
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  emitCsvUploadStatus(ptrsId, {
+    customerId,
+    datasetId: effectiveDatasetId,
+    sourceType,
+    status: "uploading",
+    rowsInserted: 0,
+    totalRows,
+  });
+
+  try {
+    if (!effectiveDatasetId) {
+      const originalName = fileMeta?.originalName || null;
+      const displayName = originalName || "Main input";
+
+      const ds = await db.PtrsDataset.create(
+        {
+          customerId,
+          ptrsId,
+          role: "main",
+          sourceType: sourceType || "csv",
+          fileName: displayName,
+          storageRef: null,
+          rowsCount: null,
+          status: "uploaded",
+          meta: {
+            headers: headersArray,
+            source: "csv",
+            originalName,
+          },
+          createdBy: null,
+          updatedBy: null,
+        },
+        { transaction: t },
+      );
+
+      effectiveDatasetId = ds.id;
+    }
+  } catch (e) {
+    // If we fail to create a dataset row, abort loudly.
+    await t.rollback().catch(() => {});
+    throw e;
+  }
+
+  const fixedStream = Readable.from(text);
+
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      await db.PtrsImportRaw.bulkCreate(batch, {
+        validate: false,
+        transaction: t,
+      });
+      rowsInserted += batch.length;
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId: effectiveDatasetId,
+        sourceType,
+        status: "uploading",
+        rowsInserted,
+        totalRows,
+      });
+    } finally {
+      batch.length = 0;
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const handleFatal = (err) => {
+      emitCsvUploadStatus(ptrsId, {
+        customerId,
+        datasetId: effectiveDatasetId,
+        sourceType,
+        status: "failed",
+        rowsInserted,
+        totalRows,
+        error: err?.message || "CSV import failed",
+      });
+      // Ensure we rollback the transaction on any fatal error
+      (t.finished ? Promise.resolve() : t.rollback())
+        .catch(() => {})
+        .finally(() => {
+          reject(err);
+        });
+    };
+
+    const parser = csv
+      .parse({
+        headers: headersArray,
+        renameHeaders: false,
+        ignoreEmpty: true,
+        trim: true,
+        strictColumnHandling: false,
+        skipLines: 1, // skip original header row
+        discardUnmappedColumns: true,
+      })
+      .on("error", (err) => {
+        handleFatal(err);
+      })
+      .on("data", (row) => {
+        rowNo += 1;
+        batch.push({
+          customerId,
+          ptrsId,
+          datasetId: effectiveDatasetId,
+          rowNo,
+          data: row,
+          errors: null,
+        });
+        if (batch.length >= BATCH_SIZE) {
+          parser.pause();
+          flush()
+            .then(() => parser.resume())
+            .catch((err) => handleFatal(err));
+        }
+      })
+      .on("end", async () => {
+        try {
+          await flush();
+
+          // Ensure there is a PtrsUpload record for this run, and update its status/row count.
+          const uploadWhere = { customerId, ptrsId };
+          const defaults = {
+            customerId,
+            ptrsId,
+            originalName: fileMeta?.originalName || null,
+            mimeType: fileMeta?.mimeType || null,
+            sizeBytes: fileMeta?.sizeBytes ?? null,
+            storagePath: uploadWhere.storagePath || null,
+          };
+
+          console.log("About to findOrCreate PtrsUpload");
+          const [upload, created] = await db.PtrsUpload.findOrCreate({
+            where: uploadWhere,
+            defaults,
+            transaction: t,
+          });
+
+          if (!created) {
+            const updatePayload = {
+              status: "Ingested",
+              rowCount: rowsInserted,
+              originalName: fileMeta?.originalName || null,
+              mimeType: fileMeta?.mimeType || null,
+              sizeBytes: fileMeta?.sizeBytes ?? null,
+            };
+            await upload.update(updatePayload, { transaction: t });
+          }
+
+          // Update dataset row stats for the main upload
+          if (effectiveDatasetId) {
+            const ds = await db.PtrsDataset.findOne({
+              where: { id: effectiveDatasetId, customerId, ptrsId },
+              transaction: t,
+            });
+            if (ds) {
+              const currentMeta = ds.get("meta") || {};
+              await ds.update(
+                {
+                  rowsCount: rowsInserted,
+                  meta: {
+                    ...currentMeta,
+                    headers: headersArray,
+                    rowsCount: rowsInserted,
+                    updatedAt: new Date().toISOString(),
+                  },
+                },
+                { transaction: t },
+              );
+            }
+          }
+
+          emitCsvUploadStatus(ptrsId, {
+            customerId,
+            datasetId: effectiveDatasetId,
+            sourceType,
+            status: "complete",
+            rowsInserted,
+            totalRows,
+          });
+          await t.commit();
+          resolve(rowsInserted);
+        } catch (e) {
+          handleFatal(e);
+        }
+      });
+
+    try {
+      fixedStream.pipe(parser);
+    } catch (e) {
+      handleFatal(e);
+    }
+  });
+}
+
 /**
  * Ensure a PTRS run has a \"main\" dataset row in tbl_ptrs_dataset when raw rows exist.
  * This is required for the standard Step 2 FE flow (datasets list) to work for non-file ingests like Xero.
@@ -87,6 +642,30 @@ async function upsertMainDatasetFromRaw({
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+
+  const debugStack = (() => {
+    try {
+      return new Error().stack
+        ?.split("\n")
+        .slice(1, 7)
+        .map((s) => s.trim())
+        .join(" | ");
+    } catch {
+      return null;
+    }
+  })();
+
+  logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: start", {
+    action: "PtrsV2UpsertMainDatasetFromRawStart",
+    customerId,
+    ptrsId,
+    source,
+    userId: userId || null,
+    ownsTxn: !transaction,
+    hasExternalTransaction: Boolean(transaction),
+    metaKeys: Object.keys(meta || {}),
+    stack: debugStack,
+  });
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
@@ -114,7 +693,27 @@ async function upsertMainDatasetFromRaw({
       transaction: t,
     });
 
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: raw count resolved", {
+      action: "PtrsV2UpsertMainDatasetFromRawRawCount",
+      customerId,
+      ptrsId,
+      source,
+      rawCount,
+      ownsTxn,
+    });
+
     if (!rawCount || rawCount <= 0) {
+      logger?.warn?.(
+        "PTRS v2 upsertMainDatasetFromRaw: no raw rows, skipping",
+        {
+          action: "PtrsV2UpsertMainDatasetFromRawNoRawRows",
+          customerId,
+          ptrsId,
+          source,
+          rawCount,
+          ownsTxn,
+        },
+      );
       if (ownsTxn) await t.commit();
       return { ok: true, rowsCount: 0, dataset: null };
     }
@@ -126,10 +725,17 @@ async function upsertMainDatasetFromRaw({
           ? "CSV upload"
           : "Main input";
 
+    const derivedHeaders = await deriveMainDatasetHeadersFromImportRaw({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
+
     const candidate = {
       customerId,
       ptrsId,
       role: "main",
+      sourceType: source === "xero" ? "xero" : source === "csv" ? "csv" : null,
       // PtrsDataset.fileName is NOT NULL. For non-file ingests (e.g. Xero), we still need a label.
       fileName: displayName,
       storageRef: null,
@@ -138,6 +744,7 @@ async function upsertMainDatasetFromRaw({
       meta: {
         ...(meta || {}),
         source,
+        headers: derivedHeaders,
         rowsCount: rawCount,
         displayName,
         updatedAt: new Date().toISOString(),
@@ -150,37 +757,216 @@ async function upsertMainDatasetFromRaw({
 
     // De-dupe: only one synthetic "main" dataset should exist for a PTRS run.
     // If multiple exist (e.g. legacy code paths), keep the newest and remove the rest.
+    const dsWhere = {
+      customerId,
+      ptrsId,
+      role: "main",
+      ...(db.PtrsDataset?.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+    };
+
     const existingRows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId, role: "main" },
+      where: dsWhere,
       order: [["createdAt", "DESC"]],
       transaction: t,
       raw: false,
     });
 
-    const canonical =
-      Array.isArray(existingRows) && existingRows.length
-        ? existingRows[0]
-        : null;
+    logger?.warn?.(
+      "PTRS v2 upsertMainDatasetFromRaw: existing main dataset rows",
+      {
+        action: "PtrsV2UpsertMainDatasetFromRawExistingRows",
+        customerId,
+        ptrsId,
+        source,
+        existingCount: Array.isArray(existingRows) ? existingRows.length : 0,
+        existingRows: (existingRows || []).map((r) => ({
+          id: r?.id,
+          role: r?.role,
+          sourceType: r?.sourceType || null,
+          fileName: r?.fileName || null,
+          createdAt: r?.createdAt || null,
+          updatedAt: r?.updatedAt || null,
+          deletedAt: r?.deletedAt || null,
+          meta: {
+            source: r?.meta?.source || null,
+            importRunId: r?.meta?.importRunId || null,
+            createdFrom: r?.meta?.createdFrom || null,
+            updatedAt: r?.meta?.updatedAt || null,
+            rowsCount: r?.meta?.rowsCount || null,
+          },
+        })),
+      },
+    );
 
-    // Best-effort cleanup of duplicates.
+    // Pick canonical "main" dataset safely.
+    // Prefer the dataset that is actually referenced by tbl_ptrs_import_raw rows.
+    // This prevents deleting the real dataset and leaving raw rows orphaned.
+    const existingIds = (existingRows || []).map((r) => r?.id).filter(Boolean);
+
+    // Count raw rows per datasetId for these candidates
+    const rawCounts = new Map();
+    if (existingIds.length) {
+      const rawAgg = await db.PtrsImportRaw.findAll({
+        attributes: [
+          "datasetId",
+          [db.sequelize.fn("COUNT", db.sequelize.col("id")), "cnt"],
+        ],
+        where: {
+          customerId,
+          ptrsId,
+          datasetId: existingIds,
+        },
+        group: ["datasetId"],
+        transaction: t,
+        raw: true,
+      });
+
+      for (const r of rawAgg || []) {
+        const did = r?.datasetId;
+        const c = Number(r?.cnt || 0);
+        if (did) rawCounts.set(did, Number.isFinite(c) ? c : 0);
+      }
+      logger?.warn?.(
+        "PTRS v2 upsertMainDatasetFromRaw: raw row counts by dataset",
+        {
+          action: "PtrsV2UpsertMainDatasetFromRawRawCountsByDataset",
+          customerId,
+          ptrsId,
+          source,
+          existingIds,
+          rawCounts: Array.from(rawCounts.entries()).map(
+            ([datasetId, count]) => ({
+              datasetId,
+              count,
+            }),
+          ),
+        },
+      );
+    }
+
+    const getScore = (row) => {
+      const id = row?.id;
+      const cnt = rawCounts.get(id) || 0;
+      // Secondary preference: rows with an importRunId / createdFrom marker.
+      const meta = row?.meta || {};
+      const hasImportRun = Boolean(meta?.importRunId || meta?.createdFrom);
+      const importBoost = hasImportRun ? 1 : 0;
+      // Newest wins only as a last tie-break.
+      const createdAtMs = row?.createdAt
+        ? new Date(row.createdAt).getTime()
+        : 0;
+      return { cnt, importBoost, createdAtMs };
+    };
+
+    let canonical = null;
+    if (Array.isArray(existingRows) && existingRows.length) {
+      canonical = existingRows.slice().sort((a, b) => {
+        const sa = getScore(a);
+        const sb = getScore(b);
+        if (sb.cnt !== sa.cnt) return sb.cnt - sa.cnt;
+        if (sb.importBoost !== sa.importBoost)
+          return sb.importBoost - sa.importBoost;
+        return sb.createdAtMs - sa.createdAtMs;
+      })[0];
+    }
+
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: canonical selection", {
+      action: "PtrsV2UpsertMainDatasetFromRawCanonicalSelection",
+      customerId,
+      ptrsId,
+      source,
+      canonicalId: canonical?.id || null,
+      canonicalScore: canonical ? getScore(canonical) : null,
+      scoredRows: (existingRows || []).map((r) => ({
+        id: r?.id,
+        score: getScore(r),
+      })),
+    });
+
+    // Best-effort cleanup of duplicates:
+    // only delete rows that are NOT canonical and have zero raw rows.
     if (Array.isArray(existingRows) && existingRows.length > 1) {
-      for (const dup of existingRows.slice(1)) {
+      for (const dup of existingRows) {
+        if (!dup || dup.id === canonical?.id) continue;
+        const cnt = rawCounts.get(dup.id) || 0;
+        if (cnt > 0) {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: duplicate retained because raw rows reference it",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDuplicateRetained",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              rawRowCount: cnt,
+            },
+          );
+          continue; // never delete a row that owns raw data
+        }
         try {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: deleting duplicate dataset row",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDeleteDuplicate",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              rawRowCount: cnt,
+            },
+          );
           await dup.destroy({ transaction: t });
-        } catch (_) {
+        } catch (cleanupErr) {
+          logger?.warn?.(
+            "PTRS v2 upsertMainDatasetFromRaw: failed to delete duplicate dataset row",
+            {
+              action: "PtrsV2UpsertMainDatasetFromRawDeleteDuplicateFailed",
+              customerId,
+              ptrsId,
+              duplicateId: dup?.id,
+              canonicalId: canonical?.id || null,
+              error: cleanupErr?.message || null,
+            },
+          );
           // never fail the request due to cleanup
         }
       }
     }
 
     let saved;
+    let writeMode = null;
     if (canonical) {
+      writeMode = "update";
       saved = await canonical.update(rowToWrite, { transaction: t });
     } else {
+      writeMode = "create";
       saved = await db.PtrsDataset.create(rowToWrite, { transaction: t });
     }
 
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: write completed", {
+      action: "PtrsV2UpsertMainDatasetFromRawWriteCompleted",
+      customerId,
+      ptrsId,
+      source,
+      writeMode,
+      datasetId: saved?.id || null,
+      rowsCount: rawCount,
+      fileName: rowToWrite?.fileName || null,
+      sourceType: rowToWrite?.sourceType || null,
+      headersCount: Array.isArray(derivedHeaders) ? derivedHeaders.length : 0,
+    });
+
     if (ownsTxn) await t.commit();
+
+    logger?.warn?.("PTRS v2 upsertMainDatasetFromRaw: success", {
+      action: "PtrsV2UpsertMainDatasetFromRawSuccess",
+      customerId,
+      ptrsId,
+      source,
+      datasetId: saved?.id || null,
+      rowsCount: rawCount,
+      ownsTxn,
+    });
 
     return {
       ok: true,
@@ -193,6 +979,15 @@ async function upsertMainDatasetFromRaw({
         await t.rollback();
       } catch (_) {}
     }
+    logger?.error?.("PTRS v2 upsertMainDatasetFromRaw: failed", {
+      action: "PtrsV2UpsertMainDatasetFromRawFailed",
+      customerId,
+      ptrsId,
+      source,
+      ownsTxn,
+      error: err?.message || String(err),
+      stack: err?.stack || null,
+    });
     throw err;
   }
 }
@@ -690,11 +1485,39 @@ async function listDatasets({ customerId, ptrsId }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const where = {
+      customerId,
+      ptrsId,
+      ...(db.PtrsDataset?.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
+    };
+
     const rows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId },
+      where,
       order: [["createdAt", "DESC"]],
       raw: true,
       transaction: t,
+    });
+
+    logger?.warn?.("PTRS v2 listDatasets: initial rows loaded", {
+      action: "PtrsV2ListDatasetsInitialRows",
+      customerId,
+      ptrsId,
+      rowCount: Array.isArray(rows) ? rows.length : 0,
+      rows: (rows || []).map((r) => ({
+        id: r?.id,
+        role: r?.role,
+        sourceType: r?.sourceType || null,
+        fileName: r?.fileName || null,
+        createdAt: r?.createdAt || null,
+        updatedAt: r?.updatedAt || null,
+        deletedAt: r?.deletedAt || null,
+        meta: {
+          source: r?.meta?.source || null,
+          importRunId: r?.meta?.importRunId || null,
+          createdFrom: r?.meta?.createdFrom || null,
+          rowsCount: r?.meta?.rowsCount || null,
+        },
+      })),
     });
 
     // Safety: if we ever end up with multiple "main" datasets (from older code paths),
@@ -719,7 +1542,7 @@ async function listDatasets({ customerId, ptrsId }) {
 
       // Refresh list after cleanup.
       const refreshed = await db.PtrsDataset.findAll({
-        where: { customerId, ptrsId },
+        where,
         order: [["createdAt", "DESC"]],
         raw: true,
         transaction: t,
@@ -727,6 +1550,25 @@ async function listDatasets({ customerId, ptrsId }) {
 
       rows.length = 0;
       rows.push(...refreshed);
+
+      logger?.warn?.(
+        "PTRS v2 listDatasets: rows after duplicate-main refresh",
+        {
+          action: "PtrsV2ListDatasetsRowsAfterRefresh",
+          customerId,
+          ptrsId,
+          rowCount: Array.isArray(rows) ? rows.length : 0,
+          rows: (rows || []).map((r) => ({
+            id: r?.id,
+            role: r?.role,
+            sourceType: r?.sourceType || null,
+            fileName: r?.fileName || null,
+            createdAt: r?.createdAt || null,
+            updatedAt: r?.updatedAt || null,
+            deletedAt: r?.deletedAt || null,
+          })),
+        },
+      );
     }
 
     const hasMain = rows.some((r) => {
@@ -738,9 +1580,21 @@ async function listDatasets({ customerId, ptrsId }) {
       );
     });
 
+    logger?.warn?.("PTRS v2 listDatasets: main dataset presence evaluated", {
+      action: "PtrsV2ListDatasetsHasMainEvaluated",
+      customerId,
+      ptrsId,
+      hasMain,
+    });
+
     if (!hasMain) {
       // Only `upsertMainDatasetFromRaw` is allowed to create the synthetic "main" dataset.
       // Keep it inside this transaction to avoid extra round trips and to preserve RLS context.
+      logger?.warn?.("PTRS v2 listDatasets: ensuring main dataset exists", {
+        action: "PtrsV2ListDatasetsEnsuringMainDataset",
+        customerId,
+        ptrsId,
+      });
       const ensured = await upsertMainDatasetFromRaw({
         customerId,
         ptrsId,
@@ -753,7 +1607,7 @@ async function listDatasets({ customerId, ptrsId }) {
       if (ensured?.dataset) {
         // Refresh list so FE sees it immediately
         const refreshed = await db.PtrsDataset.findAll({
-          where: { customerId, ptrsId },
+          where,
           order: [["createdAt", "DESC"]],
           raw: true,
           transaction: t,
@@ -761,6 +1615,22 @@ async function listDatasets({ customerId, ptrsId }) {
 
         rows.length = 0;
         rows.push(...refreshed);
+        logger?.warn?.("PTRS v2 listDatasets: rows after ensure-main refresh", {
+          action: "PtrsV2ListDatasetsRowsAfterEnsureMain",
+          customerId,
+          ptrsId,
+          ensuredDatasetId: ensured?.dataset?.id || null,
+          rowCount: Array.isArray(rows) ? rows.length : 0,
+          rows: (rows || []).map((r) => ({
+            id: r?.id,
+            role: r?.role,
+            sourceType: r?.sourceType || null,
+            fileName: r?.fileName || null,
+            createdAt: r?.createdAt || null,
+            updatedAt: r?.updatedAt || null,
+            deletedAt: r?.deletedAt || null,
+          })),
+        });
       }
     }
 
@@ -1580,4 +2450,82 @@ async function importPaymentTermChangesFromDataset({
     });
     throw err;
   }
+}
+
+function toSnake(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/^_+|_+$/g, "")
+    .replace(/_{2,}/g, "_");
+}
+
+function applyJoinTransform(value, transform) {
+  const v = value == null ? "" : String(value);
+
+  const op =
+    transform && typeof transform === "object"
+      ? String(transform.op || "")
+      : "";
+  const arg =
+    transform && typeof transform === "object" ? transform.arg : undefined;
+
+  if (!op || op === "trim_upper") return v.trim().toUpperCase();
+
+  switch (op) {
+    case "digits_only":
+      return v.replace(/[^0-9]/g, "");
+    case "remove_spaces_punct":
+      return v
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .trim()
+        .toUpperCase();
+    case "strip_prefix": {
+      const p = arg == null ? "" : String(arg);
+      if (!p) return v.trim().toUpperCase();
+      const t = v.trim();
+      return t.startsWith(p)
+        ? t.slice(p.length).trim().toUpperCase()
+        : t.toUpperCase();
+    }
+    case "lpad": {
+      const len = Number(arg);
+      const t = v.trim();
+      if (!Number.isFinite(len) || len <= 0) return t.toUpperCase();
+      return t.padStart(len, "0").toUpperCase();
+    }
+    default:
+      return v.trim().toUpperCase();
+  }
+}
+
+function normalizeJoinKeyValue(v, transform = null) {
+  return applyJoinTransform(v, transform);
+}
+
+async function countCsvRowsFromBufferedText(text, headersArray) {
+  const fixedStream = Readable.from(text);
+  return new Promise((resolve, reject) => {
+    let count = 0;
+
+    fixedStream
+      .pipe(
+        csv.parse({
+          headers: headersArray,
+          renameHeaders: false,
+          ignoreEmpty: true,
+          trim: true,
+          strictColumnHandling: false,
+          skipLines: 1,
+          discardUnmappedColumns: true,
+        }),
+      )
+      .on("error", (err) => reject(err))
+      .on("data", () => {
+        count += 1;
+      })
+      .on("end", () => resolve(count));
+  });
 }

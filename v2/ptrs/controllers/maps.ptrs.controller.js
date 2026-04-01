@@ -3,13 +3,14 @@ const { logger } = require("@/helpers/logger");
 const { safeLog } = require("@/v2/ptrs/controllers/ptrs.controller");
 const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
-const tmPtrsService = require("@/v2/ptrs/services/tablesAndMaps.ptrs.service");
+const mapsRuntimeService = require("@/v2/ptrs/services/maps.ptrs.service");
+const mapsConfigService = require("@/v2/ptrs/services/maps.config.ptrs.service");
+const mapsHeadersService = require("@/v2/ptrs/services/maps.headers.ptrs.service");
 
 module.exports = {
   getMap,
   saveMap,
   getSample,
-  getUnifiedSample,
   buildMappedDataset,
   getFieldMap,
   saveFieldMap,
@@ -17,6 +18,22 @@ module.exports = {
 };
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
+
+function maybeParse(value) {
+  if (!value) return value;
+
+  if (typeof value === "object") return value;
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+}
 
 /**
  * GET /api/v2/ptrs/:id/map
@@ -44,47 +61,37 @@ async function getMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const map = await tmPtrsService.getColumnMap({ customerId, ptrsId });
-    // Normalize JSON-typed fields that might be persisted as TEXT
-    const maybeParse = (v) => {
-      if (v == null || typeof v !== "string") return v;
-      try {
-        return JSON.parse(v);
-      } catch {
-        return v;
-      }
-    };
+    const map = await mapsConfigService.getMap({ customerId, ptrsId });
+
     if (map) {
       map.extras = maybeParse(map.extras);
       map.fallbacks = maybeParse(map.fallbacks);
       map.defaults = maybeParse(map.defaults);
-      map.joins = maybeParse(map.joins);
       map.rowRules = maybeParse(map.rowRules);
-      map.customFields = maybeParse(map.customFields);
     }
-
-    // Derive normalised joinsArray and customFieldsArray without mutating map
-    let joinsArray = [];
-    if (map && map.joins) {
-      if (Array.isArray(map.joins)) {
-        joinsArray = map.joins;
-      } else if (
-        typeof map.joins === "object" &&
-        Array.isArray(map.joins.conditions)
-      ) {
-        joinsArray = map.joins.conditions;
-      }
-    }
-    let customFieldsArray = [];
-    if (map && Array.isArray(map.customFields)) {
-      customFieldsArray = map.customFields;
-    }
-    const { headers, total, headerMeta } = await tmPtrsService.getImportSample({
+    const sampleResult = await mapsHeadersService.getImportSample({
       customerId,
       ptrsId,
       limit: 10,
       offset: 0,
     });
+
+    const datasets = Array.isArray(sampleResult?.datasets)
+      ? sampleResult.datasets
+      : [];
+    const mainDataset =
+      datasets.find((d) => d?.isMain) ||
+      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
+      datasets[0] ||
+      null;
+
+    const headers = Array.isArray(mainDataset?.headers)
+      ? mainDataset.headers
+      : [];
+    const total = datasets.length;
+    const headerMeta = {
+      datasets,
+    };
 
     // slog.info("getColumnMap", {
     //   id: map?.id,
@@ -120,8 +127,6 @@ async function getMap(req, res, next) {
         map,
         headers,
         headerMeta,
-        joins: joinsArray,
-        customFields: customFieldsArray,
       },
     });
   } catch (error) {
@@ -157,38 +162,52 @@ async function saveMap(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+
+  const body = req.body || {};
+
   const {
-    mappings,
+    mappings = null,
     extras = null,
-    fallbacks = null,
-    defaults = null,
-    joins = null,
-    rowRules = null,
     profileId = null,
-    customFields = null,
-  } = req.body || {};
+    defaults = null,
+    fallbacks = null,
+    rowRules = null,
+  } = body;
+
+  const hasProfileId = !!profileId;
+  const hasMappingsObject =
+    mappings && typeof mappings === "object" && !Array.isArray(mappings);
+
+  // Only update joins/customFields when explicitly provided.
+  // Prevent MapPanel saves from stomping joins/customFields.
 
   slog.info(
     "[PTRS v2 saveMap] body",
     safeMeta({
       ptrsId,
-      mappingsKeys: Object.keys(req.body.mappings || {}),
-      joins: req.body.joins,
-    })
+      mappingsKeys: hasMappingsObject ? Object.keys(mappings) : [],
+      hasProfileId,
+    }),
   );
 
   try {
-    // Log incoming joins before validation
-    console.log("[PTRS v2 saveMap] incoming joins:", joins);
     if (!customerId) {
       return res
         .status(400)
         .json({ status: "error", message: "Customer ID missing" });
     }
-    if (!mappings || typeof mappings !== "object" || Array.isArray(mappings)) {
+
+    if (!hasProfileId && !hasMappingsObject) {
       return res
         .status(400)
         .json({ status: "error", message: "mappings object is required" });
+    }
+
+    if (hasProfileId && mappings !== null && !hasMappingsObject) {
+      return res.status(400).json({
+        status: "error",
+        message: "mappings must be an object or null for profile-backed saves",
+      });
     }
 
     // Confirm the PTRS run exists and belongs to this tenant
@@ -199,45 +218,47 @@ async function saveMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    // Best-effort validation: warn but don't block if headers slightly differ (case/space)
-    const { headers } = await tmPtrsService.getImportSample({
-      customerId,
-      ptrsId,
-      limit: 50,
-      offset: 0,
-    });
-    const norm = (s) =>
-      String(s || "")
-        .toLowerCase()
-        .replace(/\s+/g, "");
-    const headerSet = new Set((headers || []).map(norm));
-    const missing = Object.keys(mappings).filter(
-      (src) => !headerSet.has(norm(src))
-    );
-    if (missing.length) {
-      // Include a hint but allow save (front-end will reconcile via tolerant matching)
-      logger.info(
-        "PTRS v2 saveMap: some mapping headers not found exactly in inferred headers",
-        {
-          action: "PtrsV2SaveMap",
-          ptrsId,
-          customerId,
-          missing,
-        }
+    if (hasMappingsObject) {
+      // Best-effort validation: warn but don't block if headers slightly differ (case/space)
+      // IMPORTANT: do NOT call getImportSample here (it is expensive).
+      // Validate against dataset metadata across all datasets instead.
+      const { headers } = await mapsHeadersService.getAllDatasetHeaderInfo({
+        customerId,
+        ptrsId,
+      });
+
+      const norm = (s) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/\s+/g, "");
+
+      const headerSet = new Set((headers || []).map(norm));
+      const missing = Object.keys(mappings).filter(
+        (src) => !headerSet.has(norm(src)),
       );
+
+      if (missing.length) {
+        logger.info(
+          "PTRS v2 saveMap: some mapping headers not found exactly in dataset headers",
+          {
+            action: "PtrsV2SaveMap",
+            ptrsId,
+            customerId,
+            missing,
+          },
+        );
+      }
     }
 
-    const saved = await tmPtrsService.saveColumnMap({
+    const saved = await mapsConfigService.saveSupportConfig({
       customerId,
       ptrsId,
       mappings,
       extras,
       fallbacks,
       defaults,
-      joins,
       rowRules,
       profileId,
-      customFields,
       userId,
     });
 
@@ -249,7 +270,7 @@ async function saveMap(req, res, next) {
       action: "PtrsV2SaveMap",
       entity: "PtrsUpload",
       entityId: ptrsId,
-      details: { keys: Object.keys(mappings).length },
+      details: { keys: hasMappingsObject ? Object.keys(mappings).length : 0 },
     });
 
     res.status(200).json({ status: "success", data: saved });
@@ -298,7 +319,7 @@ async function getFieldMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const fieldMap = await tmPtrsService.getFieldMap({
+    const fieldMap = await mapsConfigService.getFieldMap({
       customerId,
       ptrsId,
       profileId,
@@ -384,7 +405,7 @@ async function saveFieldMap(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const saved = await tmPtrsService.saveFieldMap({
+    const saved = await mapsConfigService.saveFieldMap({
       customerId,
       ptrsId,
       profileId,
@@ -433,6 +454,7 @@ async function buildMappedDataset(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+  const profileId = req.query.profileId || req.body?.profileId || null;
 
   try {
     if (!customerId) {
@@ -451,12 +473,13 @@ async function buildMappedDataset(req, res, next) {
 
     slog.info(
       "[PTRS v2 buildMappedDataset] begin",
-      safeMeta({ customerId, ptrsId, userId })
+      safeMeta({ customerId, ptrsId, userId }),
     );
 
-    const result = await tmPtrsService.buildMappedDatasetForPtrs({
+    const result = await mapsRuntimeService.buildMappedDatasetForPtrs({
       customerId,
       ptrsId,
+      profileId,
       actorId: userId || null,
     });
 
@@ -469,10 +492,15 @@ async function buildMappedDataset(req, res, next) {
       entity: "PtrsUpload",
       entityId: ptrsId,
       details: {
+        profileId,
         rowsPersisted: result?.count || 0,
         headersCount: Array.isArray(result?.headers)
           ? result.headers.length
           : 0,
+        skipped: !!result?.skipped,
+        reason: result?.reason || null,
+        inputHash: result?.inputHash || null,
+        previousRunId: result?.previousRunId || null,
       },
     });
 
@@ -482,7 +510,7 @@ async function buildMappedDataset(req, res, next) {
         customerId,
         ptrsId,
         rowsPersisted: result?.count || 0,
-      })
+      }),
     );
 
     return res.status(200).json({
@@ -490,6 +518,11 @@ async function buildMappedDataset(req, res, next) {
       data: {
         count: result?.count || 0,
         headers: result?.headers || [],
+        skipped: !!result?.skipped,
+        reason: result?.reason || null,
+        inputHash: result?.inputHash || null,
+        previousRunId: result?.previousRunId || null,
+        profileId,
       },
     });
   } catch (error) {
@@ -534,13 +567,28 @@ async function getSample(req, res, next) {
         .json({ status: "error", message: "Ptrs not found" });
     }
 
-    const { rows, total, headers, headerMeta } =
-      await tmPtrsService.getImportSample({
-        customerId,
-        ptrsId,
-        limit,
-        offset,
-      });
+    const sampleResult = await mapsHeadersService.getImportSample({
+      customerId,
+      ptrsId,
+      limit,
+      offset,
+    });
+
+    const datasets = Array.isArray(sampleResult?.datasets)
+      ? sampleResult.datasets
+      : [];
+    const mainDataset =
+      datasets.find((d) => d?.isMain) ||
+      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
+      datasets[0] ||
+      null;
+
+    const rows = mainDataset?.sampleRow ? [mainDataset.sampleRow] : [];
+    const total = datasets.length;
+    const headers = Array.isArray(mainDataset?.headers)
+      ? mainDataset.headers
+      : [];
+    const headerMeta = { datasets };
 
     await auditService.logEvent({
       customerId,
@@ -572,71 +620,6 @@ async function getSample(req, res, next) {
 }
 
 /**
- * GET /api/v2/ptrs/:id/unified-sample?limit=10&offset=0
- * Returns a small window of main rows + unified headers/examples merged from all datasets.
- */
-async function getUnifiedSample(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
-  const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    const { rows, total, headers, headerMeta } =
-      await ptrsService.getUnifiedSample({
-        customerId,
-        ptrsId,
-        limit,
-        offset,
-      });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2GetUnifiedSample",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: { limit, offset, returned: rows.length, total },
-    });
-
-    return res.status(200).json({
-      status: "success",
-      data: { rows, total, headers, headerMeta, limit, offset },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error fetching PTRS v2 unified sample", {
-      action: "PtrsV2GetUnifiedSample",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
  * GET /api/v2/ptrs/compatible-maps
  * Returns PTRS runs that have a saved column map, including mapMeta for compatibility filtering.
  */
@@ -645,6 +628,7 @@ async function listPtrsWithMap(req, res, next) {
   const userId = req.auth?.id;
   const ip = req.ip;
   const device = req.headers["user-agent"];
+  const profileId = req.query.profileId || null;
 
   try {
     if (!customerId) {
@@ -653,7 +637,15 @@ async function listPtrsWithMap(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const items = await tmPtrsService.listCompatibleMaps({ customerId });
+    const result = await mapsConfigService.listCompatibleMaps({
+      customerId,
+      profileId,
+    });
+    const items = Array.isArray(result?.items)
+      ? result.items
+      : Array.isArray(result)
+        ? result
+        : [];
 
     await auditService.logEvent({
       customerId,
@@ -663,7 +655,7 @@ async function listPtrsWithMap(req, res, next) {
       action: "PtrsV2ListCompatibleMaps",
       entity: "Ptrs",
       entityId: null,
-      details: { count: Array.isArray(items) ? items.length : 0 },
+      details: { profileId, count: Array.isArray(items) ? items.length : 0 },
     });
 
     return res.status(200).json({ status: "success", data: { items } });

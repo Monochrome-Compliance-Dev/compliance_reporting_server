@@ -16,4 +16,10 @@ router.post("/:id/stage", requirePtrs, stageController.stagePtrs);
 // Preview staged rows (read-only, small page)
 router.get("/:id/stage/preview", requirePtrs, stageController.getStagePreview);
 
+router.get(
+  "/:id/stage/completion-gate",
+  requirePtrs,
+  stageController.getStageCompletionGate,
+);
+
 module.exports = router;
