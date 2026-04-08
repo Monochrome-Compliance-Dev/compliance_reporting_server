@@ -2260,8 +2260,10 @@ async function importPaymentTermChangesFromDataset({
   const stats = {
     parsed: 0,
     inserted: 0,
+    insertedCompanyCodeScope: 0,
+    insertedPurchOrganisationScope: 0,
     skipped: 0,
-    skippedMissingCompanyCode: 0,
+    skippedMissingScope: 0,
     skippedMissingNewValue: 0,
     skippedMissingDate: 0,
     skippedFieldNameMismatch: 0,
@@ -2319,9 +2321,10 @@ async function importPaymentTermChangesFromDataset({
         }
 
         const companyCode = pickFromRowLoose(row, "Company Code");
-        if (!companyCode) {
+        const purchOrganisation = pickFromRowLoose(row, "Purch. organization");
+        if (!companyCode && !purchOrganisation) {
           stats.skipped += 1;
-          stats.skippedMissingCompanyCode += 1;
+          stats.skippedMissingScope += 1;
           return;
         }
 
@@ -2334,7 +2337,7 @@ async function importPaymentTermChangesFromDataset({
 
         const supplier = pickFromRowLoose(row, "Supplier");
         const changedBy = pickFromRowLoose(row, "Changed By");
-        const purchOrganisation = pickFromRowLoose(row, "Purch. organization");
+        // const purchOrganisation = pickFromRowLoose(row, "Purch. organization"); // old duplicate removed
         const oldRaw = pickFromRowLoose(row, "Old value");
 
         const rec = {
@@ -2344,7 +2347,7 @@ async function importPaymentTermChangesFromDataset({
           supplier: supplier != null ? String(supplier) : null,
           changedBy: changedBy != null ? String(changedBy) : null,
           fieldName: fieldName != null ? String(fieldName) : null,
-          companyCode: String(companyCode),
+          companyCode: companyCode != null ? String(companyCode) : null,
           purchOrganisation:
             purchOrganisation != null ? String(purchOrganisation) : null,
           newRaw: String(newRaw),
@@ -2365,6 +2368,11 @@ async function importPaymentTermChangesFromDataset({
         }
 
         rowsToInsert.push(rec);
+        if (companyCode) {
+          stats.insertedCompanyCodeScope += 1;
+        } else {
+          stats.insertedPurchOrganisationScope += 1;
+        }
       })
       .on("end", () => resolve());
 
@@ -2401,7 +2409,9 @@ async function importPaymentTermChangesFromDataset({
     parsed: stats.parsed,
     toInsert: rowsToInsert.length,
     skipped: stats.skipped,
-    skippedMissingCompanyCode: stats.skippedMissingCompanyCode,
+    skippedMissingScope: stats.skippedMissingScope,
+    insertedCompanyCodeScope: stats.insertedCompanyCodeScope,
+    insertedPurchOrganisationScope: stats.insertedPurchOrganisationScope,
     skippedMissingNewValue: stats.skippedMissingNewValue,
     skippedMissingDate: stats.skippedMissingDate,
     skippedFieldNameMismatch: stats.skippedFieldNameMismatch,

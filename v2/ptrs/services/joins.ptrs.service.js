@@ -39,6 +39,85 @@ function sanitizeForJsonbDeep(value) {
   return value;
 }
 
+function normalizeJoinSide(side, label) {
+  if (!side || typeof side !== "object" || Array.isArray(side)) {
+    const e = new Error(`Invalid joins payload (${label} must be an object)`);
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const role = String(side.role || "").trim();
+  const column = String(side.column || "").trim();
+  const datasetId =
+    side.datasetId != null && String(side.datasetId).trim() !== ""
+      ? String(side.datasetId).trim()
+      : null;
+
+  const transform =
+    side.transform &&
+    typeof side.transform === "object" &&
+    !Array.isArray(side.transform)
+      ? {
+          op:
+            side.transform.op != null && String(side.transform.op).trim() !== ""
+              ? String(side.transform.op).trim()
+              : null,
+          ...(side.transform.arg != null &&
+          String(side.transform.arg).trim() !== ""
+            ? { arg: String(side.transform.arg).trim() }
+            : {}),
+        }
+      : null;
+
+  if (!role) {
+    const e = new Error(`Invalid joins payload (${label}.role is required)`);
+    e.statusCode = 400;
+    throw e;
+  }
+
+  if (!column) {
+    const e = new Error(`Invalid joins payload (${label}.column is required)`);
+    e.statusCode = 400;
+    throw e;
+  }
+
+  return {
+    datasetId,
+    role,
+    column,
+    transform: transform?.op ? transform : null,
+  };
+}
+
+function normalizeJoinsPayload(joins) {
+  if (!joins || typeof joins !== "object" || !Array.isArray(joins.conditions)) {
+    const e = new Error("Invalid joins payload (expected { conditions: [] })");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const conditions = joins.conditions.map((condition, index) => {
+    if (
+      !condition ||
+      typeof condition !== "object" ||
+      Array.isArray(condition)
+    ) {
+      const e = new Error(
+        `Invalid joins payload (conditions[${index}] must be an object)`,
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    return {
+      from: normalizeJoinSide(condition.from, `conditions[${index}].from`),
+      to: normalizeJoinSide(condition.to, `conditions[${index}].to`),
+    };
+  });
+
+  return { conditions };
+}
+
 async function getJoins({ customerId, ptrsId, transaction = null }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -80,7 +159,7 @@ async function getJoins({ customerId, ptrsId, transaction = null }) {
       joinsRaw &&
       typeof joinsRaw === "object" &&
       Array.isArray(joinsRaw.conditions)
-        ? { conditions: joinsRaw.conditions }
+        ? normalizeJoinsPayload(joinsRaw)
         : { conditions: [] };
 
     const customFields = Array.isArray(row?.customFields)
@@ -133,17 +212,15 @@ async function saveJoins({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  if (!joins || typeof joins !== "object" || !Array.isArray(joins.conditions)) {
-    const e = new Error("Invalid joins payload (expected { conditions: [] })");
-    e.statusCode = 400;
-    throw e;
-  }
+  // Joins validation removed; now done via normalizeJoinsPayload below.
 
   if (!Array.isArray(customFields)) {
     const e = new Error("Invalid customFields payload (expected array)");
     e.statusCode = 400;
     throw e;
   }
+
+  const normalizedJoins = normalizeJoinsPayload(joins);
 
   const trace = process.env.PTRS_TRACE
     ? createPtrsTrace({
@@ -157,7 +234,9 @@ async function saveJoins({
 
   const startNs = process.hrtime.bigint();
   trace?.write("joins_save_begin", {
-    joinsCount: Array.isArray(joins?.conditions) ? joins.conditions.length : 0,
+    joinsCount: Array.isArray(normalizedJoins?.conditions)
+      ? normalizedJoins.conditions.length
+      : 0,
     customFieldsCount: Array.isArray(customFields) ? customFields.length : 0,
     hasProfileId: !!profileId,
   });
@@ -175,7 +254,7 @@ async function saveJoins({
     });
 
     const payload = {
-      joins: sanitizeForJsonbDeep(joins),
+      joins: sanitizeForJsonbDeep(normalizedJoins),
       customFields: sanitizeForJsonbDeep(customFields),
       profileId: profileId ?? null,
     };
@@ -213,7 +292,7 @@ async function saveJoins({
           typeof plain.joins === "object" &&
           Array.isArray(plain.joins.conditions)
             ? { conditions: plain.joins.conditions }
-            : { conditions: joins.conditions },
+            : { conditions: normalizedJoins.conditions },
         customFields: Array.isArray(plain?.customFields)
           ? plain.customFields
           : customFields,
@@ -261,7 +340,7 @@ async function saveJoins({
         typeof plain.joins === "object" &&
         Array.isArray(plain.joins.conditions)
           ? { conditions: plain.joins.conditions }
-          : { conditions: joins.conditions },
+          : { conditions: normalizedJoins.conditions },
       customFields: Array.isArray(plain?.customFields)
         ? plain.customFields
         : customFields,
