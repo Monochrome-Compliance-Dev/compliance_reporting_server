@@ -421,7 +421,7 @@ async function composeSingleMappedRow({
 async function composeMappedRowsForPtrs({
   customerId,
   ptrsId,
-  limit = 50,
+  limit = null,
   offset = 0,
   transaction = null,
   trace = null,
@@ -504,6 +504,11 @@ async function composeMappedRowsForPtrs({
         .trim()
         .toLowerCase();
 
+    const isMainLikeRole = (role) => {
+      const r = norm(role);
+      return r === "main" || r.startsWith("main_");
+    };
+
     const available = new Set(["main"]);
     let remaining = list.slice();
     const ordered = [];
@@ -525,8 +530,9 @@ async function composeMappedRowsForPtrs({
           continue;
         }
 
-        const fromAvailable = fromRole === "main" || available.has(fromRole);
-        const toAvailable = toRole === "main" || available.has(toRole);
+        const fromAvailable =
+          isMainLikeRole(fromRole) || available.has(fromRole);
+        const toAvailable = isMainLikeRole(toRole) || available.has(toRole);
 
         if (fromAvailable || toAvailable) {
           passPicked.push(j);
@@ -541,7 +547,7 @@ async function composeMappedRowsForPtrs({
           new Set(
             passLeft
               .flatMap((j) => [norm(j.fromRole), norm(j.toRole)])
-              .filter((r) => r && r !== "main" && !available.has(r)),
+              .filter((r) => r && !isMainLikeRole(r) && !available.has(r)),
           ),
         );
 
@@ -571,6 +577,18 @@ async function composeMappedRowsForPtrs({
   const orderedJoins = orderJoinsForExecution(normalisedJoins);
   trace?.write("compose_joins_ordered", {
     orderedJoinsCount: orderedJoins.length,
+  });
+  trace?.write("compose_join_specs_raw", {
+    joins: (orderedJoins || []).map((j) => ({
+      fromRole: j?.fromRole || null,
+      toRole: j?.toRole || null,
+      fromDatasetId: j?.fromDatasetId || null,
+      toDatasetId: j?.toDatasetId || null,
+      fromColumn: j?.fromColumn || null,
+      toColumn: j?.toColumn || null,
+      fromTransform: j?.fromTransform || null,
+      toTransform: j?.toTransform || null,
+    })),
   });
 
   const _toNum = (v) => {
@@ -842,6 +860,29 @@ async function composeMappedRowsForPtrs({
           !spec.column ||
           isMainRole(spec.role)
         ) {
+          trace?.write("compose_join_index_skipped", {
+            reason: !spec.datasetId
+              ? "missing_dataset_id"
+              : !spec.role
+                ? "missing_role"
+                : !spec.column
+                  ? "missing_column"
+                  : isMainRole(spec.role)
+                    ? "main_role_not_indexed"
+                    : "unknown",
+            datasetId: spec.datasetId || null,
+            role: spec.role || null,
+            column: spec.column || null,
+            transform: spec.transform || null,
+            sourceJoin: {
+              fromRole: j?.fromRole || null,
+              toRole: j?.toRole || null,
+              fromDatasetId: j?.fromDatasetId || null,
+              toDatasetId: j?.toDatasetId || null,
+              fromColumn: j?.fromColumn || null,
+              toColumn: j?.toColumn || null,
+            },
+          });
           continue;
         }
 
@@ -898,6 +939,15 @@ async function composeMappedRowsForPtrs({
       ? [activeMapDatasetId]
       : [];
 
+  trace?.write("compose_main_datasets_resolved", {
+    profileId: profileId || null,
+    activeMapDatasetId: activeMapDatasetId || null,
+    mappedMainDatasetIds: targetMainDatasetIds,
+    effectiveMainDatasetIds,
+    limit,
+    offset,
+  });
+
   const counters = {
     mainDatasetsProcessed: effectiveMainDatasetIds.length,
     rowsInput: 0,
@@ -928,6 +978,14 @@ async function composeMappedRowsForPtrs({
         })
       : [];
 
+    trace?.write("compose_load_main_rows_begin", {
+      profileId: profileId || null,
+      mainDatasetId,
+      limit,
+      offset,
+      fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
+    });
+
     const mainRows = await loadMainRowsForCompose({
       customerId,
       ptrsId,
@@ -937,6 +995,14 @@ async function composeMappedRowsForPtrs({
       transaction,
       stageStart,
       stageEnd,
+    });
+
+    trace?.write("compose_load_main_rows_end", {
+      profileId: profileId || null,
+      mainDatasetId,
+      rowsLoaded: Array.isArray(mainRows) ? mainRows.length : 0,
+      limit,
+      offset,
     });
 
     counters.rowsInput += Array.isArray(mainRows) ? mainRows.length : 0;

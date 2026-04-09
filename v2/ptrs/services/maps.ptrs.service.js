@@ -110,7 +110,14 @@ async function getMappedDataCompletenessGate({
     const mainDatasets = db.PtrsDataset
       ? await db.PtrsDataset.findAll({
           where: { customerId, ptrsId },
-          attributes: ["id", "role", "fileName", "sourceName"],
+          attributes: [
+            "id",
+            "role",
+            "fileName",
+            "sourceType",
+            "storageRef",
+            "meta",
+          ],
           raw: true,
           transaction: t,
         })
@@ -153,7 +160,12 @@ async function getMappedDataCompletenessGate({
       return {
         datasetId,
         role: dataset?.role || null,
-        fileName: dataset?.fileName || dataset?.sourceName || null,
+        fileName:
+          dataset?.fileName ||
+          (dataset?.meta && dataset.meta.displayName) ||
+          dataset?.storageRef ||
+          dataset?.id ||
+          null,
         mappedCanonicalFields,
         hasAnyMappings: mappedCanonicalFields.length > 0,
         missingRequiredMappings,

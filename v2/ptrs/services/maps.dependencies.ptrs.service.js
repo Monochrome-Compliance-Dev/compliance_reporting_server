@@ -182,11 +182,16 @@ function normaliseConfiguredJoins({
 
     if (!fromRole || !toRole || !fromCol || !toCol) continue;
 
+    const fromDatasetId = String(from.datasetId || "").trim() || null;
+    const toDatasetId = String(to.datasetId || "").trim() || null;
+
     normalisedJoins.push({
       fromRole,
+      fromDatasetId,
       fromColumn: fromCol,
       fromTransform: from.transform || null,
       toRole,
+      toDatasetId,
       toColumn: toCol,
       toTransform: to.transform || null,
     });

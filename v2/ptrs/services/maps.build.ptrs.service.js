@@ -40,6 +40,7 @@ async function persistMappedRowsInBatches({
   let canonicalHeaders = [];
   const headersSet = new Set();
   const nowIso = new Date().toISOString();
+  let globalRowNo = 1;
 
   trace?.write("batch_begin", { limit: batchSize, offset: 0 });
 
@@ -55,6 +56,15 @@ async function persistMappedRowsInBatches({
     durationMs: hrMsSince(composeStartNs),
     rowsComposed: Array.isArray(rows) ? rows.length : 0,
   });
+  slog.info(
+    "PTRS v2 persistMappedRowsInBatches: compose result",
+    safeMeta({
+      customerId,
+      ptrsId,
+      rowsComposed: Array.isArray(rows) ? rows.length : 0,
+      headersCount: Array.isArray(headers) ? headers.length : 0,
+    }),
+  );
 
   if (Array.isArray(headers)) {
     canonicalHeaders = headers.slice(0, maxHeaderKeys);
@@ -90,10 +100,7 @@ async function persistMappedRowsInBatches({
       payload.push({
         customerId,
         ptrsId,
-        rowNo:
-          typeof row.row_no === "number" && Number.isFinite(row.row_no)
-            ? row.row_no
-            : start + i + 1,
+        rowNo: globalRowNo++,
         data: canonicalRow,
         meta: sanitizeForJsonbDeep({
           stage: "ptrs.v2.mapped",
@@ -330,6 +337,14 @@ async function buildMappedDatasetForPtrs({
         slog,
         safeMeta,
       });
+    slog.info(
+      "PTRS v2 buildMappedDatasetForPtrs: total persisted after batch",
+      safeMeta({
+        customerId,
+        ptrsId,
+        totalPersisted,
+      }),
+    );
 
     if (!hadRows) {
       trace?.write("build_no_rows", { totalMs: hrMsSince(jobStartNs) });
