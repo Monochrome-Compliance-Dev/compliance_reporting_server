@@ -31,22 +31,59 @@ async function loadComposeDependencies({
 
   const supportConfig = supportConfigRow || {};
   const profileId = supportConfig.profileId || null;
+  let activeMapDatasetId = null;
+  let mappedMainDatasetIds = [];
 
   const sFieldMap = stageStart("load_field_map");
   let fieldMapRows = [];
   try {
     if (profileId) {
+      mappedMainDatasetIds = await loadMappedMainDatasetIdsForCompose({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction,
+        stageStart,
+        stageEnd,
+      });
+
+      activeMapDatasetId =
+        mappedMainDatasetIds[0] ||
+        (await resolveMainDatasetForCompose({
+          customerId,
+          ptrsId,
+          transaction,
+          stageStart,
+          stageEnd,
+        }));
+
+      if (!activeMapDatasetId) {
+        const e = new Error(
+          "Mapped dataset build could not resolve a main dataset slice for the active profile.",
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
       fieldMapRows = await getFieldMap({
         customerId,
         ptrsId,
         profileId,
+        datasetId: activeMapDatasetId,
         transaction,
       });
     }
   } catch (e) {
     slog.error(
       "PTRS v2 composeMappedRowsForPtrs: failed to load field map for profiled run",
-      safeMeta({ customerId, ptrsId, profileId, error: e.message }),
+      safeMeta({
+        customerId,
+        ptrsId,
+        profileId,
+        activeMapDatasetId,
+        mappedMainDatasetIds,
+        error: e.message,
+      }),
     );
     e.statusCode = e.statusCode || 500;
     throw e;
@@ -54,6 +91,8 @@ async function loadComposeDependencies({
 
   stageEnd(sFieldMap, {
     profileId,
+    activeMapDatasetId,
+    mappedMainDatasetIds,
     fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
   });
 
@@ -75,6 +114,8 @@ async function loadComposeDependencies({
         customerId,
         ptrsId,
         profileId,
+        activeMapDatasetId,
+        mappedMainDatasetIds,
         fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
       }),
     );
@@ -84,6 +125,8 @@ async function loadComposeDependencies({
     supportConfigRow,
     supportConfig,
     profileId,
+    activeMapDatasetId,
+    mappedMainDatasetIds,
     fieldMapRows,
   };
 }
@@ -210,6 +253,82 @@ function normaliseConfiguredCustomFields({
   return customFields;
 }
 
+async function loadMappedMainDatasetIdsForCompose({
+  customerId,
+  ptrsId,
+  profileId,
+  transaction,
+  stageStart,
+  stageEnd,
+}) {
+  const sMappedMain = stageStart("load_mapped_main_dataset_ids");
+  try {
+    if (!profileId) {
+      stageEnd(sMappedMain, { profileId: null, mappedMainDatasetIds: [] });
+      return [];
+    }
+
+    const fieldMapRows = await db.PtrsFieldMap.findAll({
+      where: { customerId, ptrsId, profileId },
+      attributes: ["datasetId"],
+      raw: true,
+      transaction,
+    });
+
+    const distinctDatasetIds = Array.from(
+      new Set(
+        (fieldMapRows || [])
+          .map((row) => String(row?.datasetId || "").trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (!distinctDatasetIds.length) {
+      stageEnd(sMappedMain, { profileId, mappedMainDatasetIds: [] });
+      return [];
+    }
+
+    const dsRows = await db.PtrsDataset.findAll({
+      where: {
+        customerId,
+        ptrsId,
+        id: distinctDatasetIds,
+      },
+      attributes: ["id", "role", "createdAt"],
+      raw: true,
+      transaction,
+    });
+
+    const normRole = (r) =>
+      String(r || "")
+        .trim()
+        .toLowerCase();
+
+    const mappedMainDatasetIds = (dsRows || [])
+      .filter((row) => {
+        const role = normRole(row.role);
+        return role === "main" || role.startsWith("main_");
+      })
+      .sort((a, b) => {
+        const aTime = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (aTime !== bTime) return aTime - bTime;
+        return String(a?.id || "").localeCompare(String(b?.id || ""));
+      })
+      .map((row) => String(row.id));
+
+    stageEnd(sMappedMain, { profileId, mappedMainDatasetIds });
+    return mappedMainDatasetIds;
+  } catch (e) {
+    stageEnd(sMappedMain, {
+      profileId,
+      mappedMainDatasetIds: [],
+      error: e.message,
+    });
+    throw e;
+  }
+}
+
 async function resolveMainDatasetForCompose({
   customerId,
   ptrsId,
@@ -231,11 +350,12 @@ async function resolveMainDatasetForCompose({
       String(r || "")
         .trim()
         .toLowerCase();
-    const byRole = (role) =>
-      (dsRows || []).find((d) => normRole(d.role) === role);
-
-    const main = byRole("main");
-    const anchor = byRole("anchor");
+    const mainCandidates = (dsRows || []).filter((d) => {
+      const role = normRole(d.role);
+      return role === "main" || role.startsWith("main_");
+    });
+    const anchor = (dsRows || []).find((d) => normRole(d.role) === "anchor");
+    const main = mainCandidates[0] || null;
 
     if (main && main.id) mainDatasetId = main.id;
     else if (anchor && anchor.id) mainDatasetId = anchor.id;
@@ -330,6 +450,7 @@ function buildHeadersFromComposedRows(rows) {
 
 module.exports = {
   loadComposeDependencies,
+  loadMappedMainDatasetIdsForCompose,
   normaliseConfiguredJoins,
   normaliseConfiguredCustomFields,
   resolveMainDatasetForCompose,

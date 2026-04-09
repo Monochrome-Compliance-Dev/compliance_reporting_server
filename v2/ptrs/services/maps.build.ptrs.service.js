@@ -36,64 +36,71 @@ async function persistMappedRowsInBatches({
   slog,
   safeMeta,
 }) {
-  let offset = 0;
   let totalPersisted = 0;
   let canonicalHeaders = [];
   const headersSet = new Set();
-  let isFirstBatch = true;
   const nowIso = new Date().toISOString();
 
-  while (true) {
-    const batchStartNs = process.hrtime.bigint();
-    trace?.write("batch_begin", { offset, limit: batchSize });
+  trace?.write("batch_begin", { limit: batchSize, offset: 0 });
 
-    const composeStartNs = process.hrtime.bigint();
-    const { rows } = await composeMappedRowsForPtrs({
-      customerId,
-      ptrsId,
-      limit: batchSize,
-      offset,
-      transaction,
-      trace,
-    });
-    trace?.write("batch_compose_end", {
-      offset,
-      durationMs: hrMsSince(composeStartNs),
-      rowsComposed: Array.isArray(rows) ? rows.length : 0,
-    });
+  const composeStartNs = process.hrtime.bigint();
+  const { rows, headers } = await composeMappedRowsForPtrs({
+    customerId,
+    ptrsId,
+    transaction,
+    trace,
+  });
+  trace?.write("batch_compose_end", {
+    offset: 0,
+    durationMs: hrMsSince(composeStartNs),
+    rowsComposed: Array.isArray(rows) ? rows.length : 0,
+  });
 
-    const isLastBatch =
-      Array.isArray(rows) && rows.length > 0 && rows.length < batchSize;
+  if (Array.isArray(headers)) {
+    canonicalHeaders = headers.slice(0, maxHeaderKeys);
+    canonicalHeaders.forEach((h) => headersSet.add(h));
+  }
 
-    if (!rows || !rows.length) {
-      return {
-        totalPersisted,
-        canonicalHeaders,
-        hadRows: !isFirstBatch,
-      };
+  if (!rows || !rows.length) {
+    return {
+      totalPersisted,
+      canonicalHeaders,
+      hadRows: false,
+    };
+  }
+
+  if (!canonicalHeaders.length) {
+    for (const row of rows) {
+      const canonicalRow = ensureCanonicalRowShape(row);
+      for (const k of Object.keys(canonicalRow || {})) {
+        if (headersSet.size < maxHeaderKeys) headersSet.add(k);
+      }
     }
+    canonicalHeaders = Array.from(headersSet);
+  }
+
+  for (let start = 0; start < rows.length; start += batchSize) {
+    const batchStartNs = process.hrtime.bigint();
+    const slice = rows.slice(start, start + batchSize);
 
     const payload = [];
-    for (let i = 0; i < rows.length; ++i) {
-      const row = rows[i];
+    for (let i = 0; i < slice.length; ++i) {
+      const row = slice[i];
       const canonicalRow = sanitizeForJsonbDeep(ensureCanonicalRowShape(row));
-      if (isFirstBatch) {
-        for (const k of Object.keys(canonicalRow)) {
-          if (headersSet.size < maxHeaderKeys) headersSet.add(k);
-        }
-      }
       payload.push({
         customerId,
         ptrsId,
         rowNo:
           typeof row.row_no === "number" && Number.isFinite(row.row_no)
             ? row.row_no
-            : offset + i + 1,
+            : start + i + 1,
         data: canonicalRow,
         meta: sanitizeForJsonbDeep({
           stage: "ptrs.v2.mapped",
           builtAt: nowIso,
           builtBy: actorId || null,
+          profileId: row?._ptrsMeta?.profileId || null,
+          datasetId: row?._ptrsMeta?.datasetId || null,
         }),
       });
     }
@@ -101,7 +108,7 @@ async function persistMappedRowsInBatches({
     try {
       const persistStartNs = process.hrtime.bigint();
       trace?.write("batch_persist_begin", {
-        offset,
+        offset: start,
         batchSize: payload.length,
       });
       await db.PtrsMappedRow.bulkCreate(payload, {
@@ -109,7 +116,7 @@ async function persistMappedRowsInBatches({
         validate: false,
       });
       trace?.write("batch_persist_end", {
-        offset,
+        offset: start,
         batchSize: payload.length,
         durationMs: hrMsSince(persistStartNs),
       });
@@ -119,7 +126,7 @@ async function persistMappedRowsInBatches({
         safeMeta({
           customerId,
           ptrsId,
-          offset,
+          offset: start,
           batchSize: payload.length,
           message: e?.message || null,
           name: e?.name || null,
@@ -135,19 +142,12 @@ async function persistMappedRowsInBatches({
     }
 
     totalPersisted += payload.length;
-    if (isFirstBatch) {
-      canonicalHeaders = Array.from(headersSet);
-      isFirstBatch = false;
-    }
 
     trace?.write("batch_end", {
-      offset,
+      offset: start,
       persistedSoFar: totalPersisted,
       durationMs: hrMsSince(batchStartNs),
     });
-
-    offset += batchSize;
-    if (isLastBatch) break;
   }
 
   return {
@@ -337,9 +337,36 @@ async function buildMappedDatasetForPtrs({
         "PTRS v2 buildMappedDatasetForPtrs: no rows composed, nothing persisted",
         safeMeta({ customerId, ptrsId }),
       );
+
+      const gate = await getMapCompletionGate({
+        customerId,
+        ptrsId,
+        profileId: profileId || staleness?.snapshot?.profileId || null,
+        transaction: t,
+      });
+
+      if (executionRun?.id) {
+        await updateExecutionRun({
+          customerId,
+          executionRunId: executionRun.id,
+          status: "success",
+          finishedAt: new Date(),
+          rowsIn: 0,
+          rowsOut: 0,
+          stats: {
+            headersCount: 0,
+            reason: "NO_ROWS_COMPOSED",
+            gate: gate?.summary || null,
+          },
+          errorMessage: null,
+          updatedBy: actorId || null,
+          transaction: t,
+        });
+      }
+
       await t.commit();
       if (trace) await trace.close();
-      return { count: 0, headers: [] };
+      return { count: 0, headers: [], gate };
     }
 
     slog.info(

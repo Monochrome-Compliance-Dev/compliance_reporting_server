@@ -84,6 +84,13 @@ function ensureCanonicalRowShape(row) {
   return { ...(row || {}) };
 }
 
+function isMainDatasetRole(role) {
+  const r = String(role || "")
+    .trim()
+    .toLowerCase();
+  return r === "main" || r.startsWith("main_");
+}
+
 async function getMappedDataCompletenessGate({
   customerId,
   ptrsId,
@@ -98,31 +105,73 @@ async function getMappedDataCompletenessGate({
   const isExternalTx = !!transaction;
 
   try {
+    const requiredFields = Array.from(new Set(REQUIRED_CANONICAL_FIELDS));
+
+    const mainDatasets = db.PtrsDataset
+      ? await db.PtrsDataset.findAll({
+          where: { customerId, ptrsId },
+          attributes: ["id", "role", "fileName", "sourceName"],
+          raw: true,
+          transaction: t,
+        })
+      : [];
+
+    const mainDatasetRows = (mainDatasets || []).filter((row) =>
+      isMainDatasetRole(row?.role),
+    );
+
     const mappedFieldRows =
       profileId && db.PtrsFieldMap
         ? await db.PtrsFieldMap.findAll({
             where: { customerId, ptrsId, profileId },
-            attributes: ["canonicalField"],
+            attributes: ["datasetId", "canonicalField"],
             raw: true,
             transaction: t,
           })
         : [];
 
-    const mappedCanonicalFields = Array.from(
+    const fieldMapByDatasetId = new Map();
+    for (const row of mappedFieldRows || []) {
+      const datasetId = String(row?.datasetId || "").trim();
+      const canonicalField = toSnake(row?.canonicalField);
+      if (!datasetId || !canonicalField) continue;
+      if (!fieldMapByDatasetId.has(datasetId)) {
+        fieldMapByDatasetId.set(datasetId, new Set());
+      }
+      fieldMapByDatasetId.get(datasetId).add(canonicalField);
+    }
+
+    const datasetMappingGates = mainDatasetRows.map((dataset) => {
+      const datasetId = String(dataset?.id || "").trim();
+      const mappedCanonicalFields = Array.from(
+        fieldMapByDatasetId.get(datasetId) || [],
+      );
+      const missingRequiredMappings = requiredFields.filter(
+        (field) => !mappedCanonicalFields.includes(field),
+      );
+
+      return {
+        datasetId,
+        role: dataset?.role || null,
+        fileName: dataset?.fileName || dataset?.sourceName || null,
+        mappedCanonicalFields,
+        hasAnyMappings: mappedCanonicalFields.length > 0,
+        missingRequiredMappings,
+        passed: missingRequiredMappings.length === 0,
+      };
+    });
+
+    const missingRequiredMappings = Array.from(
       new Set(
-        (mappedFieldRows || [])
-          .map((r) => toSnake(r?.canonicalField))
-          .filter(Boolean),
+        datasetMappingGates.flatMap((dataset) =>
+          Array.isArray(dataset.missingRequiredMappings)
+            ? dataset.missingRequiredMappings
+            : [],
+        ),
       ),
     );
 
-    const requiredFields = Array.from(new Set(REQUIRED_CANONICAL_FIELDS));
-    const missingRequiredMappings = requiredFields.filter(
-      (field) => !mappedCanonicalFields.includes(field),
-    );
-
-    const fieldsToAssess =
-      requiredFields.length > 0 ? requiredFields : mappedCanonicalFields;
+    const fieldsToAssess = requiredFields;
 
     const rowCountRows = await db.sequelize.query(
       `
@@ -223,7 +272,9 @@ async function getMappedDataCompletenessGate({
 
     const gate = {
       passed:
-        missingRequiredMappings.length === 0 && fieldsWithGaps.length === 0,
+        mainDatasetRows.length > 0 &&
+        datasetMappingGates.every((dataset) => dataset.passed) &&
+        fieldsWithGaps.length === 0,
       severity:
         missingRequiredMappings.length > 0
           ? "error"
@@ -232,6 +283,12 @@ async function getMappedDataCompletenessGate({
             : "success",
       summary: {
         rowCount,
+        mainDatasetsCount: mainDatasetRows.length,
+        mappedMainDatasetsCount: datasetMappingGates.filter(
+          (d) => d.hasAnyMappings,
+        ).length,
+        completeMainDatasetsCount: datasetMappingGates.filter((d) => d.passed)
+          .length,
         requiredFieldsCount: requiredFields.length,
         assessedFieldsCount: fields.length,
         missingRequiredMappingsCount: missingRequiredMappings.length,
@@ -239,6 +296,7 @@ async function getMappedDataCompletenessGate({
         emptyFieldsCount: emptyFields.length,
       },
       missingRequiredMappings,
+      datasetMappingGates,
       fields,
     };
 

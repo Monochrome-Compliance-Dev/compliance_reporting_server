@@ -35,6 +35,11 @@ function model(sequelize) {
       allowNull: false,
     },
 
+    datasetId: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+    },
+
     // Canonical (normalised) field name used by staging/rules/metrics/reporting
     // e.g. "invoice_payment_terms", "payment_date", "payer_entity_abn"
     canonicalField: {
@@ -104,26 +109,44 @@ function model(sequelize) {
       // Fast scope filtering
       {
         name: "ix_ptrs_field_map_scope",
-        fields: ["customerId", "ptrsId", "profileId"],
+        fields: ["customerId", "ptrsId", "profileId", "datasetId"],
       },
 
       // One mapping per canonical field per profile per ptrs
       {
         name: "ux_ptrs_field_map_canon",
         unique: true,
-        fields: ["customerId", "ptrsId", "profileId", "canonicalField"],
+        fields: [
+          "customerId",
+          "ptrsId",
+          "profileId",
+          "datasetId",
+          "canonicalField",
+        ],
       },
 
       // Useful for quickly finding where a source role is used
       {
         name: "ix_ptrs_field_map_source_role",
-        fields: ["customerId", "ptrsId", "profileId", "sourceRole"],
+        fields: [
+          "customerId",
+          "ptrsId",
+          "profileId",
+          "datasetId",
+          "sourceRole",
+        ],
       },
 
       // Optional helper for UI search / reverse lookup (non-unique)
       {
         name: "ix_ptrs_field_map_source_col",
-        fields: ["customerId", "ptrsId", "profileId", "sourceColumn"],
+        fields: [
+          "customerId",
+          "ptrsId",
+          "profileId",
+          "datasetId",
+          "sourceColumn",
+        ],
       },
     ],
   });

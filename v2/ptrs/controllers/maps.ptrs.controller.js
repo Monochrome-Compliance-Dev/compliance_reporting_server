@@ -299,6 +299,7 @@ async function getFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
   const profileId = req.query.profileId || null;
+  const datasetId = req.query.datasetId || null;
 
   try {
     if (!customerId) {
@@ -310,6 +311,11 @@ async function getFieldMap(req, res, next) {
       return res
         .status(400)
         .json({ status: "error", message: "profileId is required" });
+    }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
     }
 
     const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
@@ -323,6 +329,7 @@ async function getFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      datasetId,
     });
 
     await auditService.logEvent({
@@ -379,7 +386,11 @@ async function saveFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
 
-  const { profileId = null, fieldMap = null } = req.body || {};
+  const {
+    profileId = null,
+    datasetId = null,
+    fieldMap = null,
+  } = req.body || {};
 
   try {
     if (!customerId) {
@@ -391,6 +402,11 @@ async function saveFieldMap(req, res, next) {
       return res
         .status(400)
         .json({ status: "error", message: "profileId is required" });
+    }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
     }
     if (!Array.isArray(fieldMap)) {
       return res
@@ -409,6 +425,7 @@ async function saveFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      datasetId,
       fieldMap,
       userId,
     });

@@ -271,11 +271,13 @@ async function getFieldMap({
   customerId,
   ptrsId,
   profileId,
+  datasetId,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
+  if (!datasetId) throw new Error("datasetId is required");
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
@@ -283,7 +285,7 @@ async function getFieldMap({
 
   try {
     const rows = await db.PtrsFieldMap.findAll({
-      where: { customerId, ptrsId, profileId },
+      where: { customerId, ptrsId, profileId, datasetId },
       order: [["canonicalField", "ASC"]],
       raw: true,
       transaction: t,
@@ -308,19 +310,21 @@ async function saveFieldMap({
   customerId,
   ptrsId,
   profileId,
+  datasetId,
   fieldMap,
   userId,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
+  if (!datasetId) throw new Error("datasetId is required");
   if (!Array.isArray(fieldMap)) throw new Error("fieldMap array is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
     await db.PtrsFieldMap.destroy({
-      where: { customerId, ptrsId, profileId },
+      where: { customerId, ptrsId, profileId, datasetId },
       force: true,
       transaction: t,
     });
@@ -333,6 +337,7 @@ async function saveFieldMap({
         customerId,
         ptrsId,
         profileId,
+        datasetId,
         canonicalField: r.canonicalField,
         sourceRole: r.sourceRole,
         sourceColumn: r.sourceColumn ?? null,
@@ -375,7 +380,7 @@ async function saveFieldMap({
     }
 
     const rows = await db.PtrsFieldMap.findAll({
-      where: { customerId, ptrsId, profileId },
+      where: { customerId, ptrsId, profileId, datasetId },
       order: [["canonicalField", "ASC"]],
       raw: true,
       transaction: t,

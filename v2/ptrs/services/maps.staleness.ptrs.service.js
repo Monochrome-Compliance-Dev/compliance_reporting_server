@@ -90,6 +90,13 @@ function buildMaterialMapSignature({ mappings, joins, customFields }) {
   });
 }
 
+function isMainDatasetRole(role) {
+  const r = String(role || "")
+    .trim()
+    .toLowerCase();
+  return r === "main" || r.startsWith("main_");
+}
+
 async function getSupportConfigForSnapshot({
   customerId,
   ptrsId,
@@ -123,47 +130,38 @@ async function buildMapInputSnapshot({
 
   const resolvedProfileId = profileId;
 
-  const [fieldMapUpdatedAt, fieldMapCount, columnMapUpdatedAt, datasets] =
-    await Promise.all([
-      resolvedProfileId && db.PtrsFieldMap
-        ? db.PtrsFieldMap.max("updatedAt", {
-            where: {
-              customerId,
-              ptrsId,
-              profileId: resolvedProfileId,
-            },
-            transaction,
-          })
-        : Promise.resolve(null),
-      resolvedProfileId && db.PtrsFieldMap
-        ? db.PtrsFieldMap.count({
-            where: {
-              customerId,
-              ptrsId,
-              profileId: resolvedProfileId,
-            },
-            transaction,
-          })
-        : Promise.resolve(0),
-      db.PtrsColumnMap
-        ? db.PtrsColumnMap.max("updatedAt", {
-            where: { customerId, ptrsId },
-            transaction,
-          })
-        : Promise.resolve(null),
-      db.PtrsDataset
-        ? db.PtrsDataset.findAll({
-            where: { customerId, ptrsId },
-            attributes: ["id", "role", "updatedAt", "createdAt"],
-            order: [
-              ["role", "ASC"],
-              ["updatedAt", "DESC"],
-            ],
-            raw: true,
-            transaction,
-          })
-        : Promise.resolve([]),
-    ]);
+  const [fieldMapRows, columnMapUpdatedAt, datasets] = await Promise.all([
+    resolvedProfileId && db.PtrsFieldMap
+      ? db.PtrsFieldMap.findAll({
+          where: {
+            customerId,
+            ptrsId,
+            profileId: resolvedProfileId,
+          },
+          attributes: ["datasetId", "canonicalField", "updatedAt"],
+          raw: true,
+          transaction,
+        })
+      : Promise.resolve([]),
+    db.PtrsColumnMap
+      ? db.PtrsColumnMap.max("updatedAt", {
+          where: { customerId, ptrsId },
+          transaction,
+        })
+      : Promise.resolve(null),
+    db.PtrsDataset
+      ? db.PtrsDataset.findAll({
+          where: { customerId, ptrsId },
+          attributes: ["id", "role", "updatedAt", "createdAt"],
+          order: [
+            ["role", "ASC"],
+            ["updatedAt", "DESC"],
+          ],
+          raw: true,
+          transaction,
+        })
+      : Promise.resolve([]),
+  ]);
 
   const supportConfigSignature = supportConfig
     ? buildMaterialMapSignature({
@@ -172,6 +170,48 @@ async function buildMapInputSnapshot({
         customFields: supportConfig.customFields || null,
       })
     : null;
+
+  const mainDatasets = Array.isArray(datasets)
+    ? datasets.filter((d) => isMainDatasetRole(d?.role))
+    : [];
+
+  const fieldMapRowsByDatasetId = new Map();
+  for (const row of fieldMapRows || []) {
+    const datasetId = String(row?.datasetId || "").trim();
+    if (!datasetId) continue;
+    if (!fieldMapRowsByDatasetId.has(datasetId)) {
+      fieldMapRowsByDatasetId.set(datasetId, []);
+    }
+    fieldMapRowsByDatasetId.get(datasetId).push(row);
+  }
+
+  const fieldMapByDataset = mainDatasets.map((dataset) => {
+    const datasetId = String(dataset?.id || "").trim();
+    const rows = fieldMapRowsByDatasetId.get(datasetId) || [];
+    const canonicalFields = Array.from(
+      new Set(
+        rows
+          .map((row) => String(row?.canonicalField || "").trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    const updatedAtValues = rows
+      .map((row) => row?.updatedAt)
+      .filter(Boolean)
+      .map((value) => new Date(value).getTime())
+      .filter((value) => Number.isFinite(value));
+    const maxUpdatedAt = updatedAtValues.length
+      ? new Date(Math.max(...updatedAtValues)).toISOString()
+      : null;
+
+    return {
+      datasetId,
+      role: dataset?.role || null,
+      fieldMapCount: rows.length,
+      canonicalFields,
+      maxUpdatedAt,
+    };
+  });
 
   return {
     customerId,
@@ -187,8 +227,8 @@ async function buildMapInputSnapshot({
     },
     fieldMap: {
       profileId: resolvedProfileId,
-      count: Number(fieldMapCount) || 0,
-      maxUpdatedAt: fieldMapUpdatedAt || null,
+      mainDatasetCount: mainDatasets.length,
+      byDataset: fieldMapByDataset,
     },
     datasets: Array.isArray(datasets)
       ? datasets.map((d) => ({
