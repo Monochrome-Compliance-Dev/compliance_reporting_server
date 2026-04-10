@@ -27,50 +27,41 @@ function model(sequelize) {
       type: DataTypes.STRING(10),
       allowNull: false,
     },
-    reviewGroupRecordId: {
+    datasetId: {
       type: DataTypes.STRING(10),
       allowNull: true,
     },
-    decisionType: {
-      type: DataTypes.ENUM(
-        "CLASSIFICATION",
-        "MAPPING",
-        "MATCHING",
-        "EXCLUSION",
-        "REPROCESSING",
-      ),
-      allowNull: false,
+    stageRowId: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
     },
-    decisionOutcome: {
+    rowNo: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    recordStatus: {
+      type: DataTypes.ENUM("PENDING", "REVIEWED", "SKIPPED", "RESOLVED"),
+      allowNull: false,
+      defaultValue: "PENDING",
+    },
+    suggestedAction: {
       type: DataTypes.STRING(100),
-      allowNull: false,
+      allowNull: true,
     },
-    applyScope: {
-      type: DataTypes.ENUM(
-        "SINGLE_RECORD",
-        "GROUP_RECORDS",
-        "CURRENT_SUPPLIER",
-        "CURRENT_DATASET",
-        "CURRENT_ASSESSMENT",
-        "FUTURE_PATTERN",
-      ),
-      allowNull: false,
-      defaultValue: "SINGLE_RECORD",
+    appliedAction: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
     },
     reasonCode: {
       type: DataTypes.STRING(100),
       allowNull: true,
     },
-    reviewerNote: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    decisionPayload: {
+    recordSnapshot: {
       type: DataTypes.JSONB,
       allowNull: true,
     },
-    patternKey: {
-      type: DataTypes.STRING,
+    metadata: {
+      type: DataTypes.JSONB,
       allowNull: true,
     },
     reviewedBy: {
@@ -100,7 +91,7 @@ function model(sequelize) {
   };
 
   const options = {
-    tableName: "tbl_v3_review_decision",
+    tableName: "tbl_v3_review_group_record",
     timestamps: true,
     paranoid: false,
     indexes: [
@@ -111,28 +102,25 @@ function model(sequelize) {
         fields: ["reviewGroupId"],
       },
       {
-        fields: ["reviewGroupRecordId"],
+        fields: ["datasetId"],
+      },
+      {
+        fields: ["stageRowId"],
+      },
+      {
+        fields: ["recordStatus"],
       },
       {
         fields: ["reviewedBy"],
       },
-      {
-        fields: ["decisionType"],
-      },
-      {
-        fields: ["applyScope"],
-      },
-      {
-        fields: ["patternKey"],
-      },
     ],
   };
 
-  const ReviewDecision = sequelize.define(
-    "ReviewDecision",
+  const ReviewGroupRecord = sequelize.define(
+    "ReviewGroupRecord",
     attributes,
     options,
   );
 
-  return ReviewDecision;
+  return ReviewGroupRecord;
 }

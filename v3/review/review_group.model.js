@@ -23,100 +23,64 @@ function model(sequelize) {
       type: DataTypes.STRING(10),
       allowNull: true,
     },
-    datasetId: {
-      type: DataTypes.STRING(10),
+    groupType: {
+      type: DataTypes.ENUM(
+        "SUPPLIER",
+        "DOCUMENT_TYPE",
+        "MATCH_CANDIDATE",
+        "MAPPING_GAP",
+        "EXCLUSION_CANDIDATE",
+        "PAYMENT_TIME_ANOMALY",
+        "CUSTOM",
+      ),
+      allowNull: false,
+    },
+    groupByField: {
+      type: DataTypes.STRING(100),
       allowNull: true,
     },
-    caseType: {
-      type: DataTypes.ENUM(
-        "MAPPING_REVIEW",
-        "VALIDATION_REVIEW",
-        "MATCH_REVIEW",
-        "CLASSIFICATION_REVIEW",
-        "EXCLUSION_REVIEW",
-      ),
+    groupKey: {
+      type: DataTypes.STRING,
       allowNull: false,
     },
     status: {
-      type: DataTypes.ENUM(
-        "OPEN",
-        "ASSIGNED",
-        "IN_REVIEW",
-        "RESOLVED",
-        "DISMISSED",
-      ),
+      type: DataTypes.ENUM("PENDING", "IN_REVIEW", "RESOLVED", "SKIPPED"),
       allowNull: false,
-      defaultValue: "OPEN",
+      defaultValue: "PENDING",
     },
     priority: {
       type: DataTypes.ENUM("LOW", "MEDIUM", "HIGH"),
       allowNull: false,
       defaultValue: "MEDIUM",
     },
-    patternKey: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    patternDescription: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    sourceSystem: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
-    datasetRole: {
-      type: DataTypes.STRING,
-      allowNull: true,
-    },
     recordCount: {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0,
     },
-    totalValue: {
-      type: DataTypes.DECIMAL(18, 2),
-      allowNull: true,
-    },
-    smallBusinessCount: {
+    reviewedCount: {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0,
     },
-    smallBusinessValue: {
-      type: DataTypes.DECIMAL(18, 2),
-      allowNull: true,
+    decisionCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
     },
-    oldestRecordDate: {
-      type: DataTypes.DATEONLY,
-      allowNull: true,
-    },
-    newestRecordDate: {
-      type: DataTypes.DATEONLY,
-      allowNull: true,
-    },
-    queueReasonCodes: {
-      type: DataTypes.JSONB,
-      allowNull: true,
-      defaultValue: [],
-    },
-    evidencePayload: {
+    groupSnapshot: {
       type: DataTypes.JSONB,
       allowNull: true,
     },
-    assignedTo: {
+    metadata: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+    reviewedBy: {
       type: DataTypes.STRING(10),
       allowNull: true,
     },
-    assignedAt: {
-      type: DataTypes.DATE,
-      allowNull: true,
-    },
-    resolvedBy: {
-      type: DataTypes.STRING(10),
-      allowNull: true,
-    },
-    resolvedAt: {
+    reviewedAt: {
       type: DataTypes.DATE,
       allowNull: true,
     },
@@ -139,7 +103,7 @@ function model(sequelize) {
   };
 
   const options = {
-    tableName: "tbl_v3_review_case",
+    tableName: "tbl_v3_review_group",
     timestamps: true,
     paranoid: false,
     indexes: [
@@ -147,21 +111,24 @@ function model(sequelize) {
         fields: ["customerId", "profileId", "assessmentId"],
       },
       {
-        fields: ["status", "priority"],
+        fields: ["status"],
       },
       {
-        fields: ["caseType"],
+        fields: ["groupType"],
       },
       {
-        fields: ["patternKey"],
+        fields: ["groupByField"],
       },
       {
-        fields: ["datasetId"],
+        fields: ["groupKey"],
+      },
+      {
+        fields: ["reviewedBy"],
       },
     ],
   };
 
-  const ReviewCase = sequelize.define("ReviewCase", attributes, options);
+  const ReviewGroup = sequelize.define("ReviewGroup", attributes, options);
 
-  return ReviewCase;
+  return ReviewGroup;
 }

@@ -5,6 +5,7 @@ const path = require("path");
 
 // v2 PTRS model loader (New World)
 const { initPtrsV2Models } = require("@/v2/ptrs/models/ptrs_model_loader");
+const { initV3Models } = require("@/v3/model_loader");
 const { Pool } = require("pg");
 
 const DB_HOST = process.env.DB_HOST;
@@ -213,6 +214,25 @@ async function initialise() {
     });
   } catch (err) {
     logger.logEvent("error", "Failed to initialise PTRS v2 models", {
+      action: "DatabaseInit",
+      error: err.message,
+      stack: err.stack,
+    });
+  }
+
+  // --- Load v3 models (recursive loader) ---
+  try {
+    const v3Models = initV3Models(sequelize);
+    for (const model of Object.values(v3Models)) {
+      db[toPascal(model.name)] = model;
+    }
+
+    logger.logEvent("info", "v3 models initialised", {
+      action: "DatabaseInit",
+      count: Object.keys(v3Models).length,
+    });
+  } catch (err) {
+    logger.logEvent("error", "Failed to initialise v3 models", {
       action: "DatabaseInit",
       error: err.message,
       stack: err.stack,
