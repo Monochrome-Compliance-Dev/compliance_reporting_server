@@ -40,6 +40,11 @@ const {
 } = require("./exclusions.prepaid");
 
 const {
+  applyPaymentTermsExclusion,
+  previewPaymentTermsExclusion,
+} = require("./exclusions.paymentTerms");
+
+const {
   applyInternationalExclusion,
   previewInternationalExclusion,
 } = require("./exclusions.international");
@@ -143,6 +148,17 @@ async function applyExclusionsAndPersist({
     if (category === "all" || category === "prepaid") {
       stats.checksRun += 1;
       const affected = await applyPrepaidExclusion({
+        sequelize,
+        transaction: t,
+        customerId,
+        ptrsId,
+      });
+      stats.rowsExcluded += affected;
+    }
+
+    if (category === "all" || category === "payment_terms") {
+      stats.checksRun += 1;
+      const affected = await applyPaymentTermsExclusion({
         sequelize,
         transaction: t,
         customerId,
@@ -347,6 +363,22 @@ async function previewExclusions({
       result.counts.prepaid = prepaidPreview.matched;
       result.alreadyExcludedCounts.prepaid = prepaidPreview.alreadyExcluded;
       result.samples.prepaid = prepaidPreview.sampleRows;
+    }
+
+    if (category === "all" || category === "payment_terms") {
+      stats.checksRun += 1;
+      const paymentTermsPreview = await previewPaymentTermsExclusion({
+        sequelize,
+        transaction: t,
+        customerId,
+        ptrsId,
+        effectiveLimit,
+      });
+
+      result.counts.payment_terms = paymentTermsPreview.matched;
+      result.alreadyExcludedCounts.payment_terms =
+        paymentTermsPreview.alreadyExcluded;
+      result.samples.payment_terms = paymentTermsPreview.sampleRows;
     }
 
     if (category === "all" || category === "international") {

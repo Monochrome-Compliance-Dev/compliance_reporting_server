@@ -44,12 +44,12 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
         -- Canonical flags (safe parse: only true/false strings become booleans)
         CASE
           WHEN lower(data->>'trade_credit_payment') IN ('true','false') THEN (data->>'trade_credit_payment')::boolean
-          ELSE NULL
+          ELSE true
         END AS trade_credit_payment,
 
         CASE
           WHEN lower(data->>'excluded_trade_credit_payment') IN ('true','false') THEN (data->>'excluded_trade_credit_payment')::boolean
-          ELSE NULL
+          ELSE false
         END AS excluded_trade_credit_payment,
 
         CASE
@@ -58,18 +58,21 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
         END AS is_small_business,
 
         -- Safe numeric parses
-        CASE
-          WHEN (data->>'payment_amount') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_amount')::numeric
+                CASE
+          WHEN NULLIF(regexp_replace(COALESCE(data->>'payment_amount', ''), '[^0-9.\-]', '', 'g'), '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+            THEN NULLIF(regexp_replace(COALESCE(data->>'payment_amount', ''), '[^0-9.\-]', '', 'g'), '')::numeric
           ELSE NULL
         END AS payment_amount_num,
 
-        CASE
-          WHEN (data->>'payment_time_days') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_time_days')::numeric
+                CASE
+          WHEN NULLIF(regexp_replace(COALESCE(data->>'payment_time_days', ''), '[^0-9.\-]', '', 'g'), '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+            THEN NULLIF(regexp_replace(COALESCE(data->>'payment_time_days', ''), '[^0-9.\-]', '', 'g'), '')::numeric
           ELSE NULL
         END AS payment_time_days_num,
 
-        CASE
-          WHEN (data->>'payment_term_days') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_term_days')::numeric
+                CASE
+          WHEN NULLIF(regexp_replace(COALESCE(data->>'payment_term_days', ''), '[^0-9.\-]', '', 'g'), '') ~ '^-?[0-9]+(\.[0-9]+)?$'
+            THEN NULLIF(regexp_replace(COALESCE(data->>'payment_term_days', ''), '[^0-9.\-]', '', 'g'), '')::numeric
           ELSE NULL
         END AS payment_term_days_num
 
@@ -98,9 +101,41 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
       SELECT
         *,
         GREATEST(0, ROUND(payment_time_days_num)::int) AS payment_time_days_int,
-        GREATEST(0, ROUND(payment_term_days_num)::int) AS payment_term_days_int
+        GREATEST(0, ROUND(payment_term_days_num)::int) AS payment_term_days_int,
+        NULLIF(BTRIM(data->>'payer_entity_name'), '') AS payer_entity_name
       FROM population
       WHERE is_small_business IS TRUE
+    ),
+
+    entity_term_counts AS (
+      SELECT
+        payer_entity_name,
+        payment_term_days_int AS term,
+        COUNT(*) AS c
+      FROM sb
+      WHERE payer_entity_name IS NOT NULL
+        AND payment_term_days_num IS NOT NULL
+      GROUP BY payer_entity_name, payment_term_days_int
+    ),
+
+    entity_term_mode_ranked AS (
+      SELECT
+        payer_entity_name,
+        term,
+        c,
+        ROW_NUMBER() OVER (
+          PARTITION BY payer_entity_name
+          ORDER BY c DESC, term ASC
+        ) AS rn
+      FROM entity_term_counts
+    ),
+
+    entity_term_modes AS (
+      SELECT
+        payer_entity_name,
+        term
+      FROM entity_term_mode_ranked
+      WHERE rn = 1
     )
 
     SELECT
@@ -147,16 +182,15 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
       (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
       (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
 
-      -- Term min/max/mode (population)
-      (SELECT MIN(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMin",
-      (SELECT MAX(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMax",
+      -- Term min/max/mode (regulator logic: mode per payer entity, then aggregate those modes)
+      (SELECT MIN(term)::int FROM entity_term_modes) AS "termMin",
+      (SELECT MAX(term)::int FROM entity_term_modes) AS "termMax",
       (SELECT x.term::int
          FROM (
-           SELECT GREATEST(0, ROUND(payment_term_days_num)::int) AS term, COUNT(*) AS c
-           FROM population
-           WHERE payment_term_days_num IS NOT NULL
-           GROUP BY 1
-           ORDER BY c DESC
+           SELECT term, COUNT(*) AS c
+           FROM entity_term_modes
+           GROUP BY term
+           ORDER BY c DESC, term ASC
            LIMIT 1
          ) x
       ) AS "commonTermMode";
@@ -410,20 +444,8 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       missing: [],
     };
 
-    // Trade credit population definition requires these booleans to be explicit.
-    if (missingTradeCreditFlagCount > 0) {
-      canonicalQuality.missing.push({
-        field: "trade_credit_payment",
-        count: missingTradeCreditFlagCount,
-      });
-    }
-
-    if (missingExcludedTradeCreditFlagCount > 0) {
-      canonicalQuality.missing.push({
-        field: "excluded_trade_credit_payment",
-        count: missingExcludedTradeCreditFlagCount,
-      });
-    }
+    // Trade credit flags are treated as default-true/default-false in metrics
+    // unless explicitly set otherwise, so missing flags are informational only.
 
     // SB metrics quality signals (do NOT block)
     if (missingSbFlagCount > 0) {
@@ -457,15 +479,8 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       });
     }
 
-    // Block ONLY if we cannot define the trade credit population.
-    // This happens when:
-    // - the canonical booleans are not explicit for some rows, OR
-    // - we have staged rows, but zero rows qualify as trade credit (likely unmapped flags).
-    if (
-      missingTradeCreditFlagCount > 0 ||
-      missingExcludedTradeCreditFlagCount > 0 ||
-      (stageRowCount > 0 && totalCount === 0)
-    ) {
+    // Block ONLY if we still have staged rows but zero rows in the trade credit population.
+    if (stageRowCount > 0 && totalCount === 0) {
       canonicalQuality.blocked = true;
     }
 

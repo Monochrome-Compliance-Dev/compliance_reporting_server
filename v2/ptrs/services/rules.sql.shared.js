@@ -22,7 +22,9 @@ function buildRuleWhereSql(conds = [], replacements = {}, alias = null) {
     if (!field || !op) continue;
 
     const expr = buildJsonbTextExpr(field, alias);
-    const key = `r_${field}_${clauses.length}`;
+    const scope = alias ? String(alias).replace(/[^a-zA-Z0-9_]/g, "") : "x";
+    const safeField = String(field).replace(/[^a-zA-Z0-9_]/g, "_");
+    const key = `r_${scope}_${safeField}_${clauses.length}`;
 
     switch (op) {
       case "eq":

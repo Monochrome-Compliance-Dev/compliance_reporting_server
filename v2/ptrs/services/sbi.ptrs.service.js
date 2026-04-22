@@ -331,6 +331,69 @@ function sha256(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
+const STAGE_UPDATE_BATCH_SIZE = 1000;
+
+async function bulkUpdateStageRowData({
+  customerId,
+  ptrsId,
+  rows,
+  transaction,
+}) {
+  const payload = Array.isArray(rows) ? rows : [];
+  if (!payload.length) return;
+
+  for (let i = 0; i < payload.length; i += STAGE_UPDATE_BATCH_SIZE) {
+    const chunk = payload.slice(i, i + STAGE_UPDATE_BATCH_SIZE);
+
+    await db.sequelize.query(
+      `
+        UPDATE "tbl_ptrs_stage_row" s
+        SET
+          "data" = u.data,
+          "updatedAt" = now()
+        FROM (
+          SELECT *
+          FROM jsonb_to_recordset(CAST(:rowsJson AS jsonb))
+            AS x(id text, data jsonb)
+        ) u
+        WHERE s."id" = u.id
+          AND s."customerId" = :customerId
+          AND s."ptrsId" = :ptrsId
+          AND s."deletedAt" IS NULL
+      `,
+      {
+        transaction,
+        replacements: {
+          customerId,
+          ptrsId,
+          rowsJson: JSON.stringify(chunk),
+        },
+      },
+    );
+  }
+}
+
+async function loadStageRowsForSbiImport({ customerId, ptrsId, transaction }) {
+  return db.sequelize.query(
+    `
+      SELECT
+        s."id",
+        s."rowNo",
+        s."data"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+      ORDER BY s."rowNo" ASC
+    `,
+    {
+      transaction,
+      replacements: { customerId, ptrsId },
+      type: db.sequelize.QueryTypes.SELECT,
+    },
+  );
+}
+
 /**
  * Minimal CSV parser that supports commas inside quoted values.
  * This is intentionally small and purpose-built for the SBI tool outputs.
@@ -568,6 +631,8 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
     let invalidAbns = 0;
     let unknownOutcomes = 0;
+    let smallBusinessCount = 0;
+    let notSmallBusinessCount = 0;
 
     for (const r of rows) {
       const abn = normalizeAbn(r[abnIdx] || "");
@@ -578,6 +643,8 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
       const { isSmallBusiness, isValidAbn, outcome } =
         classifyOutcome(outcomeRaw);
+      if (isValidAbn && isSmallBusiness === true) smallBusinessCount += 1;
+      if (isValidAbn && isSmallBusiness === false) notSmallBusinessCount += 1;
       if (!isValidAbn) invalidAbns += 1;
       if (
         isSmallBusiness == null &&
@@ -645,10 +712,9 @@ async function importResults({ customerId, ptrsId, userId, file }) {
     });
 
     // Apply to stage rows
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      order: [["rowNo", "ASC"]],
-      raw: false,
+    const stageRows = await loadStageRowsForSbiImport({
+      customerId,
+      ptrsId,
       transaction: t,
     });
 
@@ -659,9 +725,14 @@ async function importResults({ customerId, ptrsId, userId, file }) {
     let missingAbnRows = 0;
     let invalidMatchRows = 0;
     let unknownOutcomeRows = 0;
+    let abnMissingFromSbiResultsCount = 0;
+
+    const missingFromSbiResults = [];
+    const MISSING_SBI_SAMPLE_LIMIT = 50;
 
     const nowIso = new Date().toISOString();
     const rowChanges = [];
+    const stageUpdates = [];
 
     // Update sequentially for determinism; can be optimised later
     for (const stageRow of stageRows) {
@@ -685,6 +756,29 @@ async function importResults({ customerId, ptrsId, userId, file }) {
 
       const sbi = byAbn.get(payeeAbn);
       if (!sbi) {
+        abnMissingFromSbiResultsCount += 1;
+
+        if (missingFromSbiResults.length < MISSING_SBI_SAMPLE_LIMIT) {
+          missingFromSbiResults.push({
+            stageRowId: stageRow.id,
+            rowNo: stageRow.rowNo,
+            payeeAbn,
+            payeeEntityName:
+              stageRow?.data?.payee_entity_name ||
+              stageRow?.data?.["Account  Name"] ||
+              stageRow?.data?.account_name ||
+              null,
+            invoiceReferenceNumber:
+              stageRow?.data?.invoice_reference_number ||
+              stageRow?.data?.["Document Number"] ||
+              null,
+            documentType:
+              stageRow?.data?.document_type ||
+              stageRow?.data?.["Document Type"] ||
+              null,
+          });
+        }
+
         continue;
       }
 
@@ -740,9 +834,20 @@ async function importResults({ customerId, ptrsId, userId, file }) {
           changedAt: new Date(),
         });
 
-        stageRow.data = nextData;
-        await stageRow.save({ transaction: t });
+        stageUpdates.push({
+          id: stageRow.id,
+          data: nextData,
+        });
       }
+    }
+
+    if (stageUpdates.length) {
+      await bulkUpdateStageRowData({
+        customerId,
+        ptrsId,
+        rows: stageUpdates,
+        transaction: t,
+      });
     }
 
     if (rowChanges.length) {
@@ -781,15 +886,25 @@ async function importResults({ customerId, ptrsId, userId, file }) {
       parsedAbns,
       invalidAbns,
       unknownOutcomes,
+      outcomes: {
+        smallBusinessCount,
+        notSmallBusinessCount,
+        invalidAbns,
+        unknownOutcomes,
+      },
       stage: {
         totalRows: stageRows.length,
         excludedRows,
         rowsWithPayeeAbn,
         matchedAbns,
         affectedRows,
+        abnMissingFromSbiResultsCount,
         missingAbnRows,
         invalidMatchRows,
         unknownOutcomeRows,
+      },
+      samples: {
+        missingFromSbiResults,
       },
       blockingReasons,
     };
@@ -814,6 +929,7 @@ async function importResults({ customerId, ptrsId, userId, file }) {
         excludedRows,
         rowsWithPayeeAbn,
         matchedAbns,
+        abnMissingFromSbiResultsCount,
         affectedRows,
         missingAbnRows,
         invalidMatchRows,

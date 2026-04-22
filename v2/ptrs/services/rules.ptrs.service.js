@@ -132,6 +132,373 @@ function mergePreviewHeadersFromRows(existingHeaders = [], rows = []) {
   return merged;
 }
 
+async function loadStageRowsForRulesPreview({
+  customerId,
+  ptrsId,
+  transaction,
+  limit = 20000,
+}) {
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        s."rowNo",
+        s."data",
+        s."meta",
+        s."updatedAt"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+      ORDER BY s."rowNo" ASC
+      LIMIT :limit
+    `,
+    {
+      transaction,
+      replacements: {
+        customerId,
+        ptrsId,
+        limit: Math.max(Number(limit) || 20000, 1),
+      },
+      type: db.sequelize.QueryTypes.SELECT,
+    },
+  );
+
+  return (Array.isArray(rows) ? rows : []).map((r) => {
+    const data =
+      r && typeof r.data === "object" && r.data !== null ? r.data : {};
+    const meta =
+      r && typeof r.meta === "object" && r.meta !== null ? r.meta : {};
+
+    return {
+      ...data,
+      rowNo: Number(r?.rowNo || data?.rowNo || data?.row_no || 0) || null,
+      row_no: Number(r?.rowNo || data?.rowNo || data?.row_no || 0) || null,
+      _meta: meta,
+      updatedAt: r?.updatedAt || null,
+    };
+  });
+}
+
+function previewGetText(row, keys = []) {
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const value = row?.[key];
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function previewGetNumber(row, keys = []) {
+  for (const key of Array.isArray(keys) ? keys : []) {
+    const value = row?.[key];
+    if (value == null || value === "") continue;
+    const n = Number(String(value).replace(/[, ]+/g, ""));
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function previewApproxEqual(a, b, epsilon = 0.000001) {
+  return Math.abs(Number(a || 0) - Number(b || 0)) <= epsilon;
+}
+
+function previewRound(value, dp = 2) {
+  const factor = 10 ** Number(dp || 2);
+  return Math.round(Number(value || 0) * factor) / factor;
+}
+
+function previewMatchesCond(row, cond) {
+  if (!cond || typeof cond !== "object") return true;
+
+  const field = String(cond.field || "").trim();
+  const op = String(cond.op || "").trim();
+  if (!field || !op) return true;
+
+  const raw = row?.[field];
+  const s = raw == null ? "" : String(raw);
+  const v = cond.value == null ? "" : String(cond.value);
+
+  const toNum = (x) => {
+    const n = Number(String(x).replace(/[, ]+/g, ""));
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  switch (op) {
+    case "eq":
+      return s === v;
+    case "neq":
+      return s !== v;
+    case "starts_with":
+      return s.startsWith(v);
+    case "ends_with":
+      return s.endsWith(v);
+    case "gt":
+      return toNum(raw) > toNum(v);
+    case "gte":
+      return toNum(raw) >= toNum(v);
+    case "lt":
+      return toNum(raw) < toNum(v);
+    case "lte":
+      return toNum(raw) <= toNum(v);
+    case "in": {
+      const parts = v
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return parts.includes(s);
+    }
+    case "nin": {
+      const parts = v
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      return !parts.includes(s);
+    }
+    case "is_null":
+      return raw == null || s === "";
+    case "not_null":
+      return raw != null && s !== "";
+    default:
+      return true;
+  }
+}
+
+function buildBestMatchPairingPreview({
+  rows = [],
+  rule,
+  previewPageSize = 30,
+  effectivePage = 1,
+}) {
+  const when = Array.isArray(rule?.when) ? rule.when : [];
+  const match = Array.isArray(rule?.target?.match) ? rule.target.match : [];
+  const where = Array.isArray(rule?.target?.where) ? rule.target.where : [];
+  const match0 = match[0] || {};
+  const currentField = String(match0.currentField || "").trim();
+  const targetField = String(match0.targetField || "").trim();
+  const action = rule?.action || {};
+  const op = String(action.op || "add").toLowerCase();
+  const targetAmountField = String(action.field || "").trim();
+  const currentAmountField = String(
+    action.valueFieldFromCurrent || action.valueField || "",
+  ).trim();
+  const dp = typeof action.round === "number" ? action.round : 2;
+
+  const excludeUnmatchedCurrent =
+    rule?.target?.excludeUnmatchedCurrent === true;
+  const unmatchedComment = String(
+    rule?.target?.unmatchedComment ||
+      action.unmatchedComment ||
+      `Excluded by cross-row rule — no matching invoice found for credit pairing (${rule.label || rule.id || "crossRowRule"})`,
+  ).trim();
+  const zeroInvoiceComment = `Excluded by cross-row rule — zero balance after pairing (${rule.label || rule.id || "crossRowRule"})`;
+  const excludeReason = "CROSS_ROW_RULE";
+
+  const currentRows = (Array.isArray(rows) ? rows : [])
+    .filter(
+      (row) =>
+        !(
+          row?.exclude === true ||
+          row?.exclude_from_metrics === true ||
+          row?._meta?.exclusions?.exclude === true ||
+          row?._meta?.exclusions?.exclude_from_metrics === true
+        ),
+    )
+    .filter((row) => when.every((cond) => previewMatchesCond(row, cond)))
+    .map((row, idx) => ({
+      row,
+      idx,
+      rowNo: Number(row?.row_no || row?.rowNo || idx + 1),
+      key: previewGetText(row, [currentField]),
+      amount: previewGetNumber(row, [currentAmountField]),
+      purchasingDocumentNo: previewGetText(row, [
+        "purchasing_document_no",
+        "Purchasing Document No",
+      ]),
+      dueDate: previewGetText(row, ["invoice_due_date", "Net Due Date"]),
+    }))
+    .filter((entry) => entry.key && Number.isFinite(entry.amount))
+    .sort((a, b) => a.rowNo - b.rowNo);
+
+  const targetRows = (Array.isArray(rows) ? rows : [])
+    .filter(
+      (row) =>
+        !(
+          row?.exclude === true ||
+          row?.exclude_from_metrics === true ||
+          row?._meta?.exclusions?.exclude === true ||
+          row?._meta?.exclusions?.exclude_from_metrics === true
+        ),
+    )
+    .filter((row) => where.every((cond) => previewMatchesCond(row, cond)))
+    .map((row, idx) => ({
+      row,
+      idx,
+      rowNo: Number(row?.row_no || row?.rowNo || idx + 1),
+      key: previewGetText(row, [targetField]),
+      amount: previewGetNumber(row, [targetAmountField]),
+      purchasingDocumentNo: previewGetText(row, [
+        "purchasing_document_no",
+        "Purchasing Document No",
+      ]),
+      dueDate: previewGetText(row, ["invoice_due_date", "Net Due Date"]),
+      claimed: false,
+    }))
+    .filter((entry) => entry.key && Number.isFinite(entry.amount))
+    .sort((a, b) => a.rowNo - b.rowNo);
+
+  const targetsByKey = new Map();
+  for (const entry of targetRows) {
+    const bucket = targetsByKey.get(entry.key) || [];
+    bucket.push(entry);
+    targetsByKey.set(entry.key, bucket);
+  }
+
+  const examples = [];
+  let unmatchedKeys = 0;
+
+  for (const current of currentRows) {
+    const available = (targetsByKey.get(current.key) || []).filter(
+      (target) => !target.claimed,
+    );
+
+    if (!available.length) {
+      unmatchedKeys += 1;
+      if (excludeUnmatchedCurrent) {
+        examples.push({
+          ref: current.key,
+          document_type:
+            previewGetText(current.row, ["document_type"]) || "Credit",
+          payee_entity_name: previewGetText(current.row, [
+            "payee_entity_name",
+            "Account  Name",
+            "account_name",
+          ]),
+          base_before: current.amount,
+          expected_delta: current.amount,
+          would_be: null,
+          exclude_reason: excludeReason,
+          exclude_comment: unmatchedComment,
+          updatedAt: current.row?.updatedAt || null,
+        });
+      }
+      continue;
+    }
+
+    const currentAbsAmount = Math.abs(current.amount);
+
+    const ranked = available
+      .map((target) => ({
+        target,
+        exactAmountMatch: previewApproxEqual(target.amount, currentAbsAmount)
+          ? 1
+          : 0,
+        samePurchasingDoc:
+          current.purchasingDocumentNo &&
+          target.purchasingDocumentNo &&
+          current.purchasingDocumentNo === target.purchasingDocumentNo
+            ? 1
+            : 0,
+        sameDueDate:
+          current.dueDate &&
+          target.dueDate &&
+          current.dueDate === target.dueDate
+            ? 1
+            : 0,
+      }))
+      .sort((a, b) => {
+        if (b.exactAmountMatch !== a.exactAmountMatch) {
+          return b.exactAmountMatch - a.exactAmountMatch;
+        }
+        if (b.samePurchasingDoc !== a.samePurchasingDoc) {
+          return b.samePurchasingDoc - a.samePurchasingDoc;
+        }
+        if (b.sameDueDate !== a.sameDueDate) {
+          return b.sameDueDate - a.sameDueDate;
+        }
+        return a.target.rowNo - b.target.rowNo;
+      });
+
+    const best = ranked[0]?.target;
+    if (!best) {
+      unmatchedKeys += 1;
+      if (excludeUnmatchedCurrent) {
+        examples.push({
+          ref: current.key,
+          document_type:
+            previewGetText(current.row, ["document_type"]) || "Credit",
+          payee_entity_name: previewGetText(current.row, [
+            "payee_entity_name",
+            "Account  Name",
+            "account_name",
+          ]),
+          base_before: current.amount,
+          expected_delta: current.amount,
+          would_be: null,
+          exclude_reason: excludeReason,
+          exclude_comment: unmatchedComment,
+          updatedAt: current.row?.updatedAt || null,
+        });
+      }
+      continue;
+    }
+
+    let wouldBe = best.amount;
+    if (op === "add") wouldBe = best.amount + current.amount;
+    else if (op === "sub") wouldBe = best.amount - current.amount;
+    else if (op === "mul") wouldBe = best.amount * current.amount;
+    else if (op === "div") {
+      wouldBe =
+        current.amount === 0 ? best.amount : best.amount / current.amount;
+    } else if (op === "assign") {
+      wouldBe = current.amount;
+    }
+    wouldBe = previewRound(wouldBe, dp);
+
+    best.claimed = true;
+
+    examples.push({
+      ref: best.key,
+      document_type: previewGetText(best.row, ["document_type"]) || "Invoice",
+      payee_entity_name: previewGetText(best.row, [
+        "payee_entity_name",
+        "Account  Name",
+        "account_name",
+      ]),
+      base_before: best.amount,
+      expected_delta: current.amount,
+      would_be: wouldBe,
+      exclude_reason: previewApproxEqual(wouldBe, 0) ? excludeReason : "",
+      exclude_comment: previewApproxEqual(wouldBe, 0) ? zeroInvoiceComment : "",
+      updatedAt: best.row?.updatedAt || null,
+    });
+  }
+
+  examples.sort((a, b) => {
+    const at = new Date(a?.updatedAt || 0).getTime();
+    const bt = new Date(b?.updatedAt || 0).getTime();
+    return bt - at;
+  });
+
+  const total = examples.length;
+  const offset =
+    (Math.max(Number(effectivePage) || 1, 1) - 1) *
+    Math.max(Number(previewPageSize) || 30, 1);
+  const pagedExamples = examples.slice(
+    offset,
+    offset + Math.max(Number(previewPageSize) || 30, 1),
+  );
+
+  return {
+    count: total,
+    ambiguousTargetRows: 0,
+    ambiguousKeys: 0,
+    unmatchedKeys,
+    examples: pagedExamples,
+    total,
+  };
+}
+
 function applyRules(rows, rules = []) {
   const enabled = (rules || []).filter((r) => r && r.enabled !== false);
   const stats = { rulesTried: enabled.length, rowsAffected: 0, actions: 0 };
@@ -563,6 +930,7 @@ async function getRulesPreview({
   customerId,
   ptrsId,
   limit = 50,
+  page = 1,
   mode = "sample",
   groupName = null,
 }) {
@@ -571,6 +939,9 @@ async function getRulesPreview({
 
   const started = Date.now();
   const effectiveLimit = Math.min(Number(limit) || 50, 500);
+  const previewPageSize = Math.min(Number(limit) || 30, 30);
+  const effectivePage = Math.max(Number(page) || 1, 1);
+  const effectiveOffset = (effectivePage - 1) * previewPageSize;
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
@@ -725,12 +1096,76 @@ async function getRulesPreview({
         };
       }
 
+      if (targetSelection === "best_match_pairing") {
+        const fullPreviewRows = await loadStageRowsForRulesPreview({
+          customerId,
+          ptrsId,
+          limit: 20000,
+          transaction: t,
+        });
+
+        const previewRowsAfterRowRules = fullPreviewRows;
+
+        const pairingPreview = buildBestMatchPairingPreview({
+          rows: previewRowsAfterRowRules,
+          rule,
+          previewPageSize,
+          effectivePage,
+        });
+
+        await t.commit();
+
+        return {
+          meta: {
+            ptrsId,
+            mode,
+            groupName,
+            elapsedMs: Date.now() - started,
+            isPartial: false,
+            helperRowRulesMaterialised: helperRowRules.length,
+            previewSource: "staged_rows",
+            targetSelection,
+            requireTargetMatch,
+            previewPage: effectivePage,
+            previewPageSize,
+          },
+          summary: {
+            rulesTried: crossRowRules.length,
+            rowsAffected: Number(pairingPreview?.count || 0),
+            actions: Number(pairingPreview?.count || 0),
+            ambiguousTargetRows: Number(
+              pairingPreview?.ambiguousTargetRows || 0,
+            ),
+            ambiguousKeys: Number(pairingPreview?.ambiguousKeys || 0),
+            unmatchedKeys: Number(pairingPreview?.unmatchedKeys || 0),
+          },
+          warning: null,
+          headers: [],
+          rows: [],
+          byRule: {},
+          examples: Array.isArray(pairingPreview?.examples)
+            ? pairingPreview.examples
+            : [],
+          examplesPagination: {
+            page: effectivePage,
+            limit: previewPageSize,
+            total: Number(pairingPreview?.total || 0),
+            totalPages: Math.max(
+              1,
+              Math.ceil(Number(pairingPreview?.total || 0) / previewPageSize),
+            ),
+          },
+        };
+      }
+
       // Build WHERE fragments
       const wherePartsCurr = [];
       const wherePartsTgt = [];
       const replacements = {
         customerId: String(customerId),
         ptrsId: String(ptrsId),
+        previewPageSize,
+        effectiveOffset,
       };
       const helperProjectionSql = buildPreviewRowProjectionSql({
         rules: helperRowRules,
@@ -839,10 +1274,11 @@ curr AS (
   GROUP BY 1
 ),
 eligible_targets AS (
-  SELECT
+    SELECT
     t."id",
     t."rowNo",
     t.data->>'document_type' AS document_type,
+        COALESCE(t.data->>'payee_entity_name', t.data->>'Account  Name', t.data->>'account_name') AS supplier_name,
     ${tgtKeyExpr} AS k,
     COALESCE(${tgtAmtExpr}, 0) AS base_before,
     t."updatedAt"
@@ -856,6 +1292,7 @@ matched AS (
     et."id",
     et."rowNo",
     et.document_type,
+    et.supplier_name,
     et.k,
     et.base_before,
     et."updatedAt",
@@ -872,13 +1309,14 @@ target_counts AS (
 ),
 impacted AS (
   SELECT
-    m."id",
     m."rowNo",
     m.document_type,
+    m.supplier_name,
     m.k AS ref,
     m.base_before,
     m.delta AS expected_delta,
-    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be
+    ROUND(${strictOpSql}::numeric, ${dp}) AS would_be,
+    m."updatedAt"
   FROM matched m
   JOIN target_counts tc ON tc.k = m.k
   WHERE tc.target_count = 1
@@ -950,10 +1388,11 @@ curr AS (
   GROUP BY 1
 ),
 eligible_targets AS (
-  SELECT
+    SELECT
     t."id",
     t."rowNo",
     t.data->>'document_type' AS document_type,
+    t.data->>'payee_entity_name' AS payee_entity_name,
     ${tgtKeyExpr} AS k,
     COALESCE(${tgtAmtExpr}, 0) AS base_before,
     t."updatedAt"
@@ -963,10 +1402,11 @@ eligible_targets AS (
     AND COALESCE(${tgtKeyExpr}, '') <> ''
 ),
 matched AS (
-  SELECT
+    SELECT
     et."id",
     et."rowNo",
     et.document_type,
+    et.payee_entity_name,
     et.k,
     et.base_before,
     et."updatedAt",
@@ -985,6 +1425,7 @@ impacted AS (
   SELECT
     m."rowNo",
     m.document_type,
+    m.payee_entity_name,
     m.k AS ref,
     m.base_before,
     m.delta AS expected_delta,
@@ -997,7 +1438,7 @@ impacted AS (
 SELECT *
 FROM impacted
 ORDER BY "updatedAt" DESC
-LIMIT 20;
+LIMIT :previewPageSize OFFSET :effectiveOffset;
 `
           : `
 WITH ${baseRowsCteSql}
@@ -1012,9 +1453,10 @@ curr AS (
   GROUP BY 1
 ),
 impacted AS (
-  SELECT
+    SELECT
     t."rowNo",
     t.data->>'document_type' AS document_type,
+    t.data->>'payee_entity_name' AS payee_entity_name,
     ${tgtKeyExpr} AS ref,
     COALESCE(${tgtAmtExpr}, 0) AS base_before,
     curr.delta AS expected_delta,
@@ -1028,7 +1470,7 @@ impacted AS (
 SELECT *
 FROM impacted
 ORDER BY "updatedAt" DESC
-LIMIT 20;
+LIMIT :previewPageSize OFFSET :effectiveOffset;
 `;
 
       const [
@@ -1062,6 +1504,8 @@ LIMIT 20;
           helperRowRulesMaterialised: helperRowRules.length,
           targetSelection: targetSelection || "first_match",
           requireTargetMatch,
+          previewPage: effectivePage,
+          previewPageSize,
         },
         summary: {
           rulesTried: crossRowRules.length,
@@ -1081,6 +1525,15 @@ LIMIT 20;
         rows: [],
         byRule: {},
         examples: Array.isArray(examples) ? examples : [],
+        examplesPagination: {
+          page: effectivePage,
+          limit: previewPageSize,
+          total: Number(countRow?.count || 0),
+          totalPages: Math.max(
+            1,
+            Math.ceil(Number(countRow?.count || 0) / previewPageSize),
+          ),
+        },
       };
     }
 

@@ -725,6 +725,76 @@ async function stagePtrs({
         });
         stageEnd(sPersistInsert, { inserted: persistedRowsOut });
 
+        const sPaymentTermUpdate = stageStart(
+          "persist_stage_update_payment_term_days",
+        );
+        const paymentTermSql = `
+          WITH term_source AS (
+            SELECT
+              s."id",
+              NULLIF(
+                TRIM(
+                  COALESCE(
+                    s."data"->>'payment_term_days',
+                    s."data"->>'invoice_payment_terms_effective',
+                    s."data"->>'invoice_payment_terms_raw',
+                    s."data"->>'invoice_payment_terms',
+                    s."data"->>'payment_term',
+                    s."data"->>'vendormaster__Payment terms',
+                    s."data"->>'default_payment_term',
+                    s."data"->>'contract_po_payment_terms_effective',
+                    s."data"->>'contract_po_payment_terms'
+                  )
+                ),
+                ''
+              ) AS "termCode"
+            FROM "tbl_ptrs_stage_row" s
+            WHERE s."customerId" = :customerId
+              AND s."ptrsId" = :ptrsId
+              AND s."profileId" = :profileId
+              AND s."deletedAt" IS NULL
+          ),
+          term_lookup AS (
+            SELECT
+              ts."id",
+              CASE
+                WHEN ts."termCode" ~ '^\\d{1,4}$' THEN ts."termCode"::int
+                ELSE ptm."transformedDays"
+              END AS "paymentTermDays"
+            FROM term_source ts
+            LEFT JOIN "tbl_ptrs_payment_term_map" ptm
+              ON ptm."customerId" = :customerId
+             AND ptm."profileId" = :profileId
+             AND ptm."deletedAt" IS NULL
+             AND ptm."raw" = ts."termCode"
+          )
+          UPDATE "tbl_ptrs_stage_row" s
+          SET
+            "data" = jsonb_strip_nulls(
+              COALESCE(s."data", '{}'::jsonb)
+              || jsonb_build_object(
+                'payment_term_days', tl."paymentTermDays"
+              )
+            ),
+            "updatedBy" = :userId,
+            "updatedAt" = NOW()
+          FROM term_lookup tl
+          WHERE s."id" = tl."id"
+            AND s."profileId" = :profileId
+            AND s."deletedAt" IS NULL
+        `;
+
+        await db.sequelize.query(paymentTermSql, {
+          transaction: t,
+          replacements: {
+            customerId,
+            ptrsId,
+            profileId,
+            userId: userId || null,
+          },
+        });
+        stageEnd(sPaymentTermUpdate, { updatedRows: persistedCount });
+
         const sPaymentTimeUpdate = stageStart(
           "persist_stage_update_payment_time",
         );

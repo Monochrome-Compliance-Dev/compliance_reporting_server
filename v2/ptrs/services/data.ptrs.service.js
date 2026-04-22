@@ -86,6 +86,33 @@ function pickModelFields(model, candidate) {
   return out;
 }
 
+function normaliseAccountingNegativeCell(value) {
+  if (value == null) return value;
+  if (typeof value !== "string") return value;
+
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+
+  // Convert accounting-style negatives like "(1,016.29)" or "(145.8)" to "-1016.29" / "-145.8".
+  // Leave non-numeric parenthesised text untouched.
+  if (/^\(\s*[\d,]+(?:\.\d+)?\s*\)$/.test(trimmed)) {
+    const inner = trimmed.slice(1, -1).trim().replace(/,/g, "");
+    return `-${inner}`;
+  }
+
+  return value;
+}
+
+function normaliseImportedCsvRow(row) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return row;
+
+  const out = {};
+  for (const [key, value] of Object.entries(row)) {
+    out[key] = normaliseAccountingNegativeCell(value);
+  }
+  return out;
+}
+
 async function importDatasetCsvStreamToImportRaw({
   customerId,
   ptrsId,
@@ -229,13 +256,14 @@ async function importDatasetCsvStreamToImportRaw({
       })
       .on("error", (err) => handleFatal(err))
       .on("data", (row) => {
+        const normalisedRow = normaliseImportedCsvRow(row);
         rowNo += 1;
         batch.push({
           customerId,
           ptrsId,
           datasetId,
           rowNo,
-          data: row,
+          data: normalisedRow,
           errors: null,
         });
 
@@ -532,13 +560,14 @@ async function importCsvStream({
         handleFatal(err);
       })
       .on("data", (row) => {
+        const normalisedRow = normaliseImportedCsvRow(row);
         rowNo += 1;
         batch.push({
           customerId,
           ptrsId,
           datasetId: effectiveDatasetId,
           rowNo,
-          data: row,
+          data: normalisedRow,
           errors: null,
         });
         if (batch.length >= BATCH_SIZE) {
