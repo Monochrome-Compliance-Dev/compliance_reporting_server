@@ -30,7 +30,6 @@ async function persistMappedRowsInBatches({
   batchSize,
   maxHeaderKeys,
   composeMappedRowsForPtrs,
-  ensureCanonicalRowShape,
   hrMsSince,
   db,
   slog,
@@ -81,7 +80,7 @@ async function persistMappedRowsInBatches({
 
   if (!canonicalHeaders.length) {
     for (const row of rows) {
-      const canonicalRow = ensureCanonicalRowShape(row);
+      const canonicalRow = row;
       for (const k of Object.keys(canonicalRow || {})) {
         if (headersSet.size < maxHeaderKeys) headersSet.add(k);
       }
@@ -96,7 +95,7 @@ async function persistMappedRowsInBatches({
     const payload = [];
     for (let i = 0; i < slice.length; ++i) {
       const row = slice[i];
-      const canonicalRow = sanitizeForJsonbDeep(ensureCanonicalRowShape(row));
+      const canonicalRow = sanitizeForJsonbDeep(row);
       payload.push({
         customerId,
         ptrsId,
@@ -180,7 +179,6 @@ async function buildMappedDatasetForPtrs({
   getMapCompletionGate,
   persistMappedRowsInBatches,
   composeMappedRowsForPtrs,
-  ensureCanonicalRowShape,
   db,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -331,7 +329,6 @@ async function buildMappedDatasetForPtrs({
         batchSize: BATCH_SIZE,
         maxHeaderKeys: MAX_HEADER_KEYS,
         composeMappedRowsForPtrs,
-        ensureCanonicalRowShape,
         hrMsSince,
         db,
         slog,

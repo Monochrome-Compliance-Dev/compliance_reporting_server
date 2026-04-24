@@ -1,99 +1,50 @@
-const {
-  jsonText,
-  appendJsonbTextArray,
-  appendJsonbTextArrayAtPath,
-  applyExcludeFlags,
-  applyMetaBase,
-} = require("./exclusions.shared");
-
 async function applyDocTypeExclusion({
   sequelize,
   transaction,
   customerId,
   ptrsId,
 }) {
-  const docTypeExpr = jsonText("s", "document_type", "Document Type");
-  const clearingDocExpr = jsonText(
-    "s",
-    "clearing_document",
-    "Clearing Document",
-  );
-  const reasonSql = `'DOC_TYPE'`;
-  const commentSql = `
-    CASE
-      WHEN ${docTypeExpr} = 'K1'
-        THEN 'Document type exclusion — K1 document type'
-      WHEN ${clearingDocExpr} LIKE '2000%'
-        THEN 'Document type exclusion — clearing document begins 2000'
-      WHEN ${docTypeExpr} IN ('Z', 'KZ', 'AB')
-        AND ${clearingDocExpr} LIKE '5%'
-        THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
-      ELSE 'Document type exclusion'
-    END
-  `;
-
-  const dataBaseSql = applyExcludeFlags(`s."data"`, reasonSql);
-  const dataWithReasonsSql = appendJsonbTextArray(
-    "exclude_reasons",
-    reasonSql,
-    dataBaseSql,
-  );
-  const dataFinalSql = appendJsonbTextArray(
-    "exclude_comment",
-    commentSql,
-    dataWithReasonsSql,
-  );
-
-  const metaBaseSql = applyMetaBase(`s."meta"`);
-  const metaWithReasonSql = `
-    jsonb_set(
-      ${metaBaseSql},
-      '{exclusions,reason}',
-      CASE
-        WHEN trim(COALESCE(${metaBaseSql}#>>'{exclusions,reason}', '')) <> ''
-          THEN to_jsonb(${metaBaseSql}#>>'{exclusions,reason}')
-        ELSE to_jsonb((${reasonSql})::text)
-      END,
-      true
-    )
-  `;
-  const metaWithReasonsSql = appendJsonbTextArrayAtPath(
-    "exclusions,reasons",
-    reasonSql,
-    metaWithReasonSql,
-  );
-  const metaFinalSql = appendJsonbTextArrayAtPath(
-    "exclusions,comments",
-    commentSql,
-    metaWithReasonsSql,
-  );
+  const reason = "DOC_TYPE";
 
   const sql = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        CASE
+          WHEN s."documentType" = 'K1'
+            THEN 'Document type exclusion — K1 document type'
+          WHEN s."clearingDocument" LIKE '2000%'
+            THEN 'Document type exclusion — clearing document begins 2000'
+          WHEN s."documentType" IN ('Z', 'KZ', 'AB')
+            AND s."clearingDocument" LIKE '5%'
+            THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
+          ELSE 'Document type exclusion'
+        END AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND (
+          s."documentType" = 'K1'
+          OR s."clearingDocument" LIKE '2000%'
+          OR (
+            s."documentType" IN ('Z', 'KZ', 'AB')
+            AND s."clearingDocument" LIKE '5%'
+          )
+        )
+        AND COALESCE(s."excludeReason", '') <> :reason
+    )
     UPDATE "tbl_ptrs_stage_row" s
     SET
-      "data" = ${dataFinalSql},
-      "meta" = ${metaFinalSql},
+      "excludedTradeCreditPayment" = true,
+      "excludeReason" = :reason,
       "updatedAt" = now()
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        ${docTypeExpr} = 'K1'
-        OR ${clearingDocExpr} LIKE '2000%'
-        OR (
-          ${docTypeExpr} IN ('Z', 'KZ', 'AB')
-          AND ${clearingDocExpr} LIKE '5%'
-        )
-      )
-      AND NOT (
-        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('DOC_TYPE'::text)
-        OR COALESCE(s."data"->>'exclude_reason', '') = 'DOC_TYPE'
-      )
+    FROM matched_rows mr
+    WHERE s."id" = mr."id"
   `;
 
   const [, meta] = await sequelize.query(sql, {
-    replacements: { customerId, ptrsId },
+    replacements: { customerId, ptrsId, reason },
     transaction,
   });
 
@@ -107,35 +58,62 @@ async function previewDocTypeExclusion({
   ptrsId,
   effectiveLimit,
 }) {
+  const reason = "DOC_TYPE";
+
+  const matchedRowsCte = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        s."rowNo",
+        s."payerEntityAbn",
+        s."payerEntityName",
+        s."payeeEntityAbn",
+        s."payeeEntityName",
+        s."invoiceReferenceNumber",
+        s."sourceAccountCode",
+        s."paymentDate",
+        s."paymentAmount",
+        s."documentType",
+        s."clearingDocument",
+        s."excludedTradeCreditPayment",
+        s."excludeReason",
+        CASE
+          WHEN s."documentType" = 'K1'
+            THEN 'Document type exclusion — K1 document type'
+          WHEN s."clearingDocument" LIKE '2000%'
+            THEN 'Document type exclusion — clearing document begins 2000'
+          WHEN s."documentType" IN ('Z', 'KZ', 'AB')
+            AND s."clearingDocument" LIKE '5%'
+            THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
+          ELSE 'Document type exclusion'
+        END AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND (
+          s."documentType" = 'K1'
+          OR s."clearingDocument" LIKE '2000%'
+          OR (
+            s."documentType" IN ('Z', 'KZ', 'AB')
+            AND s."clearingDocument" LIKE '5%'
+          )
+        )
+    )
+  `;
+
   const countSql = `
+    ${matchedRowsCte}
     SELECT
       COUNT(*)::int AS "matchedCount",
-      SUM(
-        CASE
-          WHEN (
-            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('DOC_TYPE'::text)
-            OR COALESCE(s."data"->>'exclude_reason', '') = 'DOC_TYPE'
-          )
-          THEN 1 ELSE 0
-        END
+      COUNT(*) FILTER (
+        WHERE COALESCE("excludeReason", '') = :reason
       )::int AS "alreadyExcludedCount"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
-        OR (
-          COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
-          AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
-        )
-      )
+    FROM matched_rows
   `;
 
   const [countRows] = await sequelize.query(countSql, {
-    replacements: { customerId, ptrsId },
+    replacements: { customerId, ptrsId, reason },
     transaction,
   });
 
@@ -144,54 +122,35 @@ async function previewDocTypeExclusion({
     Number(countRows?.[0]?.alreadyExcludedCount ?? 0) || 0;
 
   const sampleSql = `
+    ${matchedRowsCte}
     SELECT
-      (s."data"->>'row_no')::int AS "row_no",
-      s."data"->>'payer_entity_abn' AS "payer_entity_abn",
-      s."data"->>'payer_entity_name' AS "payer_entity_name",
-      s."data"->>'payee_entity_abn' AS "payee_entity_abn",
-      s."data"->>'payee_entity_name' AS "payee_entity_name",
-      s."data"->>'invoice_reference_number' AS "invoice_reference_number",
-      s."data"->>'account_code' AS "account_code",
-      s."data"->>'description' AS "description",
-      s."data"->>'payment_date' AS "payment_date",
-      s."data"->>'payment_amount' AS "payment_amount",
+      "rowNo" AS "row_no",
+      "payerEntityAbn" AS "payer_entity_abn",
+      "payerEntityName" AS "payer_entity_name",
+      "payeeEntityAbn" AS "payee_entity_abn",
+      "payeeEntityName" AS "payee_entity_name",
+      "invoiceReferenceNumber" AS "invoice_reference_number",
+      "sourceAccountCode" AS "account_code",
       CASE
-        WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-          THEN 'Document type exclusion — K1 document type'
-        WHEN COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
-          THEN 'Document type exclusion — clearing document begins 2000'
-        WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
-          AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
-          THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
-        ELSE 'Document type exclusion'
-      END AS "exclude_comment",
+        WHEN "paymentDate" IS NOT NULL THEN "paymentDate"::text
+        ELSE NULL
+      END AS "payment_date",
       CASE
-        WHEN (
-          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('DOC_TYPE'::text)
-          OR COALESCE(s."data"->>'exclude_reason', '') = 'DOC_TYPE'
-        )
-        THEN true
+        WHEN "paymentAmount" IS NOT NULL THEN "paymentAmount"::text
+        ELSE NULL
+      END AS "payment_amount",
+      "excludeComment" AS "exclude_comment",
+      CASE
+        WHEN COALESCE("excludeReason", '') = :reason THEN true
         ELSE false
       END AS "alreadyExcluded"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
-        OR (
-          COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
-          AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
-        )
-      )
-    ORDER BY s."rowNo" ASC
+    FROM matched_rows
+    ORDER BY "rowNo" ASC
     LIMIT :limit
   `;
 
   const [sampleRows] = await sequelize.query(sampleSql, {
-    replacements: { customerId, ptrsId, limit: effectiveLimit },
+    replacements: { customerId, ptrsId, reason, limit: effectiveLimit },
     transaction,
   });
 

@@ -116,6 +116,7 @@ function collectContractPreviewFields(contract) {
     contract.transaction,
     contract.dates,
     contract.terms,
+    contract.operational_source_fields,
     contract.regulator_flags,
   ];
 
@@ -134,6 +135,29 @@ function collectContractPreviewFields(contract) {
   return fields;
 }
 
+const STAGE_PREVIEW_STAGE_COLUMNS = [
+  "payerEntityName",
+  "payerEntityAbn",
+  "payeeEntityName",
+  "payeeEntityAbn",
+  "invoiceReferenceNumber",
+  "sourceAccountCode",
+  "description",
+  "documentType",
+  "clearingDocument",
+  "paymentAmount",
+  "paymentDate",
+  "invoiceIssueDate",
+  "invoiceReceiptDate",
+  "invoiceDueDate",
+  "paymentTermRaw",
+  "paymentTermDays",
+  "paymentTimeDays",
+  "tradeCreditPayment",
+  "excludedTradeCreditPayment",
+  "excludeReason",
+];
+
 function projectStagePreviewRow(row, allowedFields) {
   const source = row && typeof row === "object" ? row : {};
   const out = {};
@@ -144,6 +168,42 @@ function projectStagePreviewRow(row, allowedFields) {
   }
 
   return out;
+}
+
+function buildStagePreviewSource(row) {
+  const out = {};
+  const source = row && typeof row === "object" ? row : {};
+  const data =
+    source.data &&
+    typeof source.data === "object" &&
+    !Array.isArray(source.data)
+      ? source.data
+      : null;
+
+  if (data) {
+    Object.assign(out, data);
+  }
+
+  for (const key of Object.keys(source)) {
+    if (key === "data") continue;
+    out[key] = source[key];
+  }
+
+  return out;
+}
+
+function materialiseObj(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === "object") return value;
+  return null;
 }
 
 async function getStagePreview({
@@ -180,7 +240,7 @@ async function getStagePreview({
     const [rowsRaw, totalRows] = await Promise.all([
       db.PtrsStageRow.findAll({
         where,
-        attributes: ["rowNo", "data"],
+        attributes: ["rowNo", "data", ...STAGE_PREVIEW_STAGE_COLUMNS],
         order: [["rowNo", "ASC"]],
         limit,
         raw: true,
@@ -192,20 +252,6 @@ async function getStagePreview({
     const dbRows = rowsRaw;
 
     const headerSet = new Set();
-
-    const materialiseObj = (value) => {
-      if (!value) return null;
-      if (typeof value === "string") {
-        try {
-          const parsed = JSON.parse(value);
-          return parsed && typeof parsed === "object" ? parsed : null;
-        } catch {
-          return null;
-        }
-      }
-      if (typeof value === "object") return value;
-      return null;
-    };
 
     let mappedPreviewFields = [];
 
@@ -237,7 +283,13 @@ async function getStagePreview({
     );
 
     const rows = dbRows.map((row) =>
-      projectStagePreviewRow(materialiseObj(row?.data) || {}, previewFields),
+      projectStagePreviewRow(
+        buildStagePreviewSource({
+          ...(row || {}),
+          data: materialiseObj(row?.data) || {},
+        }),
+        previewFields,
+      ),
     );
 
     canon = mappedPreviewFields.slice();

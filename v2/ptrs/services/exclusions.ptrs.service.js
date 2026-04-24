@@ -3,7 +3,6 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { slog } = require("./ptrs.service");
-const { QueryTypes } = require("sequelize");
 
 // Helper functions
 const { getExclusionsSummary } = require("./exclusions.summary");
@@ -51,8 +50,8 @@ const {
 
 /**
  * Exclusions are eligibility decisions, not transformations.
- * Canonical pattern: SQL-first updates against tbl_ptrs_stage_row (jsonb),
- * never destroy/rebuild stage rows for exclusions.
+ * Canonical pattern: SQL-first updates against first-class columns on
+ * tbl_ptrs_stage_row, never destroy/rebuild stage rows for exclusions.
  */
 
 async function applyExclusionsAndPersist({
@@ -144,7 +143,7 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // Pre-payments (heuristic match on payment terms OR description)
+    // Pre-payments (heuristic match on promoted payment-term fields)
     if (category === "all" || category === "prepaid") {
       stats.checksRun += 1;
       const affected = await applyPrepaidExclusion({
@@ -167,7 +166,7 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // International suppliers (non-AUD currency and/or missing invalid ABN)
+    // International suppliers (non-AUD document currency)
     if (category === "all" || category === "international") {
       stats.checksRun += 1;
       const affected = await applyInternationalExclusion({
@@ -177,30 +176,6 @@ async function applyExclusionsAndPersist({
         ptrsId,
       });
       stats.rowsExcluded += affected;
-    }
-
-    // Stamp profileId onto meta for this run (only if provided), without touching data.
-    if (profileId) {
-      const profileSql = `
-        UPDATE "tbl_ptrs_stage_row" s
-        SET
-          "meta" = jsonb_set(
-            COALESCE(s."meta",'{}'::jsonb),
-            '{profileId}',
-            to_jsonb(:profileId::text),
-            true
-          ),
-          "updatedAt" = now()
-        WHERE
-          s."customerId" = :customerId
-          AND s."ptrsId" = :ptrsId
-          AND s."deletedAt" IS NULL
-      `;
-
-      await sequelize.query(profileSql, {
-        replacements: { customerId, ptrsId, profileId },
-        transaction: t,
-      });
     }
 
     await t.commit();

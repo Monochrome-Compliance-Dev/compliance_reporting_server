@@ -56,7 +56,8 @@ const PTRS_CANONICAL_CONTRACT = {
     payment_amount: {
       type: "money",
       required: true,
-      notes: "Transaction payment amount. Must be numeric and non-negative.",
+      notes:
+        "Final interpreted transaction payment amount for the TCP row. Must be numeric and non-negative after normalisation. Source-system rows may contain signed amounts and should be normalised during staging or report preparation.",
     },
 
     description: {
@@ -146,20 +147,47 @@ const PTRS_CANONICAL_CONTRACT = {
   },
 
   // ---------------------------------------------------------------------
-  // E) Regulator classification flags (populated during report prep)
+  // E) Optional operational source fields (not canonical business truth,
+  //    but highly useful for staging, exclusions, and investigation)
+  // ---------------------------------------------------------------------
+  operational_source_fields: {
+    document_type: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional source-system document classification (for example SAP document type such as RE, KR, KG, ZP). Not required for TCP validity, but highly useful for exclusion logic, transaction classification, and debugging.",
+    },
+
+    clearing_document: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional source-system clearing document identifier. Useful for pairing invoice and settlement events, exclusion logic, and identifying internal clearing or non-payment artefacts.",
+    },
+
+    source_account_code: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional source-system supplier or account code. Useful for pairing, source investigation, and identifying wrong-vendor or duplicate-account correction chains.",
+    },
+  },
+  // ---------------------------------------------------------------------
+  // F) Regulator classification flags (populated during report prep)
   // ---------------------------------------------------------------------
   regulator_flags: {
     trade_credit_payment: {
       type: "bool",
       required: false,
       notes:
-        "Determined during report preparation. Indicates whether record qualifies as trade credit.",
+        "Determined during report preparation. Indicates whether the record qualifies as trade credit after considering the transaction shape and any relevant source-system context such as document type, clearing behaviour, same-day settlement, and other accounting artefacts.",
     },
 
     excluded_trade_credit_payment: {
       type: "bool",
       required: false,
-      notes: "True when the record is excluded from TCP calculations.",
+      notes:
+        "True when the record is excluded from TCP calculations. Exclusion may depend on report-preparation rules such as non-payment accounting entries, reversals, same-day settlements, internal clearing artefacts, or other source-system behaviours that do not represent genuine payment performance.",
     },
 
     peppol_einvoice_enabled: {
@@ -194,7 +222,7 @@ const PTRS_CANONICAL_CONTRACT = {
   },
 
   // ---------------------------------------------------------------------
-  // F) Validation rules applied during canonical validation
+  // G) Validation rules applied during canonical validation
   // ---------------------------------------------------------------------
   rules: {
     required_identity_fields: [

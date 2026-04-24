@@ -1,10 +1,4 @@
-const {
-  buildKeywordMatchCondition,
-  appendJsonbTextArray,
-  appendJsonbTextArrayAtPath,
-  applyExcludeFlags,
-  applyMetaBase,
-} = require("./exclusions.shared");
+const { buildKeywordMatchCondition } = require("./exclusions.shared");
 
 async function applyKeywordExclusion({
   sequelize,
@@ -19,78 +13,38 @@ async function applyKeywordExclusion({
     stageAlias: "s",
     keywordAlias: "k",
   });
-  const reasonSql = `'KEYWORD'`;
-  const commentSql = `('Keyword exclusion — ' || k."keyword")`;
-
-  const dataBaseSql = applyExcludeFlags(`s."data"`, reasonSql);
-  const dataWithReasonsSql = appendJsonbTextArray(
-    "exclude_reasons",
-    reasonSql,
-    dataBaseSql,
-  );
-  const dataFinalSql = appendJsonbTextArray(
-    "exclude_comment",
-    commentSql,
-    dataWithReasonsSql,
-  );
-
-  const metaBaseSql = applyMetaBase(`s."meta"`);
-  const metaWithReasonSql = `
-    jsonb_set(
-      ${metaBaseSql},
-      '{exclusions,reason}',
-      CASE
-        WHEN trim(COALESCE(${metaBaseSql}#>>'{exclusions,reason}', '')) <> ''
-          THEN to_jsonb(${metaBaseSql}#>>'{exclusions,reason}')
-        ELSE to_jsonb((${reasonSql})::text)
-      END,
-      true
-    )
-  `;
-  const metaWithReasonsSql = appendJsonbTextArrayAtPath(
-    "exclusions,reasons",
-    reasonSql,
-    metaWithReasonSql,
-  );
-  const metaWithCommentsSql = appendJsonbTextArrayAtPath(
-    "exclusions,comments",
-    commentSql,
-    metaWithReasonsSql,
-  );
-  const metaFinalSql = `
-    jsonb_set(
-      ${metaWithCommentsSql},
-      '{exclusions,keyword}',
-      to_jsonb(k."keyword"),
-      true
-    )
-  `;
+  const reason = "KEYWORD";
 
   const sql = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        ('Keyword exclusion — ' || k."keyword")::text AS "excludeComment",
+        k."keyword" AS "matchedKeyword"
+      FROM "tbl_ptrs_stage_row" s
+      JOIN "tbl_ptrs_exclusion_keyword_customer_ref" k
+        ON k."customerId" = :customerId
+       AND k."profileId" = :profileId
+       AND k."deletedAt" IS NULL
+       AND (
+         ${keywordMatchCondition}
+       )
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND COALESCE(s."excludeReason", '') <> :reason
+    )
     UPDATE "tbl_ptrs_stage_row" s
     SET
-      "data" = ${dataFinalSql},
-      "meta" = ${metaFinalSql},
+      "excludedTradeCreditPayment" = true,
+      "excludeReason" = :reason,
       "updatedAt" = now()
-    FROM "tbl_ptrs_exclusion_keyword_customer_ref" k
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND k."deletedAt" IS NULL
-      AND k."customerId" = :customerId
-      AND k."profileId" = :profileId
-      AND (
-        ${keywordMatchCondition}
-      )
-      AND NOT (
-        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('KEYWORD'::text)
-        OR COALESCE(s."data"->>'exclude_reason', '') = 'KEYWORD'
-      )
+    FROM matched_rows mr
+    WHERE s."id" = mr."id"
   `;
 
   const [, meta] = await sequelize.query(sql, {
-    replacements: { customerId, ptrsId, profileId },
+    replacements: { customerId, ptrsId, profileId, reason },
     transaction,
   });
 
@@ -111,35 +65,49 @@ async function previewKeywordExclusion({
     stageAlias: "s",
     keywordAlias: "k",
   });
+  const reason = "KEYWORD";
+
+  const matchedRowsCte = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        s."rowNo",
+        s."payeeEntityAbn",
+        s."payeeEntityName",
+        s."invoiceReferenceNumber",
+        s."sourceAccountCode",
+        s."paymentDate",
+        s."paymentAmount",
+        s."excludedTradeCreditPayment",
+        s."excludeReason",
+        ('Keyword exclusion — ' || k."keyword")::text AS "excludeComment",
+        k."keyword" AS "matchedKeyword"
+      FROM "tbl_ptrs_stage_row" s
+      JOIN "tbl_ptrs_exclusion_keyword_customer_ref" k
+        ON k."customerId" = :customerId
+       AND k."profileId" = :profileId
+       AND k."deletedAt" IS NULL
+       AND (
+         ${keywordMatchCondition}
+       )
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+    )
+  `;
 
   const countSql = `
+    ${matchedRowsCte}
     SELECT
       COUNT(*)::int AS "matchedCount",
-      SUM(
-        CASE
-          WHEN (
-            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('KEYWORD'::text)
-            OR COALESCE(s."data"->>'exclude_reason', '') = 'KEYWORD'
-          )
-          THEN 1 ELSE 0
-        END
+      COUNT(*) FILTER (
+        WHERE COALESCE("excludeReason", '') = :reason
       )::int AS "alreadyExcludedCount"
-    FROM "tbl_ptrs_stage_row" s
-    JOIN "tbl_ptrs_exclusion_keyword_customer_ref" k
-      ON k."customerId" = :customerId
-      AND k."profileId" = :profileId
-      AND k."deletedAt" IS NULL
-      AND (
-        ${keywordMatchCondition}
-      )
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
+    FROM matched_rows
   `;
 
   const [countRows] = await sequelize.query(countSql, {
-    replacements: { customerId, ptrsId, profileId },
+    replacements: { customerId, ptrsId, profileId, reason },
     transaction,
   });
 
@@ -148,44 +116,40 @@ async function previewKeywordExclusion({
     Number(countRows?.[0]?.alreadyExcludedCount ?? 0) || 0;
 
   const sampleSql = `
+    ${matchedRowsCte}
     SELECT
-      (s."data"->>'row_no')::int AS "row_no",
-      s."data"->>'payee_entity_abn' AS "payee_entity_abn",
-      s."data"->>'payee_entity_name' AS "payee_entity_name",
-      s."data"->>'description' AS "description",
-      s."data"->>'invoice_reference_number' AS "invoice_reference_number",
-      s."data"->>'account_code' AS "account_code",
-      s."data"->>'account_name' AS "account_name",
-      s."data"->>'payment_date' AS "payment_date",
-      s."data"->>'payment_amount' AS "payment_amount",
-      ('Keyword exclusion — ' || k."keyword")::text AS "exclude_comment",
-      k."keyword" AS "matched_keyword",
+      "rowNo" AS "row_no",
+      "payeeEntityAbn" AS "payee_entity_abn",
+      "payeeEntityName" AS "payee_entity_name",
+      "invoiceReferenceNumber" AS "invoice_reference_number",
+      "sourceAccountCode" AS "account_code",
       CASE
-        WHEN (
-          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('KEYWORD'::text)
-          OR COALESCE(s."data"->>'exclude_reason', '') = 'KEYWORD'
-        )
-        THEN true
+        WHEN "paymentDate" IS NOT NULL THEN "paymentDate"::text
+        ELSE NULL
+      END AS "payment_date",
+      CASE
+        WHEN "paymentAmount" IS NOT NULL THEN "paymentAmount"::text
+        ELSE NULL
+      END AS "payment_amount",
+      "excludeComment" AS "exclude_comment",
+      "matchedKeyword" AS "matched_keyword",
+      CASE
+        WHEN COALESCE("excludeReason", '') = :reason THEN true
         ELSE false
       END AS "alreadyExcluded"
-    FROM "tbl_ptrs_stage_row" s
-    JOIN "tbl_ptrs_exclusion_keyword_customer_ref" k
-      ON k."customerId" = :customerId
-      AND k."profileId" = :profileId
-      AND k."deletedAt" IS NULL
-      AND (
-        ${keywordMatchCondition}
-      )
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-    ORDER BY s."rowNo" ASC
+    FROM matched_rows
+    ORDER BY "rowNo" ASC
     LIMIT :limit
   `;
 
   const [sampleRows] = await sequelize.query(sampleSql, {
-    replacements: { customerId, ptrsId, profileId, limit: effectiveLimit },
+    replacements: {
+      customerId,
+      ptrsId,
+      profileId,
+      reason,
+      limit: effectiveLimit,
+    },
     transaction,
   });
 

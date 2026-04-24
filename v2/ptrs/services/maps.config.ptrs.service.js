@@ -116,11 +116,15 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
     });
 
     const fieldMaps = await db.PtrsFieldMap.findAll({
-      where: {
-        customerId,
-        ...(profileId ? { profileId } : {}),
-      },
-      attributes: ["ptrsId", "canonicalField", "updatedAt", "createdAt"],
+      where: { customerId },
+      attributes: [
+        "ptrsId",
+        "profileId",
+        "datasetId",
+        "canonicalField",
+        "updatedAt",
+        "createdAt",
+      ],
       raw: true,
       transaction: t,
     });
@@ -150,11 +154,19 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
 
       const stat = fieldMapStatsByPtrsId.get(key) || {
         mappedFieldsCount: 0,
+        matchingProfileMappedFieldsCount: 0,
         fieldMapUpdatedAt: null,
         fieldMapCreatedAt: null,
+        profileIds: new Set(),
+        datasetIds: new Set(),
       };
 
       stat.mappedFieldsCount += 1;
+      if (row?.profileId) stat.profileIds.add(String(row.profileId));
+      if (row?.datasetId) stat.datasetIds.add(String(row.datasetId));
+      if (!profileId || String(row?.profileId || "") === String(profileId)) {
+        stat.matchingProfileMappedFieldsCount += 1;
+      }
 
       const updatedAt = row?.updatedAt || null;
       const createdAt = row?.createdAt || null;
@@ -227,8 +239,11 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
       .map((r) => {
         const fieldMapStats = fieldMapStatsByPtrsId.get(String(r.id || "")) || {
           mappedFieldsCount: 0,
+          matchingProfileMappedFieldsCount: 0,
           fieldMapUpdatedAt: null,
           fieldMapCreatedAt: null,
+          profileIds: new Set(),
+          datasetIds: new Set(),
         };
 
         return {
@@ -236,11 +251,33 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
           fileName: pickDisplayFileName(r.id),
           mapMeta: metaByPtrsId.get(r.id) || null,
           mappedFieldsCount: fieldMapStats.mappedFieldsCount,
+          matchingProfileMappedFieldsCount:
+            fieldMapStats.matchingProfileMappedFieldsCount,
+          hasMatchingProfileMap: fieldMapStats.mappedFieldsCount > 0,
+          profileMatched: profileId
+            ? fieldMapStats.matchingProfileMappedFieldsCount > 0
+            : null,
+          compatibilityBasis: "customer_field_map",
+          profileIds: Array.from(fieldMapStats.profileIds || []),
+          sourceDatasetIds: Array.from(fieldMapStats.datasetIds || []),
+          datasetIds: [],
           fieldMapUpdatedAt: fieldMapStats.fieldMapUpdatedAt,
           fieldMapCreatedAt: fieldMapStats.fieldMapCreatedAt,
         };
       })
       .sort((a, b) => {
+        if (profileId) {
+          const profileMatchDiff =
+            Number(b?.profileMatched || false) -
+            Number(a?.profileMatched || false);
+          if (profileMatchDiff !== 0) return profileMatchDiff;
+
+          const matchingCountDiff =
+            Number(b?.matchingProfileMappedFieldsCount || 0) -
+            Number(a?.matchingProfileMappedFieldsCount || 0);
+          if (matchingCountDiff !== 0) return matchingCountDiff;
+        }
+
         const countDiff =
           Number(b?.mappedFieldsCount || 0) - Number(a?.mappedFieldsCount || 0);
         if (countDiff !== 0) return countDiff;
@@ -271,21 +308,23 @@ async function getFieldMap({
   customerId,
   ptrsId,
   profileId,
-  datasetId,
+  datasetId = null,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
-  if (!datasetId) throw new Error("datasetId is required");
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
   const isExternalTx = !!transaction;
 
   try {
+    const where = { customerId, ptrsId, profileId };
+    if (datasetId) where.datasetId = datasetId;
+
     const rows = await db.PtrsFieldMap.findAll({
-      where: { customerId, ptrsId, profileId, datasetId },
+      where,
       order: [["canonicalField", "ASC"]],
       raw: true,
       transaction: t,
@@ -388,6 +427,235 @@ async function saveFieldMap({
 
     await t.commit();
     return rows || [];
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+function getDatasetMatchKey(dataset) {
+  const role = String(dataset?.role || "")
+    .trim()
+    .toLowerCase();
+  const fileName = String(
+    dataset?.fileName || dataset?.sourceName || "",
+  ).trim();
+
+  if (!role || !fileName) return null;
+  return `${role}::${fileName}`;
+}
+
+function remapFieldMapMetaDatasetIds(meta, datasetIdMap) {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta))
+    return meta ?? null;
+
+  const next = { ...meta };
+  const sourceDatasetId = String(next.sourceDatasetId || "").trim();
+
+  if (sourceDatasetId) {
+    const mappedSourceDatasetId = datasetIdMap.get(sourceDatasetId);
+    if (!mappedSourceDatasetId) {
+      const e = new Error(
+        `Cannot import field map: no current dataset match found for sourceDatasetId "${sourceDatasetId}"`,
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+    next.sourceDatasetId = mappedSourceDatasetId;
+  }
+
+  return next;
+}
+
+async function importFieldMapFromPtrs({
+  customerId,
+  targetPtrsId,
+  sourcePtrsId,
+  profileId,
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!targetPtrsId) throw new Error("targetPtrsId is required");
+  if (!sourcePtrsId) throw new Error("sourcePtrsId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (String(targetPtrsId) === String(sourcePtrsId)) {
+    const e = new Error("Cannot import field map from the same PTRS");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const sourceRows = await db.PtrsFieldMap.findAll({
+      where: { customerId, ptrsId: sourcePtrsId, profileId },
+      order: [
+        ["datasetId", "ASC"],
+        ["canonicalField", "ASC"],
+      ],
+      raw: true,
+      transaction: t,
+    });
+
+    if (!sourceRows.length) {
+      const e = new Error(
+        `No canonical mappings found on source PTRS ${sourcePtrsId}`,
+      );
+      e.statusCode = 404;
+      throw e;
+    }
+
+    const sourceDatasets = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId: sourcePtrsId },
+      attributes: ["id", "role", "fileName"],
+      raw: true,
+      transaction: t,
+    });
+
+    const targetDatasets = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId: targetPtrsId },
+      attributes: ["id", "role", "fileName"],
+      raw: true,
+      transaction: t,
+    });
+
+    const targetDatasetsByKey = new Map();
+    for (const dataset of targetDatasets || []) {
+      const key = getDatasetMatchKey(dataset);
+      if (!key) continue;
+
+      if (!targetDatasetsByKey.has(key)) {
+        targetDatasetsByKey.set(key, []);
+      }
+      targetDatasetsByKey.get(key).push(dataset);
+    }
+
+    const datasetIdMap = new Map();
+    for (const sourceDataset of sourceDatasets || []) {
+      const key = getDatasetMatchKey(sourceDataset);
+      if (!key) continue;
+
+      const matches = targetDatasetsByKey.get(key) || [];
+      if (!matches.length) {
+        const e = new Error(
+          `Cannot import field map: no current dataset matches role/file "${key}"`,
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      if (matches.length > 1) {
+        const e = new Error(
+          `Cannot import field map: multiple current datasets match role/file "${key}"`,
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      datasetIdMap.set(String(sourceDataset.id), String(matches[0].id));
+    }
+
+    const rowsByTargetDatasetId = new Map();
+
+    for (const row of sourceRows) {
+      const sourceDatasetId = String(row?.datasetId || "").trim();
+      const targetDatasetId = datasetIdMap.get(sourceDatasetId);
+
+      if (!targetDatasetId) {
+        const e = new Error(
+          `Cannot import field map: no current dataset match found for datasetId "${sourceDatasetId}"`,
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      const canonicalField = String(row?.canonicalField || "").trim();
+      const sourceRole = String(row?.sourceRole || "").trim();
+      const sourceColumn = String(row?.sourceColumn || "").trim();
+
+      if (!canonicalField || !sourceRole || !sourceColumn) continue;
+
+      if (!rowsByTargetDatasetId.has(targetDatasetId)) {
+        rowsByTargetDatasetId.set(targetDatasetId, new Map());
+      }
+
+      const rowsByCanonicalField = rowsByTargetDatasetId.get(targetDatasetId);
+      if (rowsByCanonicalField.has(canonicalField)) {
+        const e = new Error(
+          `Cannot import field map: duplicate canonical field "${canonicalField}" for target dataset "${targetDatasetId}"`,
+        );
+        e.statusCode = 400;
+        throw e;
+      }
+
+      rowsByCanonicalField.set(canonicalField, {
+        canonicalField,
+        sourceRole,
+        sourceColumn,
+        transformType: row.transformType ?? null,
+        transformConfig: row.transformConfig ?? null,
+        meta: remapFieldMapMetaDatasetIds(row.meta, datasetIdMap),
+      });
+    }
+
+    const savedRows = [];
+
+    for (const [
+      targetDatasetId,
+      rowsByCanonicalField,
+    ] of rowsByTargetDatasetId.entries()) {
+      const rows = Array.from(rowsByCanonicalField.values());
+
+      await db.PtrsFieldMap.destroy({
+        where: {
+          customerId,
+          ptrsId: targetPtrsId,
+          profileId,
+          datasetId: targetDatasetId,
+        },
+        force: true,
+        transaction: t,
+      });
+
+      if (!rows.length) continue;
+
+      const createdRows = await db.PtrsFieldMap.bulkCreate(
+        rows.map((row) => ({
+          customerId,
+          ptrsId: targetPtrsId,
+          profileId,
+          datasetId: targetDatasetId,
+          canonicalField: row.canonicalField,
+          sourceRole: row.sourceRole,
+          sourceColumn: row.sourceColumn,
+          transformType: row.transformType,
+          transformConfig: row.transformConfig,
+          meta: row.meta,
+          createdBy: userId,
+          updatedBy: userId,
+        })),
+        { returning: true, transaction: t, validate: true },
+      );
+
+      savedRows.push(
+        ...createdRows.map((createdRow) => createdRow.get({ plain: true })),
+      );
+    }
+
+    await t.commit();
+
+    return {
+      sourcePtrsId,
+      targetPtrsId,
+      profileId,
+      importedDatasetsCount: rowsByTargetDatasetId.size,
+      importedRowsCount: savedRows.length,
+      rows: savedRows,
+    };
   } catch (err) {
     if (!t.finished) {
       try {
@@ -543,5 +811,6 @@ module.exports = {
   listCompatibleMaps,
   getFieldMap,
   saveFieldMap,
+  importFieldMapFromPtrs,
   saveSupportConfig,
 };

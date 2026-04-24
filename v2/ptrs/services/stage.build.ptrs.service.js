@@ -1,9 +1,7 @@
 async function stagePtrs({
   customerId,
   ptrsId,
-  steps = [],
   persist = false,
-  limit = null,
   userId,
   profileId = null,
   force = false,
@@ -16,17 +14,6 @@ async function stagePtrs({
   getLatestExecutionRun,
   createExecutionRun,
   updateExecutionRun,
-  loadMappedRowsForPtrs,
-  getColumnMap,
-  applyRules,
-  loadEffectiveTermChangesForRows,
-  applyEffectiveTermChangesToRows,
-  loadPaymentTermMap,
-  applyPaymentTermDaysFromMap,
-  computePaymentTimeRegulator,
-  collectCanonicalContractFields,
-  PTRS_CANONICAL_CONTRACT,
-  toSnakeCase,
   db,
 }) {
   let executionRun = null;
@@ -35,7 +22,15 @@ async function stagePtrs({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  if (persist && !profileId) {
+  if (!persist) {
+    const e = new Error(
+      "stagePtrs requires persist=true; non-persist staging has been removed",
+    );
+    e.statusCode = 400;
+    throw e;
+  }
+
+  if (!profileId) {
     const e = new Error("profileId is required when persist=true");
     e.statusCode = 400;
     throw e;
@@ -64,84 +59,46 @@ async function stagePtrs({
   };
 
   trace?.write("stage_begin", {
-    persist: !!persist,
+    persist: true,
     force: !!force,
-    limit: limit == null ? null : Number(limit),
-    stepsCount: Array.isArray(steps) ? steps.length : 0,
     hasProfileId: !!profileId,
   });
 
   try {
-    if (persist) {
-      const staleness = await getStageStaleness({
-        customerId,
-        ptrsId,
-        profileId,
-        transaction: t,
-      });
+    const staleness = await getStageStaleness({
+      customerId,
+      ptrsId,
+      profileId,
+      transaction: t,
+    });
 
-      inputHash = staleness.inputHash;
-      const previous = staleness.previousRunId
-        ? {
-            id: staleness.previousRunId,
-            inputHash: staleness.previousHash,
-            status: staleness.previousHash ? "success" : null,
-          }
-        : await getLatestExecutionRun({
-            customerId,
-            ptrsId,
-            step: "stage",
-            transaction: t,
-          });
-
-      if (
-        !force &&
-        previous &&
-        previous.status === "success" &&
-        previous.inputHash === inputHash
-      ) {
-        const existingStageCount = Number(staleness?.existingStageCount) || 0;
-
-        if (Number(existingStageCount) > 0) {
-          slog.info(
-            "PTRS v2 stagePtrs: inputs unchanged; skipping persist staging",
-            {
-              action: "PtrsV2StagePtrsSkipped",
-              customerId,
-              ptrsId,
-              profileId: profileId || null,
-              inputHash,
-              previousRunId: previous.id || null,
-              existingStageCount,
-            },
-          );
-          trace?.write("stage_skip_input_unchanged", {
-            inputHash,
-            previousRunId: previous.id || null,
-            existingStageCount,
-            totalMs: hrMsSince(jobStartNs),
-          });
-
-          await t.commit();
-          if (trace) await trace.close();
-          return {
-            skipped: true,
-            reason: "INPUT_UNCHANGED",
-            inputHash,
-            previousRunId: previous.id || null,
-            persistedCount: existingStageCount,
-            rowsIn: null,
-            rowsOut: null,
-            tookMs: Date.now() - started,
-            sample: null,
-            stats: null,
-          };
+    inputHash = staleness.inputHash;
+    const previous = staleness.previousRunId
+      ? {
+          id: staleness.previousRunId,
+          inputHash: staleness.previousHash,
+          status: staleness.previousHash ? "success" : null,
         }
+      : await getLatestExecutionRun({
+          customerId,
+          ptrsId,
+          step: "stage",
+          transaction: t,
+        });
 
+    if (
+      !force &&
+      previous &&
+      previous.status === "success" &&
+      previous.inputHash === inputHash
+    ) {
+      const existingStageCount = Number(staleness?.existingStageCount) || 0;
+
+      if (Number(existingStageCount) > 0) {
         slog.info(
-          "PTRS v2 stagePtrs: inputs unchanged but no staged rows exist; forcing rebuild",
+          "PTRS v2 stagePtrs: inputs unchanged; skipping persist staging",
           {
-            action: "PtrsV2StagePtrsSkipBypassedNoRows",
+            action: "PtrsV2StagePtrsSkipped",
             customerId,
             ptrsId,
             profileId: profileId || null,
@@ -150,357 +107,86 @@ async function stagePtrs({
             existingStageCount,
           },
         );
-        trace?.write("stage_skip_bypassed_no_rows", {
+        trace?.write("stage_skip_input_unchanged", {
           inputHash,
           previousRunId: previous.id || null,
           existingStageCount,
           totalMs: hrMsSince(jobStartNs),
         });
+
+        await t.commit();
+        if (trace) await trace.close();
+        return {
+          skipped: true,
+          reason: "INPUT_UNCHANGED",
+          inputHash,
+          previousRunId: previous.id || null,
+          persistedCount: existingStageCount,
+          rowsIn: null,
+          rowsOut: null,
+          tookMs: Date.now() - started,
+          sample: null,
+          stats: null,
+        };
       }
 
-      slog.info("PTRS v2 stagePtrs: execution input hash", {
-        action: "PtrsV2StagePtrsInputHash",
-        customerId,
-        ptrsId,
-        profileId: profileId || null,
-        inputHash,
-        previousHash: previous?.inputHash || null,
-        mappedRowCount: staleness?.snapshot?.mappedRows?.rowCount || 0,
-        mappedRowUpdatedAt:
-          staleness?.snapshot?.mappedRows?.maxUpdatedAt || null,
-        datasetsCount: Array.isArray(staleness?.snapshot?.datasets)
-          ? staleness.snapshot.datasets.length
-          : 0,
-        paymentTermMapCount:
-          Number(staleness?.snapshot?.paymentTermMap?.count) || 0,
-        paymentTermMapUpdatedAt:
-          staleness?.snapshot?.paymentTermMap?.maxUpdatedAt || null,
-        paymentTermChangeCount:
-          Number(staleness?.snapshot?.paymentTermChanges?.count) || 0,
-        paymentTermChangeUpdatedAt:
-          staleness?.snapshot?.paymentTermChanges?.maxUpdatedAt || null,
-      });
-
-      executionRun = await createExecutionRun({
-        customerId,
-        ptrsId,
-        profileId,
-        step: "stage",
-        inputHash,
-        status: "running",
-        startedAt: new Date(),
-        createdBy: userId || null,
-        transaction: t,
-      });
-    }
-
-    let stagedRows = [];
-    let rulesStats = null;
-    let paymentTermChangeStats = null;
-    let paymentTermStats = null;
-    let mapRow = null;
-
-    if (!persist) {
-      const sLoadMapped = stageStart("load_mapped_rows");
-      const { rows: baseRows } = await loadMappedRowsForPtrs({
-        customerId,
-        ptrsId,
-        limit: null,
-        transaction: t,
-      });
-      stageEnd(sLoadMapped, {
-        rowsCount: Array.isArray(baseRows) ? baseRows.length : 0,
-      });
-
-      const rows = baseRows;
-
-      slog.info("PTRS v2 stagePtrs: loaded mapped rows", {
-        action: "PtrsV2StagePtrsLoadedMappedRows",
-        customerId,
-        ptrsId,
-        rowsCount: Array.isArray(rows) ? rows.length : 0,
-        sampleRowKeys: rows && rows[0] ? Object.keys(rows[0]) : null,
-      });
-
-      const sLoadMap = stageStart("load_column_map");
-      try {
-        mapRow = await getColumnMap({ customerId, ptrsId, transaction: t });
-      } catch (_) {
-        mapRow = null;
-      }
-      stageEnd(sLoadMap, {
-        hasMap: !!mapRow,
-        hasRowRules: !!(mapRow && mapRow.rowRules),
-        hasJoins: !!(mapRow && mapRow.joins),
-      });
-
-      stagedRows = rows;
-    } else {
-      try {
-        mapRow = null;
-      } catch (_) {
-        mapRow = null;
-      }
-    }
-
-    if (!persist) {
-      try {
-        let rowRules =
-          mapRow && mapRow.rowRules != null ? mapRow.rowRules : null;
-        if (typeof rowRules === "string") {
-          try {
-            rowRules = JSON.parse(rowRules);
-          } catch {
-            rowRules = null;
-          }
-        }
-
-        const sRules = stageStart("apply_row_rules");
-        const rulesResult = applyRules(
-          stagedRows,
-          Array.isArray(rowRules) ? rowRules : [],
-        );
-        stagedRows = rulesResult.rows || stagedRows;
-        rulesStats = rulesResult.stats || null;
-        stageEnd(sRules, {
-          rowsOut: Array.isArray(stagedRows) ? stagedRows.length : 0,
-          rulesCount: Array.isArray(rowRules) ? rowRules.length : 0,
-          rulesStats: rulesResult.stats || null,
-        });
-      } catch (err) {
-        slog.warn("PTRS v2 stagePtrs: failed to apply row rules", {
-          action: "PtrsV2StagePtrsApplyRules",
-          customerId,
-          ptrsId,
-          error: err.message,
-        });
-      }
-
-      try {
-        if (profileId) {
-          const sTermChanges = stageStart("apply_payment_term_changes");
-          const changeMap = await loadEffectiveTermChangesForRows({
-            customerId,
-            profileId,
-            rows: stagedRows,
-            mapRow,
-            transaction: t,
-          });
-
-          const changeResult = applyEffectiveTermChangesToRows(
-            stagedRows,
-            changeMap,
-            mapRow,
-          );
-          stagedRows = changeResult.rows || stagedRows;
-          paymentTermChangeStats = changeResult.stats || null;
-
-          stageEnd(sTermChanges, {
-            applied: Number(changeResult?.stats?.applied) || 0,
-            considered: Number(changeResult?.stats?.considered) || 0,
-            missingKey: Number(changeResult?.stats?.missingKey) || 0,
-          });
-
-          if (paymentTermChangeStats?.applied) {
-            slog.info(
-              "PTRS v2 stagePtrs: applied effective-dated payment term changes",
-              {
-                action: "PtrsV2StagePtrsPaymentTermChangesApplied",
-                customerId,
-                ptrsId,
-                profileId,
-                ...paymentTermChangeStats,
-                joinSpec: paymentTermChangeStats?.joinSpec || null,
-              },
-            );
-          }
-          if (!paymentTermChangeStats?.applied) {
-            slog.info(
-              "PTRS v2 stagePtrs: no effective-dated payment term changes applied",
-              {
-                action: "PtrsV2StagePtrsPaymentTermChangesNoneApplied",
-                customerId,
-                ptrsId,
-                profileId,
-                ...paymentTermChangeStats,
-                joinSpec: paymentTermChangeStats?.joinSpec || null,
-                note: "No matches found using company_code join key (and optional supplier) against tbl_ptrs_payment_term_change",
-              },
-            );
-          }
-        }
-      } catch (err) {
-        trace?.write("stage_payment_term_changes_error", {
-          message: err?.message || null,
-          statusCode: err?.statusCode || null,
-        });
-        slog.warn("PTRS v2 stagePtrs: failed to apply payment term changes", {
-          action: "PtrsV2StagePtrsPaymentTermChangesFailed",
-          customerId,
-          ptrsId,
-          profileId: profileId || null,
-          error: err?.message,
-        });
-      }
-
-      try {
-        if (profileId) {
-          const sTermMap = stageStart("apply_payment_term_map");
-          const termMap = await loadPaymentTermMap({
-            customerId,
-            profileId,
-            transaction: t,
-          });
-
-          const termResult = applyPaymentTermDaysFromMap(stagedRows, termMap);
-          stagedRows = termResult.rows;
-          paymentTermStats = termResult.stats;
-          stageEnd(sTermMap, {
-            lookedUp: Number(termResult?.stats?.lookedUp) || 0,
-            filled: Number(termResult?.stats?.filled) || 0,
-            missing: Number(termResult?.stats?.missing) || 0,
-            unmapped: Number(termResult?.stats?.unmapped) || 0,
-          });
-
-          if (
-            paymentTermStats?.missing ||
-            paymentTermStats?.filled ||
-            paymentTermStats?.unmapped
-          ) {
-            slog.info("PTRS v2 stagePtrs: payment term mapping stats", {
-              action: "PtrsV2StagePtrsPaymentTermMap",
-              customerId,
-              ptrsId,
-              profileId,
-              ...paymentTermStats,
-            });
-          }
-        } else {
-          slog.warn(
-            "PTRS v2 stagePtrs: profileId not provided; skipping payment term mapping",
-            {
-              action: "PtrsV2StagePtrsPaymentTermMapSkipped",
-              customerId,
-              ptrsId,
-            },
-          );
-        }
-      } catch (err) {
-        trace?.write("stage_payment_term_map_error", {
-          message: err?.message || null,
-          statusCode: err?.statusCode || null,
-        });
-        slog.warn("PTRS v2 stagePtrs: failed to apply payment term mapping", {
-          action: "PtrsV2StagePtrsPaymentTermMapFailed",
-          customerId,
-          ptrsId,
-          profileId: profileId || null,
-          error: err?.message,
-        });
-      }
-
-      try {
-        const sPaymentTime = stageStart("derive_payment_time_days");
-        let derivedCount = 0;
-        let underivedCount = 0;
-        for (const r of stagedRows) {
-          if (!r || typeof r !== "object") continue;
-
-          const res = computePaymentTimeRegulator(r);
-          if (res?.days == null) {
-            if (r.payment_time_days == null) {
-              if (!Array.isArray(r._stageErrors)) r._stageErrors = [];
-              r._stageErrors.push({
-                code: "PAYMENT_TIME_UNDERIVED",
-                message:
-                  "Payment time could not be derived using regulator rules (missing required date fields)",
-                field: "payment_time_days",
-                value: null,
-              });
-            }
-            underivedCount += 1;
-            continue;
-          }
-
-          derivedCount += 1;
-          r.payment_time_days = res.days;
-          if (res.referenceDate)
-            r.payment_time_reference_date = res.referenceDate;
-          if (res.referenceKind)
-            r.payment_time_reference_kind = res.referenceKind;
-        }
-        stageEnd(sPaymentTime, {
-          derivedCount,
-          underivedCount,
-          rows: Array.isArray(stagedRows) ? stagedRows.length : 0,
-        });
-      } catch (err) {
-        trace?.write("stage_payment_time_error", {
-          message: err?.message || null,
-          statusCode: err?.statusCode || null,
-        });
-        slog.warn("PTRS v2 stagePtrs: failed to derive payment_time_days", {
-          action: "PtrsV2StagePtrsPaymentTimeDerivationFailed",
-          customerId,
-          ptrsId,
-          error: err?.message,
-        });
-      }
-    }
-
-    const contractStageFields = collectCanonicalContractFields(
-      PTRS_CANONICAL_CONTRACT,
-    );
-
-    const derivedStageFields = [
-      "payment_term_days",
-      "payment_time_days",
-      "payment_time_reference_date",
-      "payment_time_reference_kind",
-      "contract_po_payment_terms_effective",
-      "contract_po_payment_terms_effective_source",
-      "contract_po_payment_terms_effective_changed_at",
-    ];
-
-    let mappedExtraStageFields = [];
-    try {
-      if (profileId && db.PtrsFieldMap) {
-        const fieldMapRows = await db.PtrsFieldMap.findAll({
-          where: { customerId, ptrsId, profileId },
-          attributes: ["canonicalField"],
-          raw: true,
-          transaction: t,
-        });
-
-        mappedExtraStageFields = Array.from(
-          new Set(
-            (fieldMapRows || [])
-              .map((r) => toSnakeCase(r?.canonicalField))
-              .filter(Boolean),
-          ),
-        );
-      }
-    } catch (err) {
-      slog.warn(
-        "PTRS v2 stagePtrs: failed to load canonical field-map rows for persisted stage shape",
+      slog.info(
+        "PTRS v2 stagePtrs: inputs unchanged but no staged rows exist; forcing rebuild",
         {
-          action: "PtrsV2StagePtrsPersistShapeFieldMapLoadFailed",
+          action: "PtrsV2StagePtrsSkipBypassedNoRows",
           customerId,
           ptrsId,
           profileId: profileId || null,
-          error: err?.message,
+          inputHash,
+          previousRunId: previous.id || null,
+          existingStageCount,
         },
       );
+      trace?.write("stage_skip_bypassed_no_rows", {
+        inputHash,
+        previousRunId: previous.id || null,
+        existingStageCount,
+        totalMs: hrMsSince(jobStartNs),
+      });
     }
 
-    const persistedStageFields = Array.from(
-      new Set([
-        ...contractStageFields,
-        ...mappedExtraStageFields,
-        ...derivedStageFields,
-      ]),
-    );
-    void persistedStageFields;
+    slog.info("PTRS v2 stagePtrs: execution input hash", {
+      action: "PtrsV2StagePtrsInputHash",
+      customerId,
+      ptrsId,
+      profileId: profileId || null,
+      inputHash,
+      previousHash: previous?.inputHash || null,
+      mappedRowCount: staleness?.snapshot?.mappedRows?.rowCount || 0,
+      mappedRowUpdatedAt: staleness?.snapshot?.mappedRows?.maxUpdatedAt || null,
+      datasetsCount: Array.isArray(staleness?.snapshot?.datasets)
+        ? staleness.snapshot.datasets.length
+        : 0,
+      paymentTermMapCount:
+        Number(staleness?.snapshot?.paymentTermMap?.count) || 0,
+      paymentTermMapUpdatedAt:
+        staleness?.snapshot?.paymentTermMap?.maxUpdatedAt || null,
+      paymentTermChangeCount:
+        Number(staleness?.snapshot?.paymentTermChanges?.count) || 0,
+      paymentTermChangeUpdatedAt:
+        staleness?.snapshot?.paymentTermChanges?.maxUpdatedAt || null,
+    });
+
+    executionRun = await createExecutionRun({
+      customerId,
+      ptrsId,
+      profileId,
+      step: "stage",
+      inputHash,
+      status: "running",
+      startedAt: new Date(),
+      createdBy: userId || null,
+      transaction: t,
+    });
+
+    const rulesStats = null;
+    const paymentTermChangeStats = null;
+    const paymentTermStats = null;
 
     let persistedCount = null;
     let persistedRowsIn = null;
@@ -574,35 +260,29 @@ async function stagePtrs({
       throw e;
     };
 
-    if (persist) {
-      const defaultDatasetId = await resolveDefaultDatasetId();
+    const defaultDatasetId = await resolveDefaultDatasetId();
 
-      const missingDatasetIdCount = (stagedRows || []).reduce((acc, r) => {
-        const did = r?.datasetId || r?.dataset_id || null;
-        return acc + (did ? 0 : 1);
-      }, 0);
+    if (!defaultDatasetId) {
+      const e = new Error("Unable to resolve datasetId for staging");
+      e.statusCode = 500;
+      throw e;
+    }
 
-      if (!defaultDatasetId) {
-        const e = new Error("Unable to resolve datasetId for staging");
-        e.statusCode = 500;
-        throw e;
-      }
+    const sPersistClear = stageStart("persist_stage_clear");
+    const clearedCount = await db.PtrsStageRow.destroy({
+      where: { customerId, ptrsId, profileId },
+      transaction: t,
+    });
+    stageEnd(sPersistClear, { clearedCount: Number(clearedCount) || 0 });
 
-      const sPersistClear = stageStart("persist_stage_clear");
-      const clearedCount = await db.PtrsStageRow.destroy({
-        where: { customerId, ptrsId, profileId },
-        transaction: t,
-      });
-      stageEnd(sPersistClear, { clearedCount: Number(clearedCount) || 0 });
+    slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
+      action: "PtrsV2StagePtrsClearActive",
+      customerId,
+      ptrsId,
+      clearedCount: Number(clearedCount) || 0,
+    });
 
-      slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
-        action: "PtrsV2StagePtrsClearActive",
-        customerId,
-        ptrsId,
-        clearedCount: Number(clearedCount) || 0,
-      });
-
-      const insertSql = `
+    const insertSql = `
         INSERT INTO "tbl_ptrs_stage_row"
         (
           "id",
@@ -611,6 +291,23 @@ async function stagePtrs({
           "profileId",
           "datasetId",
           "rowNo",
+          "payerEntityName",
+          "payerEntityAbn",
+          "payeeEntityName",
+          "payeeEntityAbn",
+          "invoiceReferenceNumber",
+          "sourceAccountCode",
+          "description",
+          "documentType",
+          "clearingDocument",
+          "paymentAmount",
+          "paymentDate",
+          "invoiceIssueDate",
+          "invoiceReceiptDate",
+          "invoiceDueDate",
+          "paymentTermRaw",
+          "paymentTermDays",
+          "paymentTimeDays",
           "data",
           "errors",
           "meta",
@@ -635,8 +332,79 @@ async function stagePtrs({
           :customerId AS "customerId",
           :ptrsId AS "ptrsId",
           :profileId AS "profileId",
-          :defaultDatasetId AS "datasetId",
+          COALESCE(
+            NULLIF(m."meta"->>'datasetId', ''),
+            NULLIF(m."data"->'_ptrsMeta'->>'datasetId', ''),
+            :defaultDatasetId
+          ) AS "datasetId",
           m."rowNo" AS "rowNo",
+                    NULLIF(m."data"->>'payer_entity_name', '') AS "payerEntityName",
+          NULLIF(regexp_replace(COALESCE(m."data"->>'payer_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payerEntityAbn",
+          NULLIF(m."data"->>'payee_entity_name', '') AS "payeeEntityName",
+          NULLIF(regexp_replace(COALESCE(m."data"->>'payee_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payeeEntityAbn",
+          COALESCE(
+            NULLIF(m."data"->>'invoice_reference_number', ''),
+            NULLIF(m."data"->>'Invoice Reference', ''),
+            NULLIF(m."data"->>'Document Number', '')
+          ) AS "invoiceReferenceNumber",
+          COALESCE(
+            NULLIF(m."data"->>'source_account_code', ''),
+            NULLIF(m."data"->>'Account', '')
+          ) AS "sourceAccountCode",
+          COALESCE(
+            NULLIF(m."data"->>'description', ''),
+            NULLIF(m."data"->>'Text', ''),
+            NULLIF(m."data"->>'Reference', '')
+          ) AS "description",
+          COALESCE(
+            NULLIF(m."data"->>'document_type', ''),
+            NULLIF(m."data"->>'Document Type', '')
+          ) AS "documentType",
+          COALESCE(
+            NULLIF(m."data"->>'clearing_document', ''),
+            NULLIF(m."data"->>'Clearing Document', '')
+          ) AS "clearingDocument",
+          CASE
+            WHEN NULLIF(REPLACE(COALESCE(m."data"->>'payment_amount', ''), ',', ''), '') IS NULL THEN NULL
+            ELSE ABS(REPLACE(m."data"->>'payment_amount', ',', '')::numeric)
+          END AS "paymentAmount",
+          CASE
+            WHEN NULLIF(m."data"->>'payment_date', '') IS NULL THEN NULL
+            WHEN (m."data"->>'payment_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'payment_date')::date
+            WHEN (m."data"->>'payment_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'payment_date', 'DD/MM/YYYY')
+            ELSE NULL
+          END AS "paymentDate",
+          CASE
+            WHEN NULLIF(m."data"->>'invoice_issue_date', '') IS NULL THEN NULL
+            WHEN (m."data"->>'invoice_issue_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_issue_date')::date
+            WHEN (m."data"->>'invoice_issue_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_issue_date', 'DD/MM/YYYY')
+            ELSE NULL
+          END AS "invoiceIssueDate",
+          CASE
+            WHEN NULLIF(m."data"->>'invoice_receipt_date', '') IS NULL THEN NULL
+            WHEN (m."data"->>'invoice_receipt_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_receipt_date')::date
+            WHEN (m."data"->>'invoice_receipt_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_receipt_date', 'DD/MM/YYYY')
+            ELSE NULL
+          END AS "invoiceReceiptDate",
+          CASE
+            WHEN NULLIF(m."data"->>'invoice_due_date', '') IS NULL THEN NULL
+            WHEN (m."data"->>'invoice_due_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_due_date')::date
+            WHEN (m."data"->>'invoice_due_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_due_date', 'DD/MM/YYYY')
+            ELSE NULL
+          END AS "invoiceDueDate",
+          COALESCE(
+            NULLIF(m."data"->>'payment_term', ''),
+            NULLIF(m."data"->>'Payment terms', ''),
+            NULLIF(m."data"->>'vendormaster__Payment terms', '')
+          ) AS "paymentTermRaw",
+          CASE
+            WHEN NULLIF(m."data"->>'payment_term_days', '') IS NULL THEN NULL
+            ELSE (m."data"->>'payment_term_days')::int
+          END AS "paymentTermDays",
+          CASE
+            WHEN NULLIF(m."data"->>'payment_time_days', '') IS NULL THEN NULL
+            ELSE (m."data"->>'payment_time_days')::int
+          END AS "paymentTimeDays",
           COALESCE(m."data", '{}'::jsonb) AS "data",
           NULL AS "errors",
           jsonb_build_object(
@@ -654,23 +422,22 @@ async function stagePtrs({
         ORDER BY m."rowNo"
       `;
 
-      slog.info("PTRS v2 stagePtrs: preparing SQL insert", {
-        action: "PtrsV2StagePtrsSqlInsert",
-        customerId,
-        ptrsId,
-        defaultDatasetId,
-        missingDatasetIdCount,
-      });
+    slog.info("PTRS v2 stagePtrs: preparing SQL insert", {
+      action: "PtrsV2StagePtrsSqlInsert",
+      customerId,
+      ptrsId,
+      defaultDatasetId,
+    });
 
-      try {
-        const countMappedSql = `
+    try {
+      const countMappedSql = `
           SELECT COUNT(*)::int AS "count"
           FROM "tbl_ptrs_mapped_row" m
           WHERE m."customerId" = :customerId
             AND m."ptrsId" = :ptrsId
         `;
 
-        const countStageSql = `
+      const countStageSql = `
           SELECT COUNT(*)::int AS "count"
           FROM "tbl_ptrs_stage_row" s
           WHERE s."customerId" = :customerId
@@ -679,56 +446,52 @@ async function stagePtrs({
             AND s."deletedAt" IS NULL
         `;
 
-        const sPersistCountMapped = stageStart(
-          "persist_stage_count_mapped_rows",
-        );
-        const [mappedCountRows] = await db.sequelize.query(countMappedSql, {
-          transaction: t,
-          replacements: {
-            customerId,
-            ptrsId,
-          },
-        });
-        persistedRowsIn = Number(mappedCountRows?.[0]?.count || 0);
-        stageEnd(sPersistCountMapped, {
-          mappedRowsIn: persistedRowsIn,
-        });
+      const sPersistCountMapped = stageStart("persist_stage_count_mapped_rows");
+      const [mappedCountRows] = await db.sequelize.query(countMappedSql, {
+        transaction: t,
+        replacements: {
+          customerId,
+          ptrsId,
+        },
+      });
+      persistedRowsIn = Number(mappedCountRows?.[0]?.count || 0);
+      stageEnd(sPersistCountMapped, {
+        mappedRowsIn: persistedRowsIn,
+      });
 
-        const sPersistInsert = stageStart("persist_stage_insert_select");
-        await db.sequelize.query(insertSql, {
-          transaction: t,
-          replacements: {
-            customerId,
-            ptrsId,
-            profileId,
-            defaultDatasetId,
-            userId: userId || null,
-            rulesStats: JSON.stringify(rulesStats || null),
-          },
-        });
+      const sPersistInsert = stageStart("persist_stage_insert_select");
+      await db.sequelize.query(insertSql, {
+        transaction: t,
+        replacements: {
+          customerId,
+          ptrsId,
+          profileId,
+          defaultDatasetId,
+          userId: userId || null,
+          rulesStats: JSON.stringify(rulesStats || null),
+        },
+      });
 
-        const sPersistCountStage = stageStart(
-          "persist_stage_count_active_rows",
-        );
-        const [stageCountRows] = await db.sequelize.query(countStageSql, {
-          transaction: t,
-          replacements: {
-            customerId,
-            ptrsId,
-            profileId,
-          },
-        });
-        persistedRowsOut = Number(stageCountRows?.[0]?.count || 0);
-        persistedCount = persistedRowsOut;
-        stageEnd(sPersistCountStage, {
-          activeStageRows: persistedRowsOut,
-        });
-        stageEnd(sPersistInsert, { inserted: persistedRowsOut });
+      const sPersistCountStage = stageStart("persist_stage_count_active_rows");
+      const [stageCountRows] = await db.sequelize.query(countStageSql, {
+        transaction: t,
+        replacements: {
+          customerId,
+          ptrsId,
+          profileId,
+        },
+      });
+      persistedRowsOut = Number(stageCountRows?.[0]?.count || 0);
+      persistedCount = persistedRowsOut;
+      stageEnd(sPersistCountStage, {
+        activeStageRows: persistedRowsOut,
+      });
+      stageEnd(sPersistInsert, { inserted: persistedRowsOut });
 
-        const sPaymentTermUpdate = stageStart(
-          "persist_stage_update_payment_term_days",
-        );
-        const paymentTermSql = `
+      const sPaymentTermUpdate = stageStart(
+        "persist_stage_update_payment_term_days",
+      );
+      const paymentTermSql = `
           WITH term_source AS (
             SELECT
               s."id",
@@ -757,6 +520,7 @@ async function stagePtrs({
           term_lookup AS (
             SELECT
               ts."id",
+              ts."termCode" AS "paymentTermRaw",
               CASE
                 WHEN ts."termCode" ~ '^\\d{1,4}$' THEN ts."termCode"::int
                 ELSE ptm."transformedDays"
@@ -770,12 +534,8 @@ async function stagePtrs({
           )
           UPDATE "tbl_ptrs_stage_row" s
           SET
-            "data" = jsonb_strip_nulls(
-              COALESCE(s."data", '{}'::jsonb)
-              || jsonb_build_object(
-                'payment_term_days', tl."paymentTermDays"
-              )
-            ),
+            "paymentTermRaw" = tl."paymentTermRaw",
+            "paymentTermDays" = tl."paymentTermDays",
             "updatedBy" = :userId,
             "updatedAt" = NOW()
           FROM term_lookup tl
@@ -784,21 +544,21 @@ async function stagePtrs({
             AND s."deletedAt" IS NULL
         `;
 
-        await db.sequelize.query(paymentTermSql, {
-          transaction: t,
-          replacements: {
-            customerId,
-            ptrsId,
-            profileId,
-            userId: userId || null,
-          },
-        });
-        stageEnd(sPaymentTermUpdate, { updatedRows: persistedCount });
+      await db.sequelize.query(paymentTermSql, {
+        transaction: t,
+        replacements: {
+          customerId,
+          ptrsId,
+          profileId,
+          userId: userId || null,
+        },
+      });
+      stageEnd(sPaymentTermUpdate, { updatedRows: persistedCount });
 
-        const sPaymentTimeUpdate = stageStart(
-          "persist_stage_update_payment_time",
-        );
-        const sqlDateExpr = (jsonKey) => `
+      const sPaymentTimeUpdate = stageStart(
+        "persist_stage_update_payment_time",
+      );
+      const sqlDateExpr = (jsonKey) => `
           CASE
             WHEN NULLIF(s."data"->>'${jsonKey}', '') IS NULL THEN NULL
             WHEN (s."data"->>'${jsonKey}') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (s."data"->>'${jsonKey}')::date
@@ -811,15 +571,15 @@ async function stagePtrs({
           END
         `;
 
-        const paymentDateExpr = sqlDateExpr("payment_date");
-        const invoiceIssueDateExpr = sqlDateExpr("invoice_issue_date");
-        const invoiceReceiptDateExpr = sqlDateExpr("invoice_receipt_date");
-        const noticeForPaymentIssueDateExpr = sqlDateExpr(
-          "notice_for_payment_issue_date",
-        );
-        const supplyDateExpr = sqlDateExpr("supply_date");
-        const invoiceDueDateExpr = sqlDateExpr("invoice_due_date");
-        const paymentTimeSql = `
+      const paymentDateExpr = sqlDateExpr("payment_date");
+      const invoiceIssueDateExpr = sqlDateExpr("invoice_issue_date");
+      const invoiceReceiptDateExpr = sqlDateExpr("invoice_receipt_date");
+      const noticeForPaymentIssueDateExpr = sqlDateExpr(
+        "notice_for_payment_issue_date",
+      );
+      const supplyDateExpr = sqlDateExpr("supply_date");
+      const invoiceDueDateExpr = sqlDateExpr("invoice_due_date");
+      const paymentTimeSql = `
           WITH payment_time AS (
             SELECT
               s."id",
@@ -934,14 +694,7 @@ async function stagePtrs({
           )
           UPDATE "tbl_ptrs_stage_row" s
           SET
-            "data" = jsonb_strip_nulls(
-              COALESCE(s."data", '{}'::jsonb)
-              || jsonb_build_object(
-                'payment_time_days', pt."paymentTimeDays",
-                'payment_time_reference_date', CASE WHEN pt."referenceDate" IS NOT NULL THEN pt."referenceDate"::text ELSE NULL END,
-                'payment_time_reference_kind', pt."referenceKind"
-              )
-            ),
+            "paymentTimeDays" = pt."paymentTimeDays",
             "updatedBy" = :userId,
             "updatedAt" = NOW()
           FROM payment_time pt
@@ -950,45 +703,37 @@ async function stagePtrs({
             AND s."deletedAt" IS NULL
         `;
 
-        await db.sequelize.query(paymentTimeSql, {
-          transaction: t,
-          replacements: {
-            customerId,
-            ptrsId,
-            profileId,
-            userId: userId || null,
-          },
-        });
-        stageEnd(sPaymentTimeUpdate, { updatedRows: persistedCount });
-      } catch (err) {
-        trace?.write("stage_persist_insert_select_error", {
-          message: err?.message || null,
-          statusCode: err?.statusCode || null,
-        });
-        slog.error("PTRS v2 stagePtrs: SQL insert-select failed", {
-          action: "PtrsV2StagePtrsInsertSelectFailed",
+      await db.sequelize.query(paymentTimeSql, {
+        transaction: t,
+        replacements: {
           customerId,
           ptrsId,
-          error: err?.message,
-        });
-        throw err;
-      }
+          profileId,
+          userId: userId || null,
+        },
+      });
+      stageEnd(sPaymentTimeUpdate, { updatedRows: persistedCount });
+    } catch (err) {
+      trace?.write("stage_persist_insert_select_error", {
+        message: err?.message || null,
+        statusCode: err?.statusCode || null,
+      });
+      slog.error("PTRS v2 stagePtrs: SQL insert-select failed", {
+        action: "PtrsV2StagePtrsInsertSelectFailed",
+        customerId,
+        ptrsId,
+        error: err?.message,
+      });
+      throw err;
     }
 
     const tookMs = Date.now() - started;
-    if (!persist) {
-      persistedCount = null;
-    }
 
     if (executionRun?.id) {
       try {
         const sRunUpdate = stageStart("execution_run_update_success");
-        const effectiveRowsIn = persist
-          ? Number(persistedRowsIn || 0)
-          : stagedRows.length;
-        const effectiveRowsOut = persist
-          ? Number(persistedRowsOut || 0)
-          : stagedRows.length;
+        const effectiveRowsIn = Number(persistedRowsIn || 0);
+        const effectiveRowsOut = Number(persistedRowsOut || 0);
 
         await updateExecutionRun({
           customerId,
@@ -1025,12 +770,8 @@ async function stagePtrs({
       }
     }
 
-    const effectiveRowsIn = persist
-      ? Number(persistedRowsIn || 0)
-      : stagedRows.length;
-    const effectiveRowsOut = persist
-      ? Number(persistedRowsOut || 0)
-      : stagedRows.length;
+    const effectiveRowsIn = Number(persistedRowsIn || 0);
+    const effectiveRowsOut = Number(persistedRowsOut || 0);
 
     trace?.write("stage_before_commit", {
       rowsIn: effectiveRowsIn,
@@ -1045,11 +786,11 @@ async function stagePtrs({
     if (trace) await trace.close();
 
     return {
-      rowsIn: persist ? Number(persistedRowsIn || 0) : stagedRows.length,
-      rowsOut: persist ? Number(persistedRowsOut || 0) : stagedRows.length,
+      rowsIn: Number(persistedRowsIn || 0),
+      rowsOut: Number(persistedRowsOut || 0),
       persistedCount,
       tookMs,
-      sample: persist ? null : stagedRows[0] || null,
+      sample: null,
       stats: {
         rules: rulesStats,
         paymentTerms: paymentTermStats,

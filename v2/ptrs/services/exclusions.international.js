@@ -1,11 +1,3 @@
-const {
-  jsonText,
-  appendJsonbTextArray,
-  appendJsonbTextArrayAtPath,
-  applyExcludeFlags,
-  applyMetaBase,
-} = require("./exclusions.shared");
-
 function buildInternationalCommentSql(currencyExpr) {
   return `
     CASE
@@ -29,66 +21,34 @@ async function applyInternationalExclusion({
   customerId,
   ptrsId,
 }) {
-  const currencyExpr = jsonText("s", "document_currency", "Document Currency");
+  const reason = "INTERNATIONAL";
+  const currencyExpr = `s."documentCurrency"`;
   const predicateSql = buildInternationalPredicate(currencyExpr);
-  const reasonSql = `'INTERNATIONAL'`;
   const commentSql = buildInternationalCommentSql(currencyExpr);
 
-  const dataBaseSql = applyExcludeFlags(`s."data"`, reasonSql);
-  const dataWithReasonsSql = appendJsonbTextArray(
-    "exclude_reasons",
-    reasonSql,
-    dataBaseSql,
-  );
-  const dataFinalSql = appendJsonbTextArray(
-    "exclude_comment",
-    commentSql,
-    dataWithReasonsSql,
-  );
-
-  const metaBaseSql = applyMetaBase(`s."meta"`);
-  const metaWithReasonSql = `
-    jsonb_set(
-      ${metaBaseSql},
-      '{exclusions,reason}',
-      CASE
-        WHEN trim(COALESCE(${metaBaseSql}#>>'{exclusions,reason}', '')) <> ''
-          THEN to_jsonb(${metaBaseSql}#>>'{exclusions,reason}')
-        ELSE to_jsonb((${reasonSql})::text)
-      END,
-      true
-    )
-  `;
-  const metaWithReasonsSql = appendJsonbTextArrayAtPath(
-    "exclusions,reasons",
-    reasonSql,
-    metaWithReasonSql,
-  );
-  const metaFinalSql = appendJsonbTextArrayAtPath(
-    "exclusions,comments",
-    commentSql,
-    metaWithReasonsSql,
-  );
-
   const sql = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        ${commentSql}::text AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND ${predicateSql}
+        AND COALESCE(s."excludeReason", '') <> :reason
+    )
     UPDATE "tbl_ptrs_stage_row" s
     SET
-      "data" = ${dataFinalSql},
-      "meta" = ${metaFinalSql},
+      "excludedTradeCreditPayment" = true,
+      "excludeReason" = :reason,
       "updatedAt" = now()
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND ${predicateSql}
-      AND NOT (
-        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('INTERNATIONAL'::text)
-        OR COALESCE(s."data"->>'exclude_reason', '') = 'INTERNATIONAL'
-      )
+    FROM matched_rows mr
+    WHERE s."id" = mr."id"
   `;
 
   const [, meta] = await sequelize.query(sql, {
-    replacements: { customerId, ptrsId },
+    replacements: { customerId, ptrsId, reason },
     transaction,
   });
 
@@ -102,32 +62,47 @@ async function previewInternationalExclusion({
   ptrsId,
   effectiveLimit,
 }) {
-  const currencyExpr = `COALESCE(s."data"->>'document_currency', s."data"->>'Document Currency', '')`;
+  const reason = "INTERNATIONAL";
+  const currencyExpr = `s."documentCurrency"`;
   const predicateSql = buildInternationalPredicate(currencyExpr);
   const commentSql = buildInternationalCommentSql(currencyExpr);
 
+  const matchedRowsCte = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        s."rowNo",
+        s."payerEntityAbn",
+        s."payerEntityName",
+        s."payeeEntityAbn",
+        s."payeeEntityName",
+        s."invoiceReferenceNumber",
+        s."paymentDate",
+        s."paymentAmount",
+        s."documentCurrency",
+        s."excludedTradeCreditPayment",
+        s."excludeReason",
+        ${commentSql}::text AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND ${predicateSql}
+    )
+  `;
+
   const countSql = `
+    ${matchedRowsCte}
     SELECT
       COUNT(*)::int AS "matchedCount",
-      SUM(
-        CASE
-          WHEN (
-            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('INTERNATIONAL'::text)
-            OR COALESCE(s."data"->>'exclude_reason', '') = 'INTERNATIONAL'
-          )
-          THEN 1 ELSE 0
-        END
+      COUNT(*) FILTER (
+        WHERE COALESCE("excludeReason", '') = :reason
       )::int AS "alreadyExcludedCount"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND ${predicateSql}
+    FROM matched_rows
   `;
 
   const [countRows] = await sequelize.query(countSql, {
-    replacements: { customerId, ptrsId },
+    replacements: { customerId, ptrsId, reason },
     transaction,
   });
 
@@ -136,36 +111,34 @@ async function previewInternationalExclusion({
     Number(countRows?.[0]?.alreadyExcludedCount ?? 0) || 0;
 
   const sampleSql = `
+    ${matchedRowsCte}
     SELECT
-      s."rowNo" AS "rowNo",
-      s."data"->>'payer_entity_name' AS "payer_entity_name",
-      s."data"->>'payee_entity_name' AS "payee_entity_name",
-      s."data"->>'payee_entity_abn' AS "payee_entity_abn",
-      COALESCE(s."data"->>'document_currency', s."data"->>'Document Currency') AS "document_currency",
-      s."data"->>'invoice_reference_number' AS "invoice_reference_number",
-      s."data"->>'payment_date' AS "payment_date",
-      s."data"->>'payment_amount' AS "payment_amount",
-      ${commentSql} AS "exclude_comment",
+      "rowNo" AS "row_no",
+      "payerEntityName" AS "payer_entity_name",
+      "payeeEntityName" AS "payee_entity_name",
+      "payeeEntityAbn" AS "payee_entity_abn",
+      "documentCurrency" AS "document_currency",
+      "invoiceReferenceNumber" AS "invoice_reference_number",
       CASE
-        WHEN (
-          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('INTERNATIONAL'::text)
-          OR COALESCE(s."data"->>'exclude_reason', '') = 'INTERNATIONAL'
-        )
-        THEN true
+        WHEN "paymentDate" IS NOT NULL THEN "paymentDate"::text
+        ELSE NULL
+      END AS "payment_date",
+      CASE
+        WHEN "paymentAmount" IS NOT NULL THEN "paymentAmount"::text
+        ELSE NULL
+      END AS "payment_amount",
+      "excludeComment" AS "exclude_comment",
+      CASE
+        WHEN COALESCE("excludeReason", '') = :reason THEN true
         ELSE false
       END AS "alreadyExcluded"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND ${predicateSql}
-    ORDER BY s."rowNo" ASC
+    FROM matched_rows
+    ORDER BY "rowNo" ASC
     LIMIT :limit
   `;
 
   const [sampleRows] = await sequelize.query(sampleSql, {
-    replacements: { customerId, ptrsId, limit: effectiveLimit },
+    replacements: { customerId, ptrsId, reason, limit: effectiveLimit },
     transaction,
   });
 

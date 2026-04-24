@@ -97,6 +97,12 @@ async function createKeywordExclusion({
     }
 
     const cleanedKeyword = cleaned;
+    const normalisedField = normaliseKeywordField(field);
+    const normalisedMatchType = normaliseKeywordMatchType(matchType);
+
+    if (!normalisedField) throw new Error("Invalid keyword field");
+    if (!normalisedMatchType) throw new Error("Invalid keyword matchType");
+
     const trimmedUserId = userId ? String(userId).slice(0, 10) : null;
 
     const existing = await Model.findOne({
@@ -116,8 +122,8 @@ async function createKeywordExclusion({
 
     if (existing) {
       existing.keyword = cleanedKeyword;
-      existing.field = normaliseKeywordField(field);
-      existing.matchType = normaliseKeywordMatchType(matchType);
+      existing.field = normalisedField;
+      existing.matchType = normalisedMatchType;
       existing.notes = notes ?? null;
       existing.deletedAt = null;
       existing.updatedBy = trimmedUserId;
@@ -141,8 +147,8 @@ async function createKeywordExclusion({
         customerId,
         profileId,
         keyword: cleanedKeyword,
-        field: normaliseKeywordField(field),
-        matchType: normaliseKeywordMatchType(matchType),
+        field: normalisedField,
+        matchType: normalisedMatchType,
         notes: notes ?? null,
         createdBy: trimmedUserId,
         updatedBy: trimmedUserId,
@@ -219,8 +225,16 @@ async function updateKeywordExclusion({
     }
 
     row.keyword = normaliseKeyword(keyword);
-    row.field = normaliseKeywordField(field);
-    row.matchType = normaliseKeywordMatchType(matchType);
+    if (!row.keyword) throw new Error("keyword is required");
+
+    const normalisedField = normaliseKeywordField(field);
+    const normalisedMatchType = normaliseKeywordMatchType(matchType);
+
+    if (!normalisedField) throw new Error("Invalid keyword field");
+    if (!normalisedMatchType) throw new Error("Invalid keyword matchType");
+
+    row.field = normalisedField;
+    row.matchType = normalisedMatchType;
     row.notes = notes ?? null;
     if (userId) row.updatedBy = String(userId).slice(0, 10);
 

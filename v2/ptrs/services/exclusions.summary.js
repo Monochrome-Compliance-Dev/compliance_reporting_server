@@ -22,58 +22,24 @@ async function getExclusionsSummary({ customerId, ptrsId, profileId = null }) {
         s."customerId" = :customerId
         AND s."ptrsId" = :ptrsId
         AND s."deletedAt" IS NULL
-        AND COALESCE((s."data"->>'exclude')::boolean, false) = true
+        AND s."excludedTradeCreditPayment" = true
     `;
 
     const multiReasonSql = `
-      SELECT COUNT(*)::int AS "multiReasonRows"
+      SELECT 0::int AS "multiReasonRows"
+    `;
+
+    const byReasonSql = `
+      SELECT
+        COALESCE(NULLIF(trim(s."excludeReason"), ''), 'UNKNOWN') AS reason,
+        COUNT(*)::int AS count
       FROM "tbl_ptrs_stage_row" s
       WHERE
         s."customerId" = :customerId
         AND s."ptrsId" = :ptrsId
         AND s."deletedAt" IS NULL
-        AND COALESCE((s."data"->>'exclude')::boolean, false) = true
-        AND (
-          CASE
-            WHEN jsonb_typeof(COALESCE(s."data"->'exclude_reasons', '[]'::jsonb)) = 'array'
-              THEN jsonb_array_length(COALESCE(s."data"->'exclude_reasons', '[]'::jsonb))
-            WHEN trim(COALESCE(s."data"->>'exclude_reason', '')) <> ''
-              THEN 1
-            ELSE 0
-          END
-        ) > 1
-    `;
-
-    const byReasonSql = `
-      WITH base_rows AS (
-        SELECT s."data"
-        FROM "tbl_ptrs_stage_row" s
-        WHERE
-          s."customerId" = :customerId
-          AND s."ptrsId" = :ptrsId
-          AND s."deletedAt" IS NULL
-          AND COALESCE((s."data"->>'exclude')::boolean, false) = true
-      ),
-      reason_rows AS (
-        SELECT jsonb_array_elements_text(b."data"->'exclude_reasons') AS reason
-        FROM base_rows b
-        WHERE jsonb_typeof(COALESCE(b."data"->'exclude_reasons', '[]'::jsonb)) = 'array'
-
-        UNION ALL
-
-        SELECT b."data"->>'exclude_reason' AS reason
-        FROM base_rows b
-        WHERE (
-          jsonb_typeof(COALESCE(b."data"->'exclude_reasons', '[]'::jsonb)) <> 'array'
-          OR jsonb_array_length(COALESCE(b."data"->'exclude_reasons', '[]'::jsonb)) = 0
-        )
-        AND trim(COALESCE(b."data"->>'exclude_reason', '')) <> ''
-      )
-      SELECT
-        COALESCE(reason, 'UNKNOWN') AS reason,
-        COUNT(*)::int AS count
-      FROM reason_rows
-      GROUP BY COALESCE(reason, 'UNKNOWN')
+        AND s."excludedTradeCreditPayment" = true
+      GROUP BY COALESCE(NULLIF(trim(s."excludeReason"), ''), 'UNKNOWN')
       ORDER BY COUNT(*) DESC, reason ASC
     `;
 

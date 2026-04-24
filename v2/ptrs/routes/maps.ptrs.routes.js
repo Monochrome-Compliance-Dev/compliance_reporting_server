@@ -19,6 +19,7 @@ router.post(
   requirePtrs,
   tmController.buildMappedDataset,
 );
+
 // Find compatible maps for this PTRS run
 router.get("/compatible-maps", requirePtrs, tmController.listPtrsWithMap);
 
@@ -28,5 +29,6 @@ router.get("/:id/sample", requirePtrs, tmController.getSample);
 // Canonical field mapping (profile-scoped)
 router.get("/:id/field-map", requirePtrs, tmController.getFieldMap);
 router.post("/:id/field-map", requirePtrs, tmController.saveFieldMap);
+router.post("/:id/field-map/import", requirePtrs, tmController.importFieldMap);
 
 module.exports = router;

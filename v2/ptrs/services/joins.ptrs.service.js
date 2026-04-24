@@ -118,6 +118,192 @@ function normalizeJoinsPayload(joins) {
   return { conditions };
 }
 
+// Remap imported datasetIds to the matching current PTRS dataset.
+// Matching is intentionally strict: old datasetId -> old role/fileName -> current role/fileName.
+async function remapDatasetIdsForCurrentPtrs({
+  customerId,
+  ptrsId,
+  joins,
+  customFields,
+  transaction,
+}) {
+  const conditions = Array.isArray(joins?.conditions) ? joins.conditions : [];
+  const fields = Array.isArray(customFields) ? customFields : [];
+
+  const joinSides = conditions.flatMap((condition) => [
+    condition.from,
+    condition.to,
+  ]);
+
+  const collectDatasetIdsDeep = (value, out = []) => {
+    if (!value || typeof value !== "object") return out;
+
+    if (!Array.isArray(value) && value.datasetId != null) {
+      const datasetId = String(value.datasetId || "").trim();
+      if (datasetId) out.push(datasetId);
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) collectDatasetIdsDeep(item, out);
+      return out;
+    }
+
+    for (const child of Object.values(value)) {
+      collectDatasetIdsDeep(child, out);
+    }
+
+    return out;
+  };
+
+  const importedDatasetIds = Array.from(
+    new Set([
+      ...joinSides
+        .map((side) => String(side?.datasetId || "").trim())
+        .filter(Boolean),
+      ...collectDatasetIdsDeep(fields),
+    ]),
+  );
+
+  if (!importedDatasetIds.length) {
+    if (conditions.length) {
+      const e = new Error(
+        "Cannot import joins: datasetId is required on every join side",
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    return { joins, customFields };
+  }
+
+  const currentDatasets = await db.PtrsDataset.findAll({
+    where: { customerId, ptrsId },
+    attributes: ["id", "role", "fileName"],
+    raw: true,
+    transaction,
+  });
+
+  const currentDatasetIds = new Set(
+    (currentDatasets || []).map((dataset) => String(dataset.id)),
+  );
+
+  const sourceDatasetIds = importedDatasetIds.filter(
+    (datasetId) => !currentDatasetIds.has(datasetId),
+  );
+
+  const sourceDatasets = sourceDatasetIds.length
+    ? await db.PtrsDataset.findAll({
+        where: { customerId, id: { [Op.in]: sourceDatasetIds } },
+        attributes: ["id", "role", "fileName"],
+        raw: true,
+        transaction,
+      })
+    : [];
+
+  const sourceById = new Map();
+  for (const dataset of sourceDatasets || []) {
+    sourceById.set(String(dataset.id), dataset);
+  }
+
+  const currentByRoleAndFileName = new Map();
+  for (const dataset of currentDatasets || []) {
+    const role = String(dataset?.role || "").trim();
+    const fileName = String(dataset?.fileName || "").trim();
+    if (!role || !fileName) continue;
+
+    const key = `${role}::${fileName}`;
+    if (!currentByRoleAndFileName.has(key)) {
+      currentByRoleAndFileName.set(key, []);
+    }
+    currentByRoleAndFileName.get(key).push(dataset);
+  }
+
+  const remapDatasetId = (datasetId, label) => {
+    const importedDatasetId = String(datasetId || "").trim();
+    if (!importedDatasetId) {
+      const e = new Error(
+        `Cannot import joins: datasetId is required for ${label}`,
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    if (currentDatasetIds.has(importedDatasetId)) return importedDatasetId;
+
+    const sourceDataset = sourceById.get(importedDatasetId);
+    if (!sourceDataset) {
+      const e = new Error(
+        `Cannot import joins: source dataset "${importedDatasetId}" was not found for this customer`,
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    const role = String(sourceDataset.role || "").trim();
+    const fileName = String(sourceDataset.fileName || "").trim();
+    const key = `${role}::${fileName}`;
+    const matches = currentByRoleAndFileName.get(key) || [];
+
+    if (matches.length === 1) return String(matches[0].id);
+
+    if (!matches.length) {
+      const e = new Error(
+        `Cannot import joins: no current dataset matches role "${role}" and fileName "${fileName}"`,
+      );
+      e.statusCode = 400;
+      throw e;
+    }
+
+    const e = new Error(
+      `Cannot import joins: multiple current datasets match role "${role}" and fileName "${fileName}"`,
+    );
+    e.statusCode = 400;
+    throw e;
+  };
+
+  const remapCustomFieldDatasetIdsDeep = (value, path = "customFields") => {
+    if (!value || typeof value !== "object") return value;
+
+    if (Array.isArray(value)) {
+      return value.map((item, index) =>
+        remapCustomFieldDatasetIdsDeep(item, `${path}[${index}]`),
+      );
+    }
+
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "datasetId" && child != null) {
+        out[key] = remapDatasetId(child, `${path}.datasetId`);
+      } else {
+        out[key] = remapCustomFieldDatasetIdsDeep(child, `${path}.${key}`);
+      }
+    }
+    return out;
+  };
+
+  return {
+    joins: {
+      conditions: conditions.map((condition, index) => ({
+        from: {
+          ...condition.from,
+          datasetId: remapDatasetId(
+            condition.from?.datasetId,
+            `conditions[${index}].from`,
+          ),
+        },
+        to: {
+          ...condition.to,
+          datasetId: remapDatasetId(
+            condition.to?.datasetId,
+            `conditions[${index}].to`,
+          ),
+        },
+      })),
+    },
+    customFields: remapCustomFieldDatasetIdsDeep(fields),
+  };
+}
+
 async function getJoins({ customerId, ptrsId, transaction = null }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -205,12 +391,13 @@ async function saveJoins({
   customerId,
   ptrsId,
   joins,
-  customFields,
+  customFields: customFieldsInput,
   profileId = null,
   userId = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+  let customFields = customFieldsInput;
 
   // Joins validation removed; now done via normalizeJoinsPayload below.
 
@@ -220,7 +407,7 @@ async function saveJoins({
     throw e;
   }
 
-  const normalizedJoins = normalizeJoinsPayload(joins);
+  let normalizedJoins = normalizeJoinsPayload(joins);
 
   const trace = process.env.PTRS_TRACE
     ? createPtrsTrace({
@@ -244,6 +431,17 @@ async function saveJoins({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const remapped = await remapDatasetIdsForCurrentPtrs({
+      customerId,
+      ptrsId,
+      joins: normalizedJoins,
+      customFields,
+      transaction: t,
+    });
+
+    normalizedJoins = remapped.joins;
+    customFields = remapped.customFields;
+
     const existing = await db.PtrsColumnMap.findOne({
       where: { customerId, ptrsId },
       transaction: t,

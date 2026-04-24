@@ -459,6 +459,7 @@ function deriveTermCode(row) {
 
   const candidates = [
     row.payment_term_days,
+    row.paymentTermRaw,
     row.paymentTermDays,
     row.invoice_payment_terms_effective,
     row.invoice_payment_terms_raw,

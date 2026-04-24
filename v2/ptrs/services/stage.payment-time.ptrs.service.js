@@ -20,6 +20,7 @@ function collectCanonicalContractFields(contract) {
     contract.transaction,
     contract.dates,
     contract.terms,
+    contract.operational_source_fields,
     contract.regulator_flags,
   ];
 

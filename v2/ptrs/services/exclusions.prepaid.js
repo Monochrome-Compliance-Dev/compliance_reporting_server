@@ -1,10 +1,15 @@
-const {
-  jsonText,
-  appendJsonbTextArray,
-  appendJsonbTextArrayAtPath,
-  applyExcludeFlags,
-  applyMetaBase,
-} = require("./exclusions.shared");
+const { QueryTypes } = require("sequelize");
+
+const EXCLUSION_REASON = "PREPAID";
+const EXCLUSION_COMMENT = "Prepayment — matched payment terms.";
+
+function buildPrepaidMatchSql() {
+  return `(
+    trim(COALESCE(s."paymentTermRaw", '')) ILIKE '%prepaid%'
+    OR trim(COALESCE(s."paymentTermRaw", '')) ILIKE '%pre-pay%'
+    OR trim(COALESCE(s."paymentTermRaw", '')) ILIKE '%prepay%'
+  )`;
+}
 
 async function applyPrepaidExclusion({
   sequelize,
@@ -12,73 +17,36 @@ async function applyPrepaidExclusion({
   customerId,
   ptrsId,
 }) {
-  const reasonSql = `'PREPAID'`;
-  const commentSql = `'Prepayment — matched payment terms / description'`;
-  const paymentTermsExpr = jsonText("s", "payment_terms");
-  const descriptionExpr = jsonText("s", "description");
-
-  const dataBaseSql = applyExcludeFlags(`s."data"`, reasonSql);
-  const dataWithReasonsSql = appendJsonbTextArray(
-    "exclude_reasons",
-    reasonSql,
-    dataBaseSql,
-  );
-  const dataFinalSql = appendJsonbTextArray(
-    "exclude_comment",
-    commentSql,
-    dataWithReasonsSql,
-  );
-
-  const metaBaseSql = applyMetaBase(`s."meta"`);
-  const metaWithReasonSql = `
-    jsonb_set(
-      ${metaBaseSql},
-      '{exclusions,reason}',
-      CASE
-        WHEN trim(COALESCE(${metaBaseSql}#>>'{exclusions,reason}', '')) <> ''
-          THEN to_jsonb(${metaBaseSql}#>>'{exclusions,reason}')
-        ELSE to_jsonb((${reasonSql})::text)
-      END,
-      true
-    )
-  `;
-  const metaWithReasonsSql = appendJsonbTextArrayAtPath(
-    "exclusions,reasons",
-    reasonSql,
-    metaWithReasonSql,
-  );
-  const metaFinalSql = appendJsonbTextArrayAtPath(
-    "exclusions,comments",
-    commentSql,
-    metaWithReasonsSql,
-  );
+  const matchSql = buildPrepaidMatchSql();
 
   const sql = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        :comment::text AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND ${matchSql}
+        AND COALESCE(s."excludeReason", '') <> :reason
+    )
     UPDATE "tbl_ptrs_stage_row" s
     SET
-      "data" = ${dataFinalSql},
-      "meta" = ${metaFinalSql},
+      "excludedTradeCreditPayment" = true,
+      "excludeReason" = :reason,
       "updatedAt" = now()
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        ${paymentTermsExpr} ILIKE '%prepaid%'
-        OR ${paymentTermsExpr} ILIKE '%pre-pay%'
-        OR ${paymentTermsExpr} ILIKE '%prepay%'
-        OR ${descriptionExpr} ILIKE '%prepaid%'
-        OR ${descriptionExpr} ILIKE '%pre-pay%'
-        OR ${descriptionExpr} ILIKE '%prepay%'
-      )
-      AND NOT (
-        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('PREPAID'::text)
-        OR COALESCE(s."data"->>'exclude_reason', '') = 'PREPAID'
-      )
+    FROM matched_rows mr
+    WHERE s."id" = mr."id"
   `;
 
   const [, meta] = await sequelize.query(sql, {
-    replacements: { customerId, ptrsId },
+    replacements: {
+      customerId,
+      ptrsId,
+      reason: EXCLUSION_REASON,
+      comment: EXCLUSION_COMMENT,
+    },
     transaction,
   });
 
@@ -92,80 +60,93 @@ async function previewPrepaidExclusion({
   ptrsId,
   effectiveLimit,
 }) {
+  const matchSql = buildPrepaidMatchSql();
+
+  const matchedRowsCte = `
+    WITH matched_rows AS (
+      SELECT
+        s."id",
+        s."rowNo",
+        s."payeeEntityName",
+        s."payeeEntityAbn",
+        s."invoiceReferenceNumber",
+        s."sourceAccountCode",
+        s."paymentDate",
+        s."paymentAmount",
+        s."paymentTermRaw",
+        s."paymentTermDays",
+        s."excludedTradeCreditPayment",
+        s."excludeReason",
+        :comment::text AS "excludeComment"
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+        AND ${matchSql}
+    )
+  `;
+
   const countSql = `
+    ${matchedRowsCte}
     SELECT
       COUNT(*)::int AS "matchedCount",
-      SUM(
-        CASE
-          WHEN (
-            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('PREPAID'::text)
-            OR COALESCE(s."data"->>'exclude_reason', '') = 'PREPAID'
-          )
-          THEN 1 ELSE 0
-        END
+      COUNT(*) FILTER (
+        WHERE COALESCE("excludeReason", '') = :reason
       )::int AS "alreadyExcludedCount"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        COALESCE(s."data"->>'payment_terms','') ILIKE '%prepaid%'
-        OR COALESCE(s."data"->>'payment_terms','') ILIKE '%pre-pay%'
-        OR COALESCE(s."data"->>'payment_terms','') ILIKE '%prepay%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%prepaid%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%pre-pay%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%prepay%'
-      )
+    FROM matched_rows
   `;
 
   const [countRows] = await sequelize.query(countSql, {
-    replacements: { customerId, ptrsId },
+    type: QueryTypes.SELECT,
+    replacements: {
+      customerId,
+      ptrsId,
+      reason: EXCLUSION_REASON,
+      comment: EXCLUSION_COMMENT,
+    },
     transaction,
   });
 
-  const matched = Number(countRows?.[0]?.matchedCount ?? 0) || 0;
-  const alreadyExcluded =
-    Number(countRows?.[0]?.alreadyExcludedCount ?? 0) || 0;
+  const matched = Number(countRows?.matchedCount ?? 0) || 0;
+  const alreadyExcluded = Number(countRows?.alreadyExcludedCount ?? 0) || 0;
 
   const sampleSql = `
+    ${matchedRowsCte}
     SELECT
-      s."rowNo" AS "rowNo",
-      s."data"->>'payee_entity_name' AS "payee_entity_name",
-      s."data"->>'payee_entity_abn' AS "payee_entity_abn",
-      s."data"->>'invoice_reference_number' AS "invoice_reference_number",
-      s."data"->>'account_code' AS "account_code",
-      s."data"->>'payment_date' AS "payment_date",
-      s."data"->>'payment_amount' AS "payment_amount",
-      s."data"->>'payment_terms' AS "payment_terms",
-      s."data"->>'description' AS "description",
+      "rowNo" AS "row_no",
+      "payeeEntityName" AS "payee_entity_name",
+      "payeeEntityAbn" AS "payee_entity_abn",
+      "invoiceReferenceNumber" AS "invoice_reference_number",
+      "sourceAccountCode" AS "account_code",
       CASE
-        WHEN (
-          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('PREPAID'::text)
-          OR COALESCE(s."data"->>'exclude_reason', '') = 'PREPAID'
-        )
-        THEN true
+        WHEN "paymentDate" IS NOT NULL THEN "paymentDate"::text
+        ELSE NULL
+      END AS "payment_date",
+      CASE
+        WHEN "paymentAmount" IS NOT NULL THEN "paymentAmount"::text
+        ELSE NULL
+      END AS "payment_amount",
+      "paymentTermRaw" AS "payment_term_raw",
+      "paymentTermDays" AS "payment_term_days",
+      CASE
+        WHEN COALESCE("excludeReason", '') = :reason THEN true
         ELSE false
-      END AS "alreadyExcluded"
-    FROM "tbl_ptrs_stage_row" s
-    WHERE
-      s."customerId" = :customerId
-      AND s."ptrsId" = :ptrsId
-      AND s."deletedAt" IS NULL
-      AND (
-        COALESCE(s."data"->>'payment_terms','') ILIKE '%prepaid%'
-        OR COALESCE(s."data"->>'payment_terms','') ILIKE '%pre-pay%'
-        OR COALESCE(s."data"->>'payment_terms','') ILIKE '%prepay%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%prepaid%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%pre-pay%'
-        OR COALESCE(s."data"->>'description','') ILIKE '%prepay%'
-      )
-    ORDER BY s."rowNo" ASC
+      END AS "alreadyExcluded",
+      "excludeComment" AS "exclude_comment"
+    FROM matched_rows
+    ORDER BY "rowNo" ASC
     LIMIT :limit
   `;
 
-  const [sampleRows] = await sequelize.query(sampleSql, {
-    replacements: { customerId, ptrsId, limit: effectiveLimit },
+  const sampleRows = await sequelize.query(sampleSql, {
+    type: QueryTypes.SELECT,
+    replacements: {
+      customerId,
+      ptrsId,
+      limit: effectiveLimit,
+      reason: EXCLUSION_REASON,
+      comment: EXCLUSION_COMMENT,
+    },
     transaction,
   });
 

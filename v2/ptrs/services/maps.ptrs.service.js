@@ -78,12 +78,6 @@ function parseDateFlexible(value) {
 // full Stage shape by padding missing canonical fields with nulls.
 // Stage owns canonical projection and downstream derivations.
 
-function ensureCanonicalRowShape(row) {
-  // Map remains canonical-aware, but it should not force full Stage shape.
-  // Return only the fields that actually exist on the mapped row.
-  return { ...(row || {}) };
-}
-
 function isMainDatasetRole(role) {
   const r = String(role || "")
     .trim()
@@ -406,7 +400,7 @@ async function loadMappedRowsForPtrs({
     // ensure row_no is present for downstream logic
     normalised.row_no = r.rowNo;
 
-    return ensureCanonicalRowShape(normalised);
+    return normalised;
   });
 
   // Simple header inference from the mapped rows
@@ -459,7 +453,6 @@ async function buildMappedDatasetForPtrs({
         hrMsSince,
         parseDateFlexible,
       }),
-    ensureCanonicalRowShape,
     db,
   });
 }
