@@ -66,6 +66,14 @@ function model(sequelize) {
       type: DataTypes.STRING,
       allowNull: true,
     },
+    reconciliationStatus: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    sourceUser: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     paymentAmount: {
       type: DataTypes.DECIMAL(18, 2),
       allowNull: true,
@@ -83,6 +91,14 @@ function model(sequelize) {
       allowNull: true,
     },
     invoiceDueDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    invoiceCreatedDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    entryDate: {
       type: DataTypes.DATEONLY,
       allowNull: true,
     },
@@ -158,8 +174,24 @@ function model(sequelize) {
         fields: ["customerId", "ptrsId", "profileId", "clearingDocument"],
       },
       {
+        name: "ptrs_stage_row_customer_ptrs_profile_reconciliation_status_idx",
+        fields: ["customerId", "ptrsId", "profileId", "reconciliationStatus"],
+      },
+      {
+        name: "ptrs_stage_row_customer_ptrs_profile_source_user_idx",
+        fields: ["customerId", "ptrsId", "profileId", "sourceUser"],
+      },
+      {
         name: "ptrs_stage_row_customer_ptrs_profile_payment_time_days_idx",
         fields: ["customerId", "ptrsId", "profileId", "paymentTimeDays"],
+      },
+      {
+        name: "ptrs_stage_row_customer_ptrs_profile_invoice_created_date_idx",
+        fields: ["customerId", "ptrsId", "profileId", "invoiceCreatedDate"],
+      },
+      {
+        name: "ptrs_stage_row_customer_ptrs_profile_entry_date_idx",
+        fields: ["customerId", "ptrsId", "profileId", "entryDate"],
       },
       {
         name: "ptrs_stage_row_customer_ptrs_profile_trade_credit_idx",

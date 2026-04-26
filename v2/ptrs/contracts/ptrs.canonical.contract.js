@@ -171,6 +171,34 @@ const PTRS_CANONICAL_CONTRACT = {
       notes:
         "Optional source-system supplier or account code. Useful for pairing, source investigation, and identifying wrong-vendor or duplicate-account correction chains.",
     },
+
+    invoice_created_date: {
+      type: "date",
+      required: false,
+      notes:
+        "Optional processing field. Source invoice-created date used during staging to resolve invoice_receipt_date for source systems such as Ariba where the invoice creation date is the preferred receipt-date proxy.",
+    },
+
+    entry_date: {
+      type: "date",
+      required: false,
+      notes:
+        "Optional processing field. Source entry date used during staging to resolve invoice_receipt_date where no more specific invoice-created date is available.",
+    },
+
+    reconciliation_status: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional processing field. Source reconciliation status used during staging for source-system eligibility or exclusion logic, including Ariba Paying/Paid filtering.",
+    },
+
+    source_user: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional processing field. Source-system user or integration identifier used for staging investigation and source-specific processing logic where required.",
+    },
   },
   // ---------------------------------------------------------------------
   // F) Regulator classification flags (populated during report prep)

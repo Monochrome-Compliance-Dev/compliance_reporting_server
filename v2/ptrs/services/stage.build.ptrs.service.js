@@ -269,11 +269,18 @@ async function stagePtrs({
     }
 
     const sPersistClear = stageStart("persist_stage_clear");
-    const clearedCount = await db.PtrsStageRow.destroy({
-      where: { customerId, ptrsId, profileId },
+    const clearSql = `
+        DELETE FROM "tbl_ptrs_stage_row"
+        WHERE "customerId" = :customerId
+          AND "ptrsId" = :ptrsId
+          AND "profileId" = :profileId
+      `;
+    const [, clearMeta] = await db.sequelize.query(clearSql, {
       transaction: t,
+      replacements: { customerId, ptrsId, profileId },
     });
-    stageEnd(sPersistClear, { clearedCount: Number(clearedCount) || 0 });
+    const clearedCount = Number(clearMeta?.rowCount || clearMeta || 0);
+    stageEnd(sPersistClear, { clearedCount });
 
     slog.info("PTRS v2 stagePtrs: cleared active stage rows", {
       action: "PtrsV2StagePtrsClearActive",
@@ -283,6 +290,88 @@ async function stagePtrs({
     });
 
     const insertSql = `
+        WITH source_rows AS (
+          SELECT
+            m."rowNo",
+            COALESCE(m."data", '{}'::jsonb) AS "data",
+            COALESCE(
+              NULLIF(m."meta"->>'datasetId', ''),
+              NULLIF(m."data"->'_ptrsMeta'->>'datasetId', ''),
+              :defaultDatasetId
+            ) AS "datasetId",
+            NULLIF(m."data"->>'payer_entity_name', '') AS "payerEntityName",
+            NULLIF(regexp_replace(COALESCE(m."data"->>'payer_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payerEntityAbn",
+            NULLIF(m."data"->>'payee_entity_name', '') AS "payeeEntityName",
+            NULLIF(regexp_replace(COALESCE(m."data"->>'payee_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payeeEntityAbn",
+            NULLIF(m."data"->>'invoice_reference_number', '') AS "invoiceReferenceNumber",
+            NULLIF(m."data"->>'source_account_code', '') AS "sourceAccountCode",
+            NULLIF(m."data"->>'description', '') AS "description",
+            NULLIF(m."data"->>'document_type', '') AS "documentType",
+            NULLIF(m."data"->>'clearing_document', '') AS "clearingDocument",
+            NULLIF(m."data"->>'reconciliation_status', '') AS "reconciliationStatus",
+            NULLIF(m."data"->>'source_user', '') AS "sourceUser",
+            NULLIF(REPLACE(COALESCE(m."data"->>'payment_amount', ''), ',', ''), '') AS "paymentAmountRaw",
+            NULLIF(m."data"->>'payment_date', '') AS "paymentDateRaw",
+            NULLIF(m."data"->>'invoice_issue_date', '') AS "invoiceIssueDateRaw",
+            NULLIF(m."data"->>'invoice_created_date', '') AS "invoiceCreatedDateRaw",
+            NULLIF(m."data"->>'entry_date', '') AS "entryDateRaw",
+            NULLIF(m."data"->>'invoice_receipt_date', '') AS "invoiceReceiptDateRaw",
+            NULLIF(m."data"->>'invoice_due_date', '') AS "invoiceDueDateRaw",
+            NULLIF(m."data"->>'invoice_payment_terms', '') AS "paymentTermRaw",
+            NULLIF(m."data"->>'payment_term_days', '') AS "paymentTermDaysRaw"
+          FROM "tbl_ptrs_mapped_row" m
+          WHERE m."customerId" = :customerId
+            AND m."ptrsId" = :ptrsId
+        ),
+        parsed_rows AS (
+          SELECT
+            sr.*,
+            CASE
+              WHEN sr."paymentAmountRaw" IS NULL THEN NULL
+              ELSE ABS(sr."paymentAmountRaw"::numeric)
+            END AS "paymentAmount",
+            CASE
+              WHEN sr."paymentDateRaw" IS NULL THEN NULL
+              WHEN sr."paymentDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."paymentDateRaw"::date
+              WHEN sr."paymentDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."paymentDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "paymentDate",
+            CASE
+              WHEN sr."invoiceIssueDateRaw" IS NULL THEN NULL
+              WHEN sr."invoiceIssueDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."invoiceIssueDateRaw"::date
+              WHEN sr."invoiceIssueDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."invoiceIssueDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "invoiceIssueDate",
+            CASE
+              WHEN sr."invoiceCreatedDateRaw" IS NULL THEN NULL
+              WHEN sr."invoiceCreatedDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."invoiceCreatedDateRaw"::date
+              WHEN sr."invoiceCreatedDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."invoiceCreatedDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "invoiceCreatedDate",
+            CASE
+              WHEN sr."entryDateRaw" IS NULL THEN NULL
+              WHEN sr."entryDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."entryDateRaw"::date
+              WHEN sr."entryDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."entryDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "entryDate",
+            CASE
+              WHEN sr."invoiceReceiptDateRaw" IS NULL THEN NULL
+              WHEN sr."invoiceReceiptDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."invoiceReceiptDateRaw"::date
+              WHEN sr."invoiceReceiptDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."invoiceReceiptDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "invoiceReceiptDateMapped",
+            CASE
+              WHEN sr."invoiceDueDateRaw" IS NULL THEN NULL
+              WHEN sr."invoiceDueDateRaw" ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN sr."invoiceDueDateRaw"::date
+              WHEN sr."invoiceDueDateRaw" ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(sr."invoiceDueDateRaw", 'DD/MM/YYYY')
+              ELSE NULL
+            END AS "invoiceDueDate",
+            CASE
+              WHEN sr."paymentTermDaysRaw" IS NULL THEN NULL
+              ELSE sr."paymentTermDaysRaw"::int
+            END AS "paymentTermDays"
+          FROM source_rows sr
+        )
         INSERT INTO "tbl_ptrs_stage_row"
         (
           "id",
@@ -300,11 +389,15 @@ async function stagePtrs({
           "description",
           "documentType",
           "clearingDocument",
+          "reconciliationStatus",
+          "sourceUser",
           "paymentAmount",
           "paymentDate",
           "invoiceIssueDate",
           "invoiceReceiptDate",
           "invoiceDueDate",
+          "invoiceCreatedDate",
+          "entryDate",
           "paymentTermRaw",
           "paymentTermDays",
           "paymentTimeDays",
@@ -322,9 +415,8 @@ async function stagePtrs({
               :customerId || ':' ||
               :ptrsId || ':' ||
               COALESCE(:profileId, '') || ':' ||
-              m."rowNo"::text || ':' ||
-              clock_timestamp()::text || ':' ||
-              random()::text
+              pr."datasetId" || ':' ||
+              pr."rowNo"::text
             ),
             1,
             10
@@ -332,80 +424,80 @@ async function stagePtrs({
           :customerId AS "customerId",
           :ptrsId AS "ptrsId",
           :profileId AS "profileId",
+          pr."datasetId",
+          pr."rowNo",
+          pr."payerEntityName",
+          pr."payerEntityAbn",
+          pr."payeeEntityName",
+          pr."payeeEntityAbn",
+          pr."invoiceReferenceNumber",
+          pr."sourceAccountCode",
+          pr."description",
+          pr."documentType",
+          pr."clearingDocument",
+          pr."reconciliationStatus",
+          pr."sourceUser",
+          pr."paymentAmount",
+          pr."paymentDate",
+          pr."invoiceIssueDate",
           COALESCE(
-            NULLIF(m."meta"->>'datasetId', ''),
-            NULLIF(m."data"->'_ptrsMeta'->>'datasetId', ''),
-            :defaultDatasetId
-          ) AS "datasetId",
-          m."rowNo" AS "rowNo",
-                    NULLIF(m."data"->>'payer_entity_name', '') AS "payerEntityName",
-          NULLIF(regexp_replace(COALESCE(m."data"->>'payer_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payerEntityAbn",
-          NULLIF(m."data"->>'payee_entity_name', '') AS "payeeEntityName",
-          NULLIF(regexp_replace(COALESCE(m."data"->>'payee_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payeeEntityAbn",
-          COALESCE(
-            NULLIF(m."data"->>'invoice_reference_number', ''),
-            NULLIF(m."data"->>'Invoice Reference', ''),
-            NULLIF(m."data"->>'Document Number', '')
-          ) AS "invoiceReferenceNumber",
-          COALESCE(
-            NULLIF(m."data"->>'source_account_code', ''),
-            NULLIF(m."data"->>'Account', '')
-          ) AS "sourceAccountCode",
-          COALESCE(
-            NULLIF(m."data"->>'description', ''),
-            NULLIF(m."data"->>'Text', ''),
-            NULLIF(m."data"->>'Reference', '')
-          ) AS "description",
-          COALESCE(
-            NULLIF(m."data"->>'document_type', ''),
-            NULLIF(m."data"->>'Document Type', '')
-          ) AS "documentType",
-          COALESCE(
-            NULLIF(m."data"->>'clearing_document', ''),
-            NULLIF(m."data"->>'Clearing Document', '')
-          ) AS "clearingDocument",
+            pr."invoiceCreatedDate",
+            pr."entryDate",
+            pr."invoiceReceiptDateMapped"
+          ) AS "invoiceReceiptDate",
+          pr."invoiceDueDate",
+          pr."invoiceCreatedDate",
+          pr."entryDate",
+          pr."paymentTermRaw",
           CASE
-            WHEN NULLIF(REPLACE(COALESCE(m."data"->>'payment_amount', ''), ',', ''), '') IS NULL THEN NULL
-            ELSE ABS(REPLACE(m."data"->>'payment_amount', ',', '')::numeric)
-          END AS "paymentAmount",
-          CASE
-            WHEN NULLIF(m."data"->>'payment_date', '') IS NULL THEN NULL
-            WHEN (m."data"->>'payment_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'payment_date')::date
-            WHEN (m."data"->>'payment_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'payment_date', 'DD/MM/YYYY')
-            ELSE NULL
-          END AS "paymentDate",
-          CASE
-            WHEN NULLIF(m."data"->>'invoice_issue_date', '') IS NULL THEN NULL
-            WHEN (m."data"->>'invoice_issue_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_issue_date')::date
-            WHEN (m."data"->>'invoice_issue_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_issue_date', 'DD/MM/YYYY')
-            ELSE NULL
-          END AS "invoiceIssueDate",
-          CASE
-            WHEN NULLIF(m."data"->>'invoice_receipt_date', '') IS NULL THEN NULL
-            WHEN (m."data"->>'invoice_receipt_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_receipt_date')::date
-            WHEN (m."data"->>'invoice_receipt_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_receipt_date', 'DD/MM/YYYY')
-            ELSE NULL
-          END AS "invoiceReceiptDate",
-          CASE
-            WHEN NULLIF(m."data"->>'invoice_due_date', '') IS NULL THEN NULL
-            WHEN (m."data"->>'invoice_due_date') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (m."data"->>'invoice_due_date')::date
-            WHEN (m."data"->>'invoice_due_date') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(m."data"->>'invoice_due_date', 'DD/MM/YYYY')
-            ELSE NULL
-          END AS "invoiceDueDate",
-          COALESCE(
-            NULLIF(m."data"->>'payment_term', ''),
-            NULLIF(m."data"->>'Payment terms', ''),
-            NULLIF(m."data"->>'vendormaster__Payment terms', '')
-          ) AS "paymentTermRaw",
-          CASE
-            WHEN NULLIF(m."data"->>'payment_term_days', '') IS NULL THEN NULL
-            ELSE (m."data"->>'payment_term_days')::int
+            WHEN pr."paymentTermRaw" ~ '^\\d{1,4}$' THEN pr."paymentTermRaw"::int
+            ELSE ptm."transformedDays"
           END AS "paymentTermDays",
           CASE
-            WHEN NULLIF(m."data"->>'payment_time_days', '') IS NULL THEN NULL
-            ELSE (m."data"->>'payment_time_days')::int
+            WHEN pr."paymentDate" IS NULL THEN NULL
+            WHEN pr."invoiceIssueDate" IS NOT NULL
+              AND COALESCE(
+                pr."invoiceCreatedDate",
+                pr."entryDate",
+                pr."invoiceReceiptDateMapped"
+              ) IS NOT NULL THEN
+              GREATEST(
+                0,
+                LEAST(
+                  pr."paymentDate" - pr."invoiceIssueDate",
+                  pr."paymentDate" - COALESCE(
+                    pr."invoiceCreatedDate",
+                    pr."entryDate",
+                    pr."invoiceReceiptDateMapped"
+                  )
+                )
+              ) + 1
+            WHEN COALESCE(
+              pr."invoiceCreatedDate",
+              pr."entryDate",
+              pr."invoiceReceiptDateMapped"
+            ) IS NOT NULL THEN
+              GREATEST(
+                0,
+                pr."paymentDate" - COALESCE(
+                  pr."invoiceCreatedDate",
+                  pr."entryDate",
+                  pr."invoiceReceiptDateMapped"
+                )
+              ) + 1
+            WHEN pr."invoiceIssueDate" IS NOT NULL THEN
+              GREATEST(
+                0,
+                pr."paymentDate" - pr."invoiceIssueDate"
+              ) + 1
+            WHEN pr."invoiceDueDate" IS NOT NULL THEN
+              GREATEST(
+                0,
+                pr."paymentDate" - pr."invoiceDueDate"
+              ) + 1
+            ELSE NULL
           END AS "paymentTimeDays",
-          COALESCE(m."data", '{}'::jsonb) AS "data",
+          pr."data",
           NULL AS "errors",
           jsonb_build_object(
             '_stage', 'ptrs.v2.stagePtrs',
@@ -416,10 +508,12 @@ async function stagePtrs({
           :userId AS "updatedBy",
           NOW() AS "createdAt",
           NOW() AS "updatedAt"
-        FROM "tbl_ptrs_mapped_row" m
-        WHERE m."customerId" = :customerId
-          AND m."ptrsId" = :ptrsId
-        ORDER BY m."rowNo"
+        FROM parsed_rows pr
+        LEFT JOIN "tbl_ptrs_payment_term_map" ptm
+          ON ptm."customerId" = :customerId
+         AND ptm."profileId" = :profileId
+         AND ptm."deletedAt" IS NULL
+         AND ptm."raw" = pr."paymentTermRaw"
       `;
 
     slog.info("PTRS v2 stagePtrs: preparing SQL insert", {
@@ -430,37 +524,8 @@ async function stagePtrs({
     });
 
     try {
-      const countMappedSql = `
-          SELECT COUNT(*)::int AS "count"
-          FROM "tbl_ptrs_mapped_row" m
-          WHERE m."customerId" = :customerId
-            AND m."ptrsId" = :ptrsId
-        `;
-
-      const countStageSql = `
-          SELECT COUNT(*)::int AS "count"
-          FROM "tbl_ptrs_stage_row" s
-          WHERE s."customerId" = :customerId
-            AND s."ptrsId" = :ptrsId
-            AND s."profileId" = :profileId
-            AND s."deletedAt" IS NULL
-        `;
-
-      const sPersistCountMapped = stageStart("persist_stage_count_mapped_rows");
-      const [mappedCountRows] = await db.sequelize.query(countMappedSql, {
-        transaction: t,
-        replacements: {
-          customerId,
-          ptrsId,
-        },
-      });
-      persistedRowsIn = Number(mappedCountRows?.[0]?.count || 0);
-      stageEnd(sPersistCountMapped, {
-        mappedRowsIn: persistedRowsIn,
-      });
-
       const sPersistInsert = stageStart("persist_stage_insert_select");
-      await db.sequelize.query(insertSql, {
+      const [, insertMeta] = await db.sequelize.query(insertSql, {
         transaction: t,
         replacements: {
           customerId,
@@ -472,247 +537,10 @@ async function stagePtrs({
         },
       });
 
-      const sPersistCountStage = stageStart("persist_stage_count_active_rows");
-      const [stageCountRows] = await db.sequelize.query(countStageSql, {
-        transaction: t,
-        replacements: {
-          customerId,
-          ptrsId,
-          profileId,
-        },
-      });
-      persistedRowsOut = Number(stageCountRows?.[0]?.count || 0);
+      persistedRowsOut = Number(insertMeta?.rowCount || insertMeta || 0);
+      persistedRowsIn = persistedRowsOut;
       persistedCount = persistedRowsOut;
-      stageEnd(sPersistCountStage, {
-        activeStageRows: persistedRowsOut,
-      });
       stageEnd(sPersistInsert, { inserted: persistedRowsOut });
-
-      const sPaymentTermUpdate = stageStart(
-        "persist_stage_update_payment_term_days",
-      );
-      const paymentTermSql = `
-          WITH term_source AS (
-            SELECT
-              s."id",
-              NULLIF(
-                TRIM(
-                  COALESCE(
-                    s."data"->>'payment_term_days',
-                    s."data"->>'invoice_payment_terms_effective',
-                    s."data"->>'invoice_payment_terms_raw',
-                    s."data"->>'invoice_payment_terms',
-                    s."data"->>'payment_term',
-                    s."data"->>'vendormaster__Payment terms',
-                    s."data"->>'default_payment_term',
-                    s."data"->>'contract_po_payment_terms_effective',
-                    s."data"->>'contract_po_payment_terms'
-                  )
-                ),
-                ''
-              ) AS "termCode"
-            FROM "tbl_ptrs_stage_row" s
-            WHERE s."customerId" = :customerId
-              AND s."ptrsId" = :ptrsId
-              AND s."profileId" = :profileId
-              AND s."deletedAt" IS NULL
-          ),
-          term_lookup AS (
-            SELECT
-              ts."id",
-              ts."termCode" AS "paymentTermRaw",
-              CASE
-                WHEN ts."termCode" ~ '^\\d{1,4}$' THEN ts."termCode"::int
-                ELSE ptm."transformedDays"
-              END AS "paymentTermDays"
-            FROM term_source ts
-            LEFT JOIN "tbl_ptrs_payment_term_map" ptm
-              ON ptm."customerId" = :customerId
-             AND ptm."profileId" = :profileId
-             AND ptm."deletedAt" IS NULL
-             AND ptm."raw" = ts."termCode"
-          )
-          UPDATE "tbl_ptrs_stage_row" s
-          SET
-            "paymentTermRaw" = tl."paymentTermRaw",
-            "paymentTermDays" = tl."paymentTermDays",
-            "updatedBy" = :userId,
-            "updatedAt" = NOW()
-          FROM term_lookup tl
-          WHERE s."id" = tl."id"
-            AND s."profileId" = :profileId
-            AND s."deletedAt" IS NULL
-        `;
-
-      await db.sequelize.query(paymentTermSql, {
-        transaction: t,
-        replacements: {
-          customerId,
-          ptrsId,
-          profileId,
-          userId: userId || null,
-        },
-      });
-      stageEnd(sPaymentTermUpdate, { updatedRows: persistedCount });
-
-      const sPaymentTimeUpdate = stageStart(
-        "persist_stage_update_payment_time",
-      );
-      const sqlDateExpr = (jsonKey) => `
-          CASE
-            WHEN NULLIF(s."data"->>'${jsonKey}', '') IS NULL THEN NULL
-            WHEN (s."data"->>'${jsonKey}') ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (s."data"->>'${jsonKey}')::date
-            WHEN (s."data"->>'${jsonKey}') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date(s."data"->>'${jsonKey}', 'DD/MM/YYYY')
-            ELSE (
-              SELECT pg_catalog.to_date('__INVALID__', 'YYYY-MM-DD')
-              FROM pg_catalog.pg_class
-              WHERE NULLIF(s."data"->>'${jsonKey}', '') IS NOT NULL
-            )
-          END
-        `;
-
-      const paymentDateExpr = sqlDateExpr("payment_date");
-      const invoiceIssueDateExpr = sqlDateExpr("invoice_issue_date");
-      const invoiceReceiptDateExpr = sqlDateExpr("invoice_receipt_date");
-      const noticeForPaymentIssueDateExpr = sqlDateExpr(
-        "notice_for_payment_issue_date",
-      );
-      const supplyDateExpr = sqlDateExpr("supply_date");
-      const invoiceDueDateExpr = sqlDateExpr("invoice_due_date");
-      const paymentTimeSql = `
-          WITH payment_time AS (
-            SELECT
-              s."id",
-              CASE
-                WHEN ${paymentDateExpr} IS NULL THEN NULL
-                WHEN LOWER(TRIM(COALESCE(s."data"->>'rcti', ''))) IN ('yes','y','true') THEN
-                  CASE
-                    WHEN ${invoiceIssueDateExpr} IS NULL THEN NULL
-                    WHEN (${paymentDateExpr} - ${invoiceIssueDateExpr}) <= 0 THEN 0
-                    ELSE (${paymentDateExpr} - ${invoiceIssueDateExpr}) + 1
-                  END
-                WHEN ${invoiceIssueDateExpr} IS NULL
-                  AND ${noticeForPaymentIssueDateExpr} IS NULL THEN
-                  CASE
-                    WHEN COALESCE(
-                      ${supplyDateExpr},
-                      ${invoiceDueDateExpr}
-                    ) IS NULL THEN NULL
-                    WHEN (
-                      ${paymentDateExpr}
-                      - COALESCE(
-                          ${supplyDateExpr},
-                          ${invoiceDueDateExpr}
-                        )
-                    ) <= 0 THEN 0
-                    ELSE (
-                      ${paymentDateExpr}
-                      - COALESCE(
-                          ${supplyDateExpr},
-                          ${invoiceDueDateExpr}
-                        )
-                    ) + 1
-                  END
-                WHEN ${invoiceIssueDateExpr} IS NULL THEN
-                  CASE
-                    WHEN ${noticeForPaymentIssueDateExpr} IS NULL THEN NULL
-                    WHEN (
-                      ${paymentDateExpr}
-                      - ${noticeForPaymentIssueDateExpr}
-                    ) <= 0 THEN 0
-                    ELSE (
-                      ${paymentDateExpr}
-                      - ${noticeForPaymentIssueDateExpr}
-                    ) + 1
-                  END
-                ELSE
-                  CASE
-                    WHEN ${invoiceReceiptDateExpr} IS NULL THEN
-                      CASE
-                        WHEN (
-                          ${paymentDateExpr}
-                          - ${invoiceIssueDateExpr}
-                        ) <= 0 THEN 0
-                        ELSE (
-                          ${paymentDateExpr}
-                          - ${invoiceIssueDateExpr}
-                        ) + 1
-                      END
-                    ELSE
-                      CASE
-                        WHEN LEAST(
-                          ${paymentDateExpr} - ${invoiceIssueDateExpr},
-                          ${paymentDateExpr} - ${invoiceReceiptDateExpr}
-                        ) <= 0 THEN 0
-                        ELSE LEAST(
-                          ${paymentDateExpr} - ${invoiceIssueDateExpr},
-                          ${paymentDateExpr} - ${invoiceReceiptDateExpr}
-                        ) + 1
-                      END
-                  END
-              END AS "paymentTimeDays",
-              CASE
-                WHEN ${paymentDateExpr} IS NULL THEN NULL
-                WHEN LOWER(TRIM(COALESCE(s."data"->>'rcti', ''))) IN ('yes','y','true') THEN ${invoiceIssueDateExpr}
-                WHEN ${invoiceIssueDateExpr} IS NULL
-                  AND ${noticeForPaymentIssueDateExpr} IS NULL THEN COALESCE(
-                    ${supplyDateExpr},
-                    ${invoiceDueDateExpr}
-                  )
-                WHEN ${invoiceIssueDateExpr} IS NULL THEN ${noticeForPaymentIssueDateExpr}
-                WHEN ${invoiceReceiptDateExpr} IS NULL THEN ${invoiceIssueDateExpr}
-                WHEN (
-                  ${paymentDateExpr} - ${invoiceIssueDateExpr}
-                ) <= (
-                  ${paymentDateExpr} - ${invoiceReceiptDateExpr}
-                ) THEN ${invoiceIssueDateExpr}
-                ELSE ${invoiceReceiptDateExpr}
-              END AS "referenceDate",
-              CASE
-                WHEN ${paymentDateExpr} IS NULL THEN NULL
-                WHEN LOWER(TRIM(COALESCE(s."data"->>'rcti', ''))) IN ('yes','y','true') THEN 'invoice_issue'
-                WHEN ${invoiceIssueDateExpr} IS NULL
-                  AND ${noticeForPaymentIssueDateExpr} IS NULL
-                  AND ${supplyDateExpr} IS NOT NULL THEN 'supply'
-                WHEN ${invoiceIssueDateExpr} IS NULL
-                  AND ${noticeForPaymentIssueDateExpr} IS NULL
-                  AND ${invoiceDueDateExpr} IS NOT NULL THEN 'invoice_due'
-                WHEN ${invoiceIssueDateExpr} IS NULL THEN 'notice_for_payment'
-                WHEN ${invoiceReceiptDateExpr} IS NULL THEN 'invoice_issue'
-                WHEN (
-                  ${paymentDateExpr} - ${invoiceIssueDateExpr}
-                ) <= (
-                  ${paymentDateExpr} - ${invoiceReceiptDateExpr}
-                ) THEN 'invoice_issue'
-                ELSE 'invoice_receipt'
-              END AS "referenceKind"
-            FROM "tbl_ptrs_stage_row" s
-            WHERE s."customerId" = :customerId
-              AND s."ptrsId" = :ptrsId
-              AND s."profileId" = :profileId
-              AND s."deletedAt" IS NULL
-          )
-          UPDATE "tbl_ptrs_stage_row" s
-          SET
-            "paymentTimeDays" = pt."paymentTimeDays",
-            "updatedBy" = :userId,
-            "updatedAt" = NOW()
-          FROM payment_time pt
-          WHERE s."id" = pt."id"
-            AND s."profileId" = :profileId
-            AND s."deletedAt" IS NULL
-        `;
-
-      await db.sequelize.query(paymentTimeSql, {
-        transaction: t,
-        replacements: {
-          customerId,
-          ptrsId,
-          profileId,
-          userId: userId || null,
-        },
-      });
-      stageEnd(sPaymentTimeUpdate, { updatedRows: persistedCount });
     } catch (err) {
       trace?.write("stage_persist_insert_select_error", {
         message: err?.message || null,
