@@ -4,7 +4,6 @@ const { Readable } = require("stream");
 const csv = require("fast-csv");
 
 const fs = require("fs");
-const { Worker } = require("worker_threads");
 
 const { logger } = require("@/helpers/logger");
 
@@ -1023,78 +1022,6 @@ async function upsertMainDatasetFromRaw({
 
 // TODO: future: allow external transaction but only from beginTransactionWithCustomerContext
 
-function looksLikeXlsx(buffer, mime) {
-  if (mime && /spreadsheetml|ms-excel/i.test(mime)) return true;
-  if (!buffer || buffer.length < 4) return false;
-  // XLSX is a ZIP starting with 'PK\x03\x04'
-  return (
-    buffer[0] === 0x50 &&
-    buffer[1] === 0x4b &&
-    buffer[2] === 0x03 &&
-    buffer[3] === 0x04
-  );
-}
-
-function excelBufferToCsv(buffer, { timeoutMs = 15000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const workerPath = path.resolve(
-      __dirname,
-      "../workers/xlsxToCsv.worker.js",
-    );
-    let settled = false;
-    const worker = new Worker(workerPath);
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        worker.terminate();
-      } catch {}
-      const err = new Error("Excel conversion timed out");
-      err.statusCode = 408;
-      return reject(err);
-    }, timeoutMs);
-
-    worker.on("message", (msg) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (msg && msg.ok) return resolve(msg.csv);
-      const err = new Error(msg?.error?.message || "Excel conversion failed");
-      err.statusCode = 400;
-      return reject(err);
-    });
-
-    worker.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      err.statusCode = 500;
-      return reject(err);
-    });
-
-    worker.on("exit", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        const err = new Error(
-          "Excel conversion worker exited with code " + code,
-        );
-        err.statusCode = 500;
-        return reject(err);
-      }
-    });
-
-    // Transfer the underlying ArrayBuffer for zero-copy
-    const ab = buffer.buffer.slice(
-      buffer.byteOffset,
-      buffer.byteOffset + buffer.byteLength,
-    );
-    worker.postMessage({ buffer: ab }, [ab]);
-  });
-}
-
 function pickFromRowLoose(row, header) {
   if (!row || !header) return undefined;
   for (const h of headerVariants(header)) {
@@ -1257,44 +1184,16 @@ async function addDataset({
     }
     const ptrsProfileId = ptrs?.profileId || ptrs?.profile_id || null;
 
-    // Normalise to CSV if an Excel file is uploaded
-    let workBuffer = buffer;
-    let workMime = mimeType || null;
-    let workExt = (fileName && path.extname(fileName)) || ".csv";
-
-    try {
-      const MAX_EXCEL_BYTES = 25 * 1024 * 1024; // 25 MB
-      if (looksLikeXlsx(buffer, mimeType)) {
-        if (buffer.length > MAX_EXCEL_BYTES) {
-          const e = new Error("Excel file too large; please split and retry");
-          e.statusCode = 413;
-          throw e;
-        }
-        const csvText = await excelBufferToCsv(buffer, { timeoutMs: 15000 });
-        workBuffer = Buffer.from(csvText, "utf8");
-        workMime = "text/csv";
-        workExt = ".csv";
-      }
-    } catch (convErr) {
-      convErr.statusCode = convErr.statusCode || 400;
-      if (logger && logger.error) {
-        logger.error("PTRS v2 XLSX->CSV conversion failed", {
-          action: "PtrsV2AddDatasetConvert",
-          ptrsId,
-          customerId,
-          error: convErr.message,
-        });
-      }
-      throw convErr;
-    }
+    const workBuffer = buffer;
+    const workMime = mimeType || null;
+    const workExt = (fileName && path.extname(fileName)) || ".csv";
 
     // Create DB row first to get dataset id
     const dsCandidate = {
       customerId,
       ptrsId,
       role: normalisedRole,
-      sourceType:
-        sourceType || (looksLikeXlsx(buffer, mimeType) ? "excel" : "csv"),
+      sourceType: sourceType || "csv",
       sourceName: sourceName || fileName || null,
       fileName: fileName || null,
       fileSize: Number.isFinite(fileSize)
@@ -1731,7 +1630,7 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
 
 /**
  * Return a small sample of rows from a raw dataset file plus headers and total row count.
- * Handles CSV (and Excel that was already normalised to CSV on upload).
+ * Handles CSV only.
  */
 async function getDatasetSample({
   customerId,
