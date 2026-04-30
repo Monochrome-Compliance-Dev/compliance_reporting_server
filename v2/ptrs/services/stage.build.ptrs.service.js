@@ -303,10 +303,12 @@ async function stagePtrs({
             NULLIF(regexp_replace(COALESCE(m."data"->>'payer_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payerEntityAbn",
             NULLIF(m."data"->>'payee_entity_name', '') AS "payeeEntityName",
             NULLIF(regexp_replace(COALESCE(m."data"->>'payee_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payeeEntityAbn",
+            NULLIF(regexp_replace(COALESCE(m."data"->>'payee_entity_abn', ''), '[^0-9]', '', 'g'), '') AS "payeeEntityAbnDigits",
             NULLIF(m."data"->>'invoice_reference_number', '') AS "invoiceReferenceNumber",
             NULLIF(m."data"->>'source_account_code', '') AS "sourceAccountCode",
             NULLIF(m."data"->>'description', '') AS "description",
             NULLIF(m."data"->>'document_type', '') AS "documentType",
+            NULLIF(m."data"->>'document_currency', '') AS "documentCurrency",
             NULLIF(m."data"->>'clearing_document', '') AS "clearingDocument",
             NULLIF(m."data"->>'reconciliation_status', '') AS "reconciliationStatus",
             NULLIF(m."data"->>'source_user', '') AS "sourceUser",
@@ -369,7 +371,25 @@ async function stagePtrs({
             CASE
               WHEN sr."paymentTermDaysRaw" IS NULL THEN NULL
               ELSE sr."paymentTermDaysRaw"::int
-            END AS "paymentTermDays"
+            END AS "paymentTermDays",
+            CASE
+              WHEN sr."payeeEntityAbnDigits" !~ '^\\d{11}$' THEN false
+              ELSE (
+                (
+                  ((SUBSTRING(sr."payeeEntityAbnDigits", 1, 1)::int - 1) * 10) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 2, 1)::int * 1) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 3, 1)::int * 3) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 4, 1)::int * 5) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 5, 1)::int * 7) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 6, 1)::int * 9) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 7, 1)::int * 11) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 8, 1)::int * 13) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 9, 1)::int * 15) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 10, 1)::int * 17) +
+                  (SUBSTRING(sr."payeeEntityAbnDigits", 11, 1)::int * 19)
+                ) % 89 = 0
+              )
+            END AS "payeeEntityAbnValid"
           FROM source_rows sr
         )
         INSERT INTO "tbl_ptrs_stage_row"
@@ -384,10 +404,12 @@ async function stagePtrs({
           "payerEntityAbn",
           "payeeEntityName",
           "payeeEntityAbn",
+          "payeeEntityAbnValid",
           "invoiceReferenceNumber",
           "sourceAccountCode",
           "description",
           "documentType",
+          "documentCurrency",
           "clearingDocument",
           "reconciliationStatus",
           "sourceUser",
@@ -430,10 +452,12 @@ async function stagePtrs({
           pr."payerEntityAbn",
           pr."payeeEntityName",
           pr."payeeEntityAbn",
+          pr."payeeEntityAbnValid",
           pr."invoiceReferenceNumber",
           pr."sourceAccountCode",
           pr."description",
           pr."documentType",
+          pr."documentCurrency",
           pr."clearingDocument",
           pr."reconciliationStatus",
           pr."sourceUser",

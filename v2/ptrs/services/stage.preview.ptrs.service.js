@@ -3,6 +3,7 @@ const {
 } = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
 
 const STAGE_PREVIEW_DERIVED_FIELDS = [
+  "payee_entity_abn_valid",
   "payment_term_days",
   "payment_time_days",
   "payment_time_reference_date",
@@ -140,10 +141,12 @@ const STAGE_PREVIEW_STAGE_COLUMNS = [
   "payerEntityAbn",
   "payeeEntityName",
   "payeeEntityAbn",
+  "payeeEntityAbnValid",
   "invoiceReferenceNumber",
   "sourceAccountCode",
   "description",
   "documentType",
+  "documentCurrency",
   "clearingDocument",
   "paymentAmount",
   "paymentDate",

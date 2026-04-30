@@ -221,18 +221,6 @@ async function buildMappedDatasetForPtrs({
     inputHash: staleness?.inputHash || null,
   });
 
-  executionRun = await createExecutionRun({
-    customerId,
-    ptrsId,
-    profileId: profileId || staleness?.snapshot?.profileId || null,
-    step: "map",
-    inputHash: staleness?.inputHash || null,
-    status: "running",
-    startedAt: new Date(),
-    createdBy: actorId || null,
-    transaction: t,
-  });
-
   if (!staleness?.hasChanged && Number(staleness?.existingMappedRowCount) > 0) {
     slog.info(
       "PTRS v2 buildMappedDatasetForPtrs: inputs unchanged; skipping combined-row materialisation",
@@ -259,25 +247,6 @@ async function buildMappedDatasetForPtrs({
       transaction: t,
     });
 
-    if (executionRun?.id) {
-      await updateExecutionRun({
-        customerId,
-        executionRunId: executionRun.id,
-        status: "success",
-        finishedAt: new Date(),
-        rowsIn: Number(staleness?.existingMappedRowCount) || 0,
-        rowsOut: Number(staleness?.existingMappedRowCount) || 0,
-        stats: {
-          skipped: true,
-          reason: "INPUT_UNCHANGED",
-          gate: gate?.summary || null,
-        },
-        errorMessage: null,
-        updatedBy: actorId || null,
-        transaction: t,
-      });
-    }
-
     await t.commit();
     if (trace) await trace.close();
     return {
@@ -290,6 +259,18 @@ async function buildMappedDatasetForPtrs({
       gate,
     };
   }
+
+  executionRun = await createExecutionRun({
+    customerId,
+    ptrsId,
+    profileId: profileId || staleness?.snapshot?.profileId || null,
+    step: "map",
+    inputHash: staleness?.inputHash || null,
+    status: "running",
+    startedAt: new Date(),
+    createdBy: actorId || null,
+    transaction: t,
+  });
 
   try {
     slog.info(

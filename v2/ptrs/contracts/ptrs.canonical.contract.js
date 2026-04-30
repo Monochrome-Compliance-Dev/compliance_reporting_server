@@ -158,6 +158,13 @@ const PTRS_CANONICAL_CONTRACT = {
         "Optional source-system document classification (for example SAP document type such as RE, KR, KG, ZP). Not required for TCP validity, but highly useful for exclusion logic, transaction classification, and debugging.",
     },
 
+    document_currency: {
+      type: "string",
+      required: false,
+      notes:
+        "Optional source-system document currency. Used during staging and exclusions to identify possible international payments where currency is not AUD.",
+    },
+
     clearing_document: {
       type: "string",
       required: false,
@@ -204,6 +211,12 @@ const PTRS_CANONICAL_CONTRACT = {
   // F) Regulator classification flags (populated during report prep)
   // ---------------------------------------------------------------------
   regulator_flags: {
+    payee_entity_abn_valid: {
+      type: "bool",
+      required: false,
+      notes:
+        "Derived field indicating whether the payee ABN passes checksum validation. Calculated during staging and used for supplier eligibility filtering (e.g. invalid or malformed ABNs).",
+    },
     trade_credit_payment: {
       type: "bool",
       required: false,

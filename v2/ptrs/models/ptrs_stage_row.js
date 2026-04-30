@@ -46,6 +46,10 @@ function model(sequelize) {
       type: DataTypes.STRING,
       allowNull: true,
     },
+    payeeEntityAbnValid: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+    },
     invoiceReferenceNumber: {
       type: DataTypes.STRING,
       allowNull: true,
@@ -59,6 +63,10 @@ function model(sequelize) {
       allowNull: true,
     },
     documentType: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    documentCurrency: {
       type: DataTypes.STRING,
       allowNull: true,
     },
@@ -170,6 +178,10 @@ function model(sequelize) {
         fields: ["customerId", "ptrsId", "profileId", "documentType"],
       },
       {
+        name: "ptrs_stage_row_customer_ptrs_profile_document_currency_idx",
+        fields: ["customerId", "ptrsId", "profileId", "documentCurrency"],
+      },
+      {
         name: "ptrs_stage_row_customer_ptrs_profile_clearing_document_idx",
         fields: ["customerId", "ptrsId", "profileId", "clearingDocument"],
       },
@@ -221,6 +233,10 @@ function model(sequelize) {
       {
         name: "ptrs_stage_row_customer_ptrs_profile_payee_abn_idx",
         fields: ["customerId", "ptrsId", "profileId", "payeeEntityAbn"],
+      },
+      {
+        name: "ptrs_stage_row_customer_ptrs_profile_payee_abn_valid_idx",
+        fields: ["customerId", "ptrsId", "profileId", "payeeEntityAbnValid"],
       },
       {
         name: "ptrs_stage_row_customer_ptrs_profile_source_account_idx",
