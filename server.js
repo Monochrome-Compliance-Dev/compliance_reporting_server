@@ -571,7 +571,11 @@ app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
 // V2 routes
 // PTRS
+
 app.use("/api/v2/ptrs", require("@/v2/ptrs/routes/ptrs.routes"));
+
+// Data Hub
+app.use("/api/v2/data-hub", require("@/v2/dataHub"));
 
 // Users
 app.use("/api/v2/users", require("@/v2/users/user.routes"));

@@ -41,7 +41,32 @@ CREATE POLICY tbl_ptrs_dataset_rls_policy
   FOR ALL
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+
 ALTER TABLE tbl_ptrs_dataset FORCE ROW LEVEL SECURITY;
+
+-- =============================
+-- Data Hub core tables: RLS policies
+-- =============================
+
+-- Data Hub Runs
+ALTER TABLE tbl_data_hub_run ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_data_hub_run_rls_policy ON tbl_data_hub_run;
+CREATE POLICY tbl_data_hub_run_rls_policy
+  ON tbl_data_hub_run
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_data_hub_run FORCE ROW LEVEL SECURITY;
+
+-- Data Hub Datasets
+ALTER TABLE tbl_data_hub_dataset ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tbl_data_hub_dataset_rls_policy ON tbl_data_hub_dataset;
+CREATE POLICY tbl_data_hub_dataset_rls_policy
+  ON tbl_data_hub_dataset
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_data_hub_dataset FORCE ROW LEVEL SECURITY;
 
 -- PTRS Column Map (mappings + joins + rules)
 ALTER TABLE tbl_ptrs_column_map ENABLE ROW LEVEL SECURITY;

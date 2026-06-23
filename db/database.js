@@ -136,6 +136,7 @@ async function initialise() {
     "../stripe",
     "../pulse",
     "../v2/profiles", // added to load CustomerProfile model
+    "../v2/dataHub", // added to load Data Hub models
   ];
 
   modelDirs.forEach((dir) => {
@@ -386,6 +387,43 @@ async function initialise() {
       onDelete: "CASCADE",
     });
   }
+
+  // Data Hub relationships
+  if (db.Customer && db.DataHubRun) {
+    db.Customer.hasMany(db.DataHubRun, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.DataHubRun.belongsTo(db.Customer, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  if (db.Customer && db.DataHubDataset) {
+    db.Customer.hasMany(db.DataHubDataset, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+    db.DataHubDataset.belongsTo(db.Customer, {
+      foreignKey: "customerId",
+      onDelete: "CASCADE",
+    });
+  }
+
+  if (db.DataHubRun && db.DataHubDataset) {
+    db.DataHubRun.hasMany(db.DataHubDataset, {
+      foreignKey: "runId",
+      sourceKey: "id",
+      onDelete: "CASCADE",
+    });
+    db.DataHubDataset.belongsTo(db.DataHubRun, {
+      foreignKey: "runId",
+      targetKey: "id",
+      onDelete: "CASCADE",
+    });
+  }
+
   if (db.Ptrs && db.Tcp) {
     db.Ptrs.hasMany(db.Tcp, { foreignKey: "ptrsId", onDelete: "CASCADE" });
     db.Tcp.belongsTo(db.Ptrs, { foreignKey: "ptrsId", onDelete: "CASCADE" });
