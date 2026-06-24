@@ -20,10 +20,7 @@ function normaliseDataset(row) {
   return {
     ...plain,
     id: plain.id,
-    datasetId: plain.id,
-    runId: plain.runId,
-    datasetType: plain.role,
-    role: plain.role,
+    datasetType: plain.datasetType,
     fileName: plain.originalFileName || plain.sourceName || null,
     sourceName: plain.sourceName || plain.originalFileName || null,
     rowsInserted: Number(plain.rowsCount || 0),
@@ -47,20 +44,13 @@ function getDataHubDatasetModel() {
   return db.DataHubDataset;
 }
 
-function getDataHubRunModel() {
-  if (!db.DataHubRun) {
-    throw new Error("DataHubRun model is not registered on db");
-  }
-  return db.DataHubRun;
-}
-
-function emitDatasetUploadStatus(runId, payload) {
+function emitDatasetUploadStatus(id, payload) {
   try {
     const io = global.__socketio;
-    if (!io || !runId) return;
+    if (!io || !id) return;
 
-    io.to(`dataHub:${runId}`).emit("dataHub:datasetUploadStatus", {
-      runId,
+    io.to(`dataHub:${id}`).emit("dataHub:datasetUploadStatus", {
+      id,
       ...payload,
       updatedAt: new Date().toISOString(),
     });
@@ -171,34 +161,20 @@ async function inspectCsvFile(filePath) {
   };
 }
 
-async function getRunForCustomer({ customerId, runId, transaction }) {
-  const DataHubRun = getDataHubRunModel();
-  const run = await DataHubRun.findOne({
-    where: { id: runId, customerId },
-    transaction,
-  });
-
-  if (!run) {
-    const err = new Error("Data Hub run not found");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  return run;
-}
-
-async function listDatasets({ customerId, runId, role = null } = {}) {
+async function listDatasets({
+  customerId,
+  profileId,
+  datasetType = null,
+} = {}) {
   if (!customerId) throw new Error("customerId is required");
-  if (!runId) throw new Error("runId is required");
+  if (!profileId) throw new Error("profileId is required");
 
   const DataHubDataset = getDataHubDatasetModel();
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    await getRunForCustomer({ customerId, runId, transaction: t });
-
-    const where = { customerId, runId };
-    if (role) where.role = role;
+    const where = { customerId, profileId };
+    if (datasetType) where.datasetType = datasetType;
 
     const rows = await DataHubDataset.findAll({
       where,
@@ -213,8 +189,8 @@ async function listDatasets({ customerId, runId, role = null } = {}) {
     logger?.error?.("Failed to list Data Hub datasets", {
       action: "DataHubListDatasets",
       customerId,
-      runId,
-      role,
+      profileId,
+      datasetType,
       error: err.message,
     });
     throw err;
@@ -223,24 +199,24 @@ async function listDatasets({ customerId, runId, role = null } = {}) {
 
 async function createDataset({
   customerId,
-  runId,
-  profileId = null,
-  role,
+  profileId,
+  datasetType,
   sourceType = "csv",
-  sourceName = null,
-  fileName = null,
-  fileSize = null,
-  mimeType = null,
+  sourceName,
+  fileName,
+  fileSize,
+  mimeType,
   buffer,
-  meta = null,
-  userId = null,
+  meta,
+  userId,
 } = {}) {
-  const rawRole = typeof role === "string" ? role.trim() : "";
-  const normalisedRole = rawRole.toLowerCase();
+  const rawDatasetType =
+    typeof datasetType === "string" ? datasetType.trim() : "";
+  const normalisedDatasetType = rawDatasetType.toLowerCase();
 
   if (!customerId) throw new Error("customerId is required");
-  if (!runId) throw new Error("runId is required");
-  if (!normalisedRole) throw new Error("role is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!normalisedDatasetType) throw new Error("datasetType is required");
   if (!buffer || !Buffer.isBuffer(buffer)) {
     throw new Error("file buffer is required");
   }
@@ -249,9 +225,9 @@ async function createDataset({
   const t = await beginTransactionWithCustomerContext(customerId);
   let storagePath = null;
 
-  emitDatasetUploadStatus(runId, {
+  emitDatasetUploadStatus(null, {
     customerId,
-    role: normalisedRole,
+    datasetType: normalisedDatasetType,
     sourceType,
     status: "processing",
     rowsInserted: 0,
@@ -259,18 +235,15 @@ async function createDataset({
   });
 
   try {
-    const run = await getRunForCustomer({ customerId, runId, transaction: t });
-    const effectiveProfileId = profileId || run.profileId || null;
     const originalFileName = fileName || sourceName || null;
     const displayName = sourceName || originalFileName || "Dataset upload";
     const ext = (originalFileName && path.extname(originalFileName)) || ".csv";
 
     const row = await DataHubDataset.create(
       {
-        runId,
         customerId,
-        profileId: effectiveProfileId,
-        role: normalisedRole,
+        profileId,
+        datasetType: normalisedDatasetType,
         sourceType: sourceType || "csv",
         sourceName: displayName,
         originalFileName,
@@ -291,25 +264,25 @@ async function createDataset({
       { transaction: t },
     );
 
-    const datasetId = row.id;
+    const id = row.id;
     const baseDir = path.resolve(
       process.cwd(),
       "storage",
       "data_hub",
       String(customerId),
-      String(runId),
+      "datasets",
     );
     fs.mkdirSync(baseDir, { recursive: true });
 
-    const storedFileName = `${datasetId}${ext}`;
+    const storedFileName = `${id}${ext}`;
     storagePath = path.join(baseDir, storedFileName);
     fs.writeFileSync(storagePath, buffer);
 
     const fileInspection = await inspectCsvFile(storagePath);
-    emitDatasetUploadStatus(runId, {
+    emitDatasetUploadStatus(null, {
       customerId,
-      datasetId,
-      role: normalisedRole,
+      id,
+      datasetType: normalisedDatasetType,
       sourceType,
       status: "processing",
       rowsInserted: 0,
@@ -334,19 +307,10 @@ async function createDataset({
       { transaction: t },
     );
 
-    await run.update(
-      {
-        status: "uploaded",
-        currentStep: "link",
-        updatedBy: userId || null,
-      },
-      { transaction: t },
-    );
-
-    emitDatasetUploadStatus(runId, {
+    emitDatasetUploadStatus(null, {
       customerId,
-      datasetId,
-      role: normalisedRole,
+      id,
+      datasetType: normalisedDatasetType,
       sourceType,
       status: "complete",
       rowsInserted: fileInspection.rowsCount,
@@ -356,9 +320,9 @@ async function createDataset({
     await t.commit();
     return normaliseDataset(row);
   } catch (err) {
-    emitDatasetUploadStatus(runId, {
+    emitDatasetUploadStatus(null, {
       customerId,
-      role: normalisedRole,
+      datasetType: normalisedDatasetType,
       sourceType,
       status: "failed",
       rowsInserted: 0,
@@ -377,27 +341,25 @@ async function createDataset({
     logger?.error?.("Failed to create Data Hub dataset", {
       action: "DataHubCreateDataset",
       customerId,
-      runId,
-      role: normalisedRole,
+      profileId,
+      datasetType: normalisedDatasetType,
       error: err.message,
     });
     throw err;
   }
 }
 
-async function getDataset({ customerId, runId, datasetId } = {}) {
+async function getDataset({ customerId, profileId, id } = {}) {
   if (!customerId) throw new Error("customerId is required");
-  if (!runId) throw new Error("runId is required");
-  if (!datasetId) throw new Error("datasetId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!id) throw new Error("id is required");
 
   const DataHubDataset = getDataHubDatasetModel();
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    await getRunForCustomer({ customerId, runId, transaction: t });
-
     const row = await DataHubDataset.findOne({
-      where: { id: datasetId, runId, customerId },
+      where: { id, customerId, profileId },
       transaction: t,
     });
 
@@ -408,8 +370,8 @@ async function getDataset({ customerId, runId, datasetId } = {}) {
     logger?.error?.("Failed to get Data Hub dataset", {
       action: "DataHubGetDataset",
       customerId,
-      runId,
-      datasetId,
+      profileId,
+      id,
       error: err.message,
     });
     throw err;
@@ -418,25 +380,21 @@ async function getDataset({ customerId, runId, datasetId } = {}) {
 
 async function getDatasetSample({
   customerId,
-  runId,
-  datasetId = null,
-  role = null,
+  profileId,
+  id,
   limit = 10,
   offset = 0,
 } = {}) {
   if (!customerId) throw new Error("customerId is required");
-  if (!runId) throw new Error("runId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!id) throw new Error("id is required");
 
   const DataHubDataset = getDataHubDatasetModel();
   const t = await beginTransactionWithCustomerContext(customerId);
 
   let dataset;
   try {
-    await getRunForCustomer({ customerId, runId, transaction: t });
-
-    const where = { customerId, runId };
-    if (datasetId) where.id = datasetId;
-    if (!datasetId && role) where.role = role;
+    const where = { id, customerId, profileId };
 
     dataset = await DataHubDataset.findOne({
       where,
@@ -451,9 +409,8 @@ async function getDatasetSample({
     logger?.error?.("Failed to resolve Data Hub dataset sample source", {
       action: "DataHubGetDatasetSampleResolve",
       customerId,
-      runId,
-      datasetId,
-      role,
+      profileId,
+      id,
       error: err.message,
     });
     throw err;
@@ -525,24 +482,17 @@ async function getDatasetSample({
   };
 }
 
-async function deleteDataset({
-  customerId,
-  runId,
-  datasetId,
-  userId = null,
-} = {}) {
+async function deleteDataset({ customerId, profileId, id, userId } = {}) {
   if (!customerId) throw new Error("customerId is required");
-  if (!runId) throw new Error("runId is required");
-  if (!datasetId) throw new Error("datasetId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!id) throw new Error("id is required");
 
   const DataHubDataset = getDataHubDatasetModel();
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    await getRunForCustomer({ customerId, runId, transaction: t });
-
     const row = await DataHubDataset.findOne({
-      where: { id: datasetId, runId, customerId },
+      where: { id, customerId, profileId },
       transaction: t,
     });
 
@@ -558,14 +508,14 @@ async function deleteDataset({
     await row.destroy({ transaction: t });
 
     await t.commit();
-    return { ok: true, runId, datasetId };
+    return { ok: true, id };
   } catch (err) {
     await rollbackQuietly(t);
     logger?.error?.("Failed to delete Data Hub dataset", {
       action: "DataHubDeleteDataset",
       customerId,
-      runId,
-      datasetId,
+      profileId,
+      id,
       error: err.message,
     });
     throw err;

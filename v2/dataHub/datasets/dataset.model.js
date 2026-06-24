@@ -10,19 +10,15 @@ function model(sequelize) {
       defaultValue: () => getNanoid(10),
       primaryKey: true,
     },
-    runId: {
-      type: DataTypes.STRING(10),
-      allowNull: false,
-    },
     customerId: {
       type: DataTypes.STRING(10),
       allowNull: false,
     },
     profileId: {
       type: DataTypes.STRING(10),
-      allowNull: true,
+      allowNull: false,
     },
-    role: {
+    datasetType: {
       type: DataTypes.STRING(50),
       allowNull: false,
     },
@@ -107,10 +103,10 @@ function model(sequelize) {
     timestamps: true,
     paranoid: true,
     indexes: [
-      { fields: ["runId"] },
       { fields: ["customerId"] },
+      { fields: ["profileId"] },
       { fields: ["customerId", "profileId"] },
-      { fields: ["runId", "role"] },
+      { fields: ["customerId", "profileId", "datasetType"] },
       { fields: ["status"] },
     ],
   });

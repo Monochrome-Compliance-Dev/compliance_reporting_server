@@ -389,16 +389,7 @@ async function initialise() {
   }
 
   // Data Hub relationships
-  if (db.Customer && db.DataHubRun) {
-    db.Customer.hasMany(db.DataHubRun, {
-      foreignKey: "customerId",
-      onDelete: "CASCADE",
-    });
-    db.DataHubRun.belongsTo(db.Customer, {
-      foreignKey: "customerId",
-      onDelete: "CASCADE",
-    });
-  }
+  // Simple model: DataHubDataset is the dataset record. There is no DataHubRun parent.
 
   if (db.Customer && db.DataHubDataset) {
     db.Customer.hasMany(db.DataHubDataset, {
@@ -407,19 +398,6 @@ async function initialise() {
     });
     db.DataHubDataset.belongsTo(db.Customer, {
       foreignKey: "customerId",
-      onDelete: "CASCADE",
-    });
-  }
-
-  if (db.DataHubRun && db.DataHubDataset) {
-    db.DataHubRun.hasMany(db.DataHubDataset, {
-      foreignKey: "runId",
-      sourceKey: "id",
-      onDelete: "CASCADE",
-    });
-    db.DataHubDataset.belongsTo(db.DataHubRun, {
-      foreignKey: "runId",
-      targetKey: "id",
       onDelete: "CASCADE",
     });
   }

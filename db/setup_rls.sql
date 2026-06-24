@@ -48,16 +48,6 @@ ALTER TABLE tbl_ptrs_dataset FORCE ROW LEVEL SECURITY;
 -- Data Hub core tables: RLS policies
 -- =============================
 
--- Data Hub Runs
-ALTER TABLE tbl_data_hub_run ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS tbl_data_hub_run_rls_policy ON tbl_data_hub_run;
-CREATE POLICY tbl_data_hub_run_rls_policy
-  ON tbl_data_hub_run
-  FOR ALL
-  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
-  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
-ALTER TABLE tbl_data_hub_run FORCE ROW LEVEL SECURITY;
-
 -- Data Hub Datasets
 ALTER TABLE tbl_data_hub_dataset ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_data_hub_dataset_rls_policy ON tbl_data_hub_dataset;
@@ -67,6 +57,22 @@ CREATE POLICY tbl_data_hub_dataset_rls_policy
   USING ("customerId" = current_setting('app.current_customer_id', true)::text)
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_data_hub_dataset FORCE ROW LEVEL SECURITY;
+
+-- Data Hub dataset lookup indexes
+CREATE INDEX IF NOT EXISTS idx_dh_dataset_customer_id
+  ON tbl_data_hub_dataset ("customerId");
+
+CREATE INDEX IF NOT EXISTS idx_dh_dataset_profile_id
+  ON tbl_data_hub_dataset ("profileId");
+
+CREATE INDEX IF NOT EXISTS idx_dh_dataset_customer_profile
+  ON tbl_data_hub_dataset ("customerId", "profileId");
+
+CREATE INDEX IF NOT EXISTS idx_dh_dataset_customer_profile_type
+  ON tbl_data_hub_dataset ("customerId", "profileId", "datasetType");
+
+CREATE INDEX IF NOT EXISTS idx_dh_dataset_status
+  ON tbl_data_hub_dataset ("status");
 
 -- PTRS Column Map (mappings + joins + rules)
 ALTER TABLE tbl_ptrs_column_map ENABLE ROW LEVEL SECURITY;

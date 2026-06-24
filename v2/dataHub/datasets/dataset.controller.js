@@ -10,17 +10,17 @@ const datasetService = require("./dataset.service");
 
 async function listDatasets(req, res, next) {
   const { customerId, userId, ip, device } = getRequestMeta(req);
-  const { runId } = req.params;
 
   try {
     if (!customerId) return badRequest(res, "Customer ID missing");
-    if (!runId) return badRequest(res, "runId missing");
+    const profileId = req.query.profileId || req.body?.profileId;
+    if (!profileId) return badRequest(res, "profileId missing");
 
-    const role = req.query.role || null;
+    const datasetType = req.query.datasetType;
     const items = await datasetService.listDatasets({
       customerId,
-      runId,
-      role,
+      profileId,
+      datasetType,
     });
 
     await auditService.logEvent({
@@ -32,8 +32,8 @@ async function listDatasets(req, res, next) {
       entity: "DataHubDataset",
       entityId: null,
       details: {
-        runId,
-        role,
+        profileId,
+        datasetType,
         count: Array.isArray(items) ? items.length : 0,
       },
     });
@@ -44,7 +44,7 @@ async function listDatasets(req, res, next) {
       action: "DataHubListDatasets",
       customerId,
       userId,
-      runId,
+      profileId,
       error: error.message,
     });
     return next(error);
@@ -53,24 +53,22 @@ async function listDatasets(req, res, next) {
 
 async function createDataset(req, res, next) {
   const { customerId, userId, ip, device } = getRequestMeta(req);
-  const { runId } = req.params;
 
   try {
     if (!customerId) return badRequest(res, "Customer ID missing");
-    if (!runId) return badRequest(res, "runId missing");
 
-    const { profileId, sourceType, sourceName, meta } = req.body || {};
-    const role = String(req.body?.role || req.query?.role || "").trim();
+    const { profileId, sourceType, sourceName, meta, datasetType } =
+      req.body || {};
+    if (!profileId) return badRequest(res, "profileId missing");
     const file = req.file;
 
     if (!file || !file.buffer) return badRequest(res, "File is required");
-    if (!role) return badRequest(res, "role is required");
+    if (!datasetType) return badRequest(res, "datasetType is required");
 
     const dataset = await datasetService.createDataset({
       customerId,
-      runId,
       profileId,
-      role,
+      datasetType,
       sourceType,
       sourceName,
       meta,
@@ -90,8 +88,8 @@ async function createDataset(req, res, next) {
       entity: "DataHubDataset",
       entityId: dataset.id,
       details: {
-        runId,
-        role: dataset.role,
+        profileId,
+        datasetType: dataset.datasetType,
         rowsCount: dataset.rowsCount,
       },
     });
@@ -102,7 +100,7 @@ async function createDataset(req, res, next) {
       action: "DataHubCreateDataset",
       customerId,
       userId,
-      runId,
+      profileId,
       error: error.message,
     });
     return next(error);
@@ -111,17 +109,18 @@ async function createDataset(req, res, next) {
 
 async function getDataset(req, res, next) {
   const { customerId, userId, ip, device } = getRequestMeta(req);
-  const { runId, datasetId } = req.params;
+  const { id } = req.params;
 
   try {
     if (!customerId) return badRequest(res, "Customer ID missing");
-    if (!runId) return badRequest(res, "runId missing");
-    if (!datasetId) return badRequest(res, "datasetId missing");
+    if (!id) return badRequest(res, "id missing");
+    const profileId = req.query.profileId || req.body?.profileId;
+    if (!profileId) return badRequest(res, "profileId missing");
 
     const dataset = await datasetService.getDataset({
       customerId,
-      runId,
-      datasetId,
+      profileId,
+      id,
     });
 
     if (!dataset) {
@@ -135,8 +134,8 @@ async function getDataset(req, res, next) {
       device,
       action: "DataHubGetDataset",
       entity: "DataHubDataset",
-      entityId: datasetId,
-      details: { runId },
+      entityId: id,
+      details: { profileId },
     });
 
     return success(res, dataset);
@@ -145,8 +144,8 @@ async function getDataset(req, res, next) {
       action: "DataHubGetDataset",
       customerId,
       userId,
-      runId,
-      datasetId,
+      id,
+      profileId,
       error: error.message,
     });
     return next(error);
@@ -155,17 +154,18 @@ async function getDataset(req, res, next) {
 
 async function getDatasetSample(req, res, next) {
   const { customerId, userId, ip, device } = getRequestMeta(req);
-  const { runId } = req.params;
+  const { id } = req.params;
 
   try {
     if (!customerId) return badRequest(res, "Customer ID missing");
-    if (!runId) return badRequest(res, "runId missing");
+    if (!id) return badRequest(res, "id missing");
+    const profileId = req.query.profileId || req.body?.profileId;
+    if (!profileId) return badRequest(res, "profileId missing");
 
     const sample = await datasetService.getDatasetSample({
       customerId,
-      runId,
-      datasetId: req.query.datasetId || null,
-      role: req.query.role || null,
+      profileId,
+      id,
       limit: req.query.limit,
       offset: req.query.offset,
     });
@@ -177,10 +177,9 @@ async function getDatasetSample(req, res, next) {
       device,
       action: "DataHubGetDatasetSample",
       entity: "DataHubDataset",
-      entityId: sample?.dataset?.id || req.query.datasetId || null,
+      entityId: sample?.dataset?.id || id,
       details: {
-        runId,
-        role: req.query.role || null,
+        profileId,
         returnedRows: Array.isArray(sample?.rows) ? sample.rows.length : 0,
         total: sample?.total || 0,
       },
@@ -192,9 +191,8 @@ async function getDatasetSample(req, res, next) {
       action: "DataHubGetDatasetSample",
       customerId,
       userId,
-      runId,
-      datasetId: req.query.datasetId || null,
-      role: req.query.role || null,
+      id,
+      profileId,
       error: error.message,
     });
     return next(error);
@@ -203,17 +201,18 @@ async function getDatasetSample(req, res, next) {
 
 async function deleteDataset(req, res, next) {
   const { customerId, userId, ip, device } = getRequestMeta(req);
-  const { runId, datasetId } = req.params;
+  const { id } = req.params;
 
   try {
     if (!customerId) return badRequest(res, "Customer ID missing");
-    if (!runId) return badRequest(res, "runId missing");
-    if (!datasetId) return badRequest(res, "datasetId missing");
+    if (!id) return badRequest(res, "id missing");
+    const profileId = req.query.profileId || req.body?.profileId;
+    if (!profileId) return badRequest(res, "profileId missing");
 
     const result = await datasetService.deleteDataset({
       customerId,
-      runId,
-      datasetId,
+      profileId,
+      id,
       userId,
     });
 
@@ -224,9 +223,9 @@ async function deleteDataset(req, res, next) {
       device,
       action: "DataHubDeleteDataset",
       entity: "DataHubDataset",
-      entityId: datasetId,
+      entityId: id,
       details: {
-        runId,
+        profileId,
         ok: result.ok === true,
       },
     });
@@ -237,8 +236,8 @@ async function deleteDataset(req, res, next) {
       action: "DataHubDeleteDataset",
       customerId,
       userId,
-      runId,
-      datasetId,
+      id,
+      profileId,
       error: error.message,
     });
     return next(error);
