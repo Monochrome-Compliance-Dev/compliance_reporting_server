@@ -225,14 +225,7 @@ async function createDataset({
   const t = await beginTransactionWithCustomerContext(customerId);
   let storagePath = null;
 
-  emitDatasetUploadStatus(null, {
-    customerId,
-    datasetType: normalisedDatasetType,
-    sourceType,
-    status: "processing",
-    rowsInserted: 0,
-    totalRows: 0,
-  });
+  // Removed initial emitDatasetUploadStatus(null, ...)
 
   try {
     const originalFileName = fileName || sourceName || null;
@@ -265,6 +258,14 @@ async function createDataset({
     );
 
     const id = row.id;
+    emitDatasetUploadStatus(id, {
+      customerId,
+      datasetType: normalisedDatasetType,
+      sourceType,
+      status: "processing",
+      rowsInserted: 0,
+      totalRows: 0,
+    });
     const baseDir = path.resolve(
       process.cwd(),
       "storage",
@@ -279,9 +280,8 @@ async function createDataset({
     fs.writeFileSync(storagePath, buffer);
 
     const fileInspection = await inspectCsvFile(storagePath);
-    emitDatasetUploadStatus(null, {
+    emitDatasetUploadStatus(id, {
       customerId,
-      id,
       datasetType: normalisedDatasetType,
       sourceType,
       status: "processing",
@@ -307,9 +307,8 @@ async function createDataset({
       { transaction: t },
     );
 
-    emitDatasetUploadStatus(null, {
+    emitDatasetUploadStatus(id, {
       customerId,
-      id,
       datasetType: normalisedDatasetType,
       sourceType,
       status: "complete",
@@ -320,15 +319,7 @@ async function createDataset({
     await t.commit();
     return normaliseDataset(row);
   } catch (err) {
-    emitDatasetUploadStatus(null, {
-      customerId,
-      datasetType: normalisedDatasetType,
-      sourceType,
-      status: "failed",
-      rowsInserted: 0,
-      totalRows: 0,
-      error: err?.message || "Dataset upload failed",
-    });
+    // If creation failed before the dataset row existed, there is no dataset room to emit to.
 
     await rollbackQuietly(t);
 
