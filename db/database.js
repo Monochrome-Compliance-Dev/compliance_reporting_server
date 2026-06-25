@@ -5,7 +5,9 @@ const path = require("path");
 
 // v2 PTRS model loader (New World)
 const { initPtrsV2Models } = require("@/v2/ptrs/models/ptrs_model_loader");
-const { initV3Models } = require("@/v3/model_loader");
+const {
+  initDataHubPublishingModels,
+} = require("@/v2/dataHub/publishing/models/publishing_model_loader");
 const { Pool } = require("pg");
 
 const DB_HOST = process.env.DB_HOST;
@@ -78,6 +80,9 @@ function walkModelFiles(dir) {
         entry.name === ".git" ||
         entry.name === "coverage"
       )
+        continue;
+
+      if (full.endsWith(path.join("v2", "dataHub", "publishing", "models")))
         continue;
       results.push(...walkModelFiles(full));
     } else if (entry.isFile() && entry.name.endsWith(".model.js")) {
@@ -185,6 +190,29 @@ async function initialise() {
       }
     });
   });
+
+  // --- Load Data Hub publishing models (typed published asset tables) ---
+  try {
+    const publishingModels = initDataHubPublishingModels(sequelize);
+    for (const model of Object.values(publishingModels)) {
+      db[toPascal(model.name)] = model;
+    }
+
+    logger.logEvent("info", "Data Hub publishing models initialised", {
+      action: "DatabaseInit",
+      count: Object.keys(publishingModels).length,
+    });
+  } catch (err) {
+    logger.logEvent(
+      "error",
+      "Failed to initialise Data Hub publishing models",
+      {
+        action: "DatabaseInit",
+        error: err.message,
+        stack: err.stack,
+      },
+    );
+  }
 
   // --- Load PTRS v2 New World models (non-*.model.js, via explicit loader) ---
   try {
