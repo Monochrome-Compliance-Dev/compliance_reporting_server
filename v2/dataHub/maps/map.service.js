@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const db = require("@/db/database");
 const { logger } = require("@/helpers/logger");
 const {
@@ -37,6 +38,17 @@ function normaliseDatasetMap(row) {
 function rollbackQuietly(t) {
   if (!t || t.finished) return Promise.resolve();
   return t.rollback().catch(() => {});
+}
+
+function assertDatasetIsMutable(dataset) {
+  const plain = toPlain(dataset);
+  if (!plain) return;
+
+  if (String(plain.status || "").toLowerCase() === "published") {
+    const err = new Error("Published Data Hub datasets are read-only");
+    err.statusCode = 409;
+    throw err;
+  }
 }
 
 function getDataHubDatasetModel() {
@@ -212,6 +224,7 @@ async function upsertDatasetMap({
       transaction: t,
     });
     const plainDataset = toPlain(dataset);
+    assertDatasetIsMutable(dataset);
 
     let row = await DataHubDatasetMap.findOne({
       where: { customerId, profileId, datasetId },
@@ -262,4 +275,123 @@ module.exports = {
   normaliseDatasetMap,
   getDatasetMap,
   upsertDatasetMap,
+  listCompatibleMaps,
+  importDatasetMap,
 };
+
+/**
+ * List compatible dataset maps for a customer/profile/datasetType.
+ * Returns maps ordered by updatedAt DESC, deduplicated by datasetId.
+ */
+async function listCompatibleMaps({ customerId, profileId, datasetType }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (!datasetType) throw new Error("datasetType is required");
+
+  const DataHubDatasetMap = getDataHubDatasetMapModel();
+  const DataHubDataset = getDataHubDatasetModel();
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // Find all maps for the customer/profile/datasetType
+    const maps = await DataHubDatasetMap.findAll({
+      where: { customerId, profileId, datasetType },
+      order: [["updatedAt", "DESC"]],
+      transaction: t,
+      raw: true,
+    });
+    // Distinct datasetIds
+    const datasetIds = Array.from(
+      new Set((maps || []).map((m) => m.datasetId).filter(Boolean)),
+    );
+    let datasets = [];
+    if (datasetIds.length > 0) {
+      datasets = await DataHubDataset.findAll({
+        where: { customerId, profileId, id: { [Op.in]: datasetIds } },
+        attributes: ["id", "datasetType", "sourceName", "originalFileName"],
+        transaction: t,
+        raw: true,
+      });
+    }
+    const datasetById = new Map();
+    for (const ds of datasets) {
+      datasetById.set(String(ds.id), ds);
+    }
+    // Only the most recent map per datasetId
+    const seen = new Set();
+    const items = [];
+    for (const m of maps) {
+      const dsid = String(m.datasetId);
+      if (!dsid || seen.has(dsid)) continue;
+      seen.add(dsid);
+      const ds = datasetById.get(dsid) || {};
+      items.push({
+        datasetId: m.datasetId,
+        datasetType: m.datasetType,
+        sourceName: ds.sourceName || null,
+        originalFileName: ds.originalFileName || null,
+        mappedCount: Number(m.mappedCount || 0),
+        recommendedCount: Number(m.recommendedCount || 0),
+        mappingStatus: m.mappingStatus || "draft",
+        updatedAt: m.updatedAt || null,
+      });
+    }
+    await t.commit();
+    return { items };
+  } catch (err) {
+    await rollbackQuietly(t);
+    logger?.error?.("Failed to list compatible Data Hub maps", {
+      action: "DataHubListCompatibleMaps",
+      customerId,
+      profileId,
+      datasetType,
+      error: err.message,
+    });
+    throw err;
+  }
+}
+
+/**
+ * Import a dataset map from a source dataset to a target dataset for the same customer/profile.
+ * Copies the mapping from source to target dataset.
+ */
+async function importDatasetMap({
+  customerId,
+  targetDatasetId,
+  sourceDatasetId,
+  profileId,
+  userId,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!targetDatasetId) throw new Error("targetDatasetId is required");
+  if (!sourceDatasetId) throw new Error("sourceDatasetId is required");
+  if (!profileId) throw new Error("profileId is required");
+  if (String(targetDatasetId) === String(sourceDatasetId)) {
+    const e = new Error("Cannot import map from the same dataset");
+    e.statusCode = 400;
+    throw e;
+  }
+  // Load the source map
+  const DataHubDatasetMap = getDataHubDatasetMapModel();
+  const sourceMap = await DataHubDatasetMap.findOne({
+    where: { customerId, profileId, datasetId: sourceDatasetId },
+    raw: true,
+  });
+  if (!sourceMap) {
+    const e = new Error(
+      `No mapping found on source dataset ${sourceDatasetId}`,
+    );
+    e.statusCode = 404;
+    throw e;
+  }
+  // Upsert to target dataset
+  return await upsertDatasetMap({
+    customerId,
+    profileId,
+    datasetId: targetDatasetId,
+    fieldMapping: sourceMap.fieldMapping,
+    recommendedCount: sourceMap.recommendedCount,
+    mappingStatus: sourceMap.mappingStatus,
+    meta: sourceMap.meta,
+    userId,
+  });
+}

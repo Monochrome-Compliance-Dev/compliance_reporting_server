@@ -112,7 +112,89 @@ async function saveDatasetMap(req, res, next) {
   }
 }
 
+async function listCompatibleMaps(req, res, next) {
+  const { customerId, userId, ip, device } = getRequestMeta(req);
+
+  try {
+    if (!customerId) return badRequest(res, "Customer ID missing");
+
+    const profileId = req.query.profileId;
+    const datasetType = req.query.datasetType;
+
+    if (!profileId) return badRequest(res, "profileId missing");
+    if (!datasetType) return badRequest(res, "datasetType missing");
+
+    const result = await mapService.listCompatibleMaps({
+      customerId,
+      profileId,
+      datasetType,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DataHubListCompatibleMaps",
+      entity: "DataHubDatasetMap",
+      entityId: null,
+      details: {
+        profileId,
+        datasetType,
+        count: Array.isArray(result?.items) ? result.items.length : 0,
+      },
+    });
+
+    return success(res, result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function importDatasetMap(req, res, next) {
+  const { customerId, userId, ip, device } = getRequestMeta(req);
+  const { id } = req.params;
+
+  try {
+    if (!customerId) return badRequest(res, "Customer ID missing");
+    if (!id) return badRequest(res, "id missing");
+
+    const { sourceDatasetId, profileId } = req.body || {};
+
+    if (!sourceDatasetId) return badRequest(res, "sourceDatasetId missing");
+    if (!profileId) return badRequest(res, "profileId missing");
+
+    const result = await mapService.importDatasetMap({
+      customerId,
+      targetDatasetId: id,
+      sourceDatasetId,
+      profileId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "DataHubImportDatasetMap",
+      entity: "DataHubDatasetMap",
+      entityId: id,
+      details: {
+        profileId,
+        sourceDatasetId,
+      },
+    });
+
+    return success(res, result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getDatasetMap,
   saveDatasetMap,
+  listCompatibleMaps,
+  importDatasetMap,
 };

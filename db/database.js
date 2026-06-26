@@ -8,6 +8,7 @@ const { initPtrsV2Models } = require("@/v2/ptrs/models/ptrs_model_loader");
 const {
   initDataHubPublishingModels,
 } = require("@/v2/dataHub/publishing/models/publishing_model_loader");
+const { initV3Models } = require("@/v3/model_loader");
 const { Pool } = require("pg");
 
 const DB_HOST = process.env.DB_HOST;

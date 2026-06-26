@@ -37,6 +37,17 @@ function rollbackQuietly(t) {
   return t.rollback().catch(() => {});
 }
 
+function assertDatasetIsMutable(dataset) {
+  const plain = toPlain(dataset);
+  if (!plain) return;
+
+  if (String(plain.status || "").toLowerCase() === "published") {
+    const err = new Error("Published Data Hub datasets are read-only");
+    err.statusCode = 409;
+    throw err;
+  }
+}
+
 function getDataHubDatasetModel() {
   if (!db.DataHubDataset) {
     throw new Error("DataHubDataset model is not registered on db");
@@ -492,6 +503,7 @@ async function deleteDataset({ customerId, profileId, id, userId } = {}) {
       err.statusCode = 404;
       throw err;
     }
+    assertDatasetIsMutable(row);
 
     if (userId) {
       await row.update({ updatedBy: userId }, { transaction: t });
