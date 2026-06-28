@@ -1,7 +1,9 @@
 const paymentTransformer = require("./payment.transformer");
+const invoiceTransformer = require("./invoice.transformer");
 
 const TRANSFORMERS = {
   [paymentTransformer.datasetType]: paymentTransformer,
+  [invoiceTransformer.datasetType]: invoiceTransformer,
 };
 
 function getTransformer(datasetType) {

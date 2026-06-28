@@ -58,6 +58,40 @@ CREATE POLICY tbl_data_hub_dataset_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_data_hub_dataset FORCE ROW LEVEL SECURITY;
 
+ALTER TABLE tbl_data_hub_payment ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_data_hub_payment_rls_policy
+ON tbl_data_hub_payment;
+
+CREATE POLICY tbl_data_hub_payment_rls_policy
+ON tbl_data_hub_payment
+FOR ALL
+USING (
+  "customerId" = current_setting('app.current_customer_id', true)::text
+)
+WITH CHECK (
+  "customerId" = current_setting('app.current_customer_id', true)::text
+);
+
+ALTER TABLE tbl_data_hub_payment FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_data_hub_invoice ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tbl_data_hub_invoice_rls_policy
+ON tbl_data_hub_invoice;
+
+CREATE POLICY tbl_data_hub_invoice_rls_policy
+ON tbl_data_hub_invoice
+FOR ALL
+USING (
+  "customerId" = current_setting('app.current_customer_id', true)::text
+)
+WITH CHECK (
+  "customerId" = current_setting('app.current_customer_id', true)::text
+);
+
+ALTER TABLE tbl_data_hub_invoice FORCE ROW LEVEL SECURITY;
+
 -- Data Hub dataset lookup indexes
 CREATE INDEX IF NOT EXISTS idx_dh_dataset_customer_id
   ON tbl_data_hub_dataset ("customerId");
