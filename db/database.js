@@ -143,6 +143,7 @@ async function initialise() {
     "../pulse",
     "../v2/profiles", // added to load CustomerProfile model
     "../v2/dataHub", // added to load Data Hub models
+    "../v2/sourceOnboarding", // added to load Source Onboarding models
   ];
 
   modelDirs.forEach((dir) => {

@@ -7,6 +7,9 @@ const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  getActiveSchemaForDatasetType,
+} = require("@/v2/sourceOnboarding/schemaEngine/services/schemaDefinition.service");
 
 function toPlain(row) {
   if (!row) return null;
@@ -30,6 +33,35 @@ function normaliseDataset(row) {
     detectedCoverage: plain.detectedCoverage || {},
     status: plain.status || "uploaded",
   };
+}
+
+function withNextAction(dataset, activeSchema) {
+  if (!dataset) return null;
+
+  if (activeSchema) {
+    return {
+      ...dataset,
+      nextStep: "map",
+      nextRoute: `map/${encodeURIComponent(dataset.id)}`,
+      nextLabel: "Continue to mapping",
+      schemaDefinitionId: activeSchema.id,
+    };
+  }
+
+  return {
+    ...dataset,
+    nextStep: "schema",
+    nextRoute: `schema/${encodeURIComponent(dataset.id)}`,
+    nextLabel: "Define schema",
+    schemaDefinitionId: null,
+  };
+}
+
+async function attachNextAction(dataset) {
+  if (!dataset) return null;
+
+  const activeSchema = await getActiveSchemaForDatasetType(dataset.datasetType);
+  return withNextAction(dataset, activeSchema);
 }
 
 function rollbackQuietly(t) {
@@ -328,7 +360,7 @@ async function createDataset({
     });
 
     await t.commit();
-    return normaliseDataset(row);
+    return attachNextAction(normaliseDataset(row));
   } catch (err) {
     // If creation failed before the dataset row existed, there is no dataset room to emit to.
 
@@ -366,7 +398,7 @@ async function getDataset({ customerId, profileId, id } = {}) {
     });
 
     await t.commit();
-    return normaliseDataset(row);
+    return attachNextAction(normaliseDataset(row));
   } catch (err) {
     await rollbackQuietly(t);
     logger?.error?.("Failed to get Data Hub dataset", {
