@@ -569,6 +569,12 @@ app.use("/api/billing", require("./stripe/billing.controller"));
 
 app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
+// Platform routes
+app.use(
+  "/api/platform/interactions",
+  require("@/platform/interactions/interactions.routes"),
+);
+
 // V2 routes
 // PTRS
 app.use("/api/v2/ptrs", require("@/v2/ptrs/routes/ptrs.routes"));
