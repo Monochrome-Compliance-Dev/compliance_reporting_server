@@ -13,7 +13,9 @@ jest.mock("@/middleware/authorise", () =>
 );
 
 jest.mock("@/platform/audit/audit.service", () => ({
-  recordInteractionAudit: jest.fn(),
+  recordInteractionAudit: jest.fn().mockResolvedValue({
+    eventType: "platform.interaction.executed",
+  }),
 }));
 
 const authorise = require("@/middleware/authorise");

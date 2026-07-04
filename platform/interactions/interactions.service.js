@@ -6,7 +6,7 @@ function getActor(req) {
   return req.user || req.auth || req.currentUser || null;
 }
 
-function executeInteraction(req) {
+async function executeInteraction(req) {
   const actor = getActor(req);
 
   if (!actor) {
@@ -27,11 +27,12 @@ function executeInteraction(req) {
     },
   };
 
-  auditService.recordInteractionAudit({
+  await auditService.recordInteractionAudit({
     interactionId: result.interactionId,
     capability: result.capability,
     outcome: "success",
     actor: result.actor,
+    request: req,
   });
 
   return result;

@@ -4,17 +4,32 @@ jest.mock("@/helpers/logger", () => ({
   },
 }));
 
+jest.mock("@/platform/audit/audit.repository", () => ({
+  createInteractionAuditEvent: jest.fn(),
+}));
+
 const logger = require("@/helpers/logger");
+const auditRepository = require("@/platform/audit/audit.repository");
 const auditService = require("@/platform/audit/audit.service");
 
 describe("audit.service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    auditRepository.createInteractionAuditEvent.mockResolvedValue({
+      id: "audit-123",
+    });
   });
 
   describe("recordInteractionAudit", () => {
-    it("writes platform interaction audit evidence", () => {
-      const result = auditService.recordInteractionAudit({
+    it("writes logger-backed and persistent platform interaction audit evidence", async () => {
+      const request = {
+        ip: "127.0.0.1",
+        headers: {
+          "user-agent": "jest-agent",
+        },
+      };
+
+      const result = await auditService.recordInteractionAudit({
         interactionId: "interaction-123",
         capability: "interactions",
         outcome: "success",
@@ -23,6 +38,7 @@ describe("audit.service", () => {
           role: "Admin",
           customerId: "customer-123",
         },
+        request,
       });
 
       expect(result).toEqual({
@@ -39,10 +55,22 @@ describe("audit.service", () => {
       });
 
       expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(auditRepository.createInteractionAuditEvent).toHaveBeenCalledWith({
+        interactionId: "interaction-123",
+        capability: "interactions",
+        outcome: "success",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        occurredAt: result.occurredAt,
+        request,
+      });
     });
 
-    it("normalises missing actor fields to null", () => {
-      const result = auditService.recordInteractionAudit({
+    it("normalises missing actor fields to null", async () => {
+      const result = await auditService.recordInteractionAudit({
         interactionId: "interaction-456",
         capability: "interactions",
         outcome: "success",
@@ -56,17 +84,17 @@ describe("audit.service", () => {
       });
     });
 
-    it("throws when interactionId is missing", () => {
-      expect(() =>
+    it("throws when interactionId is missing", async () => {
+      await expect(
         auditService.recordInteractionAudit({
           capability: "interactions",
           outcome: "success",
           actor: null,
         }),
-      ).toThrow("interactionId is required for audit evidence.");
+      ).rejects.toThrow("interactionId is required for audit evidence.");
 
       try {
-        auditService.recordInteractionAudit({
+        await auditService.recordInteractionAudit({
           capability: "interactions",
           outcome: "success",
           actor: null,
@@ -74,6 +102,29 @@ describe("audit.service", () => {
       } catch (error) {
         expect(error.status).toBe(500);
       }
+
+      expect(
+        auditRepository.createInteractionAuditEvent,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("fails loudly when persistent audit storage fails", async () => {
+      auditRepository.createInteractionAuditEvent.mockRejectedValue(
+        new Error("audit persistence failed"),
+      );
+
+      await expect(
+        auditService.recordInteractionAudit({
+          interactionId: "interaction-789",
+          capability: "interactions",
+          outcome: "success",
+          actor: {
+            id: "user-789",
+            role: "Boss",
+            customerId: "customer-789",
+          },
+        }),
+      ).rejects.toThrow("audit persistence failed");
     });
   });
 });

@@ -1,4 +1,5 @@
 const logger = require("@/helpers/logger");
+const auditRepository = require("@/platform/audit/audit.repository");
 
 function writeAuditEvent(auditEvent) {
   if (typeof logger.auditEvent === "function") {
@@ -31,7 +32,13 @@ function writeAuditEvent(auditEvent) {
   throw error;
 }
 
-function recordInteractionAudit({ interactionId, capability, outcome, actor }) {
+async function recordInteractionAudit({
+  interactionId,
+  capability,
+  outcome,
+  actor,
+  request,
+}) {
   if (!interactionId) {
     const error = new Error("interactionId is required for audit evidence.");
     error.status = 500;
@@ -52,6 +59,15 @@ function recordInteractionAudit({ interactionId, capability, outcome, actor }) {
   };
 
   writeAuditEvent(auditEvent);
+
+  await auditRepository.createInteractionAuditEvent({
+    interactionId: auditEvent.interactionId,
+    capability: auditEvent.capability,
+    outcome: auditEvent.outcome,
+    actor: auditEvent.actor,
+    occurredAt: auditEvent.occurredAt,
+    request,
+  });
 
   return auditEvent;
 }
