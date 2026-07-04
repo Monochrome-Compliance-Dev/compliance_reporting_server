@@ -1,6 +1,14 @@
+jest.mock("@/platform/audit/audit.service", () => ({
+  recordInteractionAudit: jest.fn(),
+}));
+
+const auditService = require("@/platform/audit/audit.service");
 const interactionsService = require("@/platform/interactions/interactions.service");
 
 describe("interactions.service", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
   describe("executeInteraction", () => {
     it("returns a successful interaction envelope using req.auth", () => {
       const result = interactionsService.executeInteraction({
@@ -16,6 +24,17 @@ describe("interactions.service", () => {
         interactionId: expect.any(String),
         capability: "interactions",
         message: "Platform interaction executed successfully.",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+      });
+
+      expect(auditService.recordInteractionAudit).toHaveBeenCalledWith({
+        interactionId: result.interactionId,
+        capability: "interactions",
+        outcome: "success",
         actor: {
           id: "user-123",
           role: "Admin",

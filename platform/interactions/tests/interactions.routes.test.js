@@ -12,6 +12,10 @@ jest.mock("@/middleware/authorise", () =>
   }),
 );
 
+jest.mock("@/platform/audit/audit.service", () => ({
+  recordInteractionAudit: jest.fn(),
+}));
+
 const authorise = require("@/middleware/authorise");
 const interactionsService = require("@/platform/interactions/interactions.service");
 const interactionsRoutes = require("@/platform/interactions/interactions.routes");

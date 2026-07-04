@@ -1,5 +1,7 @@
 const crypto = require("crypto");
 
+const auditService = require("@/platform/audit/audit.service");
+
 function getActor(req) {
   return req.user || req.auth || req.currentUser || null;
 }
@@ -13,7 +15,7 @@ function executeInteraction(req) {
     throw error;
   }
 
-  return {
+  const result = {
     success: true,
     interactionId: crypto.randomUUID(),
     capability: "interactions",
@@ -24,6 +26,15 @@ function executeInteraction(req) {
       customerId: actor.customerId || null,
     },
   };
+
+  auditService.recordInteractionAudit({
+    interactionId: result.interactionId,
+    capability: result.capability,
+    outcome: "success",
+    actor: result.actor,
+  });
+
+  return result;
 }
 
 module.exports = {
