@@ -5,7 +5,7 @@ jest.mock("@/helpers/logger", () => ({
 }));
 
 jest.mock("@/platform/audit/audit.repository", () => ({
-  createInteractionAuditEvent: jest.fn(),
+  createFoundationAuditEvent: jest.fn(),
 }));
 
 const logger = require("@/helpers/logger");
@@ -15,13 +15,13 @@ const auditService = require("@/platform/audit/audit.service");
 describe("audit.service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    auditRepository.createInteractionAuditEvent.mockResolvedValue({
+    auditRepository.createFoundationAuditEvent.mockResolvedValue({
       id: "audit-123",
     });
   });
 
-  describe("recordInteractionAudit", () => {
-    it("writes logger-backed and persistent platform interaction audit evidence", async () => {
+  describe("recordFoundationAudit", () => {
+    it("writes logger-backed and persistent platform foundation audit evidence", async () => {
       const request = {
         ip: "127.0.0.1",
         headers: {
@@ -29,9 +29,9 @@ describe("audit.service", () => {
         },
       };
 
-      const result = await auditService.recordInteractionAudit({
-        interactionId: "interaction-123",
-        capability: "interactions",
+      const result = await auditService.recordFoundationAudit({
+        foundationId: "foundation-123",
+        capability: "foundation",
         outcome: "success",
         actor: {
           id: "user-123",
@@ -42,9 +42,9 @@ describe("audit.service", () => {
       });
 
       expect(result).toEqual({
-        eventType: "platform.interaction.executed",
-        interactionId: "interaction-123",
-        capability: "interactions",
+        eventType: "platform.foundation.executed",
+        foundationId: "foundation-123",
+        capability: "foundation",
         outcome: "success",
         actor: {
           id: "user-123",
@@ -55,9 +55,9 @@ describe("audit.service", () => {
       });
 
       expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
-      expect(auditRepository.createInteractionAuditEvent).toHaveBeenCalledWith({
-        interactionId: "interaction-123",
-        capability: "interactions",
+      expect(auditRepository.createFoundationAuditEvent).toHaveBeenCalledWith({
+        foundationId: "foundation-123",
+        capability: "foundation",
         outcome: "success",
         actor: {
           id: "user-123",
@@ -70,9 +70,9 @@ describe("audit.service", () => {
     });
 
     it("normalises missing actor fields to null", async () => {
-      const result = await auditService.recordInteractionAudit({
-        interactionId: "interaction-456",
-        capability: "interactions",
+      const result = await auditService.recordFoundationAudit({
+        foundationId: "foundation-456",
+        capability: "foundation",
         outcome: "success",
         actor: {},
       });
@@ -84,18 +84,18 @@ describe("audit.service", () => {
       });
     });
 
-    it("throws when interactionId is missing", async () => {
+    it("throws when foundationId is missing", async () => {
       await expect(
-        auditService.recordInteractionAudit({
-          capability: "interactions",
+        auditService.recordFoundationAudit({
+          capability: "foundation",
           outcome: "success",
           actor: null,
         }),
-      ).rejects.toThrow("interactionId is required for audit evidence.");
+      ).rejects.toThrow("foundationId is required for audit evidence.");
 
       try {
-        await auditService.recordInteractionAudit({
-          capability: "interactions",
+        await auditService.recordFoundationAudit({
+          capability: "foundation",
           outcome: "success",
           actor: null,
         });
@@ -103,20 +103,18 @@ describe("audit.service", () => {
         expect(error.status).toBe(500);
       }
 
-      expect(
-        auditRepository.createInteractionAuditEvent,
-      ).not.toHaveBeenCalled();
+      expect(auditRepository.createFoundationAuditEvent).not.toHaveBeenCalled();
     });
 
     it("fails loudly when persistent audit storage fails", async () => {
-      auditRepository.createInteractionAuditEvent.mockRejectedValue(
+      auditRepository.createFoundationAuditEvent.mockRejectedValue(
         new Error("audit persistence failed"),
       );
 
       await expect(
-        auditService.recordInteractionAudit({
-          interactionId: "interaction-789",
-          capability: "interactions",
+        auditService.recordFoundationAudit({
+          foundationId: "foundation-789",
+          capability: "foundation",
           outcome: "success",
           actor: {
             id: "user-789",

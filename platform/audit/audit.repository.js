@@ -17,8 +17,8 @@ function requireValue(value, message) {
   }
 }
 
-async function createInteractionAuditEvent({
-  interactionId,
+async function createFoundationAuditEvent({
+  foundationId,
   capability,
   outcome,
   actor,
@@ -28,10 +28,7 @@ async function createInteractionAuditEvent({
   const customerId = actor?.customerId || null;
   const userId = actor?.id || null;
 
-  requireValue(
-    interactionId,
-    "interactionId is required for audit persistence.",
-  );
+  requireValue(foundationId, "foundationId is required for audit persistence.");
   requireValue(customerId, "customerId is required for audit persistence.");
   requireValue(userId, "userId is required for audit persistence.");
 
@@ -43,11 +40,11 @@ async function createInteractionAuditEvent({
       customerId,
       userId,
       action: "Execute",
-      entity: "platform.interaction",
-      entityId: interactionId,
+      entity: "platform.foundation",
+      entityId: foundationId,
       details: {
-        eventType: "platform.interaction.executed",
-        interactionId,
+        eventType: "platform.foundation.executed",
+        foundationId,
         capability,
         outcome,
         actor: {
@@ -75,5 +72,5 @@ async function createInteractionAuditEvent({
 }
 
 module.exports = {
-  createInteractionAuditEvent,
+  createFoundationAuditEvent,
 };

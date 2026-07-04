@@ -6,7 +6,7 @@ function getActor(req) {
   return req.user || req.auth || req.currentUser || null;
 }
 
-async function executeInteraction(req) {
+async function executeFoundation(req) {
   const actor = getActor(req);
 
   if (!actor) {
@@ -17,9 +17,9 @@ async function executeInteraction(req) {
 
   const result = {
     success: true,
-    interactionId: crypto.randomUUID(),
-    capability: "interactions",
-    message: "Platform interaction executed successfully.",
+    foundationId: crypto.randomUUID(),
+    capability: "foundation",
+    message: "Platform foundation executed successfully.",
     actor: {
       id: actor.id || actor.userId || null,
       role: actor.role || null,
@@ -27,8 +27,8 @@ async function executeInteraction(req) {
     },
   };
 
-  await auditService.recordInteractionAudit({
-    interactionId: result.interactionId,
+  await auditService.recordFoundationAudit({
+    foundationId: result.foundationId,
     capability: result.capability,
     outcome: "success",
     actor: result.actor,
@@ -39,5 +39,5 @@ async function executeInteraction(req) {
 }
 
 module.exports = {
-  executeInteraction,
+  executeFoundation,
 };

@@ -28,11 +28,11 @@ describe("audit.repository", () => {
     db.AuditEvent.create.mockImplementation(async (auditRow) => auditRow);
   });
 
-  describe("createInteractionAuditEvent", () => {
-    it("creates an interaction audit row using customer-scoped transaction", async () => {
-      const result = await auditRepository.createInteractionAuditEvent({
-        interactionId: "interaction-123",
-        capability: "interactions",
+  describe("createFoundationAuditEvent", () => {
+    it("creates an foundation audit row using customer-scoped transaction", async () => {
+      const result = await auditRepository.createFoundationAuditEvent({
+        foundationId: "foundation-123",
+        capability: "foundation",
         outcome: "success",
         occurredAt: "2026-07-04T07:00:00.000Z",
         actor: {
@@ -58,12 +58,12 @@ describe("audit.repository", () => {
           customerId: "customer-123",
           userId: "user-123",
           action: "Execute",
-          entity: "platform.interaction",
-          entityId: "interaction-123",
+          entity: "platform.foundation",
+          entityId: "foundation-123",
           details: {
-            eventType: "platform.interaction.executed",
-            interactionId: "interaction-123",
-            capability: "interactions",
+            eventType: "platform.foundation.executed",
+            foundationId: "foundation-123",
+            capability: "foundation",
             outcome: "success",
             actor: {
               id: "user-123",
@@ -91,9 +91,9 @@ describe("audit.repository", () => {
       db.AuditEvent.create.mockRejectedValue(error);
 
       await expect(
-        auditRepository.createInteractionAuditEvent({
-          interactionId: "interaction-123",
-          capability: "interactions",
+        auditRepository.createFoundationAuditEvent({
+          foundationId: "foundation-123",
+          capability: "foundation",
           outcome: "success",
           occurredAt: "2026-07-04T07:00:00.000Z",
           actor: {
@@ -108,26 +108,26 @@ describe("audit.repository", () => {
       expect(transaction.commit).not.toHaveBeenCalled();
     });
 
-    it("rejects missing interactionId", async () => {
+    it("rejects missing foundationId", async () => {
       await expect(
-        auditRepository.createInteractionAuditEvent({
-          capability: "interactions",
+        auditRepository.createFoundationAuditEvent({
+          capability: "foundation",
           outcome: "success",
           actor: {
             id: "user-123",
             customerId: "customer-123",
           },
         }),
-      ).rejects.toThrow("interactionId is required for audit persistence.");
+      ).rejects.toThrow("foundationId is required for audit persistence.");
 
       expect(beginTransactionWithCustomerContext).not.toHaveBeenCalled();
     });
 
     it("rejects missing customerId", async () => {
       await expect(
-        auditRepository.createInteractionAuditEvent({
-          interactionId: "interaction-123",
-          capability: "interactions",
+        auditRepository.createFoundationAuditEvent({
+          foundationId: "foundation-123",
+          capability: "foundation",
           outcome: "success",
           actor: {
             id: "user-123",
@@ -140,9 +140,9 @@ describe("audit.repository", () => {
 
     it("rejects missing userId", async () => {
       await expect(
-        auditRepository.createInteractionAuditEvent({
-          interactionId: "interaction-123",
-          capability: "interactions",
+        auditRepository.createFoundationAuditEvent({
+          foundationId: "foundation-123",
+          capability: "foundation",
           outcome: "success",
           actor: {
             customerId: "customer-123",

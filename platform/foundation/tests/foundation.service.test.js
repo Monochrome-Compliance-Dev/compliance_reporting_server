@@ -1,20 +1,20 @@
 jest.mock("@/platform/audit/audit.service", () => ({
-  recordInteractionAudit: jest.fn(),
+  recordFoundationAudit: jest.fn(),
 }));
 
 const auditService = require("@/platform/audit/audit.service");
-const interactionsService = require("@/platform/interactions/interactions.service");
+const foundationService = require("@/platform/foundation/foundation.service");
 
-describe("interactions.service", () => {
+describe("foundation.service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    auditService.recordInteractionAudit.mockResolvedValue({
-      eventType: "platform.interaction.executed",
+    auditService.recordFoundationAudit.mockResolvedValue({
+      eventType: "platform.foundation.executed",
     });
   });
 
-  describe("executeInteraction", () => {
-    it("returns a successful interaction envelope using req.auth after Audit succeeds", async () => {
+  describe("executeFoundation", () => {
+    it("returns a successful foundation envelope using req.auth after Audit succeeds", async () => {
       const req = {
         auth: {
           id: "user-123",
@@ -27,13 +27,13 @@ describe("interactions.service", () => {
         },
       };
 
-      const result = await interactionsService.executeInteraction(req);
+      const result = await foundationService.executeFoundation(req);
 
       expect(result).toEqual({
         success: true,
-        interactionId: expect.any(String),
-        capability: "interactions",
-        message: "Platform interaction executed successfully.",
+        foundationId: expect.any(String),
+        capability: "foundation",
+        message: "Platform foundation executed successfully.",
         actor: {
           id: "user-123",
           role: "Admin",
@@ -41,9 +41,9 @@ describe("interactions.service", () => {
         },
       });
 
-      expect(auditService.recordInteractionAudit).toHaveBeenCalledWith({
-        interactionId: result.interactionId,
-        capability: "interactions",
+      expect(auditService.recordFoundationAudit).toHaveBeenCalledWith({
+        foundationId: result.foundationId,
+        capability: "foundation",
         outcome: "success",
         actor: {
           id: "user-123",
@@ -54,8 +54,8 @@ describe("interactions.service", () => {
       });
     });
 
-    it("returns a successful interaction envelope using req.user", async () => {
-      const result = await interactionsService.executeInteraction({
+    it("returns a successful foundation envelope using req.user", async () => {
+      const result = await foundationService.executeFoundation({
         user: {
           userId: "user-456",
           role: "User",
@@ -65,9 +65,9 @@ describe("interactions.service", () => {
 
       expect(result).toEqual({
         success: true,
-        interactionId: expect.any(String),
-        capability: "interactions",
-        message: "Platform interaction executed successfully.",
+        foundationId: expect.any(String),
+        capability: "foundation",
+        message: "Platform foundation executed successfully.",
         actor: {
           id: "user-456",
           role: "User",
@@ -76,8 +76,8 @@ describe("interactions.service", () => {
       });
     });
 
-    it("returns a successful interaction envelope using req.currentUser", async () => {
-      const result = await interactionsService.executeInteraction({
+    it("returns a successful foundation envelope using req.currentUser", async () => {
+      const result = await foundationService.executeFoundation({
         currentUser: {
           id: "user-789",
           role: "Boss",
@@ -87,9 +87,9 @@ describe("interactions.service", () => {
 
       expect(result).toEqual({
         success: true,
-        interactionId: expect.any(String),
-        capability: "interactions",
-        message: "Platform interaction executed successfully.",
+        foundationId: expect.any(String),
+        capability: "foundation",
+        message: "Platform foundation executed successfully.",
         actor: {
           id: "user-789",
           role: "Boss",
@@ -99,24 +99,24 @@ describe("interactions.service", () => {
     });
 
     it("throws a 401 error when authenticated user context is missing", async () => {
-      await expect(interactionsService.executeInteraction({})).rejects.toThrow(
+      await expect(foundationService.executeFoundation({})).rejects.toThrow(
         "Authenticated user context is required.",
       );
 
       try {
-        await interactionsService.executeInteraction({});
+        await foundationService.executeFoundation({});
       } catch (error) {
         expect(error.status).toBe(401);
       }
     });
 
-    it("fails the interaction when Audit persistence fails", async () => {
-      auditService.recordInteractionAudit.mockRejectedValue(
+    it("fails the foundation when Audit persistence fails", async () => {
+      auditService.recordFoundationAudit.mockRejectedValue(
         new Error("audit persistence failed"),
       );
 
       await expect(
-        interactionsService.executeInteraction({
+        foundationService.executeFoundation({
           auth: {
             id: "user-123",
             role: "Admin",

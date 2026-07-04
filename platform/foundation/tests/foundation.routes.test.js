@@ -13,20 +13,20 @@ jest.mock("@/middleware/authorise", () =>
 );
 
 jest.mock("@/platform/audit/audit.service", () => ({
-  recordInteractionAudit: jest.fn().mockResolvedValue({
-    eventType: "platform.interaction.executed",
+  recordFoundationAudit: jest.fn().mockResolvedValue({
+    eventType: "platform.foundation.executed",
   }),
 }));
 
 const authorise = require("@/middleware/authorise");
-const interactionsService = require("@/platform/interactions/interactions.service");
-const interactionsRoutes = require("@/platform/interactions/interactions.routes");
+const foundationService = require("@/platform/foundation/foundation.service");
+const foundationRoutes = require("@/platform/foundation/foundation.routes");
 
 function createTestApp() {
   const app = express();
 
   app.use(express.json());
-  app.use("/", interactionsRoutes);
+  app.use("/", foundationRoutes);
 
   app.use((error, req, res, next) => {
     res.status(error.status || 500).json({
@@ -37,22 +37,22 @@ function createTestApp() {
   return app;
 }
 
-describe("interactions.routes", () => {
+describe("foundation.routes", () => {
   it("uses platform access authorisation", () => {
     expect(authorise).toHaveBeenCalledWith({
       roles: ["Admin", "Boss", "User"],
     });
   });
 
-  it("returns a successful interaction envelope", async () => {
+  it("returns a successful foundation envelope", async () => {
     const response = await request(createTestApp()).post("/").send({});
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       success: true,
-      interactionId: expect.any(String),
-      capability: "interactions",
-      message: "Platform interaction executed successfully.",
+      foundationId: expect.any(String),
+      capability: "foundation",
+      message: "Platform foundation executed successfully.",
       actor: {
         id: "user-123",
         role: "Admin",
@@ -66,7 +66,7 @@ describe("interactions.routes", () => {
     error.status = 418;
 
     jest
-      .spyOn(interactionsService, "executeInteraction")
+      .spyOn(foundationService, "executeFoundation")
       .mockImplementationOnce(() => {
         throw error;
       });

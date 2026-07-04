@@ -571,8 +571,8 @@ app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
 // Platform routes
 app.use(
-  "/api/platform/interactions",
-  require("@/platform/interactions/interactions.routes"),
+  "/api/platform/foundation",
+  require("@/platform/foundation/foundation.routes"),
 );
 
 // V2 routes

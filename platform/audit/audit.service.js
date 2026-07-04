@@ -32,22 +32,22 @@ function writeAuditEvent(auditEvent) {
   throw error;
 }
 
-async function recordInteractionAudit({
-  interactionId,
+async function recordFoundationAudit({
+  foundationId,
   capability,
   outcome,
   actor,
   request,
 }) {
-  if (!interactionId) {
-    const error = new Error("interactionId is required for audit evidence.");
+  if (!foundationId) {
+    const error = new Error("foundationId is required for audit evidence.");
     error.status = 500;
     throw error;
   }
 
   const auditEvent = {
-    eventType: "platform.interaction.executed",
-    interactionId,
+    eventType: "platform.foundation.executed",
+    foundationId,
     capability,
     outcome,
     actor: {
@@ -60,8 +60,8 @@ async function recordInteractionAudit({
 
   writeAuditEvent(auditEvent);
 
-  await auditRepository.createInteractionAuditEvent({
-    interactionId: auditEvent.interactionId,
+  await auditRepository.createFoundationAuditEvent({
+    foundationId: auditEvent.foundationId,
     capability: auditEvent.capability,
     outcome: auditEvent.outcome,
     actor: auditEvent.actor,
@@ -73,5 +73,5 @@ async function recordInteractionAudit({
 }
 
 module.exports = {
-  recordInteractionAudit,
+  recordFoundationAudit,
 };
