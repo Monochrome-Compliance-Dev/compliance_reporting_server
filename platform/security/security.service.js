@@ -1,3 +1,9 @@
+const ALLOWED_DENIAL_REASONS = [
+  "missing_customer_context",
+  "role_not_allowed",
+  "customer_mismatch",
+];
+
 function requireValue(value, message) {
   if (!value) {
     const error = new Error(message);
@@ -23,7 +29,13 @@ function normaliseRequest(request) {
   };
 }
 
-function observeFoundationCommand({ foundationId, actor, request }) {
+function buildFoundationSecurityObservation({
+  foundationId,
+  actor,
+  request,
+  outcome,
+  reason,
+}) {
   requireValue(
     foundationId,
     "foundationId is required for security observation.",
@@ -35,22 +47,59 @@ function observeFoundationCommand({ foundationId, actor, request }) {
     normalisedActor.id,
     "actor id is required for security observation.",
   );
+
+  return {
+    eventType: "platform.security.foundation_observed",
+    outcome,
+    capability: "foundation",
+    foundationId,
+    actor: normalisedActor,
+    request: normaliseRequest(request),
+    reason: reason || null,
+    occurredAt: new Date().toISOString(),
+  };
+}
+
+function observeFoundationCommand({ foundationId, actor, request }) {
+  const normalisedActor = normaliseActor(actor);
+
   requireValue(
     normalisedActor.customerId,
     "customerId is required for security observation.",
   );
 
-  return {
-    eventType: "platform.security.foundation_observed",
-    outcome: "allowed",
-    capability: "foundation",
+  return buildFoundationSecurityObservation({
     foundationId,
     actor: normalisedActor,
-    request: normaliseRequest(request),
-    occurredAt: new Date().toISOString(),
-  };
+    request,
+    outcome: "allowed",
+  });
+}
+
+function observeDeniedFoundationCommand({
+  foundationId,
+  actor,
+  request,
+  reason,
+}) {
+  requireValue(reason, "reason is required for denied security observation.");
+
+  if (!ALLOWED_DENIAL_REASONS.includes(reason)) {
+    const error = new Error("Unsupported denied security observation reason.");
+    error.status = 500;
+    throw error;
+  }
+
+  return buildFoundationSecurityObservation({
+    foundationId,
+    actor,
+    request,
+    outcome: "denied",
+    reason,
+  });
 }
 
 module.exports = {
+  observeDeniedFoundationCommand,
   observeFoundationCommand,
 };

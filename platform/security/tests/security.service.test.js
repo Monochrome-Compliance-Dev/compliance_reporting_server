@@ -36,6 +36,7 @@ describe("security.service", () => {
           ip: "127.0.0.1",
           userAgent: "jest-agent",
         },
+        reason: null,
         occurredAt: expect.any(String),
       });
     });
@@ -106,6 +107,113 @@ describe("security.service", () => {
           },
         }),
       ).toThrow("customerId is required for security observation.");
+    });
+  });
+
+  describe("observeDeniedFoundationCommand", () => {
+    it("creates a denied Foundation command security observation", () => {
+      const result = securityService.observeDeniedFoundationCommand({
+        foundationId: "foundation-denied-123",
+        actor: {
+          id: "user-123",
+          role: "User",
+          customerId: null,
+        },
+        request: {
+          method: "POST",
+          path: "/api/platform/foundation",
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+        reason: "missing_customer_context",
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.security.foundation_observed",
+        outcome: "denied",
+        capability: "foundation",
+        foundationId: "foundation-denied-123",
+        actor: {
+          id: "user-123",
+          role: "User",
+          customerId: null,
+        },
+        request: {
+          method: "POST",
+          path: "/api/platform/foundation",
+          ip: "127.0.0.1",
+          userAgent: "jest-agent",
+        },
+        reason: "missing_customer_context",
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it("allows role_not_allowed as a denied reason", () => {
+      const result = securityService.observeDeniedFoundationCommand({
+        foundationId: "foundation-denied-456",
+        actor: {
+          id: "user-456",
+          role: "Viewer",
+          customerId: "customer-456",
+        },
+        reason: "role_not_allowed",
+      });
+
+      expect(result.reason).toBe("role_not_allowed");
+      expect(result.outcome).toBe("denied");
+    });
+
+    it("allows customer_mismatch as a denied reason", () => {
+      const result = securityService.observeDeniedFoundationCommand({
+        foundationId: "foundation-denied-789",
+        actor: {
+          id: "user-789",
+          role: "Boss",
+          customerId: "customer-789",
+        },
+        reason: "customer_mismatch",
+      });
+
+      expect(result.reason).toBe("customer_mismatch");
+      expect(result.outcome).toBe("denied");
+    });
+
+    it("throws when denied reason is missing", () => {
+      expect(() =>
+        securityService.observeDeniedFoundationCommand({
+          foundationId: "foundation-denied-123",
+          actor: {
+            id: "user-123",
+          },
+        }),
+      ).toThrow("reason is required for denied security observation.");
+    });
+
+    it("throws when denied reason is unsupported", () => {
+      expect(() =>
+        securityService.observeDeniedFoundationCommand({
+          foundationId: "foundation-denied-123",
+          actor: {
+            id: "user-123",
+          },
+          reason: "bad_reason",
+        }),
+      ).toThrow("Unsupported denied security observation reason.");
+    });
+
+    it("throws when actor id is missing", () => {
+      expect(() =>
+        securityService.observeDeniedFoundationCommand({
+          foundationId: "foundation-denied-123",
+          actor: {
+            customerId: "customer-123",
+          },
+          reason: "role_not_allowed",
+        }),
+      ).toThrow("actor id is required for security observation.");
     });
   });
 });
