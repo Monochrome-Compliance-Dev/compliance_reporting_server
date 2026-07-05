@@ -1,20 +1,11 @@
 const crypto = require("crypto");
 
 const auditService = require("@/platform/audit/audit.service");
+const identityService = require("@/platform/identity/identity.service");
 const securityService = require("@/platform/security/security.service");
 
-function getActor(req) {
-  return req.user || req.auth || req.currentUser || null;
-}
-
 async function executeFoundation(req) {
-  const actor = getActor(req);
-
-  if (!actor) {
-    const error = new Error("Authenticated user context is required.");
-    error.status = 401;
-    throw error;
-  }
+  const executionContext = identityService.normaliseExecutionContext(req);
 
   const result = {
     success: true,
@@ -22,9 +13,9 @@ async function executeFoundation(req) {
     capability: "foundation",
     message: "Platform foundation executed successfully.",
     actor: {
-      id: actor.id || actor.userId || null,
-      role: actor.role || null,
-      customerId: actor.customerId || null,
+      id: executionContext.actorId,
+      role: executionContext.role,
+      customerId: executionContext.customerId,
     },
   };
 

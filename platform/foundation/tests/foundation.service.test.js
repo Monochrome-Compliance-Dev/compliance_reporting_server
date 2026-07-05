@@ -2,11 +2,16 @@ jest.mock("@/platform/audit/audit.service", () => ({
   recordFoundationAudit: jest.fn(),
 }));
 
+jest.mock("@/platform/identity/identity.service", () => ({
+  normaliseExecutionContext: jest.fn(),
+}));
+
 jest.mock("@/platform/security/security.service", () => ({
   observeFoundationCommand: jest.fn(),
 }));
 
 const auditService = require("@/platform/audit/audit.service");
+const identityService = require("@/platform/identity/identity.service");
 const foundationService = require("@/platform/foundation/foundation.service");
 const securityService = require("@/platform/security/security.service");
 
@@ -15,6 +20,12 @@ describe("foundation.service", () => {
     jest.clearAllMocks();
     auditService.recordFoundationAudit.mockResolvedValue({
       eventType: "platform.foundation.executed",
+    });
+    identityService.normaliseExecutionContext.mockReturnValue({
+      actorId: "user-123",
+      role: "Admin",
+      customerId: "customer-123",
+      source: "auth",
     });
 
     securityService.observeFoundationCommand.mockReturnValue({
@@ -38,6 +49,10 @@ describe("foundation.service", () => {
       };
 
       const result = await foundationService.executeFoundation(req);
+
+      expect(identityService.normaliseExecutionContext).toHaveBeenCalledWith(
+        req,
+      );
 
       expect(result).toEqual({
         success: true,
@@ -79,6 +94,13 @@ describe("foundation.service", () => {
     });
 
     it("returns a successful foundation envelope using req.user", async () => {
+      identityService.normaliseExecutionContext.mockReturnValue({
+        actorId: "user-456",
+        role: "User",
+        customerId: "customer-456",
+        source: "user",
+      });
+
       const result = await foundationService.executeFoundation({
         user: {
           userId: "user-456",
@@ -101,6 +123,13 @@ describe("foundation.service", () => {
     });
 
     it("returns a successful foundation envelope using req.currentUser", async () => {
+      identityService.normaliseExecutionContext.mockReturnValue({
+        actorId: "user-789",
+        role: "Boss",
+        customerId: "customer-789",
+        source: "currentUser",
+      });
+
       const result = await foundationService.executeFoundation({
         currentUser: {
           id: "user-789",
@@ -122,15 +151,21 @@ describe("foundation.service", () => {
       });
     });
 
-    it("throws a 401 error when authenticated user context is missing", async () => {
+    it("throws a 401 error when authenticated execution context is missing", async () => {
+      const error = new Error("Authenticated execution context is required.");
+      error.status = 401;
+      identityService.normaliseExecutionContext.mockImplementation(() => {
+        throw error;
+      });
+
       await expect(foundationService.executeFoundation({})).rejects.toThrow(
-        "Authenticated user context is required.",
+        "Authenticated execution context is required.",
       );
 
       try {
         await foundationService.executeFoundation({});
-      } catch (error) {
-        expect(error.status).toBe(401);
+      } catch (caughtError) {
+        expect(caughtError.status).toBe(401);
       }
     });
 
