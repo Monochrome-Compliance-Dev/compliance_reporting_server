@@ -570,10 +570,17 @@ app.use("/api/billing", require("./stripe/billing.controller"));
 app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
 // Platform routes
+const { sequelize } = require("./db/database");
+const PlatformDataDatasetModel = require("@/platform/data/models/platform_data_dataset");
+const { createDataRouter } = require("@/platform/data/data.routes");
+const PlatformDataDataset =
+  sequelize.models?.PlatformDataDataset || PlatformDataDatasetModel(sequelize);
+
 app.use(
   "/api/platform/foundation",
   require("@/platform/foundation/foundation.routes"),
 );
+app.use("/api/platform/data", createDataRouter({ PlatformDataDataset }));
 
 // V2 routes
 // PTRS
@@ -622,8 +629,6 @@ app.use("/api/v2/xero", require("@/v2/core/xero/xero.routes"));
 // });
 
 // --- BEGIN: Check Postgres custom GUC app.current_customer_id on startup ---
-const { sequelize } = require("./db/database");
-// console.log("sequelize:", sequelize);
 
 async function verifyAppCustomerIdGUC() {
   try {
