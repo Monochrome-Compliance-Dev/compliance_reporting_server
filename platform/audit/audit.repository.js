@@ -24,6 +24,7 @@ async function createFoundationAuditEvent({
   actor,
   occurredAt,
   request,
+  securityObservation,
 }) {
   const customerId = actor?.customerId || null;
   const userId = actor?.id || null;
@@ -53,6 +54,7 @@ async function createFoundationAuditEvent({
           customerId: actor?.customerId || null,
         },
         occurredAt,
+        security: securityObservation || null,
       },
       ip: request?.ip || null,
       device: request?.headers?.["user-agent"] || null,

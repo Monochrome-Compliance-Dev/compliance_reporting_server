@@ -29,6 +29,11 @@ describe("audit.service", () => {
         },
       };
 
+      const securityObservation = {
+        eventType: "platform.security.foundation_observed",
+        outcome: "allowed",
+      };
+
       const result = await auditService.recordFoundationAudit({
         foundationId: "foundation-123",
         capability: "foundation",
@@ -39,6 +44,7 @@ describe("audit.service", () => {
           customerId: "customer-123",
         },
         request,
+        securityObservation,
       });
 
       expect(result).toEqual({
@@ -52,6 +58,7 @@ describe("audit.service", () => {
           customerId: "customer-123",
         },
         occurredAt: expect.any(String),
+        security: securityObservation,
       });
 
       expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
@@ -66,6 +73,7 @@ describe("audit.service", () => {
         },
         occurredAt: result.occurredAt,
         request,
+        securityObservation,
       });
     });
 
@@ -82,6 +90,8 @@ describe("audit.service", () => {
         role: null,
         customerId: null,
       });
+
+      expect(result.security).toBeNull();
     });
 
     it("throws when foundationId is missing", async () => {

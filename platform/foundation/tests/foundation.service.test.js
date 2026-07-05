@@ -2,14 +2,24 @@ jest.mock("@/platform/audit/audit.service", () => ({
   recordFoundationAudit: jest.fn(),
 }));
 
+jest.mock("@/platform/security/security.service", () => ({
+  observeFoundationCommand: jest.fn(),
+}));
+
 const auditService = require("@/platform/audit/audit.service");
 const foundationService = require("@/platform/foundation/foundation.service");
+const securityService = require("@/platform/security/security.service");
 
 describe("foundation.service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     auditService.recordFoundationAudit.mockResolvedValue({
       eventType: "platform.foundation.executed",
+    });
+
+    securityService.observeFoundationCommand.mockReturnValue({
+      eventType: "platform.security.foundation_observed",
+      outcome: "allowed",
     });
   });
 
@@ -41,6 +51,16 @@ describe("foundation.service", () => {
         },
       });
 
+      expect(securityService.observeFoundationCommand).toHaveBeenCalledWith({
+        foundationId: result.foundationId,
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        request: req,
+      });
+
       expect(auditService.recordFoundationAudit).toHaveBeenCalledWith({
         foundationId: result.foundationId,
         capability: "foundation",
@@ -51,6 +71,10 @@ describe("foundation.service", () => {
           customerId: "customer-123",
         },
         request: req,
+        securityObservation: {
+          eventType: "platform.security.foundation_observed",
+          outcome: "allowed",
+        },
       });
     });
 
@@ -124,6 +148,24 @@ describe("foundation.service", () => {
           },
         }),
       ).rejects.toThrow("audit persistence failed");
+    });
+
+    it("fails the foundation when Security observation fails", async () => {
+      securityService.observeFoundationCommand.mockImplementation(() => {
+        throw new Error("security observation failed");
+      });
+
+      await expect(
+        foundationService.executeFoundation({
+          auth: {
+            id: "user-123",
+            role: "Admin",
+            customerId: "customer-123",
+          },
+        }),
+      ).rejects.toThrow("security observation failed");
+
+      expect(auditService.recordFoundationAudit).not.toHaveBeenCalled();
     });
   });
 });

@@ -46,6 +46,10 @@ describe("audit.repository", () => {
             "user-agent": "jest-agent",
           },
         },
+        securityObservation: {
+          eventType: "platform.security.foundation_observed",
+          outcome: "allowed",
+        },
       });
 
       expect(beginTransactionWithCustomerContext).toHaveBeenCalledWith(
@@ -71,6 +75,10 @@ describe("audit.repository", () => {
               customerId: "customer-123",
             },
             occurredAt: "2026-07-04T07:00:00.000Z",
+            security: {
+              eventType: "platform.security.foundation_observed",
+              outcome: "allowed",
+            },
           },
           ip: "127.0.0.1",
           device: "jest-agent",

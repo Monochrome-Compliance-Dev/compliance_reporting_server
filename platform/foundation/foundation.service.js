@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const auditService = require("@/platform/audit/audit.service");
+const securityService = require("@/platform/security/security.service");
 
 function getActor(req) {
   return req.user || req.auth || req.currentUser || null;
@@ -27,12 +28,19 @@ async function executeFoundation(req) {
     },
   };
 
+  const securityObservation = securityService.observeFoundationCommand({
+    foundationId: result.foundationId,
+    actor: result.actor,
+    request: req,
+  });
+
   await auditService.recordFoundationAudit({
     foundationId: result.foundationId,
     capability: result.capability,
     outcome: "success",
     actor: result.actor,
     request: req,
+    securityObservation,
   });
 
   return result;

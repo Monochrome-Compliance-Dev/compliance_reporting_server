@@ -38,6 +38,7 @@ async function recordFoundationAudit({
   outcome,
   actor,
   request,
+  securityObservation,
 }) {
   if (!foundationId) {
     const error = new Error("foundationId is required for audit evidence.");
@@ -56,6 +57,7 @@ async function recordFoundationAudit({
       customerId: actor?.customerId || null,
     },
     occurredAt: new Date().toISOString(),
+    security: securityObservation || null,
   };
 
   writeAuditEvent(auditEvent);
@@ -67,6 +69,7 @@ async function recordFoundationAudit({
     actor: auditEvent.actor,
     occurredAt: auditEvent.occurredAt,
     request,
+    securityObservation: auditEvent.security,
   });
 
   return auditEvent;
