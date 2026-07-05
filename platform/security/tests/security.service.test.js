@@ -216,4 +216,135 @@ describe("security.service", () => {
       ).toThrow("actor id is required for security observation.");
     });
   });
+
+  describe("enforceFoundationCommand", () => {
+    it("returns an allowed observation when the actor role is permitted", () => {
+      const result = securityService.enforceFoundationCommand({
+        foundationId: "foundation-allowed-123",
+        actor: {
+          id: "user-123",
+          role: "Boss",
+          customerId: "customer-123",
+        },
+        request: {
+          method: "POST",
+          originalUrl: "/api/platform/foundation",
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+        requiredRoles: ["Admin", "Boss"],
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.security.foundation_observed",
+        outcome: "allowed",
+        capability: "foundation",
+        foundationId: "foundation-allowed-123",
+        actor: {
+          id: "user-123",
+          role: "Boss",
+          customerId: "customer-123",
+        },
+        request: {
+          method: "POST",
+          path: "/api/platform/foundation",
+          ip: "127.0.0.1",
+          userAgent: "jest-agent",
+        },
+        reason: null,
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it("uses the default Foundation required roles when requiredRoles is not provided", () => {
+      const result = securityService.enforceFoundationCommand({
+        foundationId: "foundation-default-roles-123",
+        actor: {
+          id: "user-123",
+          role: "User",
+          customerId: "customer-123",
+        },
+      });
+
+      expect(result.outcome).toBe("allowed");
+      expect(result.reason).toBeNull();
+    });
+
+    it("throws a 403 denial error with securityObservation when the actor role is not permitted", () => {
+      try {
+        securityService.enforceFoundationCommand({
+          foundationId: "foundation-denied-123",
+          actor: {
+            id: "user-123",
+            role: "Viewer",
+            customerId: "customer-123",
+          },
+          request: {
+            method: "POST",
+            path: "/api/platform/foundation",
+            ip: "127.0.0.1",
+            headers: {
+              "user-agent": "jest-agent",
+            },
+          },
+          requiredRoles: ["Admin", "Boss", "User"],
+        });
+      } catch (error) {
+        expect(error.message).toBe(
+          "Role is not allowed for governed execution.",
+        );
+        expect(error.status).toBe(403);
+        expect(error.securityObservation).toEqual({
+          eventType: "platform.security.foundation_observed",
+          outcome: "denied",
+          capability: "foundation",
+          foundationId: "foundation-denied-123",
+          actor: {
+            id: "user-123",
+            role: "Viewer",
+            customerId: "customer-123",
+          },
+          request: {
+            method: "POST",
+            path: "/api/platform/foundation",
+            ip: "127.0.0.1",
+            userAgent: "jest-agent",
+          },
+          reason: "role_not_allowed",
+          occurredAt: expect.any(String),
+        });
+        return;
+      }
+
+      throw new Error("Expected security enforcement to throw.");
+    });
+
+    it("throws when requiredRoles is missing", () => {
+      expect(() =>
+        securityService.enforceFoundationCommand({
+          foundationId: "foundation-123",
+          actor: {
+            id: "user-123",
+            role: "Boss",
+            customerId: "customer-123",
+          },
+          requiredRoles: null,
+        }),
+      ).toThrow("requiredRoles is required for security enforcement.");
+    });
+
+    it("throws when customerId is missing", () => {
+      expect(() =>
+        securityService.enforceFoundationCommand({
+          foundationId: "foundation-123",
+          actor: {
+            id: "user-123",
+            role: "Boss",
+          },
+        }),
+      ).toThrow("customerId is required for security enforcement.");
+    });
+  });
 });

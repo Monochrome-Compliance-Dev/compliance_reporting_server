@@ -4,12 +4,21 @@ const ALLOWED_DENIAL_REASONS = [
   "customer_mismatch",
 ];
 
+const DEFAULT_FOUNDATION_REQUIRED_ROLES = ["Admin", "Boss", "User"];
+
 function requireValue(value, message) {
   if (!value) {
     const error = new Error(message);
     error.status = 500;
     throw error;
   }
+}
+
+function createSecurityDenialError(message, securityObservation) {
+  const error = new Error(message);
+  error.status = 403;
+  error.securityObservation = securityObservation;
+  return error;
 }
 
 function normaliseActor(actor) {
@@ -99,7 +108,47 @@ function observeDeniedFoundationCommand({
   });
 }
 
+function enforceFoundationCommand({
+  foundationId,
+  actor,
+  request,
+  requiredRoles = DEFAULT_FOUNDATION_REQUIRED_ROLES,
+}) {
+  requireValue(
+    requiredRoles,
+    "requiredRoles is required for security enforcement.",
+  );
+
+  const normalisedActor = normaliseActor(actor);
+
+  requireValue(
+    normalisedActor.customerId,
+    "customerId is required for security enforcement.",
+  );
+
+  if (!requiredRoles.includes(normalisedActor.role)) {
+    const securityObservation = observeDeniedFoundationCommand({
+      foundationId,
+      actor: normalisedActor,
+      request,
+      reason: "role_not_allowed",
+    });
+
+    throw createSecurityDenialError(
+      "Role is not allowed for governed execution.",
+      securityObservation,
+    );
+  }
+
+  return observeFoundationCommand({
+    foundationId,
+    actor: normalisedActor,
+    request,
+  });
+}
+
 module.exports = {
+  enforceFoundationCommand,
   observeDeniedFoundationCommand,
   observeFoundationCommand,
 };

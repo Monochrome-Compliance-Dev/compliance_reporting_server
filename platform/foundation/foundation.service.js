@@ -19,11 +19,31 @@ async function executeFoundation(req) {
     },
   };
 
-  const securityObservation = securityService.observeFoundationCommand({
-    foundationId: result.foundationId,
-    actor: result.actor,
-    request: req,
-  });
+  let securityObservation;
+
+  try {
+    securityObservation = securityService.enforceFoundationCommand({
+      foundationId: result.foundationId,
+      actor: result.actor,
+      request: req,
+    });
+  } catch (error) {
+    if (!error.securityObservation) {
+      throw error;
+    }
+
+    await auditService.recordFoundationAudit({
+      foundationId: result.foundationId,
+      capability: result.capability,
+      outcome: "denied",
+      actor: result.actor,
+      request: req,
+      securityObservation: error.securityObservation,
+      error,
+    });
+
+    throw error;
+  }
 
   await auditService.recordFoundationAudit({
     foundationId: result.foundationId,

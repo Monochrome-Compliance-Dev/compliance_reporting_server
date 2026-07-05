@@ -7,7 +7,7 @@ jest.mock("@/platform/identity/identity.service", () => ({
 }));
 
 jest.mock("@/platform/security/security.service", () => ({
-  observeFoundationCommand: jest.fn(),
+  enforceFoundationCommand: jest.fn(),
 }));
 
 const auditService = require("@/platform/audit/audit.service");
@@ -28,7 +28,7 @@ describe("foundation.service", () => {
       source: "auth",
     });
 
-    securityService.observeFoundationCommand.mockReturnValue({
+    securityService.enforceFoundationCommand.mockReturnValue({
       eventType: "platform.security.foundation_observed",
       outcome: "allowed",
     });
@@ -66,7 +66,7 @@ describe("foundation.service", () => {
         },
       });
 
-      expect(securityService.observeFoundationCommand).toHaveBeenCalledWith({
+      expect(securityService.enforceFoundationCommand).toHaveBeenCalledWith({
         foundationId: result.foundationId,
         actor: {
           id: "user-123",
@@ -185,9 +185,9 @@ describe("foundation.service", () => {
       ).rejects.toThrow("audit persistence failed");
     });
 
-    it("fails the foundation when Security observation fails", async () => {
-      securityService.observeFoundationCommand.mockImplementation(() => {
-        throw new Error("security observation failed");
+    it("fails the foundation when Security enforcement fails without denied observation", async () => {
+      securityService.enforceFoundationCommand.mockImplementation(() => {
+        throw new Error("security enforcement failed");
       });
 
       await expect(
@@ -198,9 +198,51 @@ describe("foundation.service", () => {
             customerId: "customer-123",
           },
         }),
-      ).rejects.toThrow("security observation failed");
+      ).rejects.toThrow("security enforcement failed");
 
       expect(auditService.recordFoundationAudit).not.toHaveBeenCalled();
+    });
+
+    it("records denied audit evidence and rethrows when Security enforcement denies", async () => {
+      const securityError = new Error(
+        "Role is not allowed for governed execution.",
+      );
+      securityError.status = 403;
+      securityError.securityObservation = {
+        eventType: "platform.security.foundation_observed",
+        outcome: "denied",
+        reason: "role_not_allowed",
+      };
+
+      securityService.enforceFoundationCommand.mockImplementation(() => {
+        throw securityError;
+      });
+
+      const req = {
+        auth: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+      };
+
+      await expect(foundationService.executeFoundation(req)).rejects.toThrow(
+        "Role is not allowed for governed execution.",
+      );
+
+      expect(auditService.recordFoundationAudit).toHaveBeenCalledWith({
+        foundationId: expect.any(String),
+        capability: "foundation",
+        outcome: "denied",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        request: req,
+        securityObservation: securityError.securityObservation,
+        error: securityError,
+      });
     });
   });
 });
