@@ -87,6 +87,64 @@ async function recordFoundationAudit({
   return auditEvent;
 }
 
+async function recordDataDatasetAudit({
+  datasetId,
+  capability = "data",
+  outcome,
+  actor,
+  request,
+  securityObservation,
+  error,
+}) {
+  if (!datasetId) {
+    const error = new Error("datasetId is required for audit evidence.");
+    error.status = 500;
+    throw error;
+  }
+
+  const eventType =
+    outcome === "denied"
+      ? "platform.data.dataset.denied"
+      : "platform.data.dataset.created";
+
+  const auditEvent = {
+    eventType,
+    datasetId,
+    capability,
+    action: "dataset.create",
+    outcome,
+    actor: {
+      id: actor?.id || null,
+      role: actor?.role || null,
+      customerId: actor?.customerId || null,
+    },
+    occurredAt: new Date().toISOString(),
+    security: securityObservation || null,
+    error: error
+      ? {
+          message: error.message || null,
+        }
+      : null,
+  };
+
+  writeAuditEvent(auditEvent);
+
+  await auditRepository.createDataDatasetAuditEvent({
+    datasetId: auditEvent.datasetId,
+    capability: auditEvent.capability,
+    action: auditEvent.action,
+    outcome: auditEvent.outcome,
+    actor: auditEvent.actor,
+    occurredAt: auditEvent.occurredAt,
+    request,
+    securityObservation: auditEvent.security,
+    error: auditEvent.error,
+  });
+
+  return auditEvent;
+}
+
 module.exports = {
+  recordDataDatasetAudit,
   recordFoundationAudit,
 };

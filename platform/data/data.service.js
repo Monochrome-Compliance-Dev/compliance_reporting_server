@@ -1,9 +1,11 @@
 const { getNanoid } = require("@/helpers/nanoid_helper");
 
 const acquisitionService = require("@/platform/data/acquisition.service");
+const auditService = require("@/platform/audit/audit.service");
 const datasetRepository = require("@/platform/data/dataset.repository");
 const datasetService = require("@/platform/data/dataset.service");
 const fileStorageService = require("@/platform/data/file-storage.service");
+const securityService = require("@/platform/security/security.service");
 
 function createError(message, status = 500) {
   const error = new Error(message);
@@ -44,6 +46,26 @@ async function createDataset({
 
   const datasetId = getNanoid(10);
 
+  let securityObservation;
+
+  try {
+    securityObservation = securityService.enforceDataDatasetCreation({
+      datasetId,
+      actor: command.actor,
+      customerId: command.customerId,
+    });
+  } catch (error) {
+    await auditService.recordDataDatasetAudit({
+      datasetId,
+      outcome: "denied",
+      actor: command.actor,
+      securityObservation: error.securityObservation,
+      error,
+    });
+
+    throw error;
+  }
+
   const storageResult = await fileStorageService.storeDatasetFile({
     customerId: command.customerId,
     datasetId,
@@ -62,6 +84,13 @@ async function createDataset({
       ...datasetResponse.dataset,
       actor: command.actor,
     },
+  });
+
+  await auditService.recordDataDatasetAudit({
+    datasetId,
+    outcome: "success",
+    actor: command.actor,
+    securityObservation,
   });
 
   return {

@@ -235,4 +235,220 @@ describe("audit.repository", () => {
       expect(beginTransactionWithCustomerContext).not.toHaveBeenCalled();
     });
   });
+
+  describe("createDataDatasetAuditEvent", () => {
+    it("creates a Data dataset audit row using customer-scoped transaction", async () => {
+      const result = await auditRepository.createDataDatasetAuditEvent({
+        datasetId: "dataset123",
+        capability: "data",
+        action: "dataset.create",
+        outcome: "success",
+        occurredAt: "2026-07-06T07:00:00.000Z",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        request: {
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+        securityObservation: {
+          eventType: "platform.security.data_dataset_observed",
+          outcome: "allowed",
+        },
+      });
+
+      expect(beginTransactionWithCustomerContext).toHaveBeenCalledWith(
+        "customer-123",
+      );
+
+      expect(db.AuditEvent.create).toHaveBeenCalledWith(
+        {
+          id: expect.any(String),
+          customerId: "customer-123",
+          userId: "user-123",
+          action: "Create",
+          entity: "platform.data.dataset",
+          entityId: "dataset123",
+          details: {
+            eventType: "platform.data.dataset.created",
+            datasetId: "dataset123",
+            capability: "data",
+            action: "dataset.create",
+            outcome: "success",
+            actor: {
+              id: "user-123",
+              role: "Admin",
+              customerId: "customer-123",
+            },
+            occurredAt: "2026-07-06T07:00:00.000Z",
+            security: {
+              eventType: "platform.security.data_dataset_observed",
+              outcome: "allowed",
+            },
+            error: null,
+          },
+          ip: "127.0.0.1",
+          device: "jest-agent",
+        },
+        {
+          transaction,
+        },
+      );
+
+      expect(result.id).toEqual(expect.any(String));
+      expect(result.id).toHaveLength(10);
+      expect(transaction.commit).toHaveBeenCalledTimes(1);
+      expect(transaction.rollback).not.toHaveBeenCalled();
+    });
+
+    it("creates a denied Data dataset audit row using customer-scoped transaction", async () => {
+      const result = await auditRepository.createDataDatasetAuditEvent({
+        datasetId: "dataset-denied-123",
+        capability: "data",
+        action: "dataset.create",
+        outcome: "denied",
+        occurredAt: "2026-07-06T07:00:00.000Z",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        request: {
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+        securityObservation: {
+          eventType: "platform.security.data_dataset_observed",
+          outcome: "denied",
+          reason: "role_not_allowed",
+        },
+        error: {
+          message: "Role is not allowed for governed execution.",
+        },
+      });
+
+      expect(beginTransactionWithCustomerContext).toHaveBeenCalledWith(
+        "customer-123",
+      );
+
+      expect(db.AuditEvent.create).toHaveBeenCalledWith(
+        {
+          id: expect.any(String),
+          customerId: "customer-123",
+          userId: "user-123",
+          action: "Deny",
+          entity: "platform.data.dataset",
+          entityId: "dataset-denied-123",
+          details: {
+            eventType: "platform.data.dataset.denied",
+            datasetId: "dataset-denied-123",
+            capability: "data",
+            action: "dataset.create",
+            outcome: "denied",
+            actor: {
+              id: "user-123",
+              role: "Viewer",
+              customerId: "customer-123",
+            },
+            occurredAt: "2026-07-06T07:00:00.000Z",
+            security: {
+              eventType: "platform.security.data_dataset_observed",
+              outcome: "denied",
+              reason: "role_not_allowed",
+            },
+            error: {
+              message: "Role is not allowed for governed execution.",
+            },
+          },
+          ip: "127.0.0.1",
+          device: "jest-agent",
+        },
+        {
+          transaction,
+        },
+      );
+
+      expect(result.id).toEqual(expect.any(String));
+      expect(result.id).toHaveLength(10);
+      expect(transaction.commit).toHaveBeenCalledTimes(1);
+      expect(transaction.rollback).not.toHaveBeenCalled();
+    });
+
+    it("rolls back and rethrows when Data dataset audit row creation fails", async () => {
+      const error = new Error("database failed");
+      db.AuditEvent.create.mockRejectedValue(error);
+
+      await expect(
+        auditRepository.createDataDatasetAuditEvent({
+          datasetId: "dataset123",
+          capability: "data",
+          action: "dataset.create",
+          outcome: "success",
+          occurredAt: "2026-07-06T07:00:00.000Z",
+          actor: {
+            id: "user-123",
+            role: "Admin",
+            customerId: "customer-123",
+          },
+        }),
+      ).rejects.toThrow("database failed");
+
+      expect(transaction.rollback).toHaveBeenCalledTimes(1);
+      expect(transaction.commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects missing datasetId", async () => {
+      await expect(
+        auditRepository.createDataDatasetAuditEvent({
+          capability: "data",
+          action: "dataset.create",
+          outcome: "success",
+          actor: {
+            id: "user-123",
+            customerId: "customer-123",
+          },
+        }),
+      ).rejects.toThrow("datasetId is required for audit persistence.");
+
+      expect(beginTransactionWithCustomerContext).not.toHaveBeenCalled();
+    });
+
+    it("rejects missing customerId", async () => {
+      await expect(
+        auditRepository.createDataDatasetAuditEvent({
+          datasetId: "dataset123",
+          capability: "data",
+          action: "dataset.create",
+          outcome: "success",
+          actor: {
+            id: "user-123",
+          },
+        }),
+      ).rejects.toThrow("customerId is required for audit persistence.");
+
+      expect(beginTransactionWithCustomerContext).not.toHaveBeenCalled();
+    });
+
+    it("rejects missing userId", async () => {
+      await expect(
+        auditRepository.createDataDatasetAuditEvent({
+          datasetId: "dataset123",
+          capability: "data",
+          action: "dataset.create",
+          outcome: "success",
+          actor: {
+            customerId: "customer-123",
+          },
+        }),
+      ).rejects.toThrow("userId is required for audit persistence.");
+
+      expect(beginTransactionWithCustomerContext).not.toHaveBeenCalled();
+    });
+  });
 });

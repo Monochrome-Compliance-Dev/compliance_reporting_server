@@ -1,6 +1,23 @@
 const express = require("express");
 const request = require("supertest");
 
+jest.mock("@/middleware/authorise", () => () => [
+  (req, res, next) => {
+    req.auth = {
+      id: "user-123",
+    };
+    req.user = {
+      id: "user-123",
+      role: "Admin",
+      customerId: "home-customer-123",
+    };
+    req.effectiveCustomerId = "customer-123";
+    req.tenantCustomerId = "customer-123";
+    req.actingRole = "Admin";
+    next();
+  },
+]);
+
 jest.mock("@/platform/data/data.service", () => ({
   createDataset: jest.fn(),
 }));
@@ -8,13 +25,8 @@ jest.mock("@/platform/data/data.service", () => ({
 const dataService = require("@/platform/data/data.service");
 const { createDataRouter } = require("@/platform/data/data.routes");
 
-function createApp({ executionContext } = {}) {
+function createApp() {
   const app = express();
-
-  app.use((req, res, next) => {
-    req.executionContext = executionContext;
-    next();
-  });
 
   app.use(
     "/api/platform/data",
@@ -29,15 +41,6 @@ function createApp({ executionContext } = {}) {
   });
 
   return app;
-}
-
-function createExecutionContext(overrides = {}) {
-  return {
-    actorId: "user-123",
-    role: "Admin",
-    customerId: "customer-123",
-    ...overrides,
-  };
 }
 
 function createDatasetResponse(overrides = {}) {
@@ -77,8 +80,7 @@ describe("data.routes", () => {
 
   describe("POST /api/platform/data/datasets", () => {
     it("creates a Data-owned dataset from multipart form data", async () => {
-      const executionContext = createExecutionContext();
-      const app = createApp({ executionContext });
+      const app = createApp();
 
       const response = await request(app)
         .post("/api/platform/data/datasets")
@@ -93,7 +95,12 @@ describe("data.routes", () => {
       expect(response.status).toBe(201);
       expect(response.body).toEqual(createDatasetResponse());
       expect(dataService.createDataset).toHaveBeenCalledWith({
-        executionContext,
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
         body: {
           sourceName: "July payments",
           datasetType: "payment",
@@ -114,7 +121,7 @@ describe("data.routes", () => {
       error.status = 400;
       dataService.createDataset.mockRejectedValue(error);
 
-      const app = createApp({ executionContext: createExecutionContext() });
+      const app = createApp();
 
       const response = await request(app)
         .post("/api/platform/data/datasets")

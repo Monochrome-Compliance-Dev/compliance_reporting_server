@@ -347,4 +347,196 @@ describe("security.service", () => {
       ).toThrow("customerId is required for security enforcement.");
     });
   });
+
+  describe("observeDataDatasetCreation", () => {
+    it("creates an allowed Data dataset security observation", () => {
+      const result = securityService.observeDataDatasetCreation({
+        datasetId: "dataset123",
+        actor: {
+          id: "user-123",
+          role: "Boss",
+          customerId: "customer-123",
+        },
+        request: {
+          method: "POST",
+          originalUrl: "/api/platform/data/datasets",
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.security.data_dataset_observed",
+        outcome: "allowed",
+        capability: "data",
+        action: "dataset.create",
+        datasetId: "dataset123",
+        actor: {
+          id: "user-123",
+          role: "Boss",
+          customerId: "customer-123",
+        },
+        request: {
+          method: "POST",
+          path: "/api/platform/data/datasets",
+          ip: "127.0.0.1",
+          userAgent: "jest-agent",
+        },
+        reason: null,
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it("throws when datasetId is missing", () => {
+      expect(() =>
+        securityService.observeDataDatasetCreation({
+          actor: {
+            id: "user-123",
+            customerId: "customer-123",
+          },
+        }),
+      ).toThrow("datasetId is required for security observation.");
+    });
+  });
+
+  describe("observeDeniedDataDatasetCreation", () => {
+    it("creates a denied Data dataset security observation", () => {
+      const result = securityService.observeDeniedDataDatasetCreation({
+        datasetId: "dataset-denied-123",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        reason: "role_not_allowed",
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.security.data_dataset_observed",
+        outcome: "denied",
+        capability: "data",
+        action: "dataset.create",
+        datasetId: "dataset-denied-123",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        request: {
+          method: null,
+          path: null,
+          ip: null,
+          userAgent: null,
+        },
+        reason: "role_not_allowed",
+        occurredAt: expect.any(String),
+      });
+    });
+  });
+
+  describe("enforceDataDatasetCreation", () => {
+    it("returns an allowed observation when the actor can create a Data dataset", () => {
+      const result = securityService.enforceDataDatasetCreation({
+        datasetId: "dataset123",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        customerId: "customer-123",
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.security.data_dataset_observed",
+        outcome: "allowed",
+        capability: "data",
+        action: "dataset.create",
+        datasetId: "dataset123",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        request: {
+          method: null,
+          path: null,
+          ip: null,
+          userAgent: null,
+        },
+        reason: null,
+        occurredAt: expect.any(String),
+      });
+    });
+
+    it("throws a 403 denial error when customer context is missing", () => {
+      expect(() =>
+        securityService.enforceDataDatasetCreation({
+          datasetId: "dataset123",
+          actor: {
+            id: "user-123",
+            role: "Admin",
+          },
+          customerId: null,
+        }),
+      ).toThrow("Customer context is required for governed execution.");
+    });
+
+    it("throws a 403 denial error when customer context does not match", () => {
+      expect(() =>
+        securityService.enforceDataDatasetCreation({
+          datasetId: "dataset123",
+          actor: {
+            id: "user-123",
+            role: "Admin",
+            customerId: "customer-123",
+          },
+          customerId: "customer-456",
+        }),
+      ).toThrow("Customer context does not match governed execution.");
+    });
+
+    it("throws a 403 denial error with securityObservation when the actor role is not permitted", () => {
+      try {
+        securityService.enforceDataDatasetCreation({
+          datasetId: "dataset123",
+          actor: {
+            id: "user-123",
+            role: "Viewer",
+            customerId: "customer-123",
+          },
+          customerId: "customer-123",
+        });
+      } catch (error) {
+        expect(error.message).toBe(
+          "Role is not allowed for governed execution.",
+        );
+        expect(error.status).toBe(403);
+        expect(error.securityObservation).toEqual({
+          eventType: "platform.security.data_dataset_observed",
+          outcome: "denied",
+          capability: "data",
+          action: "dataset.create",
+          datasetId: "dataset123",
+          actor: {
+            id: "user-123",
+            role: "Viewer",
+            customerId: "customer-123",
+          },
+          request: {
+            method: null,
+            path: null,
+            ip: null,
+            userAgent: null,
+          },
+          reason: "role_not_allowed",
+          occurredAt: expect.any(String),
+        });
+        return;
+      }
+
+      throw new Error("Expected security enforcement to throw.");
+    });
+  });
 });

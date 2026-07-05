@@ -80,6 +80,72 @@ async function createFoundationAuditEvent({
   }
 }
 
+async function createDataDatasetAuditEvent({
+  datasetId,
+  capability,
+  action,
+  outcome,
+  actor,
+  occurredAt,
+  request,
+  securityObservation,
+  error,
+}) {
+  const customerId = actor?.customerId || null;
+  const userId = actor?.id || null;
+
+  requireValue(datasetId, "datasetId is required for audit persistence.");
+  requireValue(customerId, "customerId is required for audit persistence.");
+  requireValue(userId, "userId is required for audit persistence.");
+
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const eventType =
+      outcome === "denied"
+        ? "platform.data.dataset.denied"
+        : "platform.data.dataset.created";
+
+    const auditRow = {
+      id: createAuditId(),
+      customerId,
+      userId,
+      action: outcome === "denied" ? "Deny" : "Create",
+      entity: "platform.data.dataset",
+      entityId: datasetId,
+      details: {
+        eventType,
+        datasetId,
+        capability,
+        action,
+        outcome,
+        actor: {
+          id: actor?.id || null,
+          role: actor?.role || null,
+          customerId: actor?.customerId || null,
+        },
+        occurredAt,
+        security: securityObservation || null,
+        error: error || null,
+      },
+      ip: request?.ip || null,
+      device: request?.headers?.["user-agent"] || null,
+    };
+
+    const createdAuditEvent = await db.AuditEvent.create(auditRow, {
+      transaction,
+    });
+
+    await transaction.commit();
+
+    return createdAuditEvent;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 module.exports = {
+  createDataDatasetAuditEvent,
   createFoundationAuditEvent,
 };

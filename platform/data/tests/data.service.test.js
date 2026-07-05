@@ -2,6 +2,10 @@ jest.mock("@/helpers/nanoid_helper", () => ({
   getNanoid: jest.fn(),
 }));
 
+jest.mock("@/platform/audit/audit.service", () => ({
+  recordDataDatasetAudit: jest.fn(),
+}));
+
 jest.mock("@/platform/data/acquisition.service", () => ({
   buildDatasetCreationCommand: jest.fn(),
 }));
@@ -18,11 +22,17 @@ jest.mock("@/platform/data/file-storage.service", () => ({
   storeDatasetFile: jest.fn(),
 }));
 
+jest.mock("@/platform/security/security.service", () => ({
+  enforceDataDatasetCreation: jest.fn(),
+}));
+
 const { getNanoid } = require("@/helpers/nanoid_helper");
+const auditService = require("@/platform/audit/audit.service");
 const acquisitionService = require("@/platform/data/acquisition.service");
 const datasetRepository = require("@/platform/data/dataset.repository");
 const datasetService = require("@/platform/data/dataset.service");
 const fileStorageService = require("@/platform/data/file-storage.service");
+const securityService = require("@/platform/security/security.service");
 const dataService = require("@/platform/data/data.service");
 
 function createExecutionContext(overrides = {}) {
@@ -112,6 +122,14 @@ function createDatasetResponse(overrides = {}) {
 describe("data.service", () => {
   beforeEach(() => {
     getNanoid.mockReturnValue("dataset123");
+    securityService.enforceDataDatasetCreation.mockReturnValue({
+      eventType: "platform.security.data_dataset_observed",
+      outcome: "allowed",
+    });
+    auditService.recordDataDatasetAudit.mockResolvedValue({
+      eventType: "platform.data.dataset.created",
+      outcome: "success",
+    });
     acquisitionService.buildDatasetCreationCommand.mockReturnValue(
       createCommand(),
     );
@@ -152,6 +170,11 @@ describe("data.service", () => {
         file,
       });
       expect(getNanoid).toHaveBeenCalledWith(10);
+      expect(securityService.enforceDataDatasetCreation).toHaveBeenCalledWith({
+        datasetId: "dataset123",
+        actor: createCommand().actor,
+        customerId: "customer-123",
+      });
       expect(fileStorageService.storeDatasetFile).toHaveBeenCalledWith({
         customerId: "customer-123",
         datasetId: "dataset123",
@@ -169,6 +192,15 @@ describe("data.service", () => {
         dataset: {
           ...createDatasetResponse().dataset,
           actor: createCommand().actor,
+        },
+      });
+      expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
+        datasetId: "dataset123",
+        outcome: "success",
+        actor: createCommand().actor,
+        securityObservation: {
+          eventType: "platform.security.data_dataset_observed",
+          outcome: "allowed",
         },
       });
       expect(result).toEqual(createDatasetResponse());
@@ -211,6 +243,43 @@ describe("data.service", () => {
           PlatformDataDataset: "PlatformDataDatasetModel",
         }),
       ).rejects.toThrow("command failed");
+    });
+
+    it("fails loudly when Security denies dataset creation", async () => {
+      securityService.enforceDataDatasetCreation.mockImplementation(() => {
+        const error = new Error("Role is not allowed for governed execution.");
+        error.status = 403;
+        error.securityObservation = {
+          outcome: "denied",
+          reason: "role_not_allowed",
+        };
+        throw error;
+      });
+
+      await expect(
+        dataService.createDataset({
+          executionContext: createExecutionContext(),
+          body: createBody(),
+          file: createFile(),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toThrow("Role is not allowed for governed execution.");
+
+      expect(fileStorageService.storeDatasetFile).not.toHaveBeenCalled();
+      expect(datasetRepository.createDatasetRecord).not.toHaveBeenCalled();
+      expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
+        datasetId: "dataset123",
+        outcome: "denied",
+        actor: createCommand().actor,
+        securityObservation: {
+          outcome: "denied",
+          reason: "role_not_allowed",
+        },
+        error: expect.objectContaining({
+          message: "Role is not allowed for governed execution.",
+          status: 403,
+        }),
+      });
     });
 
     it("fails loudly when file storage fails", async () => {
