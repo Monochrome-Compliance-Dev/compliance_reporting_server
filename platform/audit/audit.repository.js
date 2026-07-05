@@ -25,6 +25,7 @@ async function createFoundationAuditEvent({
   occurredAt,
   request,
   securityObservation,
+  error,
 }) {
   const customerId = actor?.customerId || null;
   const userId = actor?.id || null;
@@ -36,15 +37,20 @@ async function createFoundationAuditEvent({
   const transaction = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const eventType =
+      outcome === "denied"
+        ? "platform.foundation.denied"
+        : "platform.foundation.executed";
+
     const auditRow = {
       id: createAuditId(),
       customerId,
       userId,
-      action: "Execute",
+      action: outcome === "denied" ? "Deny" : "Execute",
       entity: "platform.foundation",
       entityId: foundationId,
       details: {
-        eventType: "platform.foundation.executed",
+        eventType,
         foundationId,
         capability,
         outcome,
@@ -55,6 +61,7 @@ async function createFoundationAuditEvent({
         },
         occurredAt,
         security: securityObservation || null,
+        error: error || null,
       },
       ip: request?.ip || null,
       device: request?.headers?.["user-agent"] || null,

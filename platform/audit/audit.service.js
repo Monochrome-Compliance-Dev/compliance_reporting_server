@@ -39,6 +39,7 @@ async function recordFoundationAudit({
   actor,
   request,
   securityObservation,
+  error,
 }) {
   if (!foundationId) {
     const error = new Error("foundationId is required for audit evidence.");
@@ -46,8 +47,13 @@ async function recordFoundationAudit({
     throw error;
   }
 
+  const eventType =
+    outcome === "denied"
+      ? "platform.foundation.denied"
+      : "platform.foundation.executed";
+
   const auditEvent = {
-    eventType: "platform.foundation.executed",
+    eventType,
     foundationId,
     capability,
     outcome,
@@ -58,6 +64,11 @@ async function recordFoundationAudit({
     },
     occurredAt: new Date().toISOString(),
     security: securityObservation || null,
+    error: error
+      ? {
+          message: error.message || null,
+        }
+      : null,
   };
 
   writeAuditEvent(auditEvent);
@@ -70,6 +81,7 @@ async function recordFoundationAudit({
     occurredAt: auditEvent.occurredAt,
     request,
     securityObservation: auditEvent.security,
+    error: auditEvent.error,
   });
 
   return auditEvent;

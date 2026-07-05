@@ -79,6 +79,80 @@ describe("audit.repository", () => {
               eventType: "platform.security.foundation_observed",
               outcome: "allowed",
             },
+            error: null,
+          },
+          ip: "127.0.0.1",
+          device: "jest-agent",
+        },
+        {
+          transaction,
+        },
+      );
+
+      expect(result.id).toEqual(expect.any(String));
+      expect(result.id).toHaveLength(10);
+      expect(transaction.commit).toHaveBeenCalledTimes(1);
+      expect(transaction.rollback).not.toHaveBeenCalled();
+    });
+
+    it("creates a denied foundation audit row using customer-scoped transaction", async () => {
+      const result = await auditRepository.createFoundationAuditEvent({
+        foundationId: "foundation-denied-123",
+        capability: "foundation",
+        outcome: "denied",
+        occurredAt: "2026-07-04T07:00:00.000Z",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        request: {
+          ip: "127.0.0.1",
+          headers: {
+            "user-agent": "jest-agent",
+          },
+        },
+        securityObservation: {
+          eventType: "platform.security.foundation_observed",
+          outcome: "denied",
+          reason: "role_not_allowed",
+        },
+        error: {
+          message: "role is not allowed for governed execution",
+        },
+      });
+
+      expect(beginTransactionWithCustomerContext).toHaveBeenCalledWith(
+        "customer-123",
+      );
+
+      expect(db.AuditEvent.create).toHaveBeenCalledWith(
+        {
+          id: expect.any(String),
+          customerId: "customer-123",
+          userId: "user-123",
+          action: "Deny",
+          entity: "platform.foundation",
+          entityId: "foundation-denied-123",
+          details: {
+            eventType: "platform.foundation.denied",
+            foundationId: "foundation-denied-123",
+            capability: "foundation",
+            outcome: "denied",
+            actor: {
+              id: "user-123",
+              role: "Viewer",
+              customerId: "customer-123",
+            },
+            occurredAt: "2026-07-04T07:00:00.000Z",
+            security: {
+              eventType: "platform.security.foundation_observed",
+              outcome: "denied",
+              reason: "role_not_allowed",
+            },
+            error: {
+              message: "role is not allowed for governed execution",
+            },
           },
           ip: "127.0.0.1",
           device: "jest-agent",

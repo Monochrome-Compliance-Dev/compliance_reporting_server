@@ -59,6 +59,7 @@ describe("audit.service", () => {
         },
         occurredAt: expect.any(String),
         security: securityObservation,
+        error: null,
       });
 
       expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
@@ -74,6 +75,73 @@ describe("audit.service", () => {
         occurredAt: result.occurredAt,
         request,
         securityObservation,
+        error: null,
+      });
+    });
+
+    it("writes logger-backed and persistent denied platform foundation audit evidence", async () => {
+      const request = {
+        ip: "127.0.0.1",
+        headers: {
+          "user-agent": "jest-agent",
+        },
+      };
+
+      const securityObservation = {
+        eventType: "platform.security.foundation_observed",
+        outcome: "denied",
+        reason: "role_not_allowed",
+      };
+
+      const error = new Error("role is not allowed for governed execution");
+
+      const result = await auditService.recordFoundationAudit({
+        foundationId: "foundation-denied-123",
+        capability: "foundation",
+        outcome: "denied",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        request,
+        securityObservation,
+        error,
+      });
+
+      expect(result).toEqual({
+        eventType: "platform.foundation.denied",
+        foundationId: "foundation-denied-123",
+        capability: "foundation",
+        outcome: "denied",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        occurredAt: expect.any(String),
+        security: securityObservation,
+        error: {
+          message: "role is not allowed for governed execution",
+        },
+      });
+
+      expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(auditRepository.createFoundationAuditEvent).toHaveBeenCalledWith({
+        foundationId: "foundation-denied-123",
+        capability: "foundation",
+        outcome: "denied",
+        actor: {
+          id: "user-123",
+          role: "Viewer",
+          customerId: "customer-123",
+        },
+        occurredAt: result.occurredAt,
+        request,
+        securityObservation,
+        error: {
+          message: "role is not allowed for governed execution",
+        },
       });
     });
 
@@ -92,6 +160,7 @@ describe("audit.service", () => {
       });
 
       expect(result.security).toBeNull();
+      expect(result.error).toBeNull();
     });
 
     it("throws when foundationId is missing", async () => {
