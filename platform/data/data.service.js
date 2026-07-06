@@ -1,4 +1,5 @@
 const { getNanoid } = require("@/helpers/nanoid_helper");
+const { scanFileBuffer } = require("@/middleware/virus-scan");
 
 const acquisitionService = require("@/platform/data/acquisition.service");
 const auditService = require("@/platform/audit/audit.service");
@@ -60,6 +61,20 @@ async function createDataset({
       outcome: "denied",
       actor: command.actor,
       securityObservation: error.securityObservation,
+      error,
+    });
+
+    throw error;
+  }
+
+  try {
+    await scanFileBuffer(command.file.buffer, command.file.originalFileName);
+  } catch (error) {
+    await auditService.recordDataDatasetAudit({
+      datasetId,
+      outcome: "denied",
+      actor: command.actor,
+      securityObservation,
       error,
     });
 

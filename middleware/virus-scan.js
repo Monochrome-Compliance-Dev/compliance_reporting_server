@@ -10,7 +10,7 @@ const ClamScan = new NodeClam().init({
   fileList: null,
   scanRecursively: false,
   clamscan: {
-    path: "/opt/homebrew/bin/clamscan", // adjust path if needed
+    path: process.env.CLAMSCAN_PATH || "/opt/homebrew/bin/clamscan",
     db: null,
     scanArchives: true,
     active: true,
