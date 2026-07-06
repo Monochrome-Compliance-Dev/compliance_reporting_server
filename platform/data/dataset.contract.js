@@ -17,6 +17,22 @@ const REQUIRED_DATASET_FIELDS = [
   "createdAt",
 ];
 
+const REQUIRED_WORKING_DATASET_FIELDS = [
+  "workingDatasetId",
+  "sourceDatasetId",
+  "customerId",
+  "profileId",
+  "workingName",
+  "datasetType",
+  "sourceType",
+  "headers",
+  "headersCount",
+  "rowsCount",
+  "status",
+  "lineage",
+  "createdAt",
+];
+
 const FORBIDDEN_DATASET_FIELDS = [
   "ptrsId",
   "mapping",
@@ -100,6 +116,60 @@ function validateDataset(dataset) {
   assertImmutable(dataset);
 }
 
+function validateWorkingDataset(workingDataset) {
+  requireValue(workingDataset, "workingDataset is required.");
+
+  assertNoForbiddenFields(workingDataset);
+
+  REQUIRED_WORKING_DATASET_FIELDS.forEach((field) => {
+    requireValue(
+      workingDataset[field],
+
+      `${field} is required for working dataset contract.`,
+    );
+  });
+
+  if (workingDataset.sourceType !== "working_copy") {
+    throw createError(
+      "sourceType must be working_copy for working dataset contract.",
+    );
+  }
+
+  assertHeaders(workingDataset);
+
+  assertRowsCount(workingDataset);
+
+  if (
+    workingDataset.lineage.sourceDatasetId !== workingDataset.sourceDatasetId
+  ) {
+    throw createError("lineage sourceDatasetId must match sourceDatasetId.");
+  }
+}
+
+function buildWorkingDatasetCreationResponse(workingDataset) {
+  validateWorkingDataset(workingDataset);
+
+  return {
+    success: true,
+
+    workingDataset: {
+      workingDatasetId: workingDataset.workingDatasetId,
+      sourceDatasetId: workingDataset.sourceDatasetId,
+      customerId: workingDataset.customerId,
+      profileId: workingDataset.profileId,
+      workingName: workingDataset.workingName,
+      datasetType: workingDataset.datasetType,
+      sourceType: workingDataset.sourceType,
+      headers: workingDataset.headers,
+      headersCount: workingDataset.headersCount,
+      rowsCount: workingDataset.rowsCount,
+      status: workingDataset.status,
+      lineage: workingDataset.lineage,
+      createdAt: workingDataset.createdAt,
+    },
+  };
+}
+
 function buildDatasetCreationResponse(dataset) {
   validateDataset(dataset);
 
@@ -128,4 +198,5 @@ function buildDatasetCreationResponse(dataset) {
 
 module.exports = {
   buildDatasetCreationResponse,
+  buildWorkingDatasetCreationResponse,
 };
