@@ -16,6 +16,8 @@ jest.mock("@/platform/data/acquisition.service", () => ({
 
 jest.mock("@/platform/data/dataset.repository", () => ({
   createDatasetRecord: jest.fn(),
+  createWorkingDatasetRecord: jest.fn(),
+  getDatasetRecordById: jest.fn(),
 }));
 
 jest.mock("@/platform/data/dataset.service", () => ({
@@ -124,6 +126,61 @@ function createDatasetResponse(overrides = {}) {
   };
 }
 
+function createWorkingDatasetBody(overrides = {}) {
+  return {
+    sourceDatasetId: "source-dataset-123",
+    profileId: "profile-123",
+    workingName: "July payments working data",
+    ...overrides,
+  };
+}
+
+function createSourceDataset(overrides = {}) {
+  return {
+    datasetId: "source-dataset-123",
+    customerId: "customer-123",
+    profileId: "profile-123",
+    datasetType: "payment",
+    sourceType: "csv_upload",
+    sourceName: "July payments",
+    originalFileName: "payments.csv",
+    storedFileName: "source-dataset-123.csv",
+    storagePath:
+      "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+    mimeType: "text/csv",
+    fileSize: 12345,
+    headers: ["Supplier", "Invoice"],
+    headersCount: 2,
+    rowsCount: 1,
+    status: "available",
+    isImmutable: true,
+    createdAt: "2026-07-05T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createWorkingDataset(overrides = {}) {
+  return {
+    workingDatasetId: "working-dataset-123",
+    sourceDatasetId: "source-dataset-123",
+    customerId: "customer-123",
+    profileId: "profile-123",
+    workingName: "July payments working data",
+    datasetType: "payment",
+    sourceType: "working_copy",
+    headers: ["Supplier", "Invoice"],
+    headersCount: 2,
+    rowsCount: 1,
+    status: "available",
+    lineage: {
+      sourceDatasetId: "source-dataset-123",
+      createdFrom: "immutable_dataset",
+    },
+    createdAt: "2026-07-06T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("data.service", () => {
   beforeEach(() => {
     getNanoid.mockReturnValue("dataset123");
@@ -147,6 +204,12 @@ describe("data.service", () => {
     );
     datasetRepository.createDatasetRecord.mockResolvedValue(
       createDatasetResponse().dataset,
+    );
+    datasetRepository.getDatasetRecordById.mockResolvedValue(
+      createSourceDataset(),
+    );
+    datasetRepository.createWorkingDatasetRecord.mockResolvedValue(
+      createWorkingDataset(),
     );
   });
 
@@ -379,6 +442,153 @@ describe("data.service", () => {
           PlatformDataDataset: "PlatformDataDatasetModel",
         }),
       ).rejects.toThrow("repository failed");
+    });
+  });
+
+  describe("createWorkingDataset", () => {
+    it("creates a metadata and lineage working dataset from an available source dataset", async () => {
+      getNanoid.mockReturnValue("working-dataset-123");
+      const executionContext = createExecutionContext();
+      const body = createWorkingDatasetBody();
+      const PlatformDataDataset = "PlatformDataDatasetModel";
+
+      const result = await dataService.createWorkingDataset({
+        executionContext,
+        body,
+        PlatformDataDataset,
+      });
+
+      expect(getNanoid).toHaveBeenCalledWith(10);
+      expect(securityService.enforceDataDatasetCreation).toHaveBeenCalledWith({
+        datasetId: "working-dataset-123",
+        actor: createCommand().actor,
+        customerId: "customer-123",
+      });
+      expect(datasetRepository.getDatasetRecordById).toHaveBeenCalledWith({
+        PlatformDataDataset,
+        datasetId: "source-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(datasetRepository.createWorkingDatasetRecord).toHaveBeenCalledWith(
+        {
+          PlatformDataDataset,
+          sourceDataset: createSourceDataset(),
+          workingDataset: {
+            workingDatasetId: "working-dataset-123",
+            sourceDatasetId: "source-dataset-123",
+            customerId: "customer-123",
+            profileId: "profile-123",
+            workingName: "July payments working data",
+            actor: createCommand().actor,
+          },
+        },
+      );
+      expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
+        datasetId: "working-dataset-123",
+        outcome: "success",
+        actor: createCommand().actor,
+        securityObservation: {
+          eventType: "platform.security.data_dataset_observed",
+          outcome: "allowed",
+        },
+      });
+      expect(result).toEqual({
+        success: true,
+        workingDataset: createWorkingDataset(),
+      });
+    });
+
+    it("throws when sourceDatasetId is missing", async () => {
+      await expect(
+        dataService.createWorkingDataset({
+          executionContext: createExecutionContext(),
+          body: createWorkingDatasetBody({ sourceDatasetId: null }),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toThrow(
+        "sourceDatasetId is required for working dataset creation.",
+      );
+    });
+
+    it("records denied audit evidence when Security denies working dataset creation", async () => {
+      getNanoid.mockReturnValue("working-dataset-123");
+      securityService.enforceDataDatasetCreation.mockImplementation(() => {
+        const error = new Error("Role is not allowed for governed execution.");
+        error.status = 403;
+        error.securityObservation = {
+          outcome: "denied",
+          reason: "role_not_allowed",
+        };
+        throw error;
+      });
+
+      await expect(
+        dataService.createWorkingDataset({
+          executionContext: createExecutionContext(),
+          body: createWorkingDatasetBody(),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toThrow("Role is not allowed for governed execution.");
+
+      expect(datasetRepository.getDatasetRecordById).not.toHaveBeenCalled();
+      expect(
+        datasetRepository.createWorkingDatasetRecord,
+      ).not.toHaveBeenCalled();
+      expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
+        datasetId: "working-dataset-123",
+        outcome: "denied",
+        actor: createCommand().actor,
+        securityObservation: {
+          outcome: "denied",
+          reason: "role_not_allowed",
+        },
+        error: expect.objectContaining({
+          message: "Role is not allowed for governed execution.",
+          status: 403,
+        }),
+      });
+    });
+
+    it("fails loudly when source dataset lookup fails and does not create working dataset", async () => {
+      datasetRepository.getDatasetRecordById.mockRejectedValue(
+        new Error("source dataset was not found for working data creation."),
+      );
+
+      await expect(
+        dataService.createWorkingDataset({
+          executionContext: createExecutionContext(),
+          body: createWorkingDatasetBody(),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toThrow(
+        "source dataset was not found for working data creation.",
+      );
+
+      expect(
+        datasetRepository.createWorkingDatasetRecord,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("fails loudly when source dataset is unavailable", async () => {
+      datasetRepository.getDatasetRecordById.mockResolvedValue(
+        createSourceDataset({ status: "processing" }),
+      );
+
+      await expect(
+        dataService.createWorkingDataset({
+          executionContext: createExecutionContext(),
+          body: createWorkingDatasetBody(),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toMatchObject({
+        message: "source dataset is not available for working data creation.",
+        status: 409,
+      });
+
+      expect(
+        datasetRepository.createWorkingDatasetRecord,
+      ).not.toHaveBeenCalled();
     });
   });
 });

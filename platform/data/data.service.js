@@ -114,6 +114,105 @@ async function createDataset({
   };
 }
 
+async function createWorkingDataset({
+  executionContext,
+  body,
+  PlatformDataDataset,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset creation.",
+  );
+  requireValue(
+    PlatformDataDataset,
+    "PlatformDataDataset model is required for working dataset creation.",
+  );
+  requireValue(body, "body is required for working dataset creation.");
+  requireValue(
+    body.sourceDatasetId,
+    "sourceDatasetId is required for working dataset creation.",
+  );
+  requireValue(
+    body.profileId,
+    "profileId is required for working dataset creation.",
+  );
+  requireValue(
+    body.workingName,
+    "workingName is required for working dataset creation.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset creation.",
+  );
+
+  const workingDatasetId = getNanoid(10);
+  const actor = {
+    id: executionContext.actorId,
+    role: executionContext.role,
+    customerId: executionContext.customerId,
+  };
+
+  let securityObservation;
+
+  try {
+    securityObservation = securityService.enforceDataDatasetCreation({
+      datasetId: workingDatasetId,
+      actor,
+      customerId: executionContext.customerId,
+    });
+  } catch (error) {
+    await auditService.recordDataDatasetAudit({
+      datasetId: workingDatasetId,
+      outcome: "denied",
+      actor,
+      securityObservation: error.securityObservation,
+      error,
+    });
+
+    throw error;
+  }
+
+  const sourceDataset = await datasetRepository.getDatasetRecordById({
+    PlatformDataDataset,
+    datasetId: body.sourceDatasetId,
+    customerId: executionContext.customerId,
+    profileId: body.profileId,
+  });
+
+  if (sourceDataset.status !== "available") {
+    throw createError(
+      "source dataset is not available for working data creation.",
+      409,
+    );
+  }
+
+  const workingDataset = await datasetRepository.createWorkingDatasetRecord({
+    PlatformDataDataset,
+    sourceDataset,
+    workingDataset: {
+      workingDatasetId,
+      sourceDatasetId: sourceDataset.datasetId,
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      workingName: body.workingName,
+      actor,
+    },
+  });
+
+  await auditService.recordDataDatasetAudit({
+    datasetId: workingDatasetId,
+    outcome: "success",
+    actor,
+    securityObservation,
+  });
+
+  return {
+    success: true,
+    workingDataset,
+  };
+}
+
 module.exports = {
   createDataset,
+  createWorkingDataset,
 };
