@@ -1,5 +1,13 @@
 const datasetRepository = require("@/platform/data/dataset.repository");
 
+jest.mock("@/helpers/customerTransaction", () => ({
+  withCustomerTransaction: jest.fn(async (_customerId, work) =>
+    work("mock-transaction"),
+  ),
+}));
+
+const { withCustomerTransaction } = require("@/helpers/customerTransaction");
+
 function createDataset(overrides = {}) {
   return {
     datasetId: "dataset123",
@@ -63,33 +71,41 @@ describe("dataset.repository", () => {
         dataset: createDataset(),
       });
 
-      expect(PlatformDataDataset.create).toHaveBeenCalledWith({
-        id: "dataset123",
-        customerId: "customer-1",
-        profileId: "profile-1",
-        datasetType: "payment",
-        sourceType: "csv_upload",
-        sourceName: "July payments",
-        originalFileName: "payments.csv",
-        storedFileName: "dataset123.csv",
-        storagePath:
-          "platform/data/customer-1/datasets/dataset123/payments.csv",
-        mimeType: "text/csv",
-        fileSize: 12345,
-        headers: ["Supplier", "Invoice"],
-        headersCount: 2,
-        rowsCount: 1,
-        status: "available",
-        detectedCoverage: {},
-        meta: {
+      expect(withCustomerTransaction).toHaveBeenCalledWith(
+        "customer-1",
+        expect.any(Function),
+      );
+
+      expect(PlatformDataDataset.create).toHaveBeenCalledWith(
+        {
+          id: "dataset123",
+          customerId: "customer-1",
+          profileId: "profile-1",
+          datasetType: "payment",
+          sourceType: "csv_upload",
+          sourceName: "July payments",
+          originalFileName: "payments.csv",
+          storedFileName: "dataset123.csv",
+          storagePath:
+            "platform/data/customer-1/datasets/dataset123/payments.csv",
+          mimeType: "text/csv",
+          fileSize: 12345,
           headers: ["Supplier", "Invoice"],
+          headersCount: 2,
           rowsCount: 1,
-          uploadedAt: "2026-07-05T00:00:00.000Z",
+          status: "available",
+          detectedCoverage: {},
+          meta: {
+            headers: ["Supplier", "Invoice"],
+            rowsCount: 1,
+            uploadedAt: "2026-07-05T00:00:00.000Z",
+          },
+          uploadedBy: "user-123",
+          createdBy: "user-123",
+          updatedBy: "user-123",
         },
-        uploadedBy: "user-123",
-        createdBy: "user-123",
-        updatedBy: "user-123",
-      });
+        { transaction: "mock-transaction" },
+      );
 
       expect(result).toEqual({
         datasetId: "dataset123",
@@ -136,6 +152,7 @@ describe("dataset.repository", () => {
             uploadedAt: "2026-07-05T00:00:00.000Z",
           },
         }),
+        { transaction: "mock-transaction" },
       );
     });
 
@@ -171,6 +188,17 @@ describe("dataset.repository", () => {
           dataset: createDataset({ actor: { role: "Admin" } }),
         }),
       ).rejects.toThrow("actor id is required for persistence.");
+    });
+
+    it("does not open a customer transaction when customerId is missing", async () => {
+      await expect(
+        datasetRepository.createDatasetRecord({
+          PlatformDataDataset: { create: jest.fn() },
+          dataset: createDataset({ customerId: null }),
+        }),
+      ).rejects.toThrow("customerId is required for persistence.");
+
+      expect(withCustomerTransaction).not.toHaveBeenCalled();
     });
 
     it("fails loudly when persistence fails", async () => {
@@ -229,6 +257,56 @@ describe("dataset.repository", () => {
         isImmutable: true,
         createdAt: "2026-07-05T00:00:00.000Z",
       });
+    });
+
+    it("normalises numeric database strings to numbers", () => {
+      const result = datasetRepository.normaliseDatasetRecord({
+        id: "dataset123",
+        customerId: "customer-1",
+        profileId: "profile-1",
+        datasetType: "payment",
+        sourceType: "csv_upload",
+        sourceName: "July payments",
+        originalFileName: "payments.csv",
+        storedFileName: "dataset123.csv",
+        storagePath:
+          "platform/data/customer-1/datasets/dataset123/payments.csv",
+        mimeType: "text/csv",
+        fileSize: "12345",
+        headers: ["Supplier", "Invoice"],
+        headersCount: "2",
+        rowsCount: "1",
+        status: "available",
+        createdAt: "2026-07-05T00:00:00.000Z",
+      });
+
+      expect(result.fileSize).toBe(12345);
+      expect(result.headersCount).toBe(2);
+      expect(result.rowsCount).toBe(1);
+    });
+
+    it("throws when persisted numeric fields are invalid", () => {
+      expect(() =>
+        datasetRepository.normaliseDatasetRecord({
+          id: "dataset123",
+          customerId: "customer-1",
+          profileId: "profile-1",
+          datasetType: "payment",
+          sourceType: "csv_upload",
+          sourceName: "July payments",
+          originalFileName: "payments.csv",
+          storedFileName: "dataset123.csv",
+          storagePath:
+            "platform/data/customer-1/datasets/dataset123/payments.csv",
+          mimeType: "text/csv",
+          fileSize: "not-a-number",
+          headers: ["Supplier", "Invoice"],
+          headersCount: "2",
+          rowsCount: "1",
+          status: "available",
+          createdAt: "2026-07-05T00:00:00.000Z",
+        }),
+      ).toThrow("fileSize must be a non-negative integer.");
     });
 
     it("throws when the persisted record is missing", () => {

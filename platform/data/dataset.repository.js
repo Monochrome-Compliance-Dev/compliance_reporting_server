@@ -1,3 +1,5 @@
+const { withCustomerTransaction } = require("@/helpers/customerTransaction");
+
 function createError(message, status = 500) {
   const error = new Error(message);
   error.status = status;
@@ -12,6 +14,16 @@ function requireValue(value, message) {
   if (!hasValue(value)) {
     throw createError(message);
   }
+}
+
+function normaliseInteger(value, fieldName) {
+  const numberValue = Number(value);
+
+  if (!Number.isInteger(numberValue) || numberValue < 0) {
+    throw createError(`${fieldName} must be a non-negative integer.`);
+  }
+
+  return numberValue;
 }
 
 function normaliseDatasetRecord(record) {
@@ -31,10 +43,10 @@ function normaliseDatasetRecord(record) {
     storedFileName: plainRecord.storedFileName,
     storagePath: plainRecord.storagePath,
     mimeType: plainRecord.mimeType,
-    fileSize: plainRecord.fileSize,
+    fileSize: normaliseInteger(plainRecord.fileSize, "fileSize"),
     headers: plainRecord.headers,
-    headersCount: plainRecord.headersCount,
-    rowsCount: plainRecord.rowsCount,
+    headersCount: normaliseInteger(plainRecord.headersCount, "headersCount"),
+    rowsCount: normaliseInteger(plainRecord.rowsCount, "rowsCount"),
     status: plainRecord.status,
     isImmutable: true,
     createdAt:
@@ -71,7 +83,7 @@ async function createDatasetRecord({ PlatformDataDataset, dataset }) {
 
   const storedFileName = `${dataset.datasetId}.csv`;
 
-  const record = await PlatformDataDataset.create({
+  const payload = {
     id: dataset.datasetId,
     customerId: dataset.customerId,
     profileId: dataset.profileId,
@@ -97,9 +109,12 @@ async function createDatasetRecord({ PlatformDataDataset, dataset }) {
     uploadedBy: dataset.actor.id,
     createdBy: dataset.actor.id,
     updatedBy: dataset.actor.id,
-  });
+  };
 
-  return normaliseDatasetRecord(record);
+  return withCustomerTransaction(dataset.customerId, async (transaction) => {
+    const record = await PlatformDataDataset.create(payload, { transaction });
+    return normaliseDatasetRecord(record);
+  });
 }
 
 module.exports = {
