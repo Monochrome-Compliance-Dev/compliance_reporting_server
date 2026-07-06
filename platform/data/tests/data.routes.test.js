@@ -1,8 +1,38 @@
 const express = require("express");
 const request = require("supertest");
 
+let MockauthoriseScenario = "allowed";
+
 jest.mock("@/middleware/authorise", () => () => [
   (req, res, next) => {
+    if (MockauthoriseScenario === "missingCredentials") {
+      return res.status(401).json({
+        status: "unauthorised",
+        reason: "credentials_missing",
+        message: "Unauthorised",
+      });
+    }
+
+    if (MockauthoriseScenario === "roleDenied") {
+      return res.status(401).json({
+        status: "unauthorised",
+        reason: "role_denied",
+        message: "Unauthorised",
+      });
+    }
+
+    if (MockauthoriseScenario === "missingCustomerContext") {
+      req.auth = {
+        id: "user-123",
+      };
+      req.user = {
+        id: "user-123",
+        role: "Admin",
+      };
+      req.actingRole = "Admin";
+      return next();
+    }
+
     req.auth = {
       id: "user-123",
     };
@@ -14,7 +44,7 @@ jest.mock("@/middleware/authorise", () => () => [
     req.effectiveCustomerId = "customer-123";
     req.tenantCustomerId = "customer-123";
     req.actingRole = "Admin";
-    next();
+    return next();
   },
 ]);
 
@@ -69,8 +99,21 @@ function createDatasetResponse(overrides = {}) {
   };
 }
 
+function postDataset(app) {
+  return request(app)
+    .post("/api/platform/data/datasets")
+    .field("sourceName", "July payments")
+    .field("datasetType", "payment")
+    .field("profileId", "profile-123")
+    .attach("file", Buffer.from("Supplier,Invoice\nABC,INV-001\n"), {
+      filename: "payments.csv",
+      contentType: "text/csv",
+    });
+}
+
 describe("data.routes", () => {
   beforeEach(() => {
+    MockauthoriseScenario = "allowed";
     dataService.createDataset.mockResolvedValue(createDatasetResponse());
   });
 
@@ -82,15 +125,7 @@ describe("data.routes", () => {
     it("creates a Data-owned dataset from multipart form data", async () => {
       const app = createApp();
 
-      const response = await request(app)
-        .post("/api/platform/data/datasets")
-        .field("sourceName", "July payments")
-        .field("datasetType", "payment")
-        .field("profileId", "profile-123")
-        .attach("file", Buffer.from("Supplier,Invoice\nABC,INV-001\n"), {
-          filename: "payments.csv",
-          contentType: "text/csv",
-        });
+      const response = await postDataset(app);
 
       expect(response.status).toBe(201);
       expect(response.body).toEqual(createDatasetResponse());
@@ -123,20 +158,78 @@ describe("data.routes", () => {
 
       const app = createApp();
 
-      const response = await request(app)
-        .post("/api/platform/data/datasets")
-        .field("sourceName", "July payments")
-        .field("datasetType", "payment")
-        .field("profileId", "profile-123")
-        .attach("file", Buffer.from("Supplier,Invoice\nABC,INV-001\n"), {
-          filename: "payments.csv",
-          contentType: "text/csv",
-        });
+      const response = await postDataset(app);
 
       expect(response.status).toBe(400);
       expect(response.body).toEqual({
         success: false,
         error: "dataset creation failed",
+      });
+    });
+
+    it("does not reach the Data service when credentials are missing", async () => {
+      MockauthoriseScenario = "missingCredentials";
+      const app = createApp();
+
+      const response = await postDataset(app);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        status: "unauthorised",
+        reason: "credentials_missing",
+        message: "Unauthorised",
+      });
+      expect(dataService.createDataset).not.toHaveBeenCalled();
+    });
+
+    it("does not reach the Data service when the authenticated role is not allowed", async () => {
+      MockauthoriseScenario = "roleDenied";
+      const app = createApp();
+
+      const response = await postDataset(app);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        status: "unauthorised",
+        reason: "role_denied",
+        message: "Unauthorised",
+      });
+      expect(dataService.createDataset).not.toHaveBeenCalled();
+    });
+
+    it("fails before the Data service when authenticated context has no customer context", async () => {
+      MockauthoriseScenario = "missingCustomerContext";
+      const app = createApp();
+
+      const response = await postDataset(app);
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        success: false,
+        error: "customerId is required for governed execution.",
+      });
+      expect(dataService.createDataset).not.toHaveBeenCalled();
+    });
+
+    it("surfaces Data Security denials as forbidden responses", async () => {
+      const error = new Error(
+        "Customer context does not match governed execution.",
+      );
+      error.status = 403;
+      error.securityObservation = {
+        outcome: "denied",
+        reason: "customer_mismatch",
+      };
+      dataService.createDataset.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await postDataset(app);
+
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({
+        success: false,
+        error: "Customer context does not match governed execution.",
       });
     });
   });
