@@ -21,6 +21,13 @@ function createDataRouter({ PlatformDataDataset } = {}) {
     controller.createDataset,
   );
 
+  router.post(
+    "/working-datasets",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.createWorkingDataset,
+  );
+
   return router;
 }
 

@@ -50,6 +50,7 @@ jest.mock("@/middleware/authorise", () => () => [
 
 jest.mock("@/platform/data/data.service", () => ({
   createDataset: jest.fn(),
+  createWorkingDataset: jest.fn(),
 }));
 
 const dataService = require("@/platform/data/data.service");
@@ -57,6 +58,7 @@ const { createDataRouter } = require("@/platform/data/data.routes");
 
 function createApp() {
   const app = express();
+  app.use(express.json());
 
   app.use(
     "/api/platform/data",
@@ -99,6 +101,31 @@ function createDatasetResponse(overrides = {}) {
   };
 }
 
+function createWorkingDatasetResponse(overrides = {}) {
+  return {
+    success: true,
+    workingDataset: {
+      workingDatasetId: "working-dataset-123",
+      sourceDatasetId: "source-dataset-123",
+      customerId: "customer-123",
+      profileId: "profile-123",
+      workingName: "July payments working data",
+      datasetType: "payment",
+      sourceType: "working_copy",
+      headers: ["Supplier", "Invoice"],
+      headersCount: 2,
+      rowsCount: 1,
+      status: "available",
+      lineage: {
+        sourceDatasetId: "source-dataset-123",
+        createdFrom: "immutable_dataset",
+      },
+      createdAt: "2026-07-06T00:00:00.000Z",
+      ...overrides,
+    },
+  };
+}
+
 function postDataset(app) {
   return request(app)
     .post("/api/platform/data/datasets")
@@ -111,10 +138,24 @@ function postDataset(app) {
     });
 }
 
+function postWorkingDataset(app, body = {}) {
+  return request(app)
+    .post("/api/platform/data/working-datasets")
+    .send({
+      sourceDatasetId: "source-dataset-123",
+      profileId: "profile-123",
+      workingName: "July payments working data",
+      ...body,
+    });
+}
+
 describe("data.routes", () => {
   beforeEach(() => {
     MockauthoriseScenario = "allowed";
     dataService.createDataset.mockResolvedValue(createDatasetResponse());
+    dataService.createWorkingDataset.mockResolvedValue(
+      createWorkingDatasetResponse(),
+    );
   });
 
   afterEach(() => {
@@ -225,6 +266,113 @@ describe("data.routes", () => {
       const app = createApp();
 
       const response = await postDataset(app);
+
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({
+        success: false,
+        error: "Customer context does not match governed execution.",
+      });
+    });
+  });
+
+  describe("POST /api/platform/data/working-datasets", () => {
+    it("creates a Data-owned working dataset from JSON request body", async () => {
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
+
+      expect(response.status).toBe(201);
+      expect(response.body).toEqual(createWorkingDatasetResponse());
+      expect(dataService.createWorkingDataset).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        body: {
+          sourceDatasetId: "source-dataset-123",
+          profileId: "profile-123",
+          workingName: "July payments working data",
+        },
+        PlatformDataDataset: "PlatformDataDatasetModel",
+      });
+    });
+
+    it("returns working dataset service errors through the error handler", async () => {
+      const error = new Error("working dataset creation failed");
+      error.status = 400;
+      dataService.createWorkingDataset.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({
+        success: false,
+        error: "working dataset creation failed",
+      });
+    });
+
+    it("does not reach working dataset creation when credentials are missing", async () => {
+      MockauthoriseScenario = "missingCredentials";
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        status: "unauthorised",
+        reason: "credentials_missing",
+        message: "Unauthorised",
+      });
+      expect(dataService.createWorkingDataset).not.toHaveBeenCalled();
+    });
+
+    it("does not reach working dataset creation when the authenticated role is not allowed", async () => {
+      MockauthoriseScenario = "roleDenied";
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        status: "unauthorised",
+        reason: "role_denied",
+        message: "Unauthorised",
+      });
+      expect(dataService.createWorkingDataset).not.toHaveBeenCalled();
+    });
+
+    it("fails before working dataset creation when authenticated context has no customer context", async () => {
+      MockauthoriseScenario = "missingCustomerContext";
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({
+        success: false,
+        error: "customerId is required for governed execution.",
+      });
+      expect(dataService.createWorkingDataset).not.toHaveBeenCalled();
+    });
+
+    it("surfaces working dataset Security denials as forbidden responses", async () => {
+      const error = new Error(
+        "Customer context does not match governed execution.",
+      );
+      error.status = 403;
+      error.securityObservation = {
+        outcome: "denied",
+        reason: "customer_mismatch",
+      };
+      dataService.createWorkingDataset.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await postWorkingDataset(app);
 
       expect(response.status).toBe(403);
       expect(response.body).toEqual({

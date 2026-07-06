@@ -20,8 +20,23 @@ function createDataController({ PlatformDataDataset } = {}) {
     }
   }
 
+  async function createWorkingDataset(req, res, next) {
+    try {
+      const result = await dataService.createWorkingDataset({
+        executionContext: getExecutionContext(req),
+        body: req.body,
+        PlatformDataDataset,
+      });
+
+      return res.status(201).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   return {
     createDataset,
+    createWorkingDataset,
   };
 }
 
