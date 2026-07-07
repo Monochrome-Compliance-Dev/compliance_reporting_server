@@ -57,6 +57,27 @@ function createDataRouter({
     controller.createWorkingDataset,
   );
 
+  router.post(
+    "/working-datasets/:workingDatasetId/edit-lease",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.acquireWorkingDatasetEditLease,
+  );
+
+  router.post(
+    "/working-datasets/:workingDatasetId/edit-lease/renew",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.renewWorkingDatasetEditLease,
+  );
+
+  router.delete(
+    "/working-datasets/:workingDatasetId/edit-lease",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.releaseWorkingDatasetEditLease,
+  );
+
   return router;
 }
 

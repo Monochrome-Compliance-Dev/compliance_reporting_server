@@ -40,9 +40,60 @@ function createDataController({
     }
   }
 
+  async function acquireWorkingDatasetEditLease(req, res, next) {
+    try {
+      const result = await dataService.acquireWorkingDatasetEditLease({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        body: req.body,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async function renewWorkingDatasetEditLease(req, res, next) {
+    try {
+      const result = await dataService.renewWorkingDatasetEditLease({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        body: req.body,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async function releaseWorkingDatasetEditLease(req, res, next) {
+    try {
+      const result = await dataService.releaseWorkingDatasetEditLease({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        body: req.body,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   return {
+    acquireWorkingDatasetEditLease,
     createDataset,
     createWorkingDataset,
+    releaseWorkingDatasetEditLease,
+    renewWorkingDatasetEditLease,
   };
 }
 

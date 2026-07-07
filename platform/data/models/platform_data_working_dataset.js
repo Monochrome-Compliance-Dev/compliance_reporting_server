@@ -126,15 +126,19 @@ module.exports = (sequelize) => {
       paranoid: true,
       indexes: [
         {
+          name: "idx_data_wd_scope",
           fields: ["customerId", "profileId"],
         },
         {
+          name: "idx_data_wd_source_dataset",
           fields: ["sourceDatasetId"],
         },
         {
+          name: "idx_data_wd_scope_status",
           fields: ["customerId", "profileId", "status"],
         },
         {
+          name: "idx_data_wd_active_editor",
           fields: ["activeEditorUserId"],
         },
       ],

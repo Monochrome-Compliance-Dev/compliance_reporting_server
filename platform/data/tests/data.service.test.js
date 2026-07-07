@@ -19,6 +19,9 @@ jest.mock("@/platform/data/dataset.repository", () => ({
   createWorkingDatasetRecord: jest.fn(),
   createWorkingDatasetActivityRecord: jest.fn(),
   getDatasetRecordById: jest.fn(),
+  getWorkingDatasetRecordById: jest.fn(),
+  updateWorkingDatasetEditLease: jest.fn(),
+  clearWorkingDatasetEditLease: jest.fn(),
 }));
 
 jest.mock("@/platform/data/dataset.service", () => ({
@@ -207,6 +210,34 @@ function createWorkingDatasetActivity(overrides = {}) {
   };
 }
 
+function createLeaseBody(overrides = {}) {
+  return {
+    profileId: "profile-123",
+    editorSessionId: "session-123",
+    ...overrides,
+  };
+}
+
+function createLeaseParams(overrides = {}) {
+  return {
+    workingDatasetId: "working-dataset-123",
+    ...overrides,
+  };
+}
+
+function createLeasedWorkingDataset(overrides = {}) {
+  return createWorkingDataset({
+    activeEditor: {
+      userId: "user-123",
+      sessionId: "session-123",
+      startedAt: "2026-07-06T00:00:00.000Z",
+      lastSeenAt: "2026-07-06T00:00:00.000Z",
+      expiresAt: "2099-07-06T00:30:00.000Z",
+    },
+    ...overrides,
+  });
+}
+
 describe("data.service", () => {
   beforeEach(() => {
     getNanoid.mockReturnValue("dataset123");
@@ -239,6 +270,15 @@ describe("data.service", () => {
     );
     datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
       createWorkingDatasetActivity(),
+    );
+    datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+      createWorkingDataset(),
+    );
+    datasetRepository.updateWorkingDatasetEditLease.mockResolvedValue(
+      createLeasedWorkingDataset(),
+    );
+    datasetRepository.clearWorkingDatasetEditLease.mockResolvedValue(
+      createWorkingDataset(),
     );
   });
 

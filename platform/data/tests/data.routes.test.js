@@ -49,8 +49,11 @@ jest.mock("@/middleware/authorise", () => () => [
 ]);
 
 jest.mock("@/platform/data/data.service", () => ({
+  acquireWorkingDatasetEditLease: jest.fn(),
   createDataset: jest.fn(),
   createWorkingDataset: jest.fn(),
+  releaseWorkingDatasetEditLease: jest.fn(),
+  renewWorkingDatasetEditLease: jest.fn(),
 }));
 
 const dataService = require("@/platform/data/data.service");
@@ -176,12 +179,110 @@ function postWorkingDataset(app, body = {}) {
     });
 }
 
+function postEditLease(app, body = {}) {
+  return request(app)
+    .post("/api/platform/data/working-datasets/working-dataset-123/edit-lease")
+    .send({
+      profileId: "profile-123",
+      editorSessionId: "session-123",
+      ...body,
+    });
+}
+
+function postRenewEditLease(app, body = {}) {
+  return request(app)
+    .post(
+      "/api/platform/data/working-datasets/working-dataset-123/edit-lease/renew",
+    )
+    .send({
+      profileId: "profile-123",
+      editorSessionId: "session-123",
+      ...body,
+    });
+}
+
+function deleteEditLease(app, body = {}) {
+  return request(app)
+    .delete(
+      "/api/platform/data/working-datasets/working-dataset-123/edit-lease",
+    )
+    .send({
+      profileId: "profile-123",
+      editorSessionId: "session-123",
+      ...body,
+    });
+}
+
 describe("data.routes", () => {
   beforeEach(() => {
     MockauthoriseScenario = "allowed";
     dataService.createDataset.mockResolvedValue(createDatasetResponse());
     dataService.createWorkingDataset.mockResolvedValue(
       createWorkingDatasetResponse(),
+    );
+    dataService.acquireWorkingDatasetEditLease.mockResolvedValue(
+      createWorkingDatasetResponse({
+        activity: {
+          activityId: "activity-lease-acquired",
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "edit_lease_acquired",
+          stepNumber: 1,
+          summary: "Acquired working dataset edit lease",
+          details: {
+            editorSessionId: "session-123",
+            expiresAt: "2026-07-06T00:30:00.000Z",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          createdBy: "user-123",
+          createdAt: "2026-07-06T00:00:00.000Z",
+        },
+      }),
+    );
+
+    dataService.renewWorkingDatasetEditLease.mockResolvedValue(
+      createWorkingDatasetResponse({
+        activity: {
+          activityId: "activity-lease-renewed",
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "edit_lease_renewed",
+          stepNumber: 1,
+          summary: "Renewed working dataset edit lease",
+          details: {
+            editorSessionId: "session-123",
+            expiresAt: "2026-07-06T00:30:00.000Z",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          createdBy: "user-123",
+          createdAt: "2026-07-06T00:00:00.000Z",
+        },
+      }),
+    );
+
+    dataService.releaseWorkingDatasetEditLease.mockResolvedValue(
+      createWorkingDatasetResponse({
+        activity: {
+          activityId: "activity-lease-released",
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "edit_lease_released",
+          stepNumber: 1,
+          summary: "Released working dataset edit lease",
+          details: {
+            editorSessionId: "session-123",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          createdBy: "user-123",
+          createdAt: "2026-07-06T00:00:00.000Z",
+        },
+      }),
     );
   });
 
@@ -408,6 +509,105 @@ describe("data.routes", () => {
       expect(response.body).toEqual({
         success: false,
         error: "Customer context does not match governed execution.",
+      });
+    });
+  });
+
+  describe("working dataset edit lease routes", () => {
+    it("acquires a working dataset edit lease", async () => {
+      const app = createApp();
+
+      const response = await postEditLease(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body.activity.activityType).toBe("edit_lease_acquired");
+      expect(dataService.acquireWorkingDatasetEditLease).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "session-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+    });
+
+    it("renews a working dataset edit lease", async () => {
+      const app = createApp();
+
+      const response = await postRenewEditLease(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body.activity.activityType).toBe("edit_lease_renewed");
+      expect(dataService.renewWorkingDatasetEditLease).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "session-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+    });
+
+    it("releases a working dataset edit lease", async () => {
+      const app = createApp();
+
+      const response = await deleteEditLease(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body.activity.activityType).toBe("edit_lease_released");
+      expect(dataService.releaseWorkingDatasetEditLease).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "session-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+    });
+
+    it("returns edit lease service errors through the error handler", async () => {
+      const error = new Error("working dataset is currently being edited.");
+      error.status = 409;
+      dataService.acquireWorkingDatasetEditLease.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await postEditLease(app);
+
+      expect(response.status).toBe(409);
+      expect(response.body).toEqual({
+        success: false,
+        error: "working dataset is currently being edited.",
       });
     });
   });

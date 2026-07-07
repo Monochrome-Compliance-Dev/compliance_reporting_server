@@ -235,6 +235,38 @@ async function getDatasetRecordById({
   });
 }
 
+async function getWorkingDatasetRecordById({
+  PlatformDataWorkingDataset,
+  workingDatasetId,
+  customerId,
+  profileId,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDataset.findOne({
+      where: {
+        id: workingDatasetId,
+        customerId,
+        profileId,
+      },
+      transaction,
+    });
+
+    if (!record) {
+      throw createError("working dataset was not found.", 404);
+    }
+
+    return normaliseWorkingDatasetRecord(record);
+  });
+}
+
 async function createWorkingDatasetRecord({
   PlatformDataWorkingDataset,
   sourceDataset,
@@ -355,12 +387,131 @@ async function createWorkingDatasetActivityRecord({
   });
 }
 
+async function updateWorkingDatasetEditLease({
+  PlatformDataWorkingDataset,
+  workingDatasetId,
+  customerId,
+  profileId,
+  lease,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+  requireValue(lease, "lease is required.");
+  requireValue(
+    lease.activeEditorUserId,
+    "activeEditorUserId is required for edit lease persistence.",
+  );
+  requireValue(
+    lease.activeEditorSessionId,
+    "activeEditorSessionId is required for edit lease persistence.",
+  );
+  requireValue(
+    lease.activeEditorStartedAt,
+    "activeEditorStartedAt is required for edit lease persistence.",
+  );
+  requireValue(
+    lease.activeEditorLastSeenAt,
+    "activeEditorLastSeenAt is required for edit lease persistence.",
+  );
+  requireValue(
+    lease.activeEditorExpiresAt,
+    "activeEditorExpiresAt is required for edit lease persistence.",
+  );
+  requireValue(
+    lease.updatedBy,
+    "updatedBy is required for edit lease persistence.",
+  );
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDataset.findOne({
+      where: {
+        id: workingDatasetId,
+        customerId,
+        profileId,
+      },
+      transaction,
+    });
+
+    if (!record) {
+      throw createError("working dataset was not found.", 404);
+    }
+
+    const updatedRecord = await record.update(
+      {
+        activeEditorUserId: lease.activeEditorUserId,
+        activeEditorSessionId: lease.activeEditorSessionId,
+        activeEditorStartedAt: lease.activeEditorStartedAt,
+        activeEditorLastSeenAt: lease.activeEditorLastSeenAt,
+        activeEditorExpiresAt: lease.activeEditorExpiresAt,
+        updatedBy: lease.updatedBy,
+      },
+      { transaction },
+    );
+
+    return normaliseWorkingDatasetRecord(updatedRecord);
+  });
+}
+
+async function clearWorkingDatasetEditLease({
+  PlatformDataWorkingDataset,
+  workingDatasetId,
+  customerId,
+  profileId,
+  actor,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+  requireValue(actor?.id, "actor id is required for edit lease release.");
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDataset.findOne({
+      where: {
+        id: workingDatasetId,
+        customerId,
+        profileId,
+      },
+      transaction,
+    });
+
+    if (!record) {
+      throw createError("working dataset was not found.", 404);
+    }
+
+    const updatedRecord = await record.update(
+      {
+        activeEditorUserId: null,
+        activeEditorSessionId: null,
+        activeEditorStartedAt: null,
+        activeEditorLastSeenAt: null,
+        activeEditorExpiresAt: null,
+        updatedBy: actor.id,
+      },
+      { transaction },
+    );
+
+    return normaliseWorkingDatasetRecord(updatedRecord);
+  });
+}
+
 module.exports = {
+  clearWorkingDatasetEditLease,
   createDatasetRecord,
   createWorkingDatasetActivityRecord,
   createWorkingDatasetRecord,
   getDatasetRecordById,
+  getWorkingDatasetRecordById,
   normaliseDatasetRecord,
   normaliseWorkingDatasetActivityRecord,
   normaliseWorkingDatasetRecord,
+  updateWorkingDatasetEditLease,
 };

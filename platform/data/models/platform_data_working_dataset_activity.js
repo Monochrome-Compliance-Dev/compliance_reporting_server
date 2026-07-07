@@ -59,12 +59,15 @@ module.exports = (sequelize) => {
       updatedAt: false,
       indexes: [
         {
+          name: "idx_data_wda_scope_dataset",
           fields: ["customerId", "profileId", "workingDatasetId"],
         },
         {
+          name: "idx_data_wda_activity_type",
           fields: ["activityType"],
         },
         {
+          name: "idx_data_wda_created_at",
           fields: ["createdAt"],
         },
       ],
