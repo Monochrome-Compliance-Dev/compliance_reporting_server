@@ -52,6 +52,7 @@ jest.mock("@/platform/data/data.service", () => ({
   acquireWorkingDatasetEditLease: jest.fn(),
   createDataset: jest.fn(),
   createWorkingDataset: jest.fn(),
+  finaliseWorkingDataset: jest.fn(),
   releaseWorkingDatasetEditLease: jest.fn(),
   renewWorkingDatasetEditLease: jest.fn(),
 }));
@@ -213,6 +214,16 @@ function deleteEditLease(app, body = {}) {
     });
 }
 
+function postFinaliseWorkingDataset(app, body = {}) {
+  return request(app)
+    .post("/api/platform/data/working-datasets/working-dataset-123/finalise")
+    .send({
+      profileId: "profile-123",
+      editorSessionId: "session-123",
+      ...body,
+    });
+}
+
 describe("data.routes", () => {
   beforeEach(() => {
     MockauthoriseScenario = "allowed";
@@ -281,6 +292,40 @@ describe("data.routes", () => {
           relatedRecordId: "working-dataset-123",
           createdBy: "user-123",
           createdAt: "2026-07-06T00:00:00.000Z",
+        },
+      }),
+    );
+    dataService.finaliseWorkingDataset.mockResolvedValue(
+      createWorkingDatasetResponse({
+        workingDataset: {
+          ...createWorkingDatasetResponse().workingDataset,
+          status: "final",
+          activeEditor: {
+            userId: null,
+            sessionId: null,
+            startedAt: null,
+            lastSeenAt: null,
+            expiresAt: null,
+          },
+          finalisedAt: "2026-07-06T00:30:00.000Z",
+          finalisedBy: "user-123",
+        },
+        activity: {
+          activityId: "activity-finalised",
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "working_dataset_finalised",
+          stepNumber: 1,
+          summary: "Finalised working dataset",
+          details: {
+            editorSessionId: "session-123",
+            finalisedAt: "2026-07-06T00:30:00.000Z",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          createdBy: "user-123",
+          createdAt: "2026-07-06T00:30:00.000Z",
         },
       }),
     );
@@ -608,6 +653,53 @@ describe("data.routes", () => {
       expect(response.body).toEqual({
         success: false,
         error: "working dataset is currently being edited.",
+      });
+    });
+  });
+  describe("working dataset finalisation route", () => {
+    it("finalises a working dataset", async () => {
+      const app = createApp();
+
+      const response = await postFinaliseWorkingDataset(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body.workingDataset.status).toBe("final");
+      expect(response.body.activity.activityType).toBe(
+        "working_dataset_finalised",
+      );
+      expect(dataService.finaliseWorkingDataset).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "session-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+    });
+
+    it("returns finalisation service errors through the error handler", async () => {
+      const error = new Error("final working datasets cannot be edited.");
+      error.status = 409;
+      dataService.finaliseWorkingDataset.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await postFinaliseWorkingDataset(app);
+
+      expect(response.status).toBe(409);
+      expect(response.body).toEqual({
+        success: false,
+        error: "final working datasets cannot be edited.",
       });
     });
   });

@@ -78,6 +78,13 @@ function createDataRouter({
     controller.releaseWorkingDatasetEditLease,
   );
 
+  router.post(
+    "/working-datasets/:workingDatasetId/finalise",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.finaliseWorkingDataset,
+  );
+
   return router;
 }
 

@@ -88,10 +88,27 @@ function createDataController({
     }
   }
 
+  async function finaliseWorkingDataset(req, res, next) {
+    try {
+      const result = await dataService.finaliseWorkingDataset({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        body: req.body,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   return {
     acquireWorkingDatasetEditLease,
     createDataset,
     createWorkingDataset,
+    finaliseWorkingDataset,
     releaseWorkingDatasetEditLease,
     renewWorkingDatasetEditLease,
   };

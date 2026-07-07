@@ -503,11 +503,69 @@ async function clearWorkingDatasetEditLease({
   });
 }
 
+async function finaliseWorkingDatasetRecord({
+  PlatformDataWorkingDataset,
+  workingDatasetId,
+  customerId,
+  profileId,
+  actor,
+  finalisedAt,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+  requireValue(
+    actor?.id,
+    "actor id is required for working dataset finalisation.",
+  );
+  requireValue(
+    finalisedAt,
+    "finalisedAt is required for working dataset finalisation.",
+  );
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDataset.findOne({
+      where: {
+        id: workingDatasetId,
+        customerId,
+        profileId,
+      },
+      transaction,
+    });
+
+    if (!record) {
+      throw createError("working dataset was not found.", 404);
+    }
+
+    const updatedRecord = await record.update(
+      {
+        status: "final",
+        finalisedAt,
+        finalisedBy: actor.id,
+        activeEditorUserId: null,
+        activeEditorSessionId: null,
+        activeEditorStartedAt: null,
+        activeEditorLastSeenAt: null,
+        activeEditorExpiresAt: null,
+        updatedBy: actor.id,
+      },
+      { transaction },
+    );
+
+    return normaliseWorkingDatasetRecord(updatedRecord);
+  });
+}
+
 module.exports = {
   clearWorkingDatasetEditLease,
   createDatasetRecord,
   createWorkingDatasetActivityRecord,
   createWorkingDatasetRecord,
+  finaliseWorkingDatasetRecord,
   getDatasetRecordById,
   getWorkingDatasetRecordById,
   normaliseDatasetRecord,

@@ -141,6 +141,21 @@ function createWorkingModelRecord(overrides = {}) {
   };
 }
 
+function createUpdatableWorkingModelRecord(overrides = {}) {
+  const baseRecord = createWorkingModelRecord(overrides);
+
+  return {
+    ...baseRecord,
+    update: jest.fn(async (changes) =>
+      createWorkingModelRecord({
+        ...overrides,
+        ...changes,
+        updatedAt: new Date("2026-07-06T00:30:00.000Z"),
+      }),
+    ),
+  };
+}
+
 function createWorkingActivityModelRecord(overrides = {}) {
   return {
     get: jest.fn(() => ({
@@ -696,6 +711,123 @@ describe("dataset.repository", () => {
       expect(() => datasetRepository.normaliseDatasetRecord()).toThrow(
         "dataset record is required.",
       );
+    });
+  });
+});
+
+describe("finaliseWorkingDatasetRecord", () => {
+  it("finalises a working dataset and clears active editor lease fields", async () => {
+    const finalisedAt = new Date("2026-07-06T00:30:00.000Z");
+    const workingRecord = createUpdatableWorkingModelRecord({
+      activeEditorUserId: "user-123",
+      activeEditorSessionId: "session-123",
+      activeEditorStartedAt: new Date("2026-07-06T00:00:00.000Z"),
+      activeEditorLastSeenAt: new Date("2026-07-06T00:10:00.000Z"),
+      activeEditorExpiresAt: new Date("2026-07-06T00:40:00.000Z"),
+    });
+    const PlatformDataWorkingDataset = {
+      findOne: jest.fn().mockResolvedValue(workingRecord),
+    };
+
+    const result = await datasetRepository.finaliseWorkingDatasetRecord({
+      PlatformDataWorkingDataset,
+      workingDatasetId: "working-dataset-123",
+      customerId: "customer-1",
+      profileId: "profile-1",
+      actor: {
+        id: "user-123",
+        role: "Admin",
+        customerId: "customer-1",
+      },
+      finalisedAt,
+    });
+
+    expect(withCustomerTransaction).toHaveBeenCalledWith(
+      "customer-1",
+      expect.any(Function),
+    );
+    expect(PlatformDataWorkingDataset.findOne).toHaveBeenCalledWith({
+      where: {
+        id: "working-dataset-123",
+        customerId: "customer-1",
+        profileId: "profile-1",
+      },
+      transaction: "mock-transaction",
+    });
+    expect(workingRecord.update).toHaveBeenCalledWith(
+      {
+        status: "final",
+        finalisedAt,
+        finalisedBy: "user-123",
+        activeEditorUserId: null,
+        activeEditorSessionId: null,
+        activeEditorStartedAt: null,
+        activeEditorLastSeenAt: null,
+        activeEditorExpiresAt: null,
+        updatedBy: "user-123",
+      },
+      { transaction: "mock-transaction" },
+    );
+    expect(result).toEqual({
+      workingDatasetId: "working-dataset-123",
+      sourceDatasetId: "source-dataset-123",
+      customerId: "customer-1",
+      profileId: "profile-1",
+      workingName: "July payments working data",
+      datasetType: "payment",
+      status: "final",
+      currentStepNumber: 1,
+      storagePath:
+        "platform/data/customer-1/datasets/source-dataset-123/payments.csv",
+      storedFileName: "source-dataset-123.csv",
+      mimeType: "text/csv",
+      fileSize: 12345,
+      headers: ["Supplier", "Invoice"],
+      headersCount: 2,
+      rowsCount: 1,
+      lineage: {
+        sourceDatasetId: "source-dataset-123",
+        createdFrom: "immutable_dataset",
+      },
+      meta: {
+        sourceDatasetId: "source-dataset-123",
+        sourceOriginalFileName: "payments.csv",
+      },
+      activeEditor: {
+        userId: null,
+        sessionId: null,
+        startedAt: null,
+        lastSeenAt: null,
+        expiresAt: null,
+      },
+      finalisedAt: "2026-07-06T00:30:00.000Z",
+      finalisedBy: "user-123",
+      createdAt: "2026-07-06T00:00:00.000Z",
+      updatedAt: "2026-07-06T00:30:00.000Z",
+    });
+  });
+
+  it("throws 404 when finalising a missing working dataset", async () => {
+    const PlatformDataWorkingDataset = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+
+    await expect(
+      datasetRepository.finaliseWorkingDatasetRecord({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "missing-working-dataset",
+        customerId: "customer-1",
+        profileId: "profile-1",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-1",
+        },
+        finalisedAt: new Date("2026-07-06T00:30:00.000Z"),
+      }),
+    ).rejects.toMatchObject({
+      message: "working dataset was not found.",
+      status: 404,
     });
   });
 });
