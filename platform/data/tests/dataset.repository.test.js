@@ -715,6 +715,139 @@ describe("dataset.repository", () => {
   });
 });
 
+describe("updateWorkingDatasetStorageRecord", () => {
+  it("updates working dataset storage metadata on the existing working dataset row", async () => {
+    const workingRecord = createUpdatableWorkingModelRecord();
+    const PlatformDataWorkingDataset = {
+      findOne: jest.fn().mockResolvedValue(workingRecord),
+    };
+
+    const result = await datasetRepository.updateWorkingDatasetStorageRecord({
+      PlatformDataWorkingDataset,
+      workingDatasetId: "working-dataset-123",
+      customerId: "customer-1",
+      profileId: "profile-1",
+      storage: {
+        storagePath:
+          "platform/data/customer-1/working-datasets/working-dataset-123/materialised.csv",
+        storedFileName: "materialised.csv",
+        mimeType: "text/csv",
+        fileSize: 23456,
+        headers: ["invoice_reference_number", "supplier_name"],
+        headersCount: 2,
+        rowsCount: 1,
+        meta: {
+          materialisedFrom: "projection_config",
+        },
+      },
+      actor: {
+        id: "user-123",
+        role: "Admin",
+        customerId: "customer-1",
+      },
+    });
+
+    expect(withCustomerTransaction).toHaveBeenCalledWith(
+      "customer-1",
+      expect.any(Function),
+    );
+    expect(PlatformDataWorkingDataset.findOne).toHaveBeenCalledWith({
+      where: {
+        id: "working-dataset-123",
+        customerId: "customer-1",
+        profileId: "profile-1",
+      },
+      transaction: "mock-transaction",
+    });
+    expect(workingRecord.update).toHaveBeenCalledWith(
+      {
+        storagePath:
+          "platform/data/customer-1/working-datasets/working-dataset-123/materialised.csv",
+        storedFileName: "materialised.csv",
+        mimeType: "text/csv",
+        fileSize: 23456,
+        headers: ["invoice_reference_number", "supplier_name"],
+        headersCount: 2,
+        rowsCount: 1,
+        meta: {
+          materialisedFrom: "projection_config",
+        },
+        updatedBy: "user-123",
+      },
+      { transaction: "mock-transaction" },
+    );
+    expect(result).toEqual({
+      workingDatasetId: "working-dataset-123",
+      sourceDatasetId: "source-dataset-123",
+      customerId: "customer-1",
+      profileId: "profile-1",
+      workingName: "July payments working data",
+      datasetType: "payment",
+      status: "in_progress",
+      currentStepNumber: 1,
+      storagePath:
+        "platform/data/customer-1/working-datasets/working-dataset-123/materialised.csv",
+      storedFileName: "materialised.csv",
+      mimeType: "text/csv",
+      fileSize: 23456,
+      headers: ["invoice_reference_number", "supplier_name"],
+      headersCount: 2,
+      rowsCount: 1,
+      lineage: {
+        sourceDatasetId: "source-dataset-123",
+        createdFrom: "immutable_dataset",
+      },
+      meta: {
+        materialisedFrom: "projection_config",
+      },
+      activeEditor: {
+        userId: null,
+        sessionId: null,
+        startedAt: null,
+        lastSeenAt: null,
+        expiresAt: null,
+      },
+      finalisedAt: null,
+      finalisedBy: null,
+      createdAt: "2026-07-06T00:00:00.000Z",
+      updatedAt: "2026-07-06T00:30:00.000Z",
+    });
+  });
+
+  it("throws 404 when updating storage for a missing working dataset", async () => {
+    const PlatformDataWorkingDataset = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+
+    await expect(
+      datasetRepository.updateWorkingDatasetStorageRecord({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "missing-working-dataset",
+        customerId: "customer-1",
+        profileId: "profile-1",
+        storage: {
+          storagePath:
+            "platform/data/customer-1/working-datasets/missing/materialised.csv",
+          storedFileName: "materialised.csv",
+          mimeType: "text/csv",
+          fileSize: 23456,
+          headers: ["invoice_reference_number"],
+          headersCount: 1,
+          rowsCount: 1,
+        },
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-1",
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: "working dataset was not found.",
+      status: 404,
+    });
+  });
+});
+
 describe("finaliseWorkingDatasetRecord", () => {
   it("finalises a working dataset and clears active editor lease fields", async () => {
     const finalisedAt = new Date("2026-07-06T00:30:00.000Z");

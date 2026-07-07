@@ -560,6 +560,88 @@ async function finaliseWorkingDatasetRecord({
   });
 }
 
+async function updateWorkingDatasetStorageRecord({
+  PlatformDataWorkingDataset,
+  workingDatasetId,
+  customerId,
+  profileId,
+  storage,
+  actor,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+  requireValue(storage, "storage is required for working dataset persistence.");
+  requireValue(
+    storage.storagePath,
+    "storagePath is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.storedFileName,
+    "storedFileName is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.mimeType,
+    "mimeType is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.fileSize,
+    "fileSize is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.headers,
+    "headers is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.headersCount,
+    "headersCount is required for working dataset persistence.",
+  );
+  requireValue(
+    storage.rowsCount,
+    "rowsCount is required for working dataset persistence.",
+  );
+  requireValue(
+    actor?.id,
+    "actor id is required for working dataset persistence.",
+  );
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDataset.findOne({
+      where: {
+        id: workingDatasetId,
+        customerId,
+        profileId,
+      },
+      transaction,
+    });
+
+    if (!record) {
+      throw createError("working dataset was not found.", 404);
+    }
+
+    const updatedRecord = await record.update(
+      {
+        storagePath: storage.storagePath,
+        storedFileName: storage.storedFileName,
+        mimeType: storage.mimeType,
+        fileSize: storage.fileSize,
+        headers: storage.headers,
+        headersCount: storage.headersCount,
+        rowsCount: storage.rowsCount,
+        meta: storage.meta || {},
+        updatedBy: actor.id,
+      },
+      { transaction },
+    );
+
+    return normaliseWorkingDatasetRecord(updatedRecord);
+  });
+}
+
 module.exports = {
   clearWorkingDatasetEditLease,
   createDatasetRecord,
@@ -572,4 +654,5 @@ module.exports = {
   normaliseWorkingDatasetActivityRecord,
   normaliseWorkingDatasetRecord,
   updateWorkingDatasetEditLease,
+  updateWorkingDatasetStorageRecord,
 };
