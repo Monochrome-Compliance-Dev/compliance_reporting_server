@@ -1,3 +1,5 @@
+const fs = require("fs/promises");
+const path = require("path");
 const datasetRepository = require("@/platform/data/dataset.repository");
 
 function createError(message, status = 500) {
@@ -125,6 +127,163 @@ function ensureUniqueTargetFields({ fields, customFields }) {
   }
 }
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"' && inQuotes && nextCharacter === '"') {
+      current += '"';
+      index += 1;
+    } else if (character === '"') {
+      inQuotes = !inQuotes;
+    } else if (character === "," && !inQuotes) {
+      values.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+
+  values.push(current);
+
+  return values;
+}
+
+function parseCsv(content) {
+  const lines = content
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    throw createError("working dataset CSV is empty.");
+  }
+
+  const headers = parseCsvLine(lines[0]);
+  const rows = lines.slice(1).map((line) => {
+    const values = parseCsvLine(line);
+
+    return headers.reduce((row, header, index) => {
+      row[header] = values[index] ?? "";
+      return row;
+    }, {});
+  });
+
+  return {
+    headers,
+    rows,
+  };
+}
+
+function escapeCsvValue(value) {
+  const stringValue =
+    value === undefined || value === null ? "" : String(value);
+
+  if (
+    stringValue.includes(",") ||
+    stringValue.includes('"') ||
+    stringValue.includes("\n") ||
+    stringValue.includes("\r")
+  ) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+
+  return stringValue;
+}
+
+function serialiseCsv({ headers, rows }) {
+  const outputRows = [
+    headers.map(escapeCsvValue).join(","),
+    ...rows.map((row) =>
+      headers.map((header) => escapeCsvValue(row[header])).join(","),
+    ),
+  ];
+
+  return `${outputRows.join("\n")}\n`;
+}
+
+function buildMaterialisedRows({ sourceRows, fields, customFields }) {
+  return sourceRows.map((sourceRow) => {
+    const materialisedRow = {};
+
+    fields.forEach((field) => {
+      materialisedRow[field.targetField] = sourceRow[field.sourceField] ?? "";
+    });
+
+    customFields.forEach((field) => {
+      materialisedRow[field.targetField] = field.value;
+    });
+
+    return materialisedRow;
+  });
+}
+
+function buildMaterialisedFileName({ workingDatasetId, now }) {
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  return `${workingDatasetId}-materialised-${timestamp}.csv`;
+}
+
+function buildMaterialisedStoragePath({ workingDataset, storedFileName }) {
+  const currentDirectory = path.dirname(workingDataset.storagePath);
+  return path.join(currentDirectory, storedFileName);
+}
+
+async function writeMaterialisedCsv({
+  workingDataset,
+  fields,
+  customFields,
+  now,
+}) {
+  const sourceContent = await fs.readFile(workingDataset.storagePath, "utf8");
+  const sourceCsv = parseCsv(sourceContent);
+  const materialisedHeaders = [
+    ...fields.map((field) => field.targetField),
+    ...customFields.map((field) => field.targetField),
+  ];
+  const materialisedRows = buildMaterialisedRows({
+    sourceRows: sourceCsv.rows,
+    fields,
+    customFields,
+  });
+  const materialisedContent = serialiseCsv({
+    headers: materialisedHeaders,
+    rows: materialisedRows,
+  });
+  const storedFileName = buildMaterialisedFileName({
+    workingDatasetId: workingDataset.workingDatasetId,
+    now,
+  });
+  const storagePath = buildMaterialisedStoragePath({
+    workingDataset,
+    storedFileName,
+  });
+
+  await fs.mkdir(path.dirname(storagePath), { recursive: true });
+  await fs.writeFile(storagePath, materialisedContent, "utf8");
+
+  const fileStats = await fs.stat(storagePath);
+
+  return {
+    storagePath,
+    storedFileName,
+    mimeType: "text/csv",
+    fileSize: fileStats.size,
+    headers: materialisedHeaders,
+    headersCount: materialisedHeaders.length,
+    rowsCount: materialisedRows.length,
+    meta: {
+      materialisedFrom: "projection_config",
+      sourceStoragePath: workingDataset.storagePath,
+      materialisedAt: now.toISOString(),
+    },
+  };
+}
+
 async function materialiseWorkingDataset({
   executionContext,
   params,
@@ -187,6 +346,23 @@ async function materialiseWorkingDataset({
     now,
   });
 
+  const storage = await writeMaterialisedCsv({
+    workingDataset,
+    fields,
+    customFields,
+    now,
+  });
+
+  const materialisedWorkingDataset =
+    await datasetRepository.updateWorkingDatasetStorageRecord({
+      PlatformDataWorkingDataset,
+      workingDatasetId: params.workingDatasetId,
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      storage,
+      actor,
+    });
+
   const activity = await datasetRepository.createWorkingDatasetActivityRecord({
     PlatformDataWorkingDatasetActivity,
     activity: {
@@ -200,6 +376,10 @@ async function materialiseWorkingDataset({
         editorSessionId: body.editorSessionId,
         fields,
         customFields,
+        storagePath: storage.storagePath,
+        storedFileName: storage.storedFileName,
+        rowsCount: storage.rowsCount,
+        headersCount: storage.headersCount,
       },
       relatedCapability: "transformation",
       relatedRecordId: params.workingDatasetId,
@@ -209,7 +389,7 @@ async function materialiseWorkingDataset({
 
   return {
     success: true,
-    workingDataset,
+    workingDataset: materialisedWorkingDataset,
     activity,
   };
 }

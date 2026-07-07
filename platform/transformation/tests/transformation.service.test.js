@@ -1,8 +1,17 @@
+jest.mock("fs/promises", () => ({
+  mkdir: jest.fn(),
+  readFile: jest.fn(),
+  stat: jest.fn(),
+  writeFile: jest.fn(),
+}));
+
 jest.mock("@/platform/data/dataset.repository", () => ({
   createWorkingDatasetActivityRecord: jest.fn(),
   getWorkingDatasetRecordById: jest.fn(),
+  updateWorkingDatasetStorageRecord: jest.fn(),
 }));
 
+const fs = require("fs/promises");
 const datasetRepository = require("@/platform/data/dataset.repository");
 const transformationService = require("@/platform/transformation/transformation.service");
 
@@ -82,6 +91,22 @@ function createWorkingDataset(overrides = {}) {
   };
 }
 
+function createMaterialisedWorkingDataset(overrides = {}) {
+  return createWorkingDataset({
+    storagePath:
+      "/tmp/storage/data_hub/customer-123/datasets/working-dataset-123-materialised.csv",
+    storedFileName: "working-dataset-123-materialised.csv",
+    fileSize: 82,
+    headers: ["invoice_reference_number", "supplier_name", "source_file_type"],
+    headersCount: 3,
+    rowsCount: 1,
+    meta: {
+      materialisedFrom: "projection_config",
+    },
+    ...overrides,
+  });
+}
+
 function createActivity(overrides = {}) {
   return {
     activityId: "activity-123",
@@ -104,8 +129,18 @@ function createActivity(overrides = {}) {
 
 describe("transformation.service", () => {
   beforeEach(() => {
+    fs.readFile.mockResolvedValue(
+      "Supplier,Invoice No\nAcme Pty Ltd,INV-001\n",
+    );
+    fs.mkdir.mockResolvedValue(undefined);
+    fs.writeFile.mockResolvedValue(undefined);
+    fs.stat.mockResolvedValue({ size: 82 });
+
     datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
       createWorkingDataset(),
+    );
+    datasetRepository.updateWorkingDatasetStorageRecord.mockResolvedValue(
+      createMaterialisedWorkingDataset(),
     );
     datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
       createActivity(),
@@ -117,7 +152,7 @@ describe("transformation.service", () => {
   });
 
   describe("materialiseWorkingDataset", () => {
-    it("records materialisation activity for an editable working dataset with an owned active lease", async () => {
+    it("materialises a CSV, updates working dataset storage and records activity for an editable working dataset with an owned active lease", async () => {
       const PlatformDataWorkingDataset = "PlatformDataWorkingDatasetModel";
       const PlatformDataWorkingDatasetActivity =
         "PlatformDataWorkingDatasetActivityModel";
@@ -137,6 +172,62 @@ describe("transformation.service", () => {
         workingDatasetId: "working-dataset-123",
         customerId: "customer-123",
         profileId: "profile-123",
+      });
+      expect(fs.readFile).toHaveBeenCalledWith(
+        "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+        "utf8",
+      );
+      expect(fs.mkdir).toHaveBeenCalledWith(
+        "/tmp/storage/data_hub/customer-123/datasets",
+        { recursive: true },
+      );
+      expect(fs.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /\/tmp\/storage\/data_hub\/customer-123\/datasets\/working-dataset-123-materialised-.+\.csv$/,
+        ),
+        "invoice_reference_number,supplier_name,source_file_type\nINV-001,Acme Pty Ltd,payments\n",
+        "utf8",
+      );
+      expect(fs.stat).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /\/tmp\/storage\/data_hub\/customer-123\/datasets\/working-dataset-123-materialised-.+\.csv$/,
+        ),
+      );
+      expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+        storage: {
+          storagePath: expect.stringMatching(
+            /\/tmp\/storage\/data_hub\/customer-123\/datasets\/working-dataset-123-materialised-.+\.csv$/,
+          ),
+          storedFileName: expect.stringMatching(
+            /^working-dataset-123-materialised-.+\.csv$/,
+          ),
+          mimeType: "text/csv",
+          fileSize: 82,
+          headers: [
+            "invoice_reference_number",
+            "supplier_name",
+            "source_file_type",
+          ],
+          headersCount: 3,
+          rowsCount: 1,
+          meta: {
+            materialisedFrom: "projection_config",
+            sourceStoragePath:
+              "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+            materialisedAt: expect.any(String),
+          },
+        },
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
       });
       expect(
         datasetRepository.createWorkingDatasetActivityRecord,
@@ -167,6 +258,14 @@ describe("transformation.service", () => {
                 value: "payments",
               },
             ],
+            storagePath: expect.stringMatching(
+              /\/tmp\/storage\/data_hub\/customer-123\/datasets\/working-dataset-123-materialised-.+\.csv$/,
+            ),
+            storedFileName: expect.stringMatching(
+              /^working-dataset-123-materialised-.+\.csv$/,
+            ),
+            rowsCount: 1,
+            headersCount: 3,
           },
           relatedCapability: "transformation",
           relatedRecordId: "working-dataset-123",
@@ -179,7 +278,7 @@ describe("transformation.service", () => {
       });
       expect(result).toEqual({
         success: true,
-        workingDataset: createWorkingDataset(),
+        workingDataset: createMaterialisedWorkingDataset(),
         activity: createActivity(),
       });
     });
@@ -198,6 +297,9 @@ describe("transformation.service", () => {
 
       expect(
         datasetRepository.getWorkingDatasetRecordById,
+      ).not.toHaveBeenCalled();
+      expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
       ).not.toHaveBeenCalled();
       expect(
         datasetRepository.createWorkingDatasetActivityRecord,
@@ -233,6 +335,9 @@ describe("transformation.service", () => {
         datasetRepository.getWorkingDatasetRecordById,
       ).not.toHaveBeenCalled();
       expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).not.toHaveBeenCalled();
+      expect(
         datasetRepository.createWorkingDatasetActivityRecord,
       ).not.toHaveBeenCalled();
     });
@@ -253,6 +358,9 @@ describe("transformation.service", () => {
         }),
       ).rejects.toThrow("final working datasets cannot be materialised.");
 
+      expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).not.toHaveBeenCalled();
       expect(
         datasetRepository.createWorkingDatasetActivityRecord,
       ).not.toHaveBeenCalled();
@@ -283,6 +391,9 @@ describe("transformation.service", () => {
       ).rejects.toThrow("active editor lease belongs to another session.");
 
       expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).not.toHaveBeenCalled();
+      expect(
         datasetRepository.createWorkingDatasetActivityRecord,
       ).not.toHaveBeenCalled();
     });
@@ -311,6 +422,9 @@ describe("transformation.service", () => {
         }),
       ).rejects.toThrow("active editor lease has expired.");
 
+      expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).not.toHaveBeenCalled();
       expect(
         datasetRepository.createWorkingDatasetActivityRecord,
       ).not.toHaveBeenCalled();
