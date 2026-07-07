@@ -1,5 +1,5 @@
 const { getNanoid } = require("@/helpers/nanoid_helper");
-const { scanFileBuffer } = require("@/middleware/virus-scan");
+const { scanFile } = require("@/middleware/virus-scan");
 
 const acquisitionService = require("@/platform/data/acquisition.service");
 const auditService = require("@/platform/audit/audit.service");
@@ -68,7 +68,7 @@ async function createDataset({
   }
 
   try {
-    await scanFileBuffer(command.file.buffer, command.file.originalFileName);
+    await scanFile(command.file.path, command.file.originalFileName);
   } catch (error) {
     await auditService.recordDataDatasetAudit({
       datasetId,
@@ -84,7 +84,7 @@ async function createDataset({
   const storageResult = await fileStorageService.storeDatasetFile({
     customerId: command.customerId,
     datasetId,
-    buffer: command.file.buffer,
+    sourceFilePath: command.file.path,
   });
 
   const datasetResponse = datasetService.createImmutableDatasetFromCommand({

@@ -1,5 +1,5 @@
 jest.mock("@/platform/data/csv-inspection.service", () => ({
-  inspectCsvBuffer: jest.fn(),
+  inspectCsvFile: jest.fn(),
 }));
 
 jest.mock("@/platform/data/dataset.contract", () => ({
@@ -26,7 +26,7 @@ function createCommand(overrides = {}) {
       originalFileName: "payments.csv",
       mimeType: "text/csv",
       fileSize: 12345,
-      buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+      path: "/tmp/mc-platform-data-uploads/payments.csv",
     },
     ...overrides,
   };
@@ -53,7 +53,7 @@ describe("dataset.service", () => {
   beforeEach(() => {
     jest.useFakeTimers().setSystemTime(new Date("2026-07-05T00:00:00.000Z"));
 
-    csvInspectionService.inspectCsvBuffer.mockReturnValue({
+    csvInspectionService.inspectCsvFile.mockReturnValue({
       headers: ["Supplier", "Invoice"],
       headersCount: 2,
       rowsCount: 1,
@@ -77,8 +77,8 @@ describe("dataset.service", () => {
       const result =
         datasetService.createImmutableDatasetFromCommand(createDatasetInput());
 
-      expect(csvInspectionService.inspectCsvBuffer).toHaveBeenCalledWith(
-        Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+      expect(csvInspectionService.inspectCsvFile).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
       );
 
       expect(datasetContract.buildDatasetCreationResponse).toHaveBeenCalledWith(
@@ -266,8 +266,23 @@ describe("dataset.service", () => {
       ).toThrow("fileSize is required for dataset creation.");
     });
 
+    it("throws when file path is missing", () => {
+      expect(() =>
+        datasetService.createImmutableDatasetFromCommand(
+          createDatasetInput({
+            command: createCommand({
+              file: {
+                ...createCommand().file,
+                path: null,
+              },
+            }),
+          }),
+        ),
+      ).toThrow("file path is required for dataset creation.");
+    });
+
     it("fails loudly when CSV inspection fails", () => {
-      csvInspectionService.inspectCsvBuffer.mockImplementation(() => {
+      csvInspectionService.inspectCsvFile.mockImplementation(() => {
         throw new Error("CSV inspection failed");
       });
 

@@ -1,3 +1,5 @@
+const fs = require("fs");
+
 function createError(message, status = 400) {
   const error = new Error(message);
   error.status = status;
@@ -11,6 +13,12 @@ function requireBuffer(buffer) {
 
   if (buffer.length === 0) {
     throw createError("CSV buffer must not be empty.");
+  }
+}
+
+function requireFilePath(filePath) {
+  if (!filePath) {
+    throw createError("CSV file path is required for dataset creation.");
   }
 }
 
@@ -112,6 +120,14 @@ function inspectCsvBuffer(buffer) {
   };
 }
 
+function inspectCsvFile(filePath) {
+  requireFilePath(filePath);
+
+  const buffer = fs.readFileSync(filePath);
+  return inspectCsvBuffer(buffer);
+}
+
 module.exports = {
   inspectCsvBuffer,
+  inspectCsvFile,
 };

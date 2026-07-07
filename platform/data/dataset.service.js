@@ -73,10 +73,12 @@ function createImmutableDatasetFromCommand({
     command.file.fileSize,
     "fileSize is required for dataset creation.",
   );
-
-  const csvInspection = csvInspectionService.inspectCsvBuffer(
-    command.file.buffer,
+  requireValue(
+    command.file.path,
+    "file path is required for dataset creation.",
   );
+
+  const csvInspection = csvInspectionService.inspectCsvFile(command.file.path);
 
   const dataset = {
     datasetId,

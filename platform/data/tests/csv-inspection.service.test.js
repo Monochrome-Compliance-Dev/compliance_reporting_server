@@ -1,10 +1,20 @@
 const csvInspectionService = require("@/platform/data/csv-inspection.service");
 
+jest.mock("fs", () => ({
+  readFileSync: jest.fn(),
+}));
+
+const fs = require("fs");
+
 function createBuffer(csvText) {
   return Buffer.from(csvText, "utf8");
 }
 
 describe("csv-inspection.service", () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
   describe("inspectCsvBuffer", () => {
     it("extracts headers and row count from a normal CSV buffer", () => {
       const result = csvInspectionService.inspectCsvBuffer(
@@ -113,6 +123,45 @@ describe("csv-inspection.service", () => {
           createBuffer(",,\nABC,DEF,GHI\n"),
         ),
       ).toThrow("CSV appears to have no header row.");
+    });
+  });
+
+  describe("inspectCsvFile", () => {
+    it("reads a CSV file from disk and inspects the file content", () => {
+      fs.readFileSync.mockReturnValue(
+        createBuffer("Supplier,Invoice\nABC,INV-001\nDEF,INV-002\n"),
+      );
+
+      const result = csvInspectionService.inspectCsvFile(
+        "/tmp/mc-platform-data-uploads/payments.csv",
+      );
+
+      expect(fs.readFileSync).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
+      );
+      expect(result).toEqual({
+        headers: ["Supplier", "Invoice"],
+        headersCount: 2,
+        rowsCount: 2,
+      });
+    });
+
+    it("throws when the CSV file path is missing", () => {
+      expect(() => csvInspectionService.inspectCsvFile()).toThrow(
+        "CSV file path is required for dataset creation.",
+      );
+    });
+
+    it("surfaces file read failures", () => {
+      fs.readFileSync.mockImplementation(() => {
+        throw new Error("read failed");
+      });
+
+      expect(() =>
+        csvInspectionService.inspectCsvFile(
+          "/tmp/mc-platform-data-uploads/payments.csv",
+        ),
+      ).toThrow("read failed");
     });
   });
 });

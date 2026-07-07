@@ -23,7 +23,7 @@ function createFile(overrides = {}) {
     originalname: "payments.csv",
     mimetype: "text/csv",
     size: 12345,
-    buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+    path: "/tmp/mc-platform-data-uploads/payments.csv",
     ...overrides,
   };
 }
@@ -52,7 +52,7 @@ describe("acquisition.service", () => {
           originalFileName: "payments.csv",
           mimeType: "text/csv",
           fileSize: 12345,
-          buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+          path: "/tmp/mc-platform-data-uploads/payments.csv",
         },
       });
     });
@@ -190,6 +190,16 @@ describe("acquisition.service", () => {
           file: createFile({ size: undefined }),
         }),
       ).toThrow("file.size is required for dataset creation.");
+    });
+
+    it("throws when file.path is missing", () => {
+      expect(() =>
+        acquisitionService.buildDatasetCreationCommand({
+          executionContext: createExecutionContext(),
+          body: createBody(),
+          file: createFile({ path: undefined }),
+        }),
+      ).toThrow("file.path is required for dataset creation.");
     });
 
     it("throws when file.size is not positive", () => {

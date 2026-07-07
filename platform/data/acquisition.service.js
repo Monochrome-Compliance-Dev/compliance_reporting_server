@@ -67,6 +67,7 @@ function assertCsvFile(file) {
     "file.mimetype is required for dataset creation.",
   );
   requireValue(file.size, "file.size is required for dataset creation.");
+  requireValue(file.path, "file.path is required for dataset creation.");
 
   if (!Number.isInteger(file.size) || file.size <= 0) {
     throw createError("file.size must be a positive integer.");
@@ -113,7 +114,7 @@ function buildDatasetCreationCommand({ executionContext, body, file }) {
       originalFileName: file.originalname,
       mimeType: normaliseString(file.mimetype).toLowerCase(),
       fileSize: file.size,
-      buffer: file.buffer,
+      path: file.path,
     },
   };
 }

@@ -186,7 +186,7 @@ describe("data.routes", () => {
           originalname: "payments.csv",
           mimetype: "text/csv",
           size: Buffer.byteLength("Supplier,Invoice\nABC,INV-001\n"),
-          buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+          path: expect.stringContaining("payments.csv"),
         }),
         PlatformDataDataset: "PlatformDataDatasetModel",
       });

@@ -3,7 +3,7 @@ jest.mock("@/helpers/nanoid_helper", () => ({
 }));
 
 jest.mock("@/middleware/virus-scan", () => ({
-  scanFileBuffer: jest.fn(),
+  scanFile: jest.fn(),
 }));
 
 jest.mock("@/platform/audit/audit.service", () => ({
@@ -33,7 +33,7 @@ jest.mock("@/platform/security/security.service", () => ({
 }));
 
 const { getNanoid } = require("@/helpers/nanoid_helper");
-const { scanFileBuffer } = require("@/middleware/virus-scan");
+const { scanFile } = require("@/middleware/virus-scan");
 const auditService = require("@/platform/audit/audit.service");
 const acquisitionService = require("@/platform/data/acquisition.service");
 const datasetRepository = require("@/platform/data/dataset.repository");
@@ -65,7 +65,7 @@ function createFile(overrides = {}) {
     originalname: "payments.csv",
     mimetype: "text/csv",
     size: 12345,
-    buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+    path: "/tmp/mc-platform-data-uploads/payments.csv",
     ...overrides,
   };
 }
@@ -86,7 +86,7 @@ function createCommand(overrides = {}) {
       originalFileName: "payments.csv",
       mimeType: "text/csv",
       fileSize: 12345,
-      buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+      path: "/tmp/mc-platform-data-uploads/payments.csv",
     },
     ...overrides,
   };
@@ -184,7 +184,7 @@ function createWorkingDataset(overrides = {}) {
 describe("data.service", () => {
   beforeEach(() => {
     getNanoid.mockReturnValue("dataset123");
-    scanFileBuffer.mockResolvedValue(undefined);
+    scanFile.mockResolvedValue(undefined);
     securityService.enforceDataDatasetCreation.mockReturnValue({
       eventType: "platform.security.data_dataset_observed",
       outcome: "allowed",
@@ -244,17 +244,14 @@ describe("data.service", () => {
         actor: createCommand().actor,
         customerId: "customer-123",
       });
-      expect(scanFileBuffer).toHaveBeenCalledWith(
-        expect.any(Buffer),
+      expect(scanFile).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
         "payments.csv",
-      );
-      expect(scanFileBuffer.mock.calls[0][0].toString()).toBe(
-        "Supplier,Invoice\nABC,INV-001\n",
       );
       expect(fileStorageService.storeDatasetFile).toHaveBeenCalledWith({
         customerId: "customer-123",
         datasetId: "dataset123",
-        buffer: Buffer.from("Supplier,Invoice\nABC,INV-001\n"),
+        sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
       });
       expect(
         datasetService.createImmutableDatasetFromCommand,
@@ -342,7 +339,7 @@ describe("data.service", () => {
       ).rejects.toThrow("Role is not allowed for governed execution.");
 
       expect(fileStorageService.storeDatasetFile).not.toHaveBeenCalled();
-      expect(scanFileBuffer).not.toHaveBeenCalled();
+      expect(scanFile).not.toHaveBeenCalled();
       expect(datasetRepository.createDatasetRecord).not.toHaveBeenCalled();
       expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
         datasetId: "dataset123",
@@ -362,7 +359,7 @@ describe("data.service", () => {
     it("fails loudly and records denied audit evidence when antivirus scanning fails", async () => {
       const scanError = new Error("Antivirus scan failed.");
       scanError.status = 400;
-      scanFileBuffer.mockRejectedValue(scanError);
+      scanFile.mockRejectedValue(scanError);
 
       await expect(
         dataService.createDataset({
@@ -373,12 +370,9 @@ describe("data.service", () => {
         }),
       ).rejects.toThrow("Antivirus scan failed.");
 
-      expect(scanFileBuffer).toHaveBeenCalledWith(
-        expect.any(Buffer),
+      expect(scanFile).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
         "payments.csv",
-      );
-      expect(scanFileBuffer.mock.calls[0][0].toString()).toBe(
-        "Supplier,Invoice\nABC,INV-001\n",
       );
       expect(fileStorageService.storeDatasetFile).not.toHaveBeenCalled();
       expect(

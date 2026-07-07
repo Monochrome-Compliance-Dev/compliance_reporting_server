@@ -3,19 +3,15 @@ const path = require("path");
 
 jest.mock("fs/promises", () => ({
   mkdir: jest.fn(),
-  writeFile: jest.fn(),
+  copyFile: jest.fn(),
 }));
 
 const fileStorageService = require("@/platform/data/file-storage.service");
 
-function createBuffer() {
-  return Buffer.from("Supplier,Invoice\nABC,INV-001\n");
-}
-
 describe("file-storage.service", () => {
   beforeEach(() => {
     fs.mkdir.mockResolvedValue(undefined);
-    fs.writeFile.mockResolvedValue(undefined);
+    fs.copyFile.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -86,27 +82,27 @@ describe("file-storage.service", () => {
   });
 
   describe("storeDatasetFile", () => {
-    it("creates the dataset directory and writes the immutable CSV file", async () => {
+    it("creates the dataset directory and copies the scanned immutable CSV file", async () => {
       const result = await fileStorageService.storeDatasetFile({
         storageRoot: "/tmp/storage/data_hub",
         customerId: "customer-1",
         datasetId: "dataset123",
-        buffer: createBuffer(),
+        sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
       });
 
       expect(fs.mkdir).toHaveBeenCalledWith(
         path.join("/tmp/storage/data_hub", "customer-1", "datasets"),
         { recursive: true },
       );
-      expect(fs.writeFile).toHaveBeenCalledWith(
+      expect(fs.copyFile).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
         path.join(
           "/tmp/storage/data_hub",
           "customer-1",
           "datasets",
           "dataset123.csv",
         ),
-        createBuffer(),
-        { flag: "wx" },
+        expect.any(Number),
       );
       expect(result).toEqual({
         storedFileName: "dataset123.csv",
@@ -123,7 +119,7 @@ describe("file-storage.service", () => {
       await expect(
         fileStorageService.storeDatasetFile({
           datasetId: "dataset123",
-          buffer: createBuffer(),
+          sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
         }),
       ).rejects.toThrow("customerId is required for dataset storage.");
     });
@@ -132,28 +128,18 @@ describe("file-storage.service", () => {
       await expect(
         fileStorageService.storeDatasetFile({
           customerId: "customer-1",
-          buffer: createBuffer(),
+          sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
         }),
       ).rejects.toThrow("datasetId is required for dataset storage.");
     });
 
-    it("throws when buffer is missing", async () => {
+    it("throws when sourceFilePath is missing", async () => {
       await expect(
         fileStorageService.storeDatasetFile({
           customerId: "customer-1",
           datasetId: "dataset123",
         }),
-      ).rejects.toThrow("file buffer is required for dataset storage.");
-    });
-
-    it("throws when buffer is empty", async () => {
-      await expect(
-        fileStorageService.storeDatasetFile({
-          customerId: "customer-1",
-          datasetId: "dataset123",
-          buffer: Buffer.alloc(0),
-        }),
-      ).rejects.toThrow("file buffer must not be empty for dataset storage.");
+      ).rejects.toThrow("sourceFilePath is required for dataset storage.");
     });
 
     it("fails loudly when directory creation fails", async () => {
@@ -164,22 +150,22 @@ describe("file-storage.service", () => {
           storageRoot: "/tmp/storage/data_hub",
           customerId: "customer-1",
           datasetId: "dataset123",
-          buffer: createBuffer(),
+          sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
         }),
       ).rejects.toThrow("mkdir failed");
     });
 
-    it("fails loudly when file writing fails", async () => {
-      fs.writeFile.mockRejectedValue(new Error("write failed"));
+    it("fails loudly when file copy fails", async () => {
+      fs.copyFile.mockRejectedValue(new Error("copy failed"));
 
       await expect(
         fileStorageService.storeDatasetFile({
           storageRoot: "/tmp/storage/data_hub",
           customerId: "customer-1",
           datasetId: "dataset123",
-          buffer: createBuffer(),
+          sourceFilePath: "/tmp/mc-platform-data-uploads/payments.csv",
         }),
-      ).rejects.toThrow("write failed");
+      ).rejects.toThrow("copy failed");
     });
   });
 });

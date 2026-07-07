@@ -1,4 +1,5 @@
 const fs = require("fs/promises");
+const { constants: fsConstants } = require("fs");
 const path = require("path");
 
 const DEFAULT_STORAGE_ROOT = path.resolve(process.cwd(), "storage", "data_hub");
@@ -19,14 +20,11 @@ function requireValue(value, message) {
   }
 }
 
-function requireBuffer(buffer) {
-  if (!Buffer.isBuffer(buffer)) {
-    throw createError("file buffer is required for dataset storage.");
-  }
-
-  if (buffer.length === 0) {
-    throw createError("file buffer must not be empty for dataset storage.");
-  }
+function requireFilePath(sourceFilePath) {
+  requireValue(
+    sourceFilePath,
+    "sourceFilePath is required for dataset storage.",
+  );
 }
 
 function buildStoredFileName(datasetId) {
@@ -62,11 +60,11 @@ async function storeDatasetFile({
   storageRoot = DEFAULT_STORAGE_ROOT,
   customerId,
   datasetId,
-  buffer,
+  sourceFilePath,
 }) {
   requireValue(customerId, "customerId is required for dataset storage.");
   requireValue(datasetId, "datasetId is required for dataset storage.");
-  requireBuffer(buffer);
+  requireFilePath(sourceFilePath);
 
   const storageDirectory = buildDatasetStorageDirectory({
     storageRoot,
@@ -76,7 +74,7 @@ async function storeDatasetFile({
   const storagePath = path.join(storageDirectory, storedFileName);
 
   await fs.mkdir(storageDirectory, { recursive: true });
-  await fs.writeFile(storagePath, buffer, { flag: "wx" });
+  await fs.copyFile(sourceFilePath, storagePath, fsConstants.COPYFILE_EXCL);
 
   return {
     storedFileName,
