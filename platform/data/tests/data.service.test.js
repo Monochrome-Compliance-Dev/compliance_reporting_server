@@ -17,6 +17,7 @@ jest.mock("@/platform/data/acquisition.service", () => ({
 jest.mock("@/platform/data/dataset.repository", () => ({
   createDatasetRecord: jest.fn(),
   createWorkingDatasetRecord: jest.fn(),
+  createWorkingDatasetActivityRecord: jest.fn(),
   getDatasetRecordById: jest.fn(),
 }));
 
@@ -167,15 +168,40 @@ function createWorkingDataset(overrides = {}) {
     profileId: "profile-123",
     workingName: "July payments working data",
     datasetType: "payment",
-    sourceType: "working_copy",
+    status: "in_progress",
+    currentStepNumber: 1,
+    storagePath:
+      "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+    storedFileName: "source-dataset-123.csv",
+    mimeType: "text/csv",
+    fileSize: 12345,
     headers: ["Supplier", "Invoice"],
     headersCount: 2,
     rowsCount: 1,
-    status: "available",
     lineage: {
       sourceDatasetId: "source-dataset-123",
       createdFrom: "immutable_dataset",
     },
+    createdAt: "2026-07-06T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createWorkingDatasetActivity(overrides = {}) {
+  return {
+    activityId: "activity-123",
+    customerId: "customer-123",
+    profileId: "profile-123",
+    workingDatasetId: "working-dataset-123",
+    activityType: "working_dataset_created",
+    stepNumber: 1,
+    summary: "Created working dataset July payments working data",
+    details: {
+      sourceDatasetId: "source-dataset-123",
+    },
+    relatedCapability: "data",
+    relatedRecordId: "working-dataset-123",
+    createdBy: "user-123",
     createdAt: "2026-07-06T00:00:00.000Z",
     ...overrides,
   };
@@ -210,6 +236,9 @@ describe("data.service", () => {
     );
     datasetRepository.createWorkingDatasetRecord.mockResolvedValue(
       createWorkingDataset(),
+    );
+    datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
+      createWorkingDatasetActivity(),
     );
   });
 
@@ -445,11 +474,16 @@ describe("data.service", () => {
       const executionContext = createExecutionContext();
       const body = createWorkingDatasetBody();
       const PlatformDataDataset = "PlatformDataDatasetModel";
+      const PlatformDataWorkingDataset = "PlatformDataWorkingDatasetModel";
+      const PlatformDataWorkingDatasetActivity =
+        "PlatformDataWorkingDatasetActivityModel";
 
       const result = await dataService.createWorkingDataset({
         executionContext,
         body,
         PlatformDataDataset,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
       });
 
       expect(getNanoid).toHaveBeenCalledWith(10);
@@ -466,7 +500,7 @@ describe("data.service", () => {
       });
       expect(datasetRepository.createWorkingDatasetRecord).toHaveBeenCalledWith(
         {
-          PlatformDataDataset,
+          PlatformDataWorkingDataset,
           sourceDataset: createSourceDataset(),
           workingDataset: {
             workingDatasetId: "working-dataset-123",
@@ -474,10 +508,30 @@ describe("data.service", () => {
             customerId: "customer-123",
             profileId: "profile-123",
             workingName: "July payments working data",
+            currentStepNumber: 1,
             actor: createCommand().actor,
           },
         },
       );
+      expect(
+        datasetRepository.createWorkingDatasetActivityRecord,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDatasetActivity,
+        activity: {
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "working_dataset_created",
+          stepNumber: 1,
+          summary: "Created working dataset July payments working data",
+          details: {
+            sourceDatasetId: "source-dataset-123",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          actor: createCommand().actor,
+        },
+      });
       expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
         datasetId: "working-dataset-123",
         outcome: "success",
@@ -490,6 +544,7 @@ describe("data.service", () => {
       expect(result).toEqual({
         success: true,
         workingDataset: createWorkingDataset(),
+        activity: createWorkingDatasetActivity(),
       });
     });
 
@@ -499,6 +554,9 @@ describe("data.service", () => {
           executionContext: createExecutionContext(),
           body: createWorkingDatasetBody({ sourceDatasetId: null }),
           PlatformDataDataset: "PlatformDataDatasetModel",
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
         }),
       ).rejects.toThrow(
         "sourceDatasetId is required for working dataset creation.",
@@ -522,6 +580,9 @@ describe("data.service", () => {
           executionContext: createExecutionContext(),
           body: createWorkingDatasetBody(),
           PlatformDataDataset: "PlatformDataDatasetModel",
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
         }),
       ).rejects.toThrow("Role is not allowed for governed execution.");
 
@@ -554,6 +615,9 @@ describe("data.service", () => {
           executionContext: createExecutionContext(),
           body: createWorkingDatasetBody(),
           PlatformDataDataset: "PlatformDataDatasetModel",
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
         }),
       ).rejects.toThrow(
         "source dataset was not found for working data creation.",
@@ -574,6 +638,9 @@ describe("data.service", () => {
           executionContext: createExecutionContext(),
           body: createWorkingDatasetBody(),
           PlatformDataDataset: "PlatformDataDatasetModel",
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
         }),
       ).rejects.toMatchObject({
         message: "source dataset is not available for working data creation.",

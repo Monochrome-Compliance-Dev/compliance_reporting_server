@@ -571,16 +571,15 @@ app.use("/api/big-bertha", require("./bigBertha/bigBertha.controller"));
 
 // Platform routes
 const { sequelize } = require("./db/database");
-const PlatformDataDatasetModel = require("@/platform/data/models/platform_data_dataset");
+const { loadPlatformModels } = require("@/platform/platform.model_loader");
 const { createDataRouter } = require("@/platform/data/data.routes");
-const PlatformDataDataset =
-  sequelize.models?.PlatformDataDataset || PlatformDataDatasetModel(sequelize);
+const platformModels = loadPlatformModels(sequelize);
 
 app.use(
   "/api/platform/foundation",
   require("@/platform/foundation/foundation.routes"),
 );
-app.use("/api/platform/data", createDataRouter({ PlatformDataDataset }));
+app.use("/api/platform/data", createDataRouter(platformModels));
 
 // V2 routes
 // PTRS

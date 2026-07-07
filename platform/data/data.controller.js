@@ -4,7 +4,11 @@ function getExecutionContext(req) {
   return req.executionContext;
 }
 
-function createDataController({ PlatformDataDataset } = {}) {
+function createDataController({
+  PlatformDataDataset,
+  PlatformDataWorkingDataset,
+  PlatformDataWorkingDatasetActivity,
+} = {}) {
   async function createDataset(req, res, next) {
     try {
       const result = await dataService.createDataset({
@@ -26,6 +30,8 @@ function createDataController({ PlatformDataDataset } = {}) {
         executionContext: getExecutionContext(req),
         body: req.body,
         PlatformDataDataset,
+        PlatformDataWorkingDataset,
+        PlatformDataWorkingDatasetActivity,
       });
 
       return res.status(201).json(result);

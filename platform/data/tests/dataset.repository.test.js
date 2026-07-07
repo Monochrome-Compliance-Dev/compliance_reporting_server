@@ -90,6 +90,7 @@ function createWorkingDatasetCommand(overrides = {}) {
     customerId: "customer-1",
     profileId: "profile-1",
     workingName: "July payments working data",
+    currentStepNumber: 1,
     actor: {
       id: "user-123",
       role: "Admin",
@@ -105,10 +106,11 @@ function createWorkingModelRecord(overrides = {}) {
       id: "working-dataset-123",
       customerId: "customer-1",
       profileId: "profile-1",
+      sourceDatasetId: "source-dataset-123",
+      workingName: "July payments working data",
       datasetType: "payment",
-      sourceType: "working_copy",
-      sourceName: "July payments working data",
-      originalFileName: "payments.csv",
+      status: "in_progress",
+      currentStepNumber: 1,
       storedFileName: "source-dataset-123.csv",
       storagePath:
         "platform/data/customer-1/datasets/source-dataset-123/payments.csv",
@@ -117,15 +119,44 @@ function createWorkingModelRecord(overrides = {}) {
       headers: ["Supplier", "Invoice"],
       headersCount: 2,
       rowsCount: 1,
-      status: "available",
-      meta: {
-        lineage: {
-          sourceDatasetId: "source-dataset-123",
-          createdFrom: "immutable_dataset",
-        },
+      lineage: {
         sourceDatasetId: "source-dataset-123",
-        workingName: "July payments working data",
+        createdFrom: "immutable_dataset",
       },
+      meta: {
+        sourceDatasetId: "source-dataset-123",
+        sourceOriginalFileName: "payments.csv",
+      },
+      activeEditorUserId: null,
+      activeEditorSessionId: null,
+      activeEditorStartedAt: null,
+      activeEditorLastSeenAt: null,
+      activeEditorExpiresAt: null,
+      finalisedAt: null,
+      finalisedBy: null,
+      createdAt: new Date("2026-07-06T00:00:00.000Z"),
+      updatedAt: new Date("2026-07-06T00:00:00.000Z"),
+      ...overrides,
+    })),
+  };
+}
+
+function createWorkingActivityModelRecord(overrides = {}) {
+  return {
+    get: jest.fn(() => ({
+      id: "activity-123",
+      customerId: "customer-1",
+      profileId: "profile-1",
+      workingDatasetId: "working-dataset-123",
+      activityType: "working_dataset_created",
+      stepNumber: 1,
+      summary: "Created working dataset July payments working data",
+      details: {
+        sourceDatasetId: "source-dataset-123",
+      },
+      relatedCapability: "data",
+      relatedRecordId: "working-dataset-123",
+      createdBy: "user-123",
       createdAt: new Date("2026-07-06T00:00:00.000Z"),
       ...overrides,
     })),
@@ -378,13 +409,13 @@ describe("dataset.repository", () => {
   });
 
   describe("createWorkingDatasetRecord", () => {
-    it("creates a working_copy dataset record with source lineage", async () => {
-      const PlatformDataDataset = {
+    it("creates a dedicated working dataset record with source lineage", async () => {
+      const PlatformDataWorkingDataset = {
         create: jest.fn().mockResolvedValue(createWorkingModelRecord()),
       };
 
       const result = await datasetRepository.createWorkingDatasetRecord({
-        PlatformDataDataset,
+        PlatformDataWorkingDataset,
         sourceDataset: createSourceDataset(),
         workingDataset: createWorkingDatasetCommand(),
       });
@@ -393,15 +424,16 @@ describe("dataset.repository", () => {
         "customer-1",
         expect.any(Function),
       );
-      expect(PlatformDataDataset.create).toHaveBeenCalledWith(
+      expect(PlatformDataWorkingDataset.create).toHaveBeenCalledWith(
         {
           id: "working-dataset-123",
           customerId: "customer-1",
           profileId: "profile-1",
+          sourceDatasetId: "source-dataset-123",
+          workingName: "July payments working data",
           datasetType: "payment",
-          sourceType: "working_copy",
-          sourceName: "July payments working data",
-          originalFileName: "payments.csv",
+          status: "in_progress",
+          currentStepNumber: 1,
           storedFileName: "source-dataset-123.csv",
           storagePath:
             "platform/data/customer-1/datasets/source-dataset-123/payments.csv",
@@ -410,17 +442,14 @@ describe("dataset.repository", () => {
           headers: ["Supplier", "Invoice"],
           headersCount: 2,
           rowsCount: 1,
-          status: "available",
-          detectedCoverage: {},
-          meta: {
-            lineage: {
-              sourceDatasetId: "source-dataset-123",
-              createdFrom: "immutable_dataset",
-            },
+          lineage: {
             sourceDatasetId: "source-dataset-123",
-            workingName: "July payments working data",
+            createdFrom: "immutable_dataset",
           },
-          uploadedBy: "user-123",
+          meta: {
+            sourceDatasetId: "source-dataset-123",
+            sourceOriginalFileName: "payments.csv",
+          },
           createdBy: "user-123",
           updatedBy: "user-123",
         },
@@ -433,16 +462,35 @@ describe("dataset.repository", () => {
         profileId: "profile-1",
         workingName: "July payments working data",
         datasetType: "payment",
-        sourceType: "working_copy",
+        status: "in_progress",
+        currentStepNumber: 1,
+        storagePath:
+          "platform/data/customer-1/datasets/source-dataset-123/payments.csv",
+        storedFileName: "source-dataset-123.csv",
+        mimeType: "text/csv",
+        fileSize: 12345,
         headers: ["Supplier", "Invoice"],
         headersCount: 2,
         rowsCount: 1,
-        status: "available",
         lineage: {
           sourceDatasetId: "source-dataset-123",
           createdFrom: "immutable_dataset",
         },
+        meta: {
+          sourceDatasetId: "source-dataset-123",
+          sourceOriginalFileName: "payments.csv",
+        },
+        activeEditor: {
+          userId: null,
+          sessionId: null,
+          startedAt: null,
+          lastSeenAt: null,
+          expiresAt: null,
+        },
+        finalisedAt: null,
+        finalisedBy: null,
         createdAt: "2026-07-06T00:00:00.000Z",
+        updatedAt: "2026-07-06T00:00:00.000Z",
       });
     });
 
@@ -462,7 +510,7 @@ describe("dataset.repository", () => {
     it("throws when lineage is missing during normalisation", () => {
       expect(() =>
         datasetRepository.normaliseWorkingDatasetRecord(
-          createWorkingModelRecord({ meta: {} }),
+          createWorkingModelRecord({ lineage: null }),
         ),
       ).toThrow("working dataset lineage is required.");
     });
@@ -470,13 +518,83 @@ describe("dataset.repository", () => {
     it("does not open a customer transaction when working dataset customerId is missing", async () => {
       await expect(
         datasetRepository.createWorkingDatasetRecord({
-          PlatformDataDataset: { create: jest.fn() },
+          PlatformDataWorkingDataset: { create: jest.fn() },
           sourceDataset: createSourceDataset(),
           workingDataset: createWorkingDatasetCommand({ customerId: null }),
         }),
       ).rejects.toThrow("customerId is required for persistence.");
 
       expect(withCustomerTransaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createWorkingDatasetActivityRecord", () => {
+    it("creates a working dataset activity record", async () => {
+      const PlatformDataWorkingDatasetActivity = {
+        create: jest.fn().mockResolvedValue(createWorkingActivityModelRecord()),
+      };
+
+      const result = await datasetRepository.createWorkingDatasetActivityRecord(
+        {
+          PlatformDataWorkingDatasetActivity,
+          activity: {
+            customerId: "customer-1",
+            profileId: "profile-1",
+            workingDatasetId: "working-dataset-123",
+            activityType: "working_dataset_created",
+            stepNumber: 1,
+            summary: "Created working dataset July payments working data",
+            details: {
+              sourceDatasetId: "source-dataset-123",
+            },
+            relatedCapability: "data",
+            relatedRecordId: "working-dataset-123",
+            actor: {
+              id: "user-123",
+              role: "Admin",
+              customerId: "customer-1",
+            },
+          },
+        },
+      );
+
+      expect(withCustomerTransaction).toHaveBeenCalledWith(
+        "customer-1",
+        expect.any(Function),
+      );
+      expect(PlatformDataWorkingDatasetActivity.create).toHaveBeenCalledWith(
+        {
+          customerId: "customer-1",
+          profileId: "profile-1",
+          workingDatasetId: "working-dataset-123",
+          activityType: "working_dataset_created",
+          stepNumber: 1,
+          summary: "Created working dataset July payments working data",
+          details: {
+            sourceDatasetId: "source-dataset-123",
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          createdBy: "user-123",
+        },
+        { transaction: "mock-transaction" },
+      );
+      expect(result).toEqual({
+        activityId: "activity-123",
+        customerId: "customer-1",
+        profileId: "profile-1",
+        workingDatasetId: "working-dataset-123",
+        activityType: "working_dataset_created",
+        stepNumber: 1,
+        summary: "Created working dataset July payments working data",
+        details: {
+          sourceDatasetId: "source-dataset-123",
+        },
+        relatedCapability: "data",
+        relatedRecordId: "working-dataset-123",
+        createdBy: "user-123",
+        createdAt: "2026-07-06T00:00:00.000Z",
+      });
     });
   });
 

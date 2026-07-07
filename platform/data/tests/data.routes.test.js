@@ -62,7 +62,12 @@ function createApp() {
 
   app.use(
     "/api/platform/data",
-    createDataRouter({ PlatformDataDataset: "PlatformDataDatasetModel" }),
+    createDataRouter({
+      PlatformDataDataset: "PlatformDataDatasetModel",
+      PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      PlatformDataWorkingDatasetActivity:
+        "PlatformDataWorkingDatasetActivityModel",
+    }),
   );
 
   app.use((error, req, res, next) => {
@@ -111,11 +116,16 @@ function createWorkingDatasetResponse(overrides = {}) {
       profileId: "profile-123",
       workingName: "July payments working data",
       datasetType: "payment",
-      sourceType: "working_copy",
+      status: "in_progress",
+      currentStepNumber: 1,
+      storagePath:
+        "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+      storedFileName: "source-dataset-123.csv",
+      mimeType: "text/csv",
+      fileSize: 12345,
       headers: ["Supplier", "Invoice"],
       headersCount: 2,
       rowsCount: 1,
-      status: "available",
       lineage: {
         sourceDatasetId: "source-dataset-123",
         createdFrom: "immutable_dataset",
@@ -123,6 +133,23 @@ function createWorkingDatasetResponse(overrides = {}) {
       createdAt: "2026-07-06T00:00:00.000Z",
       ...overrides,
     },
+    activity: {
+      activityId: "activity-123",
+      customerId: "customer-123",
+      profileId: "profile-123",
+      workingDatasetId: "working-dataset-123",
+      activityType: "working_dataset_created",
+      stepNumber: 1,
+      summary: "Created working dataset July payments working data",
+      details: {
+        sourceDatasetId: "source-dataset-123",
+      },
+      relatedCapability: "data",
+      relatedRecordId: "working-dataset-123",
+      createdBy: "user-123",
+      createdAt: "2026-07-06T00:00:00.000Z",
+    },
+    ...overrides,
   };
 }
 
@@ -296,6 +323,9 @@ describe("data.routes", () => {
           workingName: "July payments working data",
         },
         PlatformDataDataset: "PlatformDataDatasetModel",
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
       });
     });
 

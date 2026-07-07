@@ -61,28 +61,80 @@ function normaliseWorkingDatasetRecord(record) {
     typeof record?.get === "function" ? record.get({ plain: true }) : record;
 
   requireValue(plainRecord, "working dataset record is required.");
-
-  const lineage = plainRecord.meta?.lineage;
-
-  requireValue(lineage, "working dataset lineage is required.");
   requireValue(
-    lineage.sourceDatasetId,
-    "working dataset sourceDatasetId lineage is required.",
+    plainRecord.sourceDatasetId,
+    "working dataset sourceDatasetId is required.",
   );
+  requireValue(plainRecord.lineage, "working dataset lineage is required.");
 
   return {
     workingDatasetId: plainRecord.id,
-    sourceDatasetId: lineage.sourceDatasetId,
+    sourceDatasetId: plainRecord.sourceDatasetId,
     customerId: plainRecord.customerId,
     profileId: plainRecord.profileId,
-    workingName: plainRecord.sourceName,
+    workingName: plainRecord.workingName,
     datasetType: plainRecord.datasetType,
-    sourceType: plainRecord.sourceType,
+    status: plainRecord.status,
+    currentStepNumber: plainRecord.currentStepNumber,
+    storagePath: plainRecord.storagePath,
+    storedFileName: plainRecord.storedFileName,
+    mimeType: plainRecord.mimeType,
+    fileSize: normaliseInteger(plainRecord.fileSize, "fileSize"),
     headers: plainRecord.headers,
     headersCount: normaliseInteger(plainRecord.headersCount, "headersCount"),
     rowsCount: normaliseInteger(plainRecord.rowsCount, "rowsCount"),
-    status: plainRecord.status,
-    lineage,
+    lineage: plainRecord.lineage,
+    meta: plainRecord.meta,
+    activeEditor: {
+      userId: plainRecord.activeEditorUserId,
+      sessionId: plainRecord.activeEditorSessionId,
+      startedAt:
+        plainRecord.activeEditorStartedAt instanceof Date
+          ? plainRecord.activeEditorStartedAt.toISOString()
+          : plainRecord.activeEditorStartedAt,
+      lastSeenAt:
+        plainRecord.activeEditorLastSeenAt instanceof Date
+          ? plainRecord.activeEditorLastSeenAt.toISOString()
+          : plainRecord.activeEditorLastSeenAt,
+      expiresAt:
+        plainRecord.activeEditorExpiresAt instanceof Date
+          ? plainRecord.activeEditorExpiresAt.toISOString()
+          : plainRecord.activeEditorExpiresAt,
+    },
+    finalisedAt:
+      plainRecord.finalisedAt instanceof Date
+        ? plainRecord.finalisedAt.toISOString()
+        : plainRecord.finalisedAt,
+    finalisedBy: plainRecord.finalisedBy,
+    createdAt:
+      plainRecord.createdAt instanceof Date
+        ? plainRecord.createdAt.toISOString()
+        : plainRecord.createdAt,
+    updatedAt:
+      plainRecord.updatedAt instanceof Date
+        ? plainRecord.updatedAt.toISOString()
+        : plainRecord.updatedAt,
+  };
+}
+
+function normaliseWorkingDatasetActivityRecord(record) {
+  const plainRecord =
+    typeof record?.get === "function" ? record.get({ plain: true }) : record;
+
+  requireValue(plainRecord, "working dataset activity record is required.");
+
+  return {
+    activityId: plainRecord.id,
+    customerId: plainRecord.customerId,
+    profileId: plainRecord.profileId,
+    workingDatasetId: plainRecord.workingDatasetId,
+    activityType: plainRecord.activityType,
+    stepNumber: plainRecord.stepNumber,
+    summary: plainRecord.summary,
+    details: plainRecord.details,
+    relatedCapability: plainRecord.relatedCapability,
+    relatedRecordId: plainRecord.relatedRecordId,
+    createdBy: plainRecord.createdBy,
     createdAt:
       plainRecord.createdAt instanceof Date
         ? plainRecord.createdAt.toISOString()
@@ -184,11 +236,14 @@ async function getDatasetRecordById({
 }
 
 async function createWorkingDatasetRecord({
-  PlatformDataDataset,
+  PlatformDataWorkingDataset,
   sourceDataset,
   workingDataset,
 }) {
-  requireValue(PlatformDataDataset, "PlatformDataDataset model is required.");
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
   requireValue(sourceDataset, "sourceDataset is required.");
   requireValue(workingDataset, "workingDataset is required.");
   requireValue(
@@ -225,10 +280,11 @@ async function createWorkingDatasetRecord({
     id: workingDataset.workingDatasetId,
     customerId: workingDataset.customerId,
     profileId: workingDataset.profileId,
+    sourceDatasetId: workingDataset.sourceDatasetId,
+    workingName: workingDataset.workingName,
     datasetType: sourceDataset.datasetType,
-    sourceType: "working_copy",
-    sourceName: workingDataset.workingName,
-    originalFileName: sourceDataset.originalFileName,
+    status: "in_progress",
+    currentStepNumber: workingDataset.currentStepNumber,
     storedFileName: sourceDataset.storedFileName,
     storagePath: sourceDataset.storagePath,
     mimeType: sourceDataset.mimeType,
@@ -236,14 +292,11 @@ async function createWorkingDatasetRecord({
     headers: sourceDataset.headers,
     headersCount: sourceDataset.headersCount,
     rowsCount: sourceDataset.rowsCount,
-    status: "available",
-    detectedCoverage: {},
+    lineage,
     meta: {
-      lineage,
       sourceDatasetId: workingDataset.sourceDatasetId,
-      workingName: workingDataset.workingName,
+      sourceOriginalFileName: sourceDataset.originalFileName,
     },
-    uploadedBy: workingDataset.actor.id,
     createdBy: workingDataset.actor.id,
     updatedBy: workingDataset.actor.id,
   };
@@ -251,16 +304,63 @@ async function createWorkingDatasetRecord({
   return withCustomerTransaction(
     workingDataset.customerId,
     async (transaction) => {
-      const record = await PlatformDataDataset.create(payload, { transaction });
+      const record = await PlatformDataWorkingDataset.create(payload, {
+        transaction,
+      });
       return normaliseWorkingDatasetRecord(record);
     },
   );
 }
 
+async function createWorkingDatasetActivityRecord({
+  PlatformDataWorkingDatasetActivity,
+  activity,
+}) {
+  requireValue(
+    PlatformDataWorkingDatasetActivity,
+    "PlatformDataWorkingDatasetActivity model is required.",
+  );
+  requireValue(activity, "activity is required for persistence.");
+  requireValue(activity.customerId, "customerId is required for persistence.");
+  requireValue(activity.profileId, "profileId is required for persistence.");
+  requireValue(
+    activity.workingDatasetId,
+    "workingDatasetId is required for persistence.",
+  );
+  requireValue(
+    activity.activityType,
+    "activityType is required for persistence.",
+  );
+  requireValue(activity.summary, "summary is required for persistence.");
+  requireValue(activity.actor?.id, "actor id is required for persistence.");
+
+  const payload = {
+    customerId: activity.customerId,
+    profileId: activity.profileId,
+    workingDatasetId: activity.workingDatasetId,
+    activityType: activity.activityType,
+    stepNumber: activity.stepNumber,
+    summary: activity.summary,
+    details: activity.details || {},
+    relatedCapability: activity.relatedCapability,
+    relatedRecordId: activity.relatedRecordId,
+    createdBy: activity.actor.id,
+  };
+
+  return withCustomerTransaction(activity.customerId, async (transaction) => {
+    const record = await PlatformDataWorkingDatasetActivity.create(payload, {
+      transaction,
+    });
+    return normaliseWorkingDatasetActivityRecord(record);
+  });
+}
+
 module.exports = {
   createDatasetRecord,
+  createWorkingDatasetActivityRecord,
   createWorkingDatasetRecord,
   getDatasetRecordById,
   normaliseDatasetRecord,
+  normaliseWorkingDatasetActivityRecord,
   normaliseWorkingDatasetRecord,
 };

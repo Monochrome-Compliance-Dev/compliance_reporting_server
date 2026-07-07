@@ -118,6 +118,8 @@ async function createWorkingDataset({
   executionContext,
   body,
   PlatformDataDataset,
+  PlatformDataWorkingDataset,
+  PlatformDataWorkingDatasetActivity,
 }) {
   requireValue(
     executionContext,
@@ -126,6 +128,14 @@ async function createWorkingDataset({
   requireValue(
     PlatformDataDataset,
     "PlatformDataDataset model is required for working dataset creation.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset creation.",
+  );
+  requireValue(
+    PlatformDataWorkingDatasetActivity,
+    "PlatformDataWorkingDatasetActivity model is required for working dataset creation.",
   );
   requireValue(body, "body is required for working dataset creation.");
   requireValue(
@@ -187,7 +197,7 @@ async function createWorkingDataset({
   }
 
   const workingDataset = await datasetRepository.createWorkingDatasetRecord({
-    PlatformDataDataset,
+    PlatformDataWorkingDataset,
     sourceDataset,
     workingDataset: {
       workingDatasetId,
@@ -195,6 +205,25 @@ async function createWorkingDataset({
       customerId: executionContext.customerId,
       profileId: body.profileId,
       workingName: body.workingName,
+      currentStepNumber: body.currentStepNumber || 1,
+      actor,
+    },
+  });
+
+  const activity = await datasetRepository.createWorkingDatasetActivityRecord({
+    PlatformDataWorkingDatasetActivity,
+    activity: {
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      workingDatasetId,
+      activityType: "working_dataset_created",
+      stepNumber: workingDataset.currentStepNumber,
+      summary: `Created working dataset ${body.workingName}`,
+      details: {
+        sourceDatasetId: sourceDataset.datasetId,
+      },
+      relatedCapability: "data",
+      relatedRecordId: workingDatasetId,
       actor,
     },
   });
@@ -209,6 +238,7 @@ async function createWorkingDataset({
   return {
     success: true,
     workingDataset,
+    activity,
   };
 }
 

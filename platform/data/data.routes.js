@@ -26,10 +26,18 @@ function createDataUploadStorage() {
   });
 }
 
-function createDataRouter({ PlatformDataDataset } = {}) {
+function createDataRouter({
+  PlatformDataDataset,
+  PlatformDataWorkingDataset,
+  PlatformDataWorkingDatasetActivity,
+} = {}) {
   const router = express.Router();
   const upload = multer({ storage: createDataUploadStorage() });
-  const controller = createDataController({ PlatformDataDataset });
+  const controller = createDataController({
+    PlatformDataDataset,
+    PlatformDataWorkingDataset,
+    PlatformDataWorkingDatasetActivity,
+  });
   const requirePlatformAccess = authorise({
     roles: ["Admin", "Boss", "User"],
   });
