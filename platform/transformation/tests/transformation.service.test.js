@@ -342,6 +342,41 @@ describe("transformation.service", () => {
       ).not.toHaveBeenCalled();
     });
 
+    it("throws when a projection source field is missing from the working dataset CSV", async () => {
+      await expect(
+        transformationService.materialiseWorkingDataset({
+          executionContext: createExecutionContext(),
+          params: createParams(),
+          body: createBody({
+            fields: [
+              {
+                sourceField: "Missing Invoice No",
+                targetField: "invoice_reference_number",
+              },
+            ],
+            customFields: [],
+          }),
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
+        }),
+      ).rejects.toThrow(
+        "materialisation source fields were not found in the working dataset: Missing Invoice No.",
+      );
+
+      expect(fs.readFile).toHaveBeenCalledWith(
+        "/tmp/storage/data_hub/customer-123/datasets/source-dataset-123.csv",
+        "utf8",
+      );
+      expect(fs.writeFile).not.toHaveBeenCalled();
+      expect(
+        datasetRepository.updateWorkingDatasetStorageRecord,
+      ).not.toHaveBeenCalled();
+      expect(
+        datasetRepository.createWorkingDatasetActivityRecord,
+      ).not.toHaveBeenCalled();
+    });
+
     it("throws when the working dataset is final", async () => {
       datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
         createWorkingDataset({ status: "final" }),

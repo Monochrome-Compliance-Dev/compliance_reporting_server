@@ -127,6 +127,19 @@ function ensureUniqueTargetFields({ fields, customFields }) {
   }
 }
 
+function requireSourceFieldsPresent({ sourceHeaders, fields }) {
+  const missingSourceFields = fields
+    .map((field) => field.sourceField)
+    .filter((sourceField) => !sourceHeaders.includes(sourceField));
+
+  if (missingSourceFields.length > 0) {
+    throw createError(
+      `materialisation source fields were not found in the working dataset: ${missingSourceFields.join(", ")}.`,
+      400,
+    );
+  }
+}
+
 function parseCsvLine(line) {
   const values = [];
   let current = "";
@@ -241,6 +254,10 @@ async function writeMaterialisedCsv({
 }) {
   const sourceContent = await fs.readFile(workingDataset.storagePath, "utf8");
   const sourceCsv = parseCsv(sourceContent);
+  requireSourceFieldsPresent({
+    sourceHeaders: sourceCsv.headers,
+    fields,
+  });
   const materialisedHeaders = [
     ...fields.map((field) => field.targetField),
     ...customFields.map((field) => field.targetField),
