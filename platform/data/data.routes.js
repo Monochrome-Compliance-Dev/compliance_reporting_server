@@ -57,6 +57,27 @@ function createDataRouter({
     controller.createWorkingDataset,
   );
 
+  router.get(
+    "/working-datasets",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.listWorkingDatasets,
+  );
+
+  router.get(
+    "/working-datasets/:workingDatasetId",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.getWorkingDataset,
+  );
+
+  router.get(
+    "/working-datasets/:workingDatasetId/activity",
+    requirePlatformAccess,
+    identityService.attachExecutionContext,
+    controller.listWorkingDatasetActivity,
+  );
+
   router.post(
     "/working-datasets/:workingDatasetId/edit-lease",
     requirePlatformAccess,

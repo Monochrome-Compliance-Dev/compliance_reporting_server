@@ -55,6 +55,9 @@ jest.mock("@/platform/data/data.service", () => ({
   finaliseWorkingDataset: jest.fn(),
   releaseWorkingDatasetEditLease: jest.fn(),
   renewWorkingDatasetEditLease: jest.fn(),
+  getWorkingDataset: jest.fn(),
+  listWorkingDatasetActivity: jest.fn(),
+  listWorkingDatasets: jest.fn(),
 }));
 
 const dataService = require("@/platform/data/data.service");
@@ -180,6 +183,33 @@ function postWorkingDataset(app, body = {}) {
     });
 }
 
+function getWorkingDatasets(app, query = {}) {
+  return request(app)
+    .get("/api/platform/data/working-datasets")
+    .query({
+      profileId: "profile-123",
+      ...query,
+    });
+}
+
+function getWorkingDataset(app, query = {}) {
+  return request(app)
+    .get("/api/platform/data/working-datasets/working-dataset-123")
+    .query({
+      profileId: "profile-123",
+      ...query,
+    });
+}
+
+function getWorkingDatasetActivity(app, query = {}) {
+  return request(app)
+    .get("/api/platform/data/working-datasets/working-dataset-123/activity")
+    .query({
+      profileId: "profile-123",
+      ...query,
+    });
+}
+
 function postEditLease(app, body = {}) {
   return request(app)
     .post("/api/platform/data/working-datasets/working-dataset-123/edit-lease")
@@ -231,6 +261,20 @@ describe("data.routes", () => {
     dataService.createWorkingDataset.mockResolvedValue(
       createWorkingDatasetResponse(),
     );
+    dataService.listWorkingDatasets.mockResolvedValue({
+      success: true,
+      workingDatasets: [createWorkingDatasetResponse().workingDataset],
+    });
+
+    dataService.getWorkingDataset.mockResolvedValue({
+      success: true,
+      workingDataset: createWorkingDatasetResponse().workingDataset,
+    });
+
+    dataService.listWorkingDatasetActivity.mockResolvedValue({
+      success: true,
+      activities: [createWorkingDatasetResponse().activity],
+    });
     dataService.acquireWorkingDatasetEditLease.mockResolvedValue(
       createWorkingDatasetResponse({
         activity: {
@@ -555,6 +599,118 @@ describe("data.routes", () => {
         success: false,
         error: "Customer context does not match governed execution.",
       });
+    });
+  });
+
+  describe("working dataset read routes", () => {
+    it("lists Data-owned working datasets", async () => {
+      const app = createApp();
+
+      const response = await getWorkingDatasets(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        workingDatasets: [createWorkingDatasetResponse().workingDataset],
+      });
+      expect(dataService.listWorkingDatasets).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      });
+    });
+
+    it("gets Data-owned working dataset detail", async () => {
+      const app = createApp();
+
+      const response = await getWorkingDataset(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        workingDataset: createWorkingDatasetResponse().workingDataset,
+      });
+      expect(dataService.getWorkingDataset).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      });
+    });
+
+    it("lists Data-owned working dataset activity", async () => {
+      const app = createApp();
+
+      const response = await getWorkingDatasetActivity(app);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        activities: [createWorkingDatasetResponse().activity],
+      });
+      expect(dataService.listWorkingDatasetActivity).toHaveBeenCalledWith({
+        executionContext: {
+          actorId: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+          source: "tenantContext",
+        },
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+    });
+
+    it("returns working dataset read service errors through the error handler", async () => {
+      const error = new Error("working dataset read failed");
+      error.status = 400;
+      dataService.getWorkingDataset.mockRejectedValue(error);
+
+      const app = createApp();
+
+      const response = await getWorkingDataset(app);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({
+        success: false,
+        error: "working dataset read failed",
+      });
+    });
+
+    it("does not reach working dataset listing when credentials are missing", async () => {
+      MockauthoriseScenario = "missingCredentials";
+      const app = createApp();
+
+      const response = await getWorkingDatasets(app);
+
+      expect(response.status).toBe(401);
+      expect(response.body).toEqual({
+        status: "unauthorised",
+        reason: "credentials_missing",
+        message: "Unauthorised",
+      });
+      expect(dataService.listWorkingDatasets).not.toHaveBeenCalled();
     });
   });
 

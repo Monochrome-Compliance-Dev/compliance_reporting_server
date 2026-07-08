@@ -267,6 +267,61 @@ async function getWorkingDatasetRecordById({
   });
 }
 
+async function listWorkingDatasetRecords({
+  PlatformDataWorkingDataset,
+  customerId,
+  profileId,
+}) {
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required.",
+  );
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const records = await PlatformDataWorkingDataset.findAll({
+      where: {
+        customerId,
+        profileId,
+      },
+      order: [["updatedAt", "DESC"]],
+      transaction,
+    });
+
+    return records.map(normaliseWorkingDatasetRecord);
+  });
+}
+
+async function listWorkingDatasetActivityRecords({
+  PlatformDataWorkingDatasetActivity,
+  workingDatasetId,
+  customerId,
+  profileId,
+}) {
+  requireValue(
+    PlatformDataWorkingDatasetActivity,
+    "PlatformDataWorkingDatasetActivity model is required.",
+  );
+  requireValue(workingDatasetId, "workingDatasetId is required.");
+  requireValue(customerId, "customerId is required.");
+  requireValue(profileId, "profileId is required.");
+
+  return withCustomerTransaction(customerId, async (transaction) => {
+    const records = await PlatformDataWorkingDatasetActivity.findAll({
+      where: {
+        workingDatasetId,
+        customerId,
+        profileId,
+      },
+      order: [["createdAt", "ASC"]],
+      transaction,
+    });
+
+    return records.map(normaliseWorkingDatasetActivityRecord);
+  });
+}
+
 async function createWorkingDatasetRecord({
   PlatformDataWorkingDataset,
   sourceDataset,
@@ -650,6 +705,8 @@ module.exports = {
   finaliseWorkingDatasetRecord,
   getDatasetRecordById,
   getWorkingDatasetRecordById,
+  listWorkingDatasetActivityRecords,
+  listWorkingDatasetRecords,
   normaliseDatasetRecord,
   normaliseWorkingDatasetActivityRecord,
   normaliseWorkingDatasetRecord,

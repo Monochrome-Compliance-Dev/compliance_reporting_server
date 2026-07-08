@@ -20,6 +20,8 @@ jest.mock("@/platform/data/dataset.repository", () => ({
   createWorkingDatasetActivityRecord: jest.fn(),
   getDatasetRecordById: jest.fn(),
   getWorkingDatasetRecordById: jest.fn(),
+  listWorkingDatasetActivityRecords: jest.fn(),
+  listWorkingDatasetRecords: jest.fn(),
   updateWorkingDatasetEditLease: jest.fn(),
   clearWorkingDatasetEditLease: jest.fn(),
   finaliseWorkingDatasetRecord: jest.fn(),
@@ -291,6 +293,13 @@ describe("data.service", () => {
     datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
       createWorkingDataset(),
     );
+    datasetRepository.listWorkingDatasetRecords.mockResolvedValue([
+      createWorkingDataset(),
+    ]);
+
+    datasetRepository.listWorkingDatasetActivityRecords.mockResolvedValue([
+      createWorkingDatasetActivity(),
+    ]);
     datasetRepository.updateWorkingDatasetEditLease.mockResolvedValue(
       createLeasedWorkingDataset(),
     );
@@ -709,6 +718,131 @@ describe("data.service", () => {
 
       expect(
         datasetRepository.createWorkingDatasetRecord,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("working dataset read operations", () => {
+    it("lists working datasets for the governed customer and profile", async () => {
+      const result = await dataService.listWorkingDatasets({
+        executionContext: createExecutionContext(),
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      });
+
+      expect(datasetRepository.listWorkingDatasetRecords).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(result).toEqual({
+        success: true,
+        workingDatasets: [createWorkingDataset()],
+      });
+    });
+
+    it("fails loudly when profileId is missing for working dataset listing", async () => {
+      await expect(
+        dataService.listWorkingDatasets({
+          executionContext: createExecutionContext(),
+          query: {},
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        }),
+      ).rejects.toThrow("profileId is required for working dataset listing.");
+
+      expect(
+        datasetRepository.listWorkingDatasetRecords,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("gets working dataset detail for the governed customer and profile", async () => {
+      const result = await dataService.getWorkingDataset({
+        executionContext: createExecutionContext(),
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      });
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(result).toEqual({
+        success: true,
+        workingDataset: createWorkingDataset(),
+      });
+    });
+
+    it("fails loudly when workingDatasetId is missing for detail retrieval", async () => {
+      await expect(
+        dataService.getWorkingDataset({
+          executionContext: createExecutionContext(),
+          params: {},
+          query: {
+            profileId: "profile-123",
+          },
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        }),
+      ).rejects.toThrow(
+        "workingDatasetId is required for working dataset detail retrieval.",
+      );
+    });
+
+    it("lists working dataset activity for the governed customer and profile", async () => {
+      const result = await dataService.listWorkingDatasetActivity({
+        executionContext: createExecutionContext(),
+        params: {
+          workingDatasetId: "working-dataset-123",
+        },
+        query: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+
+      expect(
+        datasetRepository.listWorkingDatasetActivityRecords,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(result).toEqual({
+        success: true,
+        activities: [createWorkingDatasetActivity()],
+      });
+    });
+
+    it("fails loudly when profileId is missing for activity listing", async () => {
+      await expect(
+        dataService.listWorkingDatasetActivity({
+          executionContext: createExecutionContext(),
+          params: {
+            workingDatasetId: "working-dataset-123",
+          },
+          query: {},
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
+        }),
+      ).rejects.toThrow(
+        "profileId is required for working dataset activity listing.",
+      );
+
+      expect(
+        datasetRepository.listWorkingDatasetActivityRecords,
       ).not.toHaveBeenCalled();
     });
   });

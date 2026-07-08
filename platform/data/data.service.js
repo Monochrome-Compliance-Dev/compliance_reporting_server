@@ -317,6 +317,137 @@ async function createWorkingDataset({
   };
 }
 
+async function listWorkingDatasets({
+  executionContext,
+  query,
+  PlatformDataWorkingDataset,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset listing.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset listing.",
+  );
+  requireValue(query, "query is required for working dataset listing.");
+  requireValue(
+    query.profileId,
+    "profileId is required for working dataset listing.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset listing.",
+  );
+
+  const workingDatasets = await datasetRepository.listWorkingDatasetRecords({
+    PlatformDataWorkingDataset,
+    customerId: executionContext.customerId,
+    profileId: query.profileId,
+  });
+
+  return {
+    success: true,
+    workingDatasets,
+  };
+}
+
+async function getWorkingDataset({
+  executionContext,
+  params,
+  query,
+  PlatformDataWorkingDataset,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset detail retrieval.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset detail retrieval.",
+  );
+  requireValue(
+    params,
+    "params are required for working dataset detail retrieval.",
+  );
+  requireValue(
+    params.workingDatasetId,
+    "workingDatasetId is required for working dataset detail retrieval.",
+  );
+  requireValue(
+    query,
+    "query is required for working dataset detail retrieval.",
+  );
+  requireValue(
+    query.profileId,
+    "profileId is required for working dataset detail retrieval.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset detail retrieval.",
+  );
+
+  const workingDataset = await datasetRepository.getWorkingDatasetRecordById({
+    PlatformDataWorkingDataset,
+    workingDatasetId: params.workingDatasetId,
+    customerId: executionContext.customerId,
+    profileId: query.profileId,
+  });
+
+  return {
+    success: true,
+    workingDataset,
+  };
+}
+
+async function listWorkingDatasetActivity({
+  executionContext,
+  params,
+  query,
+  PlatformDataWorkingDatasetActivity,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset activity listing.",
+  );
+  requireValue(
+    PlatformDataWorkingDatasetActivity,
+    "PlatformDataWorkingDatasetActivity model is required for working dataset activity listing.",
+  );
+  requireValue(
+    params,
+    "params are required for working dataset activity listing.",
+  );
+  requireValue(
+    params.workingDatasetId,
+    "workingDatasetId is required for working dataset activity listing.",
+  );
+  requireValue(
+    query,
+    "query is required for working dataset activity listing.",
+  );
+  requireValue(
+    query.profileId,
+    "profileId is required for working dataset activity listing.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset activity listing.",
+  );
+
+  const activities = await datasetRepository.listWorkingDatasetActivityRecords({
+    PlatformDataWorkingDatasetActivity,
+    workingDatasetId: params.workingDatasetId,
+    customerId: executionContext.customerId,
+    profileId: query.profileId,
+  });
+
+  return {
+    success: true,
+    activities,
+  };
+}
+
 async function acquireWorkingDatasetEditLease({
   executionContext,
   params,
@@ -716,6 +847,9 @@ module.exports = {
   createDataset,
   createWorkingDataset,
   finaliseWorkingDataset,
+  getWorkingDataset,
+  listWorkingDatasetActivity,
+  listWorkingDatasets,
   releaseWorkingDatasetEditLease,
   renewWorkingDatasetEditLease,
 };

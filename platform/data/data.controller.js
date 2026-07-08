@@ -40,6 +40,50 @@ function createDataController({
     }
   }
 
+  async function listWorkingDatasets(req, res, next) {
+    try {
+      const result = await dataService.listWorkingDatasets({
+        executionContext: getExecutionContext(req),
+        query: req.query,
+        PlatformDataWorkingDataset,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async function getWorkingDataset(req, res, next) {
+    try {
+      const result = await dataService.getWorkingDataset({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        query: req.query,
+        PlatformDataWorkingDataset,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async function listWorkingDatasetActivity(req, res, next) {
+    try {
+      const result = await dataService.listWorkingDatasetActivity({
+        executionContext: getExecutionContext(req),
+        params: req.params,
+        query: req.query,
+        PlatformDataWorkingDatasetActivity,
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async function acquireWorkingDatasetEditLease(req, res, next) {
     try {
       const result = await dataService.acquireWorkingDatasetEditLease({
@@ -109,6 +153,9 @@ function createDataController({
     createDataset,
     createWorkingDataset,
     finaliseWorkingDataset,
+    getWorkingDataset,
+    listWorkingDatasetActivity,
+    listWorkingDatasets,
     releaseWorkingDatasetEditLease,
     renewWorkingDatasetEditLease,
   };
