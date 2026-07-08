@@ -1,6 +1,9 @@
+const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 const datasetRepository = require("@/platform/data/dataset.repository");
+
+const EDITOR_LEASE_DURATION_MS = 30 * 60 * 1000;
 
 function createError(message, status = 500) {
   const error = new Error(message);
@@ -54,6 +57,199 @@ function requireEditableWorkingDataset(workingDataset) {
   if (isFinalWorkingDataset(workingDataset)) {
     throw createError("final working datasets cannot be materialised.", 409);
   }
+}
+
+function buildEditorSession({ actor, now }) {
+  return {
+    sessionId: crypto.randomUUID(),
+    userId: actor.id,
+    startedAt: now.toISOString(),
+    lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + EDITOR_LEASE_DURATION_MS).toISOString(),
+  };
+}
+
+function buildRenewedEditorSession({
+  workingDataset,
+  actor,
+  editorSessionId,
+  now,
+}) {
+  return {
+    sessionId: editorSessionId,
+    userId: actor.id,
+    startedAt: workingDataset.activeEditor.startedAt,
+    lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + EDITOR_LEASE_DURATION_MS).toISOString(),
+  };
+}
+
+function requireLeaseAvailable({ workingDataset, actor, now }) {
+  requireEditableWorkingDataset(workingDataset);
+
+  if (
+    isLeaseActive(workingDataset, now) &&
+    workingDataset.activeEditor?.userId !== actor.id
+  ) {
+    throw createError("active editor lease belongs to another user.", 409);
+  }
+}
+async function acquireWorkingDatasetEditorLease({
+  executionContext,
+  params,
+  body,
+  PlatformDataWorkingDataset,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    params,
+    "params are required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    params.workingDatasetId,
+    "workingDatasetId is required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    body,
+    "body is required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    body.profileId,
+    "profileId is required for working dataset editor lease acquisition.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset editor lease acquisition.",
+  );
+
+  const actor = buildActor(executionContext);
+  const now = new Date();
+
+  const workingDataset = await datasetRepository.getWorkingDatasetRecordById({
+    PlatformDataWorkingDataset,
+    workingDatasetId: params.workingDatasetId,
+    customerId: executionContext.customerId,
+    profileId: body.profileId,
+  });
+
+  requireLeaseAvailable({ workingDataset, actor, now });
+
+  const editorSession = buildEditorSession({ actor, now });
+
+  const leasedWorkingDataset =
+    await datasetRepository.updateWorkingDatasetEditLease({
+      PlatformDataWorkingDataset,
+      workingDatasetId: params.workingDatasetId,
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      lease: {
+        activeEditorUserId: editorSession.userId,
+        activeEditorSessionId: editorSession.sessionId,
+        activeEditorStartedAt: editorSession.startedAt,
+        activeEditorLastSeenAt: editorSession.lastSeenAt,
+        activeEditorExpiresAt: editorSession.expiresAt,
+        updatedBy: actor.id,
+      },
+    });
+
+  return {
+    success: true,
+    workingDataset: leasedWorkingDataset,
+    editorSession,
+  };
+}
+
+async function renewWorkingDatasetEditorLease({
+  executionContext,
+  params,
+  body,
+  PlatformDataWorkingDataset,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    params,
+    "params are required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    params.workingDatasetId,
+    "workingDatasetId is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    body,
+    "body is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    body.profileId,
+    "profileId is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    body.editorSessionId,
+    "editorSessionId is required for working dataset editor lease renewal.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset editor lease renewal.",
+  );
+
+  const actor = buildActor(executionContext);
+  const now = new Date();
+
+  const workingDataset = await datasetRepository.getWorkingDatasetRecordById({
+    PlatformDataWorkingDataset,
+    workingDatasetId: params.workingDatasetId,
+    customerId: executionContext.customerId,
+    profileId: body.profileId,
+  });
+
+  requireOwnedActiveLease({
+    workingDataset,
+    actor,
+    editorSessionId: body.editorSessionId,
+    now,
+  });
+
+  const editorSession = buildRenewedEditorSession({
+    workingDataset,
+    actor,
+    editorSessionId: body.editorSessionId,
+    now,
+  });
+
+  const leasedWorkingDataset =
+    await datasetRepository.updateWorkingDatasetEditLease({
+      PlatformDataWorkingDataset,
+      workingDatasetId: params.workingDatasetId,
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      lease: {
+        activeEditorUserId: editorSession.userId,
+        activeEditorSessionId: editorSession.sessionId,
+        activeEditorStartedAt: editorSession.startedAt,
+        activeEditorLastSeenAt: editorSession.lastSeenAt,
+        activeEditorExpiresAt: editorSession.expiresAt,
+        updatedBy: actor.id,
+      },
+    });
+
+  return {
+    success: true,
+    workingDataset: leasedWorkingDataset,
+    editorSession,
+  };
 }
 
 function requireOwnedActiveLease({
@@ -301,6 +497,97 @@ async function writeMaterialisedCsv({
   };
 }
 
+async function finaliseWorkingDataset({
+  executionContext,
+  params,
+  body,
+  PlatformDataWorkingDataset,
+  PlatformDataWorkingDatasetActivity,
+}) {
+  requireValue(
+    executionContext,
+    "executionContext is required for working dataset finalisation.",
+  );
+  requireValue(
+    PlatformDataWorkingDataset,
+    "PlatformDataWorkingDataset model is required for working dataset finalisation.",
+  );
+  requireValue(
+    PlatformDataWorkingDatasetActivity,
+    "PlatformDataWorkingDatasetActivity model is required for working dataset finalisation.",
+  );
+  requireValue(params, "params are required for working dataset finalisation.");
+  requireValue(
+    params.workingDatasetId,
+    "workingDatasetId is required for working dataset finalisation.",
+  );
+  requireValue(body, "body is required for working dataset finalisation.");
+  requireValue(
+    body.profileId,
+    "profileId is required for working dataset finalisation.",
+  );
+  requireValue(
+    body.editorSessionId,
+    "editorSessionId is required for working dataset finalisation.",
+  );
+  requireValue(
+    executionContext.customerId,
+    "customerId is required for working dataset finalisation.",
+  );
+
+  const actor = buildActor(executionContext);
+  const now = new Date();
+
+  const workingDataset = await datasetRepository.getWorkingDatasetRecordById({
+    PlatformDataWorkingDataset,
+    workingDatasetId: params.workingDatasetId,
+    customerId: executionContext.customerId,
+    profileId: body.profileId,
+  });
+
+  requireOwnedActiveLease({
+    workingDataset,
+    actor,
+    editorSessionId: body.editorSessionId,
+    now,
+  });
+
+  const finalisedWorkingDataset =
+    await datasetRepository.finaliseWorkingDatasetRecord({
+      PlatformDataWorkingDataset,
+      workingDatasetId: params.workingDatasetId,
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      actor,
+      finalisedAt: now.toISOString(),
+    });
+
+  const activity = await datasetRepository.createWorkingDatasetActivityRecord({
+    PlatformDataWorkingDatasetActivity,
+    activity: {
+      customerId: executionContext.customerId,
+      profileId: body.profileId,
+      workingDatasetId: params.workingDatasetId,
+      activityType: "working_dataset_finalised",
+      stepNumber: body.stepNumber || workingDataset.currentStepNumber,
+      summary: "Finalised working dataset",
+      details: {
+        editorSessionId: body.editorSessionId,
+        finalisedAt: finalisedWorkingDataset.finalisedAt,
+      },
+      relatedCapability: "transformation",
+      relatedRecordId: params.workingDatasetId,
+      actor,
+    },
+  });
+
+  return {
+    success: true,
+    workingDataset: finalisedWorkingDataset,
+    activity,
+  };
+}
+
 async function materialiseWorkingDataset({
   executionContext,
   params,
@@ -412,5 +699,8 @@ async function materialiseWorkingDataset({
 }
 
 module.exports = {
+  acquireWorkingDatasetEditorLease,
+  finaliseWorkingDataset,
   materialiseWorkingDataset,
+  renewWorkingDatasetEditorLease,
 };

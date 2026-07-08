@@ -7,7 +7,9 @@ jest.mock("fs/promises", () => ({
 
 jest.mock("@/platform/data/dataset.repository", () => ({
   createWorkingDatasetActivityRecord: jest.fn(),
+  finaliseWorkingDatasetRecord: jest.fn(),
   getWorkingDatasetRecordById: jest.fn(),
+  updateWorkingDatasetEditLease: jest.fn(),
   updateWorkingDatasetStorageRecord: jest.fn(),
 }));
 
@@ -107,6 +109,22 @@ function createMaterialisedWorkingDataset(overrides = {}) {
   });
 }
 
+function createFinalisedWorkingDataset(overrides = {}) {
+  return createWorkingDataset({
+    status: "final",
+    activeEditor: {
+      userId: null,
+      sessionId: null,
+      startedAt: null,
+      lastSeenAt: null,
+      expiresAt: null,
+    },
+    finalisedAt: "2026-07-07T00:30:00.000Z",
+    finalisedBy: "user-123",
+    ...overrides,
+  });
+}
+
 function createActivity(overrides = {}) {
   return {
     activityId: "activity-123",
@@ -139,8 +157,25 @@ describe("transformation.service", () => {
     datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
       createWorkingDataset(),
     );
+    datasetRepository.updateWorkingDatasetEditLease.mockImplementation(
+      ({ lease }) =>
+        Promise.resolve(
+          createWorkingDataset({
+            activeEditor: {
+              userId: lease.activeEditorUserId,
+              sessionId: lease.activeEditorSessionId,
+              startedAt: lease.activeEditorStartedAt,
+              lastSeenAt: lease.activeEditorLastSeenAt,
+              expiresAt: lease.activeEditorExpiresAt,
+            },
+          }),
+        ),
+    );
     datasetRepository.updateWorkingDatasetStorageRecord.mockResolvedValue(
       createMaterialisedWorkingDataset(),
+    );
+    datasetRepository.finaliseWorkingDatasetRecord.mockResolvedValue(
+      createFinalisedWorkingDataset(),
     );
     datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
       createActivity(),
@@ -149,6 +184,155 @@ describe("transformation.service", () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe("acquireWorkingDatasetEditorLease", () => {
+    it("acquires an editor lease for an editable working dataset", async () => {
+      const PlatformDataWorkingDataset = "PlatformDataWorkingDatasetModel";
+
+      const result =
+        await transformationService.acquireWorkingDatasetEditorLease({
+          executionContext: createExecutionContext(),
+          params: createParams(),
+          body: {
+            profileId: "profile-123",
+          },
+          PlatformDataWorkingDataset,
+        });
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+        lease: {
+          activeEditorUserId: "user-123",
+          activeEditorSessionId: expect.any(String),
+          activeEditorStartedAt: expect.any(String),
+          activeEditorLastSeenAt: expect.any(String),
+          activeEditorExpiresAt: expect.any(String),
+          updatedBy: "user-123",
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(result.editorSession).toEqual({
+        sessionId: expect.any(String),
+        userId: "user-123",
+        startedAt: expect.any(String),
+        lastSeenAt: expect.any(String),
+        expiresAt: expect.any(String),
+      });
+      expect(result.workingDataset.activeEditor).toEqual(result.editorSession);
+    });
+
+    it("throws when another user owns an unexpired editor lease", async () => {
+      datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+        createWorkingDataset({
+          activeEditor: {
+            userId: "other-user",
+            sessionId: "other-session",
+            startedAt: "2026-07-07T00:00:00.000Z",
+            lastSeenAt: "2026-07-07T00:00:00.000Z",
+            expiresAt: "2099-07-07T00:30:00.000Z",
+          },
+        }),
+      );
+
+      await expect(
+        transformationService.acquireWorkingDatasetEditorLease({
+          executionContext: createExecutionContext(),
+          params: createParams(),
+          body: {
+            profileId: "profile-123",
+          },
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        }),
+      ).rejects.toThrow("active editor lease belongs to another user.");
+
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("renewWorkingDatasetEditorLease", () => {
+    it("renews an owned active editor lease", async () => {
+      const PlatformDataWorkingDataset = "PlatformDataWorkingDatasetModel";
+
+      const result = await transformationService.renewWorkingDatasetEditorLease(
+        {
+          executionContext: createExecutionContext(),
+          params: createParams(),
+          body: {
+            profileId: "profile-123",
+            editorSessionId: "session-123",
+          },
+          PlatformDataWorkingDataset,
+        },
+      );
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+        lease: {
+          activeEditorUserId: "user-123",
+          activeEditorSessionId: "session-123",
+          activeEditorStartedAt: "2026-07-07T00:00:00.000Z",
+          activeEditorLastSeenAt: expect.any(String),
+          activeEditorExpiresAt: expect.any(String),
+          updatedBy: "user-123",
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(result.editorSession).toEqual({
+        sessionId: "session-123",
+        userId: "user-123",
+        startedAt: "2026-07-07T00:00:00.000Z",
+        lastSeenAt: expect.any(String),
+        expiresAt: expect.any(String),
+      });
+      expect(result.workingDataset.activeEditor).toEqual(result.editorSession);
+    });
+
+    it("throws when renewing with the wrong session", async () => {
+      await expect(
+        transformationService.renewWorkingDatasetEditorLease({
+          executionContext: createExecutionContext(),
+          params: createParams(),
+          body: {
+            profileId: "profile-123",
+            editorSessionId: "wrong-session",
+          },
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        }),
+      ).rejects.toThrow("active editor lease belongs to another session.");
+
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).not.toHaveBeenCalled();
+    });
   });
 
   describe("materialiseWorkingDataset", () => {
@@ -464,5 +648,125 @@ describe("transformation.service", () => {
         datasetRepository.createWorkingDatasetActivityRecord,
       ).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("finaliseWorkingDataset", () => {
+  it("finalises a working dataset with an owned active editor lease and records activity", async () => {
+    const PlatformDataWorkingDataset = "PlatformDataWorkingDatasetModel";
+    const PlatformDataWorkingDatasetActivity =
+      "PlatformDataWorkingDatasetActivityModel";
+    datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+      createWorkingDataset(),
+    );
+    datasetRepository.finaliseWorkingDatasetRecord.mockResolvedValue(
+      createFinalisedWorkingDataset(),
+    );
+
+    datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
+      createActivity({
+        activityType: "working_dataset_finalised",
+        summary: "Finalised working dataset",
+        details: {
+          editorSessionId: "session-123",
+          finalisedAt: "2026-07-07T00:30:00.000Z",
+        },
+      }),
+    );
+
+    const result = await transformationService.finaliseWorkingDataset({
+      executionContext: createExecutionContext(),
+      params: createParams(),
+      body: {
+        profileId: "profile-123",
+        editorSessionId: "session-123",
+        stepNumber: 3,
+      },
+      PlatformDataWorkingDataset,
+      PlatformDataWorkingDatasetActivity,
+    });
+
+    expect(datasetRepository.getWorkingDatasetRecordById).toHaveBeenCalledWith({
+      PlatformDataWorkingDataset,
+      workingDatasetId: "working-dataset-123",
+      customerId: "customer-123",
+      profileId: "profile-123",
+    });
+    expect(datasetRepository.finaliseWorkingDatasetRecord).toHaveBeenCalledWith(
+      {
+        PlatformDataWorkingDataset,
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+        finalisedAt: expect.any(String),
+      },
+    );
+    expect(
+      datasetRepository.createWorkingDatasetActivityRecord,
+    ).toHaveBeenCalledWith({
+      PlatformDataWorkingDatasetActivity,
+      activity: {
+        customerId: "customer-123",
+        profileId: "profile-123",
+        workingDatasetId: "working-dataset-123",
+        activityType: "working_dataset_finalised",
+        stepNumber: 3,
+        summary: "Finalised working dataset",
+        details: {
+          editorSessionId: "session-123",
+          finalisedAt: "2026-07-07T00:30:00.000Z",
+        },
+        relatedCapability: "transformation",
+        relatedRecordId: "working-dataset-123",
+        actor: {
+          id: "user-123",
+          role: "Admin",
+          customerId: "customer-123",
+        },
+      },
+    });
+    expect(result).toEqual({
+      success: true,
+      workingDataset: createFinalisedWorkingDataset(),
+      activity: createActivity({
+        activityType: "working_dataset_finalised",
+        summary: "Finalised working dataset",
+        details: {
+          editorSessionId: "session-123",
+          finalisedAt: "2026-07-07T00:30:00.000Z",
+        },
+      }),
+    });
+  });
+
+  it("throws when finalising with the wrong editor session", async () => {
+    datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+      createWorkingDataset(),
+    );
+    await expect(
+      transformationService.finaliseWorkingDataset({
+        executionContext: createExecutionContext(),
+        params: createParams(),
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "wrong-session",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      }),
+    ).rejects.toThrow("active editor lease belongs to another session.");
+
+    expect(
+      datasetRepository.finaliseWorkingDatasetRecord,
+    ).not.toHaveBeenCalled();
+    expect(
+      datasetRepository.createWorkingDatasetActivityRecord,
+    ).not.toHaveBeenCalled();
   });
 });

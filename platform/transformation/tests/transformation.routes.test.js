@@ -17,7 +17,10 @@ jest.mock("@/middleware/authorise", () =>
 );
 
 jest.mock("@/platform/transformation/transformation.service", () => ({
+  acquireWorkingDatasetEditorLease: jest.fn(),
+  finaliseWorkingDataset: jest.fn(),
   materialiseWorkingDataset: jest.fn(),
+  renewWorkingDatasetEditorLease: jest.fn(),
 }));
 
 const transformationService = require("@/platform/transformation/transformation.service");
@@ -69,6 +72,34 @@ function createBody(overrides = {}) {
 
 describe("transformation.routes", () => {
   beforeEach(() => {
+    transformationService.acquireWorkingDatasetEditorLease.mockResolvedValue({
+      success: true,
+      workingDataset: {
+        workingDatasetId: "working-dataset-123",
+        status: "in_progress",
+      },
+      editorSession: {
+        sessionId: "session-123",
+        userId: "user-123",
+        startedAt: "2026-07-07T00:00:00.000Z",
+        lastSeenAt: "2026-07-07T00:00:00.000Z",
+        expiresAt: "2026-07-07T00:30:00.000Z",
+      },
+    });
+    transformationService.renewWorkingDatasetEditorLease.mockResolvedValue({
+      success: true,
+      workingDataset: {
+        workingDatasetId: "working-dataset-123",
+        status: "in_progress",
+      },
+      editorSession: {
+        sessionId: "session-123",
+        userId: "user-123",
+        startedAt: "2026-07-07T00:00:00.000Z",
+        lastSeenAt: "2026-07-07T00:10:00.000Z",
+        expiresAt: "2026-07-07T00:40:00.000Z",
+      },
+    });
     transformationService.materialiseWorkingDataset.mockResolvedValue({
       success: true,
       workingDataset: {
@@ -80,10 +111,66 @@ describe("transformation.routes", () => {
         activityType: "working_dataset_materialised",
       },
     });
+    transformationService.finaliseWorkingDataset.mockResolvedValue({
+      success: true,
+      workingDataset: {
+        workingDatasetId: "working-dataset-123",
+        status: "final",
+      },
+      activity: {
+        activityId: "activity-456",
+        activityType: "working_dataset_finalised",
+      },
+    });
   });
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  it("finalises a working dataset", async () => {
+    const app = createApp(createModels());
+
+    const response = await request(app)
+      .post(
+        "/api/platform/transformation/working-datasets/working-dataset-123/finalise",
+      )
+      .send({
+        profileId: "profile-123",
+        editorSessionId: "session-123",
+        stepNumber: 3,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      success: true,
+      workingDataset: {
+        workingDatasetId: "working-dataset-123",
+        status: "final",
+      },
+      activity: {
+        activityId: "activity-456",
+        activityType: "working_dataset_finalised",
+      },
+    });
+    expect(transformationService.finaliseWorkingDataset).toHaveBeenCalledWith({
+      executionContext: {
+        actorId: "user-123",
+        role: "Admin",
+        customerId: "customer-123",
+      },
+      params: {
+        workingDatasetId: "working-dataset-123",
+      },
+      body: {
+        profileId: "profile-123",
+        editorSessionId: "session-123",
+        stepNumber: 3,
+      },
+      PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+      PlatformDataWorkingDatasetActivity:
+        "PlatformDataWorkingDatasetActivityModel",
+    });
   });
 
   it("materialises a working dataset", async () => {
