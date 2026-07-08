@@ -66,7 +66,12 @@ describe("audit.service", () => {
         error: null,
       });
 
-      expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(logger.auditLogger.info).toHaveBeenCalledWith(
+        "Platform audit event",
+        {
+          auditEvent: result,
+        },
+      );
       expect(auditRepository.createFoundationAuditEvent).toHaveBeenCalledWith({
         foundationId: "foundation-123",
         capability: "foundation",
@@ -130,7 +135,12 @@ describe("audit.service", () => {
         },
       });
 
-      expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(logger.auditLogger.info).toHaveBeenCalledWith(
+        "Platform audit event",
+        {
+          auditEvent: result,
+        },
+      );
       expect(auditRepository.createFoundationAuditEvent).toHaveBeenCalledWith({
         foundationId: "foundation-denied-123",
         capability: "foundation",
@@ -251,7 +261,12 @@ describe("audit.service", () => {
         error: null,
       });
 
-      expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(logger.auditLogger.info).toHaveBeenCalledWith(
+        "Platform audit event",
+        {
+          auditEvent: result,
+        },
+      );
       expect(auditRepository.createDataDatasetAuditEvent).toHaveBeenCalledWith({
         datasetId: "dataset123",
         capability: "data",
@@ -307,7 +322,12 @@ describe("audit.service", () => {
         },
       });
 
-      expect(logger.auditLogger.info).toHaveBeenCalledWith(result);
+      expect(logger.auditLogger.info).toHaveBeenCalledWith(
+        "Platform audit event",
+        {
+          auditEvent: result,
+        },
+      );
       expect(auditRepository.createDataDatasetAuditEvent).toHaveBeenCalledWith({
         datasetId: "dataset-denied-123",
         capability: "data",

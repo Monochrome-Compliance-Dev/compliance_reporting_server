@@ -3,17 +3,17 @@ const auditRepository = require("@/platform/audit/audit.repository");
 
 function writeAuditEvent(auditEvent) {
   if (typeof logger.auditEvent === "function") {
-    logger.auditEvent(auditEvent);
+    logger.auditEvent("Platform audit event", { auditEvent });
     return;
   }
 
   if (logger.auditLogger && typeof logger.auditLogger.info === "function") {
-    logger.auditLogger.info(auditEvent);
+    logger.auditLogger.info("Platform audit event", { auditEvent });
     return;
   }
 
   if (logger.audit && typeof logger.audit.info === "function") {
-    logger.audit.info(auditEvent);
+    logger.audit.info("Platform audit event", { auditEvent });
     return;
   }
 
