@@ -846,4 +846,167 @@ describe("data.service", () => {
       ).not.toHaveBeenCalled();
     });
   });
+
+  describe("renewWorkingDatasetEditLease", () => {
+    it("renews an owned active editor lease and records activity", async () => {
+      const existingWorkingDataset = createLeasedWorkingDataset({
+        activeEditor: {
+          userId: "user-123",
+          sessionId: "session-123",
+          startedAt: "2026-07-06T00:00:00.000Z",
+          lastSeenAt: "2026-07-06T00:10:00.000Z",
+          expiresAt: "2099-07-06T00:30:00.000Z",
+        },
+      });
+      const renewedWorkingDataset = createLeasedWorkingDataset({
+        activeEditor: {
+          userId: "user-123",
+          sessionId: "session-123",
+          startedAt: "2026-07-06T00:00:00.000Z",
+          lastSeenAt: "2026-07-06T00:20:00.000Z",
+          expiresAt: "2099-07-06T00:50:00.000Z",
+        },
+      });
+      const renewalActivity = createWorkingDatasetActivity({
+        activityType: "edit_lease_renewed",
+        summary: "Renewed working dataset edit lease",
+      });
+
+      datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+        existingWorkingDataset,
+      );
+      datasetRepository.updateWorkingDatasetEditLease.mockResolvedValue(
+        renewedWorkingDataset,
+      );
+      datasetRepository.createWorkingDatasetActivityRecord.mockResolvedValue(
+        renewalActivity,
+      );
+
+      const result = await dataService.renewWorkingDatasetEditLease({
+        executionContext: createExecutionContext(),
+        params: createLeaseParams(),
+        body: createLeaseBody(),
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      });
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+      });
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        workingDatasetId: "working-dataset-123",
+        customerId: "customer-123",
+        profileId: "profile-123",
+        lease: {
+          activeEditorUserId: "user-123",
+          activeEditorSessionId: "session-123",
+          activeEditorStartedAt: "2026-07-06T00:00:00.000Z",
+          activeEditorLastSeenAt: expect.any(Date),
+          activeEditorExpiresAt: expect.any(Date),
+          updatedBy: "user-123",
+        },
+      });
+      expect(
+        datasetRepository.createWorkingDatasetActivityRecord,
+      ).toHaveBeenCalledWith({
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+        activity: {
+          customerId: "customer-123",
+          profileId: "profile-123",
+          workingDatasetId: "working-dataset-123",
+          activityType: "edit_lease_renewed",
+          stepNumber: renewedWorkingDataset.currentStepNumber,
+          summary: "Renewed working dataset edit lease",
+          details: {
+            editorSessionId: "session-123",
+            expiresAt: expect.any(String),
+          },
+          relatedCapability: "data",
+          relatedRecordId: "working-dataset-123",
+          actor: {
+            id: "user-123",
+            role: "Admin",
+            customerId: "customer-123",
+          },
+        },
+      });
+      expect(result).toEqual({
+        success: true,
+        workingDataset: renewedWorkingDataset,
+        activity: renewalActivity,
+      });
+    });
+
+    it("throws when profileId is missing for editor lease renewal", async () => {
+      await expect(
+        dataService.renewWorkingDatasetEditLease({
+          executionContext: createExecutionContext(),
+          params: createLeaseParams(),
+          body: createLeaseBody({ profileId: null }),
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
+        }),
+      ).rejects.toThrow(
+        "profileId is required for working dataset edit lease renewal.",
+      );
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("throws when editorSessionId is missing for editor lease renewal", async () => {
+      await expect(
+        dataService.renewWorkingDatasetEditLease({
+          executionContext: createExecutionContext(),
+          params: createLeaseParams(),
+          body: createLeaseBody({ editorSessionId: null }),
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
+        }),
+      ).rejects.toThrow(
+        "editorSessionId is required for working dataset edit lease renewal.",
+      );
+
+      expect(
+        datasetRepository.getWorkingDatasetRecordById,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("throws when there is no active editor lease to renew", async () => {
+      datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+        createWorkingDataset({ activeEditor: null }),
+      );
+
+      await expect(
+        dataService.renewWorkingDatasetEditLease({
+          executionContext: createExecutionContext(),
+          params: createLeaseParams(),
+          body: createLeaseBody(),
+          PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+          PlatformDataWorkingDatasetActivity:
+            "PlatformDataWorkingDatasetActivityModel",
+        }),
+      ).rejects.toThrow();
+
+      expect(
+        datasetRepository.updateWorkingDatasetEditLease,
+      ).not.toHaveBeenCalled();
+      expect(
+        datasetRepository.createWorkingDatasetActivityRecord,
+      ).not.toHaveBeenCalled();
+    });
+  });
 });
