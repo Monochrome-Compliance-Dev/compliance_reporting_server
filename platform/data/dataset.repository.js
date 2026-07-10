@@ -26,6 +26,30 @@ function normaliseInteger(value, fieldName) {
   return numberValue;
 }
 
+function normaliseTimestamp(value) {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function normaliseActiveEditor(plainRecord) {
+  if (!plainRecord.activeEditorSessionId) {
+    return null;
+  }
+
+  const expiresAt = normaliseTimestamp(plainRecord.activeEditorExpiresAt);
+
+  if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+    return null;
+  }
+
+  return {
+    userId: plainRecord.activeEditorUserId,
+    sessionId: plainRecord.activeEditorSessionId,
+    startedAt: normaliseTimestamp(plainRecord.activeEditorStartedAt),
+    lastSeenAt: normaliseTimestamp(plainRecord.activeEditorLastSeenAt),
+    expiresAt,
+  };
+}
+
 function normaliseDatasetRecord(record) {
   const plainRecord =
     typeof record?.get === "function" ? record.get({ plain: true }) : record;
@@ -85,22 +109,7 @@ function normaliseWorkingDatasetRecord(record) {
     rowsCount: normaliseInteger(plainRecord.rowsCount, "rowsCount"),
     lineage: plainRecord.lineage,
     meta: plainRecord.meta,
-    activeEditor: {
-      userId: plainRecord.activeEditorUserId,
-      sessionId: plainRecord.activeEditorSessionId,
-      startedAt:
-        plainRecord.activeEditorStartedAt instanceof Date
-          ? plainRecord.activeEditorStartedAt.toISOString()
-          : plainRecord.activeEditorStartedAt,
-      lastSeenAt:
-        plainRecord.activeEditorLastSeenAt instanceof Date
-          ? plainRecord.activeEditorLastSeenAt.toISOString()
-          : plainRecord.activeEditorLastSeenAt,
-      expiresAt:
-        plainRecord.activeEditorExpiresAt instanceof Date
-          ? plainRecord.activeEditorExpiresAt.toISOString()
-          : plainRecord.activeEditorExpiresAt,
-    },
+    activeEditor: normaliseActiveEditor(plainRecord),
     finalisedAt:
       plainRecord.finalisedAt instanceof Date
         ? plainRecord.finalisedAt.toISOString()

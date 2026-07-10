@@ -481,13 +481,7 @@ describe("dataset.repository", () => {
               sourceDatasetId: "source-dataset-123",
               sourceOriginalFileName: "payments.csv",
             },
-            activeEditor: {
-              userId: null,
-              sessionId: null,
-              startedAt: null,
-              lastSeenAt: null,
-              expiresAt: null,
-            },
+            activeEditor: null,
             finalisedAt: null,
             finalisedBy: null,
             createdAt: "2026-07-06T00:00:00.000Z",
@@ -518,13 +512,7 @@ describe("dataset.repository", () => {
               sourceDatasetId: "source-dataset-123",
               sourceOriginalFileName: "payments.csv",
             },
-            activeEditor: {
-              userId: null,
-              sessionId: null,
-              startedAt: null,
-              lastSeenAt: null,
-              expiresAt: null,
-            },
+            activeEditor: null,
             finalisedAt: null,
             finalisedBy: null,
             createdAt: "2026-07-06T00:00:00.000Z",
@@ -699,13 +687,7 @@ describe("dataset.repository", () => {
           sourceDatasetId: "source-dataset-123",
           sourceOriginalFileName: "payments.csv",
         },
-        activeEditor: {
-          userId: null,
-          sessionId: null,
-          startedAt: null,
-          lastSeenAt: null,
-          expiresAt: null,
-        },
+        activeEditor: null,
         finalisedAt: null,
         finalisedBy: null,
         createdAt: "2026-07-06T00:00:00.000Z",
@@ -724,6 +706,44 @@ describe("dataset.repository", () => {
 
       expect(result.headersCount).toBe(2);
       expect(result.rowsCount).toBe(1);
+    });
+
+    it("normalises an unexpired active editor lease", () => {
+      const startedAt = new Date(Date.now() - 60000);
+      const lastSeenAt = new Date(Date.now() - 30000);
+      const expiresAt = new Date(Date.now() + 60000);
+
+      const result = datasetRepository.normaliseWorkingDatasetRecord(
+        createWorkingModelRecord({
+          activeEditorUserId: "user-123",
+          activeEditorSessionId: "editor-session-123",
+          activeEditorStartedAt: startedAt,
+          activeEditorLastSeenAt: lastSeenAt,
+          activeEditorExpiresAt: expiresAt,
+        }),
+      );
+
+      expect(result.activeEditor).toEqual({
+        userId: "user-123",
+        sessionId: "editor-session-123",
+        startedAt: startedAt.toISOString(),
+        lastSeenAt: lastSeenAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+    });
+
+    it("normalises an expired active editor lease as inactive", () => {
+      const result = datasetRepository.normaliseWorkingDatasetRecord(
+        createWorkingModelRecord({
+          activeEditorUserId: "user-123",
+          activeEditorSessionId: "editor-session-123",
+          activeEditorStartedAt: new Date(Date.now() - 120000),
+          activeEditorLastSeenAt: new Date(Date.now() - 90000),
+          activeEditorExpiresAt: new Date(Date.now() - 60000),
+        }),
+      );
+
+      expect(result.activeEditor).toBeNull();
     });
 
     it("throws when lineage is missing during normalisation", () => {
@@ -1004,13 +1024,7 @@ describe("updateWorkingDatasetStorageRecord", () => {
       meta: {
         materialisedFrom: "projection_config",
       },
-      activeEditor: {
-        userId: null,
-        sessionId: null,
-        startedAt: null,
-        lastSeenAt: null,
-        expiresAt: null,
-      },
+      activeEditor: null,
       finalisedAt: null,
       finalisedBy: null,
       createdAt: "2026-07-06T00:00:00.000Z",
@@ -1130,13 +1144,7 @@ describe("finaliseWorkingDatasetRecord", () => {
         sourceDatasetId: "source-dataset-123",
         sourceOriginalFileName: "payments.csv",
       },
-      activeEditor: {
-        userId: null,
-        sessionId: null,
-        startedAt: null,
-        lastSeenAt: null,
-        expiresAt: null,
-      },
+      activeEditor: null,
       finalisedAt: "2026-07-06T00:30:00.000Z",
       finalisedBy: "user-123",
       createdAt: "2026-07-06T00:00:00.000Z",
