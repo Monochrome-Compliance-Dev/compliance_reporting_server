@@ -744,6 +744,33 @@ describe("finaliseWorkingDataset", () => {
     });
   });
 
+  it("throws when editorSessionId is missing", async () => {
+    await expect(
+      transformationService.finaliseWorkingDataset({
+        executionContext: createExecutionContext(),
+        params: createParams(),
+        body: {
+          profileId: "profile-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      }),
+    ).rejects.toThrow(
+      "editorSessionId is required for working dataset finalisation.",
+    );
+
+    expect(
+      datasetRepository.getWorkingDatasetRecordById,
+    ).not.toHaveBeenCalled();
+    expect(
+      datasetRepository.finaliseWorkingDatasetRecord,
+    ).not.toHaveBeenCalled();
+    expect(
+      datasetRepository.createWorkingDatasetActivityRecord,
+    ).not.toHaveBeenCalled();
+  });
+
   it("throws when finalising with the wrong editor session", async () => {
     datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
       createWorkingDataset(),
@@ -761,6 +788,41 @@ describe("finaliseWorkingDataset", () => {
           "PlatformDataWorkingDatasetActivityModel",
       }),
     ).rejects.toThrow("active editor lease belongs to another session.");
+
+    expect(
+      datasetRepository.finaliseWorkingDatasetRecord,
+    ).not.toHaveBeenCalled();
+    expect(
+      datasetRepository.createWorkingDatasetActivityRecord,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("throws when the active editor lease has expired", async () => {
+    datasetRepository.getWorkingDatasetRecordById.mockResolvedValue(
+      createWorkingDataset({
+        activeEditor: {
+          userId: "user-123",
+          sessionId: "session-123",
+          startedAt: "2026-07-07T00:00:00.000Z",
+          lastSeenAt: "2026-07-07T00:00:00.000Z",
+          expiresAt: "2000-07-07T00:30:00.000Z",
+        },
+      }),
+    );
+
+    await expect(
+      transformationService.finaliseWorkingDataset({
+        executionContext: createExecutionContext(),
+        params: createParams(),
+        body: {
+          profileId: "profile-123",
+          editorSessionId: "session-123",
+        },
+        PlatformDataWorkingDataset: "PlatformDataWorkingDatasetModel",
+        PlatformDataWorkingDatasetActivity:
+          "PlatformDataWorkingDatasetActivityModel",
+      }),
+    ).rejects.toThrow("active editor lease has expired.");
 
     expect(
       datasetRepository.finaliseWorkingDatasetRecord,
