@@ -17,45 +17,37 @@ if (process.env.NODE_ENV === "development") {
   }
 }
 
-const { logger } = require("./helpers/logger");
+const { logger } = require("@/helpers/logger");
+
+const {
+  apiLimiter,
+  emailLimiter,
+  loginLimiter,
+} = require("@/platform/security/rate-limiting.middleware");
 
 const crypto = require("crypto");
 const os = require("os");
 const fs = require("fs");
 
-// --- BEGIN: request correlation + focused 429 logging to file ---
+// --- BEGIN: request correlation + optional request telemetry ---
 const rateLimitLogDir = path.join(process.cwd(), "logs", "rate-limits");
-const rateLimitLogFile = path.join(rateLimitLogDir, "rate-limit.ndjson");
 const requestsLogFile = path.join(rateLimitLogDir, "requests.ndjson");
 const REQUESTS_TEXT_LOG =
   String(process.env.REQUESTS_TEXT_LOG || "false").toLowerCase() === "true";
 
-function safeString(v) {
-  if (v == null) return null;
-  try {
-    const s = String(v);
-    return s.length > 500 ? s.slice(0, 500) + "…" : s;
-  } catch {
+function safeString(value) {
+  if (value == null) {
     return null;
   }
-}
 
-function getClientIp(req) {
-  const xf = req.headers["x-forwarded-for"];
-  if (xf) {
-    const first = String(xf).split(",")[0].trim();
-    if (first) return first;
-  }
-  return req.socket?.remoteAddress || req.connection?.remoteAddress || null;
-}
-
-function writeRateLimitNdjson(entry) {
   try {
-    fs.mkdirSync(rateLimitLogDir, { recursive: true });
-    fs.appendFileSync(rateLimitLogFile, JSON.stringify(entry) + os.EOL);
-  } catch (e) {
-    // Never let logging break the app.
-    console.warn("⚠️ Failed to write rate-limit log", e?.message);
+    const stringValue = String(value);
+
+    return stringValue.length > 500
+      ? `${stringValue.slice(0, 500)}…`
+      : stringValue;
+  } catch {
+    return null;
   }
 }
 
@@ -63,62 +55,29 @@ function writeRequestsNdjson(entry) {
   try {
     fs.mkdirSync(rateLimitLogDir, { recursive: true });
     fs.appendFileSync(requestsLogFile, JSON.stringify(entry) + os.EOL);
-  } catch (e) {
-    // Never let logging break the app.
-    console.warn("⚠️ Failed to write requests log", e?.message);
+  } catch (error) {
+    console.warn("⚠️ Failed to write requests log", error?.message);
   }
 }
 
-function buildRequestLogContext(req, res, extra = {}) {
-  const userAgent = req.headers["user-agent"];
-  const origin = req.headers.origin;
-  const referer = req.headers.referer;
-
-  // Avoid dumping tokens/cookies. Log only presence.
-  const hasAuthHeader = Boolean(req.headers.authorization);
-  const hasCookie = Boolean(req.headers.cookie);
-
-  // Best-effort extraction of identifiers from query/body.
-  const ptrsId = req.query?.ptrsId || req.body?.ptrsId || null;
-  const profileId = req.query?.profileId || req.body?.profileId || null;
+function buildRequestTelemetry(request, response, durationMs) {
+  const origin = request.headers.origin;
+  const ptrsId = request.query?.ptrsId || request.body?.ptrsId || null;
+  const profileId = request.query?.profileId || request.body?.profileId || null;
 
   return {
     ts: new Date().toISOString(),
-    requestId: req.id || null,
-    status: res?.statusCode,
-    method: req.method,
-    path: req.originalUrl,
-    ip: getClientIp(req),
-    origin: safeString(origin),
-    referer: safeString(referer),
-    userAgent: safeString(userAgent),
-    hasAuthHeader,
-    hasCookie,
-    ptrsId: ptrsId ? String(ptrsId) : null,
-    profileId: profileId ? String(profileId) : null,
-    ...extra,
-  };
-}
-function buildRequestTelemetry(req, res, durationMs) {
-  const origin = req.headers.origin;
-
-  // Best-effort extraction of identifiers from query/body.
-  const ptrsId = req.query?.ptrsId || req.body?.ptrsId || null;
-  const profileId = req.query?.profileId || req.body?.profileId || null;
-
-  return {
-    ts: new Date().toISOString(),
-    requestId: req.id || null,
-    method: req.method,
-    path: req.originalUrl,
+    requestId: request.id || null,
+    method: request.method,
+    path: request.originalUrl,
     ptrsId: ptrsId ? String(ptrsId) : null,
     profileId: profileId ? String(profileId) : null,
     origin: safeString(origin),
-    status: res?.statusCode,
+    status: response?.statusCode,
     durationMs,
   };
 }
-// --- END: request correlation + focused 429 logging to file ---
+// --- END: request correlation + optional request telemetry ---
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
   "https://monochrome-compliance.com",
@@ -171,32 +130,20 @@ app.use((req, res, next) => {
   req.id = req.headers["x-request-id"] || crypto.randomUUID();
   res.setHeader("x-request-id", req.id);
 
-  // High-resolution timer for request duration
   const start = process.hrtime.bigint();
 
   res.on("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
 
-    // Lightweight request telemetry (OFF by default; enable via REQUESTS_TEXT_LOG=true)
     if (REQUESTS_TEXT_LOG) {
       const requestEntry = buildRequestTelemetry(
         req,
         res,
         Math.round(durationMs),
       );
+
       writeRequestsNdjson(requestEntry);
     }
-
-    // Additionally log 429s with richer context (existing behaviour)
-    if (res.statusCode !== 429) return;
-
-    const entry = buildRequestLogContext(req, res, {
-      type: "rate_limit",
-      stage: "response_finish",
-    });
-
-    writeRateLimitNdjson(entry);
-    logger?.logEvent?.("warn", "RateLimit429", entry);
   });
 
   next();
@@ -315,7 +262,6 @@ const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
 const helmet = require("helmet");
 const setCspHeaders = require("./cspHeaders");
-const rateLimit = require("express-rate-limit");
 
 // Middleware to set customerId for RLS
 // const setCustomerIdRLS = require("./helpers/setCustomerIdRLS");
@@ -360,93 +306,13 @@ app.get("/api/health-check", (req, res) => {
   res.status(200).json({ status: "ok", message: "Backend is up and running." });
 });
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // limit each IP to 1000 requests per windowMs
-  standardHeaders: true,
-  legacyHeaders: false,
-
-  handler: (req, res, next, options) => {
-    const entry = buildRequestLogContext(req, res, {
-      type: "rate_limit",
-      stage: "limiter_handler",
-      limiter: "api",
-      windowMs: options?.windowMs,
-      max: options?.max,
-    });
-
-    writeRateLimitNdjson(entry);
-    logger?.logEvent?.("warn", "RateLimit429", entry);
-
-    res.status(options.statusCode || 429).json({
-      status: "error",
-      code: "RATE_LIMITED",
-      message: options.message || "Too many requests, please try again later.",
-      requestId: req.id || null,
-    });
-  },
-});
-
 app.use("/api/", apiLimiter); // Apply to all API routes
-
-const loginLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 5,
-  message: "Too many login attempts from this IP, please try again later.",
-
-  handler: (req, res, next, options) => {
-    const entry = buildRequestLogContext(req, res, {
-      type: "rate_limit",
-      stage: "limiter_handler",
-      limiter: "login",
-      windowMs: options?.windowMs,
-      max: options?.max,
-    });
-
-    writeRateLimitNdjson(entry);
-    logger?.logEvent?.("warn", "RateLimit429", entry);
-
-    res.status(options.statusCode || 429).json({
-      status: "error",
-      code: "RATE_LIMITED",
-      message: options.message,
-      requestId: req.id || null,
-    });
-  },
-});
 
 app.use("/api/users/authenticate", loginLimiter);
 app.use("/api/users/forgot-password", loginLimiter);
 app.use("/api/users/reset-password", loginLimiter);
 app.use("/api/booking", loginLimiter);
 app.use("/api/customers/register", loginLimiter);
-
-const emailLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5,
-  message: "Too many attempts, please try again later.",
-
-  handler: (req, res, next, options) => {
-    const entry = buildRequestLogContext(req, res, {
-      type: "rate_limit",
-      stage: "limiter_handler",
-      limiter: "email",
-      windowMs: options?.windowMs,
-      max: options?.max,
-    });
-
-    writeRateLimitNdjson(entry);
-    logger?.logEvent?.("warn", "RateLimit429", entry);
-
-    res.status(options.statusCode || 429).json({
-      status: "error",
-      code: "RATE_LIMITED",
-      message: options.message,
-      requestId: req.id || null,
-    });
-  },
-});
-
 app.use("/api/public/send-attachment-email", emailLimiter);
 app.use("/api/booking", emailLimiter);
 
