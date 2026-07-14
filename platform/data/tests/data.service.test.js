@@ -2,7 +2,7 @@ jest.mock("@/helpers/nanoid_helper", () => ({
   getNanoid: jest.fn(),
 }));
 
-jest.mock("@/middleware/virus-scan", () => ({
+jest.mock("@/platform/security/malware-scanner.service", () => ({
   scanFile: jest.fn(),
 }));
 
@@ -40,7 +40,7 @@ jest.mock("@/platform/security/security.service", () => ({
 }));
 
 const { getNanoid } = require("@/helpers/nanoid_helper");
-const { scanFile } = require("@/middleware/virus-scan");
+const malwareScannerService = require("@/platform/security/malware-scanner.service");
 const auditService = require("@/platform/audit/audit.service");
 const acquisitionService = require("@/platform/data/acquisition.service");
 const datasetRepository = require("@/platform/data/dataset.repository");
@@ -260,7 +260,12 @@ function createFinalisedWorkingDataset(overrides = {}) {
 describe("data.service", () => {
   beforeEach(() => {
     getNanoid.mockReturnValue("dataset123");
-    scanFile.mockResolvedValue(undefined);
+    malwareScannerService.scanFile.mockResolvedValue({
+      outcome: "clean",
+      fileName: "payments.csv",
+      elapsedMs: 14,
+      scannerMode: "clamdscan",
+    });
     securityService.enforceDataDatasetCreation.mockReturnValue({
       eventType: "platform.security.data_dataset_observed",
       outcome: "allowed",
@@ -342,7 +347,7 @@ describe("data.service", () => {
         actor: createCommand().actor,
         customerId: "customer-123",
       });
-      expect(scanFile).toHaveBeenCalledWith(
+      expect(malwareScannerService.scanFile).toHaveBeenCalledWith(
         "/tmp/mc-platform-data-uploads/payments.csv",
         "payments.csv",
       );
@@ -437,7 +442,7 @@ describe("data.service", () => {
       ).rejects.toThrow("Role is not allowed for governed execution.");
 
       expect(fileStorageService.storeDatasetFile).not.toHaveBeenCalled();
-      expect(scanFile).not.toHaveBeenCalled();
+      expect(malwareScannerService.scanFile).not.toHaveBeenCalled();
       expect(datasetRepository.createDatasetRecord).not.toHaveBeenCalled();
       expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
         datasetId: "dataset123",
@@ -454,10 +459,18 @@ describe("data.service", () => {
       });
     });
 
-    it("fails loudly and records denied audit evidence when antivirus scanning fails", async () => {
-      const scanError = new Error("Antivirus scan failed.");
+    it("rejects malware and records the Security observation", async () => {
+      const scanError = new Error("File failed antivirus scan.");
       scanError.status = 400;
-      scanFile.mockRejectedValue(scanError);
+      scanError.code = "malware_detected";
+      scanError.securityObservation = {
+        outcome: "denied",
+        reason: "malware_detected",
+        fileName: "payments.csv",
+        elapsedMs: 14,
+        scannerMode: "clamdscan",
+      };
+      malwareScannerService.scanFile.mockRejectedValue(scanError);
 
       await expect(
         dataService.createDataset({
@@ -466,9 +479,9 @@ describe("data.service", () => {
           file: createFile(),
           PlatformDataDataset: "PlatformDataDatasetModel",
         }),
-      ).rejects.toThrow("Antivirus scan failed.");
+      ).rejects.toThrow("File failed antivirus scan.");
 
-      expect(scanFile).toHaveBeenCalledWith(
+      expect(malwareScannerService.scanFile).toHaveBeenCalledWith(
         "/tmp/mc-platform-data-uploads/payments.csv",
         "payments.csv",
       );
@@ -481,10 +494,47 @@ describe("data.service", () => {
         datasetId: "dataset123",
         outcome: "denied",
         actor: createCommand().actor,
-        securityObservation: {
-          eventType: "platform.security.data_dataset_observed",
-          outcome: "allowed",
-        },
+        securityObservation: scanError.securityObservation,
+        error: scanError,
+      });
+    });
+
+    it("fails closed when malware scanning fails and records the Security observation", async () => {
+      const scanError = new Error("Antivirus scan failed.");
+      scanError.status = 503;
+      scanError.code = "malware_scan_failed";
+      scanError.securityObservation = {
+        outcome: "denied",
+        reason: "malware_scan_failed",
+        fileName: "payments.csv",
+        elapsedMs: 14,
+        scannerMode: "clamdscan",
+      };
+      malwareScannerService.scanFile.mockRejectedValue(scanError);
+
+      await expect(
+        dataService.createDataset({
+          executionContext: createExecutionContext(),
+          body: createBody(),
+          file: createFile(),
+          PlatformDataDataset: "PlatformDataDatasetModel",
+        }),
+      ).rejects.toThrow("Antivirus scan failed.");
+
+      expect(malwareScannerService.scanFile).toHaveBeenCalledWith(
+        "/tmp/mc-platform-data-uploads/payments.csv",
+        "payments.csv",
+      );
+      expect(fileStorageService.storeDatasetFile).not.toHaveBeenCalled();
+      expect(
+        datasetService.createImmutableDatasetFromCommand,
+      ).not.toHaveBeenCalled();
+      expect(datasetRepository.createDatasetRecord).not.toHaveBeenCalled();
+      expect(auditService.recordDataDatasetAudit).toHaveBeenCalledWith({
+        datasetId: "dataset123",
+        outcome: "denied",
+        actor: createCommand().actor,
+        securityObservation: scanError.securityObservation,
         error: scanError,
       });
     });
