@@ -24,6 +24,13 @@ const {
   emailLimiter,
   loginLimiter,
 } = require("@/platform/security/rate-limiting.middleware");
+const {
+  blockSuspiciousBotRoute,
+  createCorsMiddleware,
+  createSecurityHeadersMiddleware,
+  disablePoweredByHeader,
+  enforceHttps,
+} = require("@/platform/security/http-boundary.middleware");
 
 const crypto = require("crypto");
 const os = require("os");
@@ -258,45 +265,19 @@ global.__socketio = io;
 
 const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
-const cors = require("cors");
 const errorHandler = require("./middleware/error-handler");
-const helmet = require("helmet");
-const setCspHeaders = require("./cspHeaders");
 
 // Middleware to set customerId for RLS
 // const setCustomerIdRLS = require("./helpers/setCustomerIdRLS");
 // const transactionCleanup = require("./middleware/transactionCleanup");
 
-// Apply CORS middleware globally with custom origin logic
 app.use(
-  cors({
-    origin: function (origin, callback) {
-      // console.log("🔍 CORS origin received:", origin);
-      // console.log("🧾 Allowed origins:", allowedOrigins);
-
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        logger.logEvent("warn", "CORS Rejected", {
-          action: "CORSRejected",
-          origin,
-        });
-        callback(new Error("CORS: Origin not allowed"));
-      }
-    },
-    credentials: true,
+  createCorsMiddleware({
+    allowedOrigins,
   }),
 );
 
-// Immediately reject suspicious bot routes such as /boaform/admin/formLogin
-app.use("/boaform", (req, res) => {
-  logger.logEvent("warn", "Blocked suspicious request", {
-    action: "BotRouteBlocked",
-    path: req.path,
-    ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress,
-  });
-  res.status(403).send("Forbidden");
-});
+app.use("/boaform", blockSuspiciousBotRoute);
 
 // Health check endpoint
 // This endpoint is used to check if the backend is running
@@ -340,17 +321,6 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-app.use(helmet());
-if (process.env.NODE_ENV === "production") {
-  app.use(
-    helmet.hsts({
-      maxAge: 63072000, // 2 years
-      includeSubDomains: true,
-      preload: true,
-    }),
-  );
-}
-
 // Log incoming request IPs
 // app.use((req, res, next) => {
 //   const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
@@ -361,20 +331,19 @@ if (process.env.NODE_ENV === "production") {
 //   next();
 // });
 
-app.use(setCspHeaders);
+app.use(
+  createSecurityHeadersMiddleware({
+    environment: process.env.NODE_ENV,
+  }),
+);
 
-app.disable("x-powered-by");
+disablePoweredByHeader(app);
 
-// Enforce HTTPS in production
-app.use((req, res, next) => {
-  if (
-    process.env.NODE_ENV !== "development" &&
-    req.headers["x-forwarded-proto"] !== "https"
-  ) {
-    return res.redirect("https://" + req.headers.host + req.url);
-  }
-  next();
-});
+app.use(
+  enforceHttps({
+    environment: process.env.NODE_ENV,
+  }),
+);
 
 // Set RLS customerId for every request
 // app.use(setCustomerIdRLS); // Converted to a helper function at the service level
