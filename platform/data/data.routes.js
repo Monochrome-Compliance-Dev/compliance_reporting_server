@@ -7,6 +7,10 @@ const multer = require("multer");
 const authorise = require("@/middleware/authorise");
 const { createDataController } = require("@/platform/data/data.controller");
 const identityService = require("@/platform/identity/identity.service");
+const {
+  createUploadProtection,
+  uploadProtectionErrorHandler,
+} = require("@/platform/security/upload-protection.middleware");
 
 const DATA_UPLOAD_TEMP_DIRECTORY = path.join(
   os.tmpdir(),
@@ -32,7 +36,9 @@ function createDataRouter({
   PlatformDataWorkingDatasetActivity,
 } = {}) {
   const router = express.Router();
-  const upload = multer({ storage: createDataUploadStorage() });
+  const uploadDatasetFile = createUploadProtection({
+    storage: createDataUploadStorage(),
+  });
   const controller = createDataController({
     PlatformDataDataset,
     PlatformDataWorkingDataset,
@@ -46,7 +52,8 @@ function createDataRouter({
     "/datasets",
     requirePlatformAccess,
     identityService.attachExecutionContext,
-    upload.single("file"),
+    uploadDatasetFile,
+    uploadProtectionErrorHandler,
     controller.createDataset,
   );
 
