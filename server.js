@@ -24,6 +24,7 @@ const {
   emailLimiter,
   loginLimiter,
 } = require("@/platform/security/rate-limiting.middleware");
+
 const {
   blockSuspiciousBotRoute,
   createCorsMiddleware,
@@ -31,6 +32,11 @@ const {
   disablePoweredByHeader,
   enforceHttps,
 } = require("@/platform/security/http-boundary.middleware");
+
+const {
+  createRequestBodyMiddleware,
+  requestSizeErrorHandler,
+} = require("@/platform/security/request-size.middleware");
 
 const crypto = require("crypto");
 const os = require("os");
@@ -263,7 +269,6 @@ app.set("socketio", io);
 // Expose for service-layer emitters (MVP)
 global.__socketio = io;
 
-const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const errorHandler = require("./middleware/error-handler");
 
@@ -317,8 +322,8 @@ app.post(
 );
 // --- end webhook mount ---
 
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(...createRequestBodyMiddleware());
+app.use(requestSizeErrorHandler);
 app.use(cookieParser());
 
 // Log incoming request IPs
