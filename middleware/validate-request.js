@@ -1,4 +1,7 @@
-const { logger } = require("../helpers/logger");
+const { logger } = require("@/helpers/logger");
+const {
+  sanitiseValidationError,
+} = require("@/platform/security/validation-error-sanitiser");
 
 /**
  * validateRequest(schema, location?)
@@ -19,7 +22,7 @@ module.exports = function validateRequest(schema, location = "body") {
     // Determine if this route requires a customerId based on Joi schema meta
     const metas = (schema && schema.$_terms && schema.$_terms.metas) || [];
     const metaFlag = metas.find((m) =>
-      Object.prototype.hasOwnProperty.call(m, "requireCustomer")
+      Object.prototype.hasOwnProperty.call(m, "requireCustomer"),
     );
     const requireCustomer = metaFlag ? !!metaFlag.requireCustomer : true; // default to true
 
@@ -60,12 +63,7 @@ module.exports = function validateRequest(schema, location = "body") {
 
       const { error, value } = schema.validate(fullRecord, options);
       if (error) {
-        const details = error.details.map((x) => {
-          const path = x.path.join(".");
-          const val = x.context?.value;
-          const type = typeof val;
-          return `[${path}] ${x.message} | Value: "${val}" (${type})`;
-        });
+        const details = sanitiseValidationError(error);
         errors.push({ index, errors: details });
       } else {
         results.push(value);
