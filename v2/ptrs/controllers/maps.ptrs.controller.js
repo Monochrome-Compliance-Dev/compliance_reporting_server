@@ -14,6 +14,7 @@ module.exports = {
   buildMappedDataset,
   getFieldMap,
   saveFieldMap,
+  importFieldMap,
   listPtrsWithMap,
 };
 
@@ -299,6 +300,7 @@ async function getFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
   const profileId = req.query.profileId || null;
+  const datasetId = req.query.datasetId || null;
 
   try {
     if (!customerId) {
@@ -310,6 +312,11 @@ async function getFieldMap(req, res, next) {
       return res
         .status(400)
         .json({ status: "error", message: "profileId is required" });
+    }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
     }
 
     const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
@@ -323,6 +330,7 @@ async function getFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      datasetId,
     });
 
     await auditService.logEvent({
@@ -335,6 +343,7 @@ async function getFieldMap(req, res, next) {
       entityId: ptrsId,
       details: {
         profileId,
+        datasetId,
         count: Array.isArray(fieldMap) ? fieldMap.length : 0,
       },
     });
@@ -379,7 +388,11 @@ async function saveFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
 
-  const { profileId = null, fieldMap = null } = req.body || {};
+  const {
+    profileId = null,
+    datasetId = null,
+    fieldMap = null,
+  } = req.body || {};
 
   try {
     if (!customerId) {
@@ -391,6 +404,11 @@ async function saveFieldMap(req, res, next) {
       return res
         .status(400)
         .json({ status: "error", message: "profileId is required" });
+    }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
     }
     if (!Array.isArray(fieldMap)) {
       return res
@@ -409,6 +427,7 @@ async function saveFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      datasetId,
       fieldMap,
       userId,
     });
@@ -423,6 +442,7 @@ async function saveFieldMap(req, res, next) {
       entityId: ptrsId,
       details: {
         profileId,
+        datasetId,
         count: Array.isArray(saved) ? saved.length : 0,
       },
     });
@@ -440,6 +460,126 @@ async function saveFieldMap(req, res, next) {
       statusCode: error.statusCode || 500,
       timestamp: new Date().toISOString(),
     });
+    return next(error);
+  }
+}
+
+async function importFieldMap(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ip = req.ip;
+  const device = req.headers["user-agent"];
+  const targetPtrsId = req.params.id;
+
+  const {
+    sourcePtrsId = null,
+    sourceDatasetId = null,
+    targetDatasetId = null,
+    profileId = null,
+  } = req.body || {};
+
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+
+    if (!sourcePtrsId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "sourcePtrsId is required" });
+    }
+
+    if (!sourceDatasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "sourceDatasetId is required" });
+    }
+
+    if (!targetDatasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "targetDatasetId is required" });
+    }
+
+    if (!profileId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "profileId is required" });
+    }
+
+    const targetPtrs = await ptrsService.getPtrs({
+      customerId,
+      ptrsId: targetPtrsId,
+    });
+
+    if (!targetPtrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Target PTRS run not found" });
+    }
+
+    const sourcePtrs = await ptrsService.getPtrs({
+      customerId,
+      ptrsId: sourcePtrsId,
+    });
+
+    if (!sourcePtrs) {
+      return res
+        .status(404)
+        .json({ status: "error", message: "Source PTRS run not found" });
+    }
+
+    const fieldMap = await mapsConfigService.importFieldMap({
+      customerId,
+      sourcePtrsId,
+      sourceDatasetId,
+      targetPtrsId,
+      targetDatasetId,
+      profileId,
+      userId,
+    });
+
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip,
+      device,
+      action: "PtrsV2ImportFieldMap",
+      entity: "PtrsUpload",
+      entityId: targetPtrsId,
+      details: {
+        sourcePtrsId,
+        sourceDatasetId,
+        targetDatasetId,
+        profileId,
+        count: fieldMap.length,
+      },
+    });
+
+    return res.status(200).json({
+      status: "success",
+      data: {
+        fieldMap,
+        count: fieldMap.length,
+      },
+    });
+  } catch (error) {
+    logger.logEvent("error", "Error importing PTRS v2 field map", {
+      action: "PtrsV2ImportFieldMap",
+      targetPtrsId,
+      sourcePtrsId,
+      sourceDatasetId,
+      targetDatasetId,
+      profileId,
+      customerId,
+      userId,
+      error: error.message,
+      statusCode: error.statusCode || 500,
+      timestamp: new Date().toISOString(),
+    });
+
     return next(error);
   }
 }

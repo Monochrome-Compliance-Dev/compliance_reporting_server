@@ -29,4 +29,6 @@ router.get("/:id/sample", requirePtrs, tmController.getSample);
 router.get("/:id/field-map", requirePtrs, tmController.getFieldMap);
 router.post("/:id/field-map", requirePtrs, tmController.saveFieldMap);
 
+router.post("/:id/field-map/import", requirePtrs, tmController.importFieldMap);
+
 module.exports = router;

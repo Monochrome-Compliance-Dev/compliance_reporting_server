@@ -35,8 +35,12 @@ function model(sequelize) {
       allowNull: false,
     },
 
+    datasetId: {
+      type: DataTypes.STRING(10),
+      allowNull: false,
+    },
+
     // Canonical (normalised) field name used by staging/rules/metrics/reporting
-    // e.g. "invoice_payment_terms", "payment_date", "payer_entity_abn"
     canonicalField: {
       type: DataTypes.STRING(100),
       allowNull: false,

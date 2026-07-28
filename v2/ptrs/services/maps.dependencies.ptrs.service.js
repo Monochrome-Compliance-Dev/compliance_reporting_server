@@ -131,8 +131,16 @@ function normaliseConfiguredJoins({
     const from = j.from || {};
     const to = j.to || {};
 
-    const fromRole = String(from.role || "").toLowerCase();
-    const toRole = String(to.role || "").toLowerCase();
+    const normaliseJoinRole = (role) => {
+      const value = String(role || "")
+        .trim()
+        .toLowerCase();
+
+      return value === "main" || value.startsWith("main_") ? "main" : value;
+    };
+
+    const fromRole = normaliseJoinRole(from.role);
+    const toRole = normaliseJoinRole(to.role);
 
     const fromCol = from.column;
     const toCol = to.column;
@@ -231,16 +239,24 @@ async function resolveMainDatasetForCompose({
       String(r || "")
         .trim()
         .toLowerCase();
-    const byRole = (role) =>
-      (dsRows || []).find((d) => normRole(d.role) === role);
 
-    const main = byRole("main");
-    const anchor = byRole("anchor");
+    const main =
+      (dsRows || []).find((dataset) => {
+        const role = normRole(dataset?.role);
+        return role === "main" || role.startsWith("main_");
+      }) || null;
 
-    if (main && main.id) mainDatasetId = main.id;
-    else if (anchor && anchor.id) mainDatasetId = anchor.id;
-    else if (Array.isArray(dsRows) && dsRows.length === 1)
+    const anchor =
+      (dsRows || []).find((dataset) => normRole(dataset?.role) === "anchor") ||
+      null;
+
+    if (main?.id) {
+      mainDatasetId = main.id;
+    } else if (anchor?.id) {
+      mainDatasetId = anchor.id;
+    } else if (Array.isArray(dsRows) && dsRows.length === 1) {
       mainDatasetId = dsRows[0].id;
+    }
 
     slog.info(
       "PTRS v2 composeMappedRowsForPtrs: resolved main dataset",

@@ -120,7 +120,13 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
         customerId,
         ...(profileId ? { profileId } : {}),
       },
-      attributes: ["ptrsId", "canonicalField", "updatedAt", "createdAt"],
+      attributes: [
+        "ptrsId",
+        "datasetId",
+        "canonicalField",
+        "updatedAt",
+        "createdAt",
+      ],
       raw: true,
       transaction: t,
     });
@@ -144,11 +150,15 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
     }
 
     const fieldMapStatsByPtrsId = new Map();
-    for (const row of fieldMaps || []) {
-      const key = String(row?.ptrsId || "");
-      if (!key) continue;
 
-      const stat = fieldMapStatsByPtrsId.get(key) || {
+    for (const row of fieldMaps || []) {
+      const ptrsKey = String(row?.ptrsId || "");
+      const datasetId = row?.datasetId || null;
+
+      if (!ptrsKey || !datasetId) continue;
+
+      const stat = fieldMapStatsByPtrsId.get(ptrsKey) || {
+        datasetId: null,
         mappedFieldsCount: 0,
         fieldMapUpdatedAt: null,
         fieldMapCreatedAt: null,
@@ -166,6 +176,7 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
             new Date(stat.fieldMapUpdatedAt).getTime())
       ) {
         stat.fieldMapUpdatedAt = updatedAt;
+        stat.datasetId = datasetId;
       }
 
       if (
@@ -177,7 +188,11 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
         stat.fieldMapCreatedAt = createdAt;
       }
 
-      fieldMapStatsByPtrsId.set(key, stat);
+      if (!stat.datasetId) {
+        stat.datasetId = datasetId;
+      }
+
+      fieldMapStatsByPtrsId.set(ptrsKey, stat);
     }
 
     const ptrsRows = await db.Ptrs.findAll({
@@ -192,7 +207,7 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
 
     const dsRows = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId: { [Op.in]: ptrsIds } },
-      attributes: ["ptrsId", "role", "fileName", "createdAt"],
+      attributes: ["id", "ptrsId", "role", "fileName", "createdAt"],
       order: [
         ["ptrsId", "ASC"],
         ["createdAt", "ASC"],
@@ -216,11 +231,15 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
       return r === "main" || r.startsWith("main_");
     };
 
-    const pickDisplayFileName = (ptrsId) => {
+    const pickDisplayDataset = (ptrsId) => {
       const list = byPtrsId.get(String(ptrsId || "")) || [];
       const main = list.find((d) => isMainRole(d?.role));
       const chosen = main || list[0] || null;
-      return chosen?.fileName || null;
+
+      return {
+        datasetId: chosen?.id || null,
+        fileName: chosen?.fileName || null,
+      };
     };
 
     const items = (ptrsRows || [])
@@ -231,9 +250,19 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
           fieldMapCreatedAt: null,
         };
 
+        const displayDataset = pickDisplayDataset(r.id);
+
+        const mappedDatasetId = fieldMapStats.datasetId || null;
+
+        const mappedDataset =
+          (byPtrsId.get(String(r.id || "")) || []).find(
+            (dataset) => dataset?.id === mappedDatasetId,
+          ) || null;
+
         return {
           ...r,
-          fileName: pickDisplayFileName(r.id),
+          datasetId: mappedDatasetId,
+          fileName: mappedDataset?.fileName || null,
           mapMeta: metaByPtrsId.get(r.id) || null,
           mappedFieldsCount: fieldMapStats.mappedFieldsCount,
           fieldMapUpdatedAt: fieldMapStats.fieldMapUpdatedAt,
@@ -271,6 +300,7 @@ async function getFieldMap({
   customerId,
   ptrsId,
   profileId,
+  datasetId,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -283,7 +313,12 @@ async function getFieldMap({
 
   try {
     const rows = await db.PtrsFieldMap.findAll({
-      where: { customerId, ptrsId, profileId },
+      where: {
+        customerId,
+        ptrsId,
+        profileId,
+        ...(datasetId ? { datasetId } : {}),
+      },
       order: [["canonicalField", "ASC"]],
       raw: true,
       transaction: t,
@@ -308,19 +343,21 @@ async function saveFieldMap({
   customerId,
   ptrsId,
   profileId,
+  datasetId,
   fieldMap,
   userId,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
+  if (!datasetId) throw new Error("datasetId is required");
   if (!Array.isArray(fieldMap)) throw new Error("fieldMap array is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
     await db.PtrsFieldMap.destroy({
-      where: { customerId, ptrsId, profileId },
+      where: { customerId, ptrsId, profileId, datasetId },
       force: true,
       transaction: t,
     });
@@ -333,6 +370,7 @@ async function saveFieldMap({
         customerId,
         ptrsId,
         profileId,
+        datasetId,
         canonicalField: r.canonicalField,
         sourceRole: r.sourceRole,
         sourceColumn: r.sourceColumn ?? null,
@@ -375,7 +413,7 @@ async function saveFieldMap({
     }
 
     const rows = await db.PtrsFieldMap.findAll({
-      where: { customerId, ptrsId, profileId },
+      where: { customerId, ptrsId, profileId, datasetId },
       order: [["canonicalField", "ASC"]],
       raw: true,
       transaction: t,
@@ -389,6 +427,114 @@ async function saveFieldMap({
         await t.rollback();
       } catch (_) {}
     }
+    throw err;
+  }
+}
+
+async function importFieldMap({
+  customerId,
+  sourcePtrsId,
+  sourceDatasetId,
+  targetPtrsId,
+  targetDatasetId,
+  profileId,
+  userId,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!sourcePtrsId) throw new Error("sourcePtrsId is required");
+  if (!sourceDatasetId) throw new Error("sourceDatasetId is required");
+  if (!targetPtrsId) throw new Error("targetPtrsId is required");
+  if (!targetDatasetId) throw new Error("targetDatasetId is required");
+  if (!profileId) throw new Error("profileId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const sourceRows = await db.PtrsFieldMap.findAll({
+      where: {
+        customerId,
+        ptrsId: sourcePtrsId,
+        profileId,
+        datasetId: sourceDatasetId,
+      },
+      order: [["canonicalField", "ASC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    if (!sourceRows.length) {
+      const err = new Error(
+        "The selected previous PTRS run has no saved field mappings for that dataset.",
+      );
+      err.statusCode = 404;
+      throw err;
+    }
+
+    await db.PtrsFieldMap.destroy({
+      where: {
+        customerId,
+        ptrsId: targetPtrsId,
+        profileId,
+        datasetId: targetDatasetId,
+      },
+      force: true,
+      transaction: t,
+    });
+
+    const actor = userId || null;
+
+    const payload = sourceRows.map((row) => {
+      const existingMeta =
+        row?.meta && typeof row.meta === "object" && !Array.isArray(row.meta)
+          ? row.meta
+          : {};
+
+      const { sourceDatasetId: ignoredSourceDatasetId, ...remainingMeta } =
+        existingMeta;
+
+      return {
+        customerId,
+        ptrsId: targetPtrsId,
+        profileId,
+        datasetId: targetDatasetId,
+        canonicalField: row.canonicalField,
+        sourceRole: row.sourceRole,
+        sourceColumn: row.sourceColumn ?? null,
+        transformType: row.transformType ?? null,
+        transformConfig: row.transformConfig ?? null,
+        meta: Object.keys(remainingMeta).length ? remainingMeta : null,
+        createdBy: actor,
+        updatedBy: actor,
+      };
+    });
+
+    await db.PtrsFieldMap.bulkCreate(payload, {
+      transaction: t,
+      validate: true,
+    });
+
+    const importedRows = await db.PtrsFieldMap.findAll({
+      where: {
+        customerId,
+        ptrsId: targetPtrsId,
+        profileId,
+        datasetId: targetDatasetId,
+      },
+      order: [["canonicalField", "ASC"]],
+      raw: true,
+      transaction: t,
+    });
+
+    await t.commit();
+
+    return importedRows;
+  } catch (err) {
+    if (!t.finished) {
+      try {
+        await t.rollback();
+      } catch (_) {}
+    }
+
     throw err;
   }
 }
@@ -538,5 +684,6 @@ module.exports = {
   listCompatibleMaps,
   getFieldMap,
   saveFieldMap,
+  importFieldMap,
   saveSupportConfig,
 };
