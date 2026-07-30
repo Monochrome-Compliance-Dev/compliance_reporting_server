@@ -273,8 +273,22 @@ function _applyAction(row, act) {
     row[targetField] = segments
       .map((seg) => {
         if (seg?.kind === "literal") return String(seg?.value || "");
+
         const fieldName = String(seg?.name || "").trim();
-        return fieldName ? String(row?.[fieldName] ?? "") : "";
+        if (!fieldName) return "";
+
+        const normalisedFieldName = fieldName
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "");
+
+        const value =
+          row?.[fieldName] !== undefined
+            ? row[fieldName]
+            : row?.[normalisedFieldName];
+
+        return String(value ?? "");
       })
       .join("");
     return;
