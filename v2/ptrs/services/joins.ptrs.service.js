@@ -346,7 +346,7 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
     if (ptrsIds.length) {
       const dsRows = await db.PtrsDataset.findAll({
         where: { customerId, ptrsId: { [Op.in]: ptrsIds } },
-        attributes: ["ptrsId", "role", "fileName", "createdAt"],
+        attributes: ["id", "ptrsId", "role", "fileName", "meta", "createdAt"],
         order: [
           ["ptrsId", "ASC"],
           ["createdAt", "ASC"],
@@ -377,20 +377,37 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
       return chosen?.fileName || null;
     };
 
-    const items = eligible.map((row) => ({
-      id: row.ptrsId,
-      ptrsId: row.ptrsId,
-      fileName: pickDisplayFileName(row.ptrsId),
-      joinsCount: Array.isArray(row?.joins?.conditions)
-        ? row.joins.conditions.length
-        : 0,
-      customFieldsCount: Array.isArray(row?.customFields)
-        ? row.customFields.length
-        : 0,
-      profileId: row?.profileId || null,
-      updatedAt: row?.updatedAt || null,
-      createdAt: row?.createdAt || null,
-    }));
+    const items = eligible.map((row) => {
+      const sourceDatasets = byPtrsId.get(String(row.ptrsId || "")) || [];
+
+      return {
+        id: row.ptrsId,
+        ptrsId: row.ptrsId,
+        fileName: pickDisplayFileName(row.ptrsId),
+        joinsCount: Array.isArray(row?.joins?.conditions)
+          ? row.joins.conditions.length
+          : 0,
+        customFieldsCount: Array.isArray(row?.customFields)
+          ? row.customFields.length
+          : 0,
+        profileId: row?.profileId || null,
+        updatedAt: row?.updatedAt || null,
+        createdAt: row?.createdAt || null,
+        datasets: sourceDatasets.map((dataset) => ({
+          id: dataset.id,
+          role: dataset.role,
+          fileName: dataset.fileName,
+          rowCount:
+            dataset?.meta?.rowsCount ??
+            dataset?.meta?.rowCount ??
+            dataset?.meta?.rows ??
+            0,
+          headers: Array.isArray(dataset?.meta?.headers)
+            ? dataset.meta.headers
+            : [],
+        })),
+      };
+    });
 
     if (!isExternalTx && !t.finished) {
       await t.commit();
