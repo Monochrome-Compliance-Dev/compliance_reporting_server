@@ -8,6 +8,9 @@ const {
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  buildMaterialMapSignature,
+} = require("@/v2/ptrs/services/maps.staleness.ptrs.service");
 
 async function buildStageInputSnapshot({
   customerId,
@@ -27,6 +30,7 @@ async function buildStageInputSnapshot({
     paymentTermMapCount,
     paymentTermChangeUpdatedAt,
     paymentTermChangeCount,
+    stageConfig,
   ] = await Promise.all([
     db.PtrsExecutionRun.findOne({
       where: {
@@ -120,6 +124,19 @@ async function buildStageInputSnapshot({
       );
       return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
     })(),
+    db.PtrsColumnMap.findOne({
+      where: { customerId, ptrsId },
+      attributes: [
+        "id",
+        "mappings",
+        "joins",
+        "customFields",
+        "rowRules",
+        "updatedAt",
+      ],
+      raw: true,
+      transaction,
+    }),
   ]);
 
   return {
@@ -144,6 +161,18 @@ async function buildStageInputSnapshot({
       profileId: profileId || null,
       count: Number(paymentTermChangeCount) || 0,
       maxUpdatedAt: paymentTermChangeUpdatedAt || null,
+    },
+    stageConfig: {
+      id: stageConfig?.id || null,
+      updatedAt: stageConfig?.updatedAt || null,
+      signature: stageConfig
+        ? buildMaterialMapSignature({
+            mappings: stageConfig.mappings,
+            joins: stageConfig.joins,
+            customFields: stageConfig.customFields,
+          })
+        : null,
+      rowRules: stageConfig?.rowRules || null,
     },
   };
 }
@@ -179,7 +208,7 @@ async function getStageStaleness({
     });
 
     const existingStageCount = await db.PtrsStageRow.count({
-      where: { customerId, ptrsId, deletedAt: null },
+      where: { customerId, ptrsId, profileId, deletedAt: null },
       transaction: t,
     });
 

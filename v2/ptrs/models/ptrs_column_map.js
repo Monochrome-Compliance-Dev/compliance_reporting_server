@@ -34,6 +34,12 @@ function model(sequelize) {
       allowNull: true,
     },
 
+    rowRules: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: [],
+    },
+
     // Custom made fields
     customFields: {
       type: DataTypes.JSONB,

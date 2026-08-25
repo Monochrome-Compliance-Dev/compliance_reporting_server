@@ -23,8 +23,6 @@ async function applyDocTypeExclusion({
     CASE
       WHEN ${docTypeExpr} = 'K1'
         THEN 'Document type exclusion — K1 document type'
-      WHEN ${clearingDocExpr} LIKE '2000%'
-        THEN 'Document type exclusion — clearing document begins 2000'
       WHEN ${docTypeExpr} IN ('Z', 'KZ', 'AB')
         AND ${clearingDocExpr} LIKE '5%'
         THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
@@ -80,7 +78,6 @@ async function applyDocTypeExclusion({
       AND s."deletedAt" IS NULL
       AND (
         ${docTypeExpr} = 'K1'
-        OR ${clearingDocExpr} LIKE '2000%'
         OR (
           ${docTypeExpr} IN ('Z', 'KZ', 'AB')
           AND ${clearingDocExpr} LIKE '5%'
@@ -126,7 +123,6 @@ async function previewDocTypeExclusion({
       AND s."deletedAt" IS NULL
       AND (
         COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
         OR (
           COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
           AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
@@ -158,8 +154,6 @@ async function previewDocTypeExclusion({
       CASE
         WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
           THEN 'Document type exclusion — K1 document type'
-        WHEN COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
-          THEN 'Document type exclusion — clearing document begins 2000'
         WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
           AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
           THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
@@ -180,7 +174,6 @@ async function previewDocTypeExclusion({
       AND s."deletedAt" IS NULL
       AND (
         COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '2000%'
         OR (
           COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
           AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'

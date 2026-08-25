@@ -6,6 +6,27 @@ const {
   getFieldMap,
 } = require("@/v2/ptrs/services/maps.config.ptrs.service");
 
+function normaliseJoinRole(role) {
+  const value = String(role || "")
+    .trim()
+    .toLowerCase();
+
+  return value === "main" || value.startsWith("main_") ? "main" : value;
+}
+
+function isMainJoinRole(role) {
+  return normaliseJoinRole(role) === "main";
+}
+
+function isPaymentTermChangeJoinRole(role) {
+  const compact = String(role || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  return compact.includes("term") && compact.includes("change");
+}
+
 async function loadComposeDependencies({
   customerId,
   ptrsId,
@@ -131,14 +152,6 @@ function normaliseConfiguredJoins({
     const from = j.from || {};
     const to = j.to || {};
 
-    const normaliseJoinRole = (role) => {
-      const value = String(role || "")
-        .trim()
-        .toLowerCase();
-
-      return value === "main" || value.startsWith("main_") ? "main" : value;
-    };
-
     const fromRole = normaliseJoinRole(from.role);
     const toRole = normaliseJoinRole(to.role);
 
@@ -149,9 +162,11 @@ function normaliseConfiguredJoins({
 
     normalisedJoins.push({
       fromRole,
+      fromDatasetId: from.datasetId || null,
       fromColumn: fromCol,
       fromTransform: from.transform || null,
       toRole,
+      toDatasetId: to.datasetId || null,
       toColumn: toCol,
       toTransform: to.transform || null,
     });
@@ -346,6 +361,9 @@ function buildHeadersFromComposedRows(rows) {
 
 module.exports = {
   loadComposeDependencies,
+  normaliseJoinRole,
+  isMainJoinRole,
+  isPaymentTermChangeJoinRole,
   normaliseConfiguredJoins,
   normaliseConfiguredCustomFields,
   resolveMainDatasetForCompose,

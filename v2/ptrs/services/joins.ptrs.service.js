@@ -232,7 +232,7 @@ async function saveJoins({
         extras: null,
         fallbacks: null,
         defaults: null,
-        rowRules: null,
+        rowRules: [],
         ...payload,
         createdBy: userId || null,
         updatedBy: userId || null,

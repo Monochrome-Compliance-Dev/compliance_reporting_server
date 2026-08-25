@@ -2,6 +2,11 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  buildPaymentObservationsCte,
+  getPaymentObservationReplacements,
+  listPaymentObservations,
+} = require("./payment-observations.ptrs.service");
 
 module.exports = {
   validate,
@@ -107,10 +112,12 @@ function parseMoney(value) {
   return n;
 }
 
-function toIssue(stageRow, code, message, extra = {}) {
+function toIssue(paymentObservation, code, message, extra = {}) {
   return {
-    stageRowId: stageRow.id,
-    rowNo: stageRow.rowNo,
+    paymentObservationId: paymentObservation.observationId,
+    stageRowId: paymentObservation.sourceInvoiceStageRowId,
+    sourceStageRowIds: paymentObservation.sourceStageRowIds,
+    rowNo: paymentObservation.rowNo,
     code,
     message,
     ...extra,
@@ -167,10 +174,9 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       throw e;
     }
 
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      order: [["rowNo", "ASC"]],
-      raw: false,
+    const paymentObservations = await listPaymentObservations({
+      customerId,
+      ptrsId,
       transaction: t,
     });
 
@@ -207,7 +213,7 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
 
     const seenKeys = new Map(); // key -> firstRowNo
 
-    for (const r of stageRows) {
+    for (const r of paymentObservations) {
       if (isExcludedRow(r)) {
         excludedRows += 1;
         continue;
@@ -538,7 +544,8 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       ptrsId,
       mode,
       counts: {
-        totalRows: stageRows.length,
+        totalRows: paymentObservations.length,
+        paymentObservationRows: paymentObservations.length,
         excludedRows,
         blockers: blockers.length,
         warnings: warnings.length,
@@ -578,7 +585,11 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
-    const baseWhere = `"customerId" = :customerId AND "ptrsId" = :ptrsId`;
+    const paymentObservationCte = buildPaymentObservationsCte();
+    const replacements = getPaymentObservationReplacements({
+      customerId,
+      ptrsId,
+    });
 
     // Exclusion logic: canonical exclude flag OR rule meta flag
     const excludedExpr = `(
@@ -586,26 +597,19 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       OR COALESCE((meta->'rules'->>'exclude')::boolean, false) = true
     )`;
 
-    // Included trade credit population: not excluded, trade credit true, excluded_trade_credit_payment not true
-    const tradeCreditIncludedExpr = `(
-      NOT ${excludedExpr}
-      AND COALESCE((data->>'trade_credit_payment')::boolean, false) = true
-      AND COALESCE((data->>'excluded_trade_credit_payment')::boolean, false) = false
-    )`;
-
-    // Trade credit excluded (for visibility): not excluded, trade credit true, but excluded_trade_credit_payment true
-    const tradeCreditExcludedExpr = `(
-      NOT ${excludedExpr}
-      AND COALESCE((data->>'trade_credit_payment')::boolean, false) = true
-      AND COALESCE((data->>'excluded_trade_credit_payment')::boolean, false) = true
-    )`;
+    // Payment identity is established by the derived relation, not by raw
+    // Stage classification flags.
+    const tradeCreditIncludedExpr = `(NOT ${excludedExpr})`;
+    const tradeCreditExcludedExpr = "false";
 
     const countsResult = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
-        COUNT(*)::int AS "stageRowCount",
-        SUM(CASE WHEN ${excludedExpr} THEN 1 ELSE 0 END)::int AS "excludedRowCount",
-        SUM(CASE WHEN NOT ${excludedExpr} THEN 1 ELSE 0 END)::int AS "includedRowCount",
+        (SELECT COUNT(*)::int FROM payment_observation_source_rows) AS "stageRowCount",
+        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE ${excludedExpr}) AS "excludedRowCount",
+        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE NOT ${excludedExpr}) AS "includedRowCount",
+        COUNT(*)::int AS "paymentObservationCount",
 
         SUM(CASE WHEN ${tradeCreditIncludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditIncludedCount",
         SUM(CASE WHEN ${tradeCreditExcludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditExcludedCount",
@@ -613,12 +617,11 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = true THEN 1 ELSE 0 END)::int AS "sbTrueCount",
         SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = false THEN 1 ELSE 0 END)::int AS "sbFalseCount",
         SUM(CASE WHEN ${tradeCreditIncludedExpr} AND (data->>'is_small_business') IS NULL THEN 1 ELSE 0 END)::int AS "sbUnknownCount"
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere}
+      FROM payment_observations
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -628,6 +631,8 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     const stageRowCount = Number(countsRow?.stageRowCount) || 0;
     const excludedRowCount = Number(countsRow?.excludedRowCount) || 0;
     const includedRowCount = Number(countsRow?.includedRowCount) || 0;
+    const paymentObservationCount =
+      Number(countsRow?.paymentObservationCount) || 0;
     const tradeCreditIncludedCount =
       Number(countsRow?.tradeCreditIncludedCount) || 0;
     const tradeCreditExcludedCount =
@@ -639,20 +644,21 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     // Payment time breakdown by reference kind
     const byKindRows = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         CASE
           WHEN (data->>'payment_time_reference_kind') IS NULL OR (data->>'payment_time_reference_kind') = '' THEN 'missing'
           ELSE (data->>'payment_time_reference_kind')
         END AS kind,
         COUNT(*)::int AS count
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
       GROUP BY 1
       ORDER BY 1
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -677,16 +683,17 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
 
     const missingTimeRows = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date,
         SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_reference_date,
         SUM(CASE WHEN ((data->>'payment_date') IS NULL OR (data->>'payment_date') = '') AND ((data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '') THEN 1 ELSE 0 END)::int AS missing_both
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -703,20 +710,21 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
 
     const paymentTimeExamples = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         data->>'invoice_reference_number' AS invoice_reference_number,
         data->>'payment_date' AS payment_date,
         data->>'payment_time_reference_date' AS payment_time_reference_date,
         data->>'payment_time_reference_kind' AS payment_time_reference_kind,
         (data->>'payment_time_days')::int AS payment_time_days
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
       ORDER BY "rowNo" ASC
       LIMIT 5
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -724,6 +732,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     // Payment terms dedupe table
     const paymentTermsRows = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         CASE
           WHEN (data->>'payment_term') IS NULL OR (data->>'payment_term') = '' THEN '(blank)'
@@ -737,26 +746,26 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
           ELSE 'unknown'
         END AS payment_term_source,
         COUNT(*)::int AS count
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
       GROUP BY 1,2,3
       ORDER BY 4 DESC, 1 ASC
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
 
     const unmappedRawRows = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         (data->>'payment_term') AS raw,
         COUNT(*)::int AS count
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere}
-        AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
         AND (data->>'payment_term') IS NOT NULL
         AND (data->>'payment_term') <> ''
         AND ((data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '')
@@ -765,7 +774,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -782,6 +791,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     // Canonical missing counts within the trade credit included population
     const missingCanonRows = await db.sequelize.query(
       `
+      WITH ${paymentObservationCte}
       SELECT
         SUM(CASE WHEN (data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '' THEN 1 ELSE 0 END)::int AS missing_payment_term_days,
         SUM(CASE WHEN (data->>'is_small_business') IS NULL OR (data->>'is_small_business') = '' THEN 1 ELSE 0 END)::int AS missing_is_small_business,
@@ -789,12 +799,12 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         SUM(CASE WHEN (data->>'payment_amount') IS NULL OR (data->>'payment_amount') = '' THEN 1 ELSE 0 END)::int AS missing_payment_amount,
         SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_time_reference_date,
         SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date
-      FROM tbl_ptrs_stage_row
-      WHERE ${baseWhere} AND ${tradeCreditIncludedExpr}
+      FROM payment_observations
+      WHERE ${tradeCreditIncludedExpr}
       `,
       {
         transaction: t,
-        replacements: { customerId, ptrsId },
+        replacements,
         type: db.sequelize.QueryTypes.SELECT,
       },
     );
@@ -859,6 +869,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         includedRowCount,
       },
       population: {
+        paymentObservationCount,
         tradeCreditIncludedCount,
         tradeCreditExcludedCount,
         smallBusinessTrueCount: sbTrueCount,
@@ -945,7 +956,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
         missingByField,
         populationDefinition: {
           includedRule:
-            "trade_credit_payment===true && excluded_trade_credit_payment!==true && exclude_from_metrics!==true (and meta.rules.exclude!==true)",
+            "unambiguous derived payment observation with no Stage exclusion",
         },
       },
     };

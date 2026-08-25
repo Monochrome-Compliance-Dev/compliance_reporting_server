@@ -6,6 +6,9 @@ const {
   buildRuleWhereSql,
   buildConcatSegmentsSql,
 } = require("./rules.sql.shared");
+const {
+  appendTransformationHistorySql,
+} = require("./stage.transformation-history");
 
 async function applyRowRulesSql({
   customerId,
@@ -41,16 +44,20 @@ async function applyRowRulesSql({
 
     if (!actions.length) continue;
 
-    for (const act of actions) {
+    for (const [actionIndex, act] of actions.entries()) {
       const replacements = { customerId, ptrsId };
       const whereBuilt = buildRuleWhereSql(conds, replacements);
       const whereSql = whereBuilt.sql || "";
 
       const escapedRuleKey = ruleKey.replace(/'/g, "''");
+      const actionKey = `${ruleKey}:action:${actionIndex}`;
+      const escapedActionKey = actionKey.replace(/'/g, "''");
       const notAppliedSql = `
         AND NOT (
           COALESCE(COALESCE(meta, '{}'::jsonb)#>'{rules,applied}', '[]'::jsonb)
           @> jsonb_build_array('${escapedRuleKey}'::text)
+          OR COALESCE(COALESCE(meta, '{}'::jsonb)#>'{rules,applied}', '[]'::jsonb)
+          @> jsonb_build_array('${escapedActionKey}'::text)
         )
       `;
 
@@ -147,15 +154,38 @@ async function applyRowRulesSql({
         continue;
       }
 
-      const metaSql = `
+      const appliedMetaSql = `
         jsonb_set(
           COALESCE(meta, '{}'::jsonb),
           '{rules,applied}',
           COALESCE(COALESCE(meta, '{}'::jsonb)#>'{rules,applied}', '[]'::jsonb)
-            || to_jsonb('${escapedRuleKey}'::text),
+            || to_jsonb('${escapedActionKey}'::text),
           true
         )
       `;
+      const ruleLabel = String(rule?.label || ruleKey).replace(/'/g, "''");
+      const configuredComment = String(act?.comment || act?.note || "").trim();
+      const commentSql = configuredComment
+        ? `'${configuredComment.replace(/'/g, "''")}'`
+        : `'Rule ${ruleLabel} applied ${op} to ${targetField}'`;
+      const metaSql = appendTransformationHistorySql(
+        appliedMetaSql,
+        `jsonb_build_object(
+          'key', 'row-rule:${escapedActionKey}',
+          'kind', 'row_rule',
+          'comment', ${commentSql},
+          'sourceStageRowIds', jsonb_build_array("id"),
+          'targetStageRowIds', jsonb_build_array("id"),
+          'details', jsonb_build_object(
+            'ruleId', '${escapedRuleKey}',
+            'actionIndex', ${actionIndex},
+            'operation', '${op.replace(/'/g, "''")}',
+            'field', '${targetField.replace(/'/g, "''")}',
+            'beforeValue', data->>'${targetField.replace(/'/g, "''")}',
+            'afterValue', (${dataSql})->>'${targetField.replace(/'/g, "''")}'
+          )
+        )`,
+      );
 
       const sql = `
   UPDATE "tbl_ptrs_stage_row"

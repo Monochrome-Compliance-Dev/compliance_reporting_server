@@ -72,6 +72,7 @@ const sbiRoutes = require("@/v2/ptrs/routes/sbi.ptrs.routes");
 const validateRoutes = require("@/v2/ptrs/routes/validate.ptrs.routes");
 const metricsRoutes = require("@/v2/ptrs/routes/metrics.ptrs.routes");
 const reportRoutes = require("@/v2/ptrs/routes/report.ptrs.routes");
+const processRoutes = require("@/v2/ptrs/routes/process.ptrs.routes");
 
 // --- mount the new slices ---
 // datasets (supporting files)
@@ -85,6 +86,9 @@ router.use("/", mapsRoutes);
 
 // staging
 router.use("/", stageRoutes);
+
+// complete post-Stage processing orchestration
+router.use("/", processRoutes);
 
 // exclusions
 router.use("/", exclusionsRoutes);

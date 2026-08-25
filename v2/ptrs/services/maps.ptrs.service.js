@@ -12,7 +12,7 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 
-const { QueryTypes } = require("sequelize");
+const { Op, QueryTypes } = require("sequelize");
 
 const { createPtrsTrace, hrMsSince } = require("@/helpers/ptrsTrackerLog");
 
@@ -278,15 +278,22 @@ async function loadMappedRowsForPtrs({
   customerId,
   ptrsId,
   limit = 50,
+  afterRowNo = null,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const findOpts = {
-    where: { customerId, ptrsId },
+    where: {
+      customerId,
+      ptrsId,
+      ...(afterRowNo != null && Number.isFinite(Number(afterRowNo))
+        ? { rowNo: { [Op.gt]: Number(afterRowNo) } }
+        : {}),
+    },
     order: [["rowNo", "ASC"]],
-    attributes: ["rowNo", "data"],
+    attributes: ["rowNo", "data", "meta"],
     raw: true,
     transaction,
   };
@@ -305,6 +312,7 @@ async function loadMappedRowsForPtrs({
         customerId,
         ptrsId,
         requestedLimit: limit,
+        afterRowNo,
         rowsCount: Array.isArray(rows) ? rows.length : 0,
       }),
     );
@@ -335,6 +343,8 @@ async function loadMappedRowsForPtrs({
 
     // ensure row_no is present for downstream logic
     normalised.row_no = r.rowNo;
+    normalised._dataset_id =
+      r?.meta?.datasetId || base?._ptrsMeta?.datasetId || null;
 
     return ensureCanonicalRowShape(normalised);
   });

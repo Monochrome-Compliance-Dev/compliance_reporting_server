@@ -4,6 +4,12 @@ const { slog } = require("./ptrs.service");
 const {
   parseISODateOnly,
 } = require("@/v2/ptrs/services/stage.payment-time.ptrs.service");
+const {
+  isMainJoinRole,
+  isPaymentTermChangeJoinRole,
+  normaliseConfiguredJoins,
+  normaliseJoinRole,
+} = require("@/v2/ptrs/services/maps.dependencies.ptrs.service");
 
 function deriveSupplierKey(row) {
   if (!row || typeof row !== "object") return null;
@@ -30,19 +36,18 @@ function deriveSupplierKey(row) {
 }
 
 function deriveTermReferenceDate(row) {
-  const candidates = [
-    row?.invoice_issue_date,
-    row?.invoice_receipt_date,
-    row?.supply_date,
-    row?.payment_date,
-  ];
+  const parsed = parseISODateOnly(row?.invoice_issue_date);
+  return parsed ? parsed.iso : null;
+}
 
-  for (const c of candidates) {
-    const p = parseISODateOnly(c);
-    if (p) return p.iso;
+function buildEffectiveTermChangeKey(values, referenceDate) {
+  const parts = Array.isArray(values)
+    ? values.map((value) => String(value ?? "").trim())
+    : [];
+  if (!parts.length || parts.some((value) => !value) || !referenceDate) {
+    return null;
   }
-
-  return null;
+  return `${parts.join("::")}::${referenceDate}`;
 }
 
 function normaliseHeaderToRowField(header) {
@@ -79,14 +84,45 @@ function normaliseHeaderToDbColumn(header) {
   return camel;
 }
 
-function getCanonicalFieldForMainHeader(mapRow, header) {
+function getCanonicalFieldForMainHeader(
+  mapRow,
+  header,
+  { fieldMapRows = [], mainEndpoint = null } = {},
+) {
   if (!header) return null;
   const h = String(header).trim();
   if (!h) return null;
 
+  const comparableHeader = normaliseHeaderToRowField(h);
+  const endpointDatasetId = String(mainEndpoint?.datasetId || "").trim();
+  const endpointRole = normaliseJoinRole(mainEndpoint?.role);
+  const currentFieldMapRows = Array.isArray(fieldMapRows) ? fieldMapRows : [];
+
+  const fieldMapMatch = currentFieldMapRows.find((mapping) => {
+    const sourceColumn = normaliseHeaderToRowField(mapping?.sourceColumn);
+    if (!sourceColumn || sourceColumn !== comparableHeader) return false;
+
+    const mappingDatasetId = String(mapping?.datasetId || "").trim();
+    if (endpointDatasetId && mappingDatasetId) {
+      return endpointDatasetId === mappingDatasetId;
+    }
+
+    return (
+      isMainJoinRole(mapping?.sourceRole) ||
+      normaliseJoinRole(mapping?.sourceRole) === endpointRole
+    );
+  });
+
+  if (fieldMapMatch?.canonicalField) {
+    return normaliseHeaderToRowField(fieldMapMatch.canonicalField);
+  }
+
   const mappings = mapRow && mapRow.mappings ? mapRow.mappings : null;
   if (mappings && typeof mappings === "object") {
-    const direct = mappings[h];
+    const directKey = Object.keys(mappings).find(
+      (key) => normaliseHeaderToRowField(key) === comparableHeader,
+    );
+    const direct = directKey ? mappings[directKey] : null;
     if (direct) {
       if (typeof direct === "string") return direct;
       if (typeof direct === "object") {
@@ -115,45 +151,61 @@ function getCanonicalFieldForMainHeader(mapRow, header) {
   return null;
 }
 
-function extractTermChangesJoinSpec(mapRow) {
-  const joins = mapRow && mapRow.joins ? mapRow.joins : null;
-  let parsed = joins;
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      parsed = null;
-    }
-  }
+function extractTermChangesJoinSpec(
+  mapRow,
+  { customerId = null, ptrsId = null, datasets = [], fieldMapRows = [] } = {},
+) {
+  const { normalisedJoins } = normaliseConfiguredJoins({
+    supportConfig: mapRow || {},
+    customerId,
+    ptrsId,
+    trace: null,
+  });
 
-  const conditions =
-    parsed && Array.isArray(parsed.conditions) ? parsed.conditions : [];
-
-  const termConds = conditions.filter(
-    (c) =>
-      c &&
-      c.to &&
-      c.from &&
-      c.to.role === "termschanges" &&
-      c.from.role &&
-      c.from.role !== "termschanges" &&
-      c.to.column &&
-      c.from.column,
+  const roleByDatasetId = new Map(
+    (datasets || [])
+      .filter((dataset) => dataset?.id)
+      .map((dataset) => [String(dataset.id), dataset.role]),
   );
-
-  const effective = termConds.length
-    ? termConds
-    : [
-        {
-          to: { role: "termschanges", column: "Company Code" },
-          from: { role: "main", column: "Company Code" },
-        },
-      ];
+  const endpointRole = (endpoint) =>
+    roleByDatasetId.get(String(endpoint.datasetId || "")) || endpoint.role;
 
   const spec = [];
-  for (const c of effective) {
-    const mainField = getCanonicalFieldForMainHeader(mapRow, c.from.column);
-    const changeColumn = normaliseHeaderToDbColumn(c.to.column);
+  for (const join of normalisedJoins) {
+    const from = {
+      datasetId: join.fromDatasetId,
+      role: endpointRole({
+        datasetId: join.fromDatasetId,
+        role: join.fromRole,
+      }),
+      column: join.fromColumn,
+    };
+    const to = {
+      datasetId: join.toDatasetId,
+      role: endpointRole({ datasetId: join.toDatasetId, role: join.toRole }),
+      column: join.toColumn,
+    };
+    const mainEndpoint = isMainJoinRole(from.role)
+      ? from
+      : isMainJoinRole(to.role)
+        ? to
+        : null;
+    const changeEndpoint = isPaymentTermChangeJoinRole(from.role)
+      ? from
+      : isPaymentTermChangeJoinRole(to.role)
+        ? to
+        : null;
+
+    if (!mainEndpoint || !changeEndpoint || mainEndpoint === changeEndpoint) {
+      continue;
+    }
+
+    const mainField = getCanonicalFieldForMainHeader(
+      mapRow,
+      mainEndpoint.column,
+      { fieldMapRows, mainEndpoint },
+    );
+    const changeColumn = normaliseHeaderToDbColumn(changeEndpoint.column);
     if (!mainField || !changeColumn) continue;
     spec.push({ mainField, changeColumn });
   }
@@ -182,13 +234,14 @@ async function loadEffectiveTermChangesForRows({
   profileId,
   rows,
   mapRow,
+  joinContext = null,
   transaction,
 }) {
   const out = new Map();
   if (!customerId || !profileId) return out;
   if (!Array.isArray(rows) || rows.length === 0) return out;
 
-  const joinSpec = extractTermChangesJoinSpec(mapRow);
+  const joinSpec = extractTermChangesJoinSpec(mapRow, joinContext || {});
 
   const allowedJoinColumns = new Set([
     "companyCode",
@@ -275,9 +328,10 @@ async function loadEffectiveTermChangesForRows({
 
     if (missingAnyJoin) continue;
 
-    const key =
-      effectiveJoinSpec.map((s) => `${inputRow[s.changeColumn]}`).join("::") +
-      `::${refDate}`;
+    const key = buildEffectiveTermChangeKey(
+      effectiveJoinSpec.map((s) => inputRow[s.changeColumn]),
+      refDate,
+    );
 
     if (seen.has(key)) continue;
     seen.add(key);
@@ -331,9 +385,11 @@ async function loadEffectiveTermChangesForRows({
     const term = r?.newRaw != null ? String(r.newRaw).trim() : "";
     if (!term) continue;
 
-    const key = joinCols
-      .map((c) => (r?.[c] != null ? String(r[c]).trim() : ""))
-      .join("::");
+    const refDate = parseISODateOnly(r?.refDate)?.iso || null;
+    const key = buildEffectiveTermChangeKey(
+      joinCols.map((c) => r?.[c]),
+      refDate,
+    );
 
     if (!key) continue;
 
@@ -346,7 +402,12 @@ async function loadEffectiveTermChangesForRows({
   return out;
 }
 
-function applyEffectiveTermChangesToRows(rows, changeMap, mapRow) {
+function applyEffectiveTermChangesToRows(
+  rows,
+  changeMap,
+  mapRow,
+  joinContext = null,
+) {
   const stats = {
     considered: 0,
     applied: 0,
@@ -362,7 +423,7 @@ function applyEffectiveTermChangesToRows(rows, changeMap, mapRow) {
     return { rows, stats };
   }
 
-  const joinSpec = extractTermChangesJoinSpec(mapRow);
+  const joinSpec = extractTermChangesJoinSpec(mapRow, joinContext || {});
 
   const allowedJoinColumns = new Set([
     "companyCode",
@@ -413,7 +474,9 @@ function applyEffectiveTermChangesToRows(rows, changeMap, mapRow) {
       continue;
     }
 
-    const key = keyParts.join("::");
+    const refDate = deriveTermReferenceDate(r);
+    const key = buildEffectiveTermChangeKey(keyParts, refDate);
+    if (!key) continue;
     const hit = changeMap.get(key);
     if (!hit || !hit.term) continue;
 
@@ -460,6 +523,7 @@ function deriveTermCode(row) {
   const candidates = [
     row.payment_term_days,
     row.paymentTermDays,
+    row.contract_po_payment_terms_effective,
     row.invoice_payment_terms_effective,
     row.invoice_payment_terms_raw,
     row.invoice_payment_terms,
@@ -468,7 +532,6 @@ function deriveTermCode(row) {
     row["vendormaster__Payment terms"],
     row.default_payment_term,
     row.defaultPaymentTerm,
-    row.contract_po_payment_terms_effective,
     row.contract_po_payment_terms,
   ];
 
@@ -634,6 +697,7 @@ function applyPaymentTermDaysFromMap(rows, termMap) {
 module.exports = {
   deriveSupplierKey,
   deriveTermReferenceDate,
+  buildEffectiveTermChangeKey,
   normaliseHeaderToRowField,
   normaliseHeaderToDbColumn,
   getCanonicalFieldForMainHeader,

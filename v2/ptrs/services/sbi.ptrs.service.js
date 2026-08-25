@@ -4,12 +4,16 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  appendTransformationHistory,
+} = require("./stage.transformation-history");
 
 module.exports = {
   importResults,
   getStatus,
   exportAbnCsv,
   validateAppliedSbi,
+  reapplyLatestResults,
 };
 async function getLatestAppliedUpload({ customerId, ptrsId, transaction }) {
   // Prefer most recent upload with a usable status
@@ -324,7 +328,191 @@ function isProbablyAbn(abn) {
 
 function isExcludedRow(stageRow) {
   const meta = stageRow?.meta || {};
-  return meta?.rules?.exclude === true;
+  const data = stageRow?.data || {};
+  return (
+    meta?.rules?.exclude === true ||
+    data.exclude === true ||
+    data.exclude_from_metrics === true
+  );
+}
+
+async function applySbiMapToStageRows({
+  customerId,
+  ptrsId,
+  userId,
+  uploadId,
+  sbiMap,
+  transaction,
+}) {
+  const stageRows = await db.PtrsStageRow.findAll({
+    where: { customerId, ptrsId, deletedAt: null },
+    order: [["rowNo", "ASC"]],
+    raw: false,
+    transaction,
+  });
+
+  const stats = {
+    totalRows: stageRows.length,
+    excludedRows: 0,
+    rowsWithPayeeAbn: 0,
+    matchedAbns: 0,
+    affectedRows: 0,
+    historyRows: 0,
+    missingAbnRows: 0,
+    invalidMatchRows: 0,
+    unknownOutcomeRows: 0,
+  };
+  const rowChanges = [];
+
+  for (const stageRow of stageRows) {
+    if (isExcludedRow(stageRow)) {
+      stats.excludedRows += 1;
+      continue;
+    }
+
+    const payeeAbn = normalizeAbn(stageRow?.data?.payee_entity_abn);
+    if (!payeeAbn) {
+      stats.missingAbnRows += 1;
+      continue;
+    }
+    stats.rowsWithPayeeAbn += 1;
+    if (!isProbablyAbn(payeeAbn)) continue;
+
+    const sbi = sbiMap.get(payeeAbn);
+    if (!sbi) continue;
+    stats.matchedAbns += 1;
+
+    if (!sbi.isValidAbn) {
+      stats.invalidMatchRows += 1;
+      continue;
+    }
+
+    const expected = classifyOutcome(sbi.outcome).isSmallBusiness;
+    if (expected == null) {
+      stats.unknownOutcomeRows += 1;
+      continue;
+    }
+
+    const before = stageRow?.data?.is_small_business;
+    const beforeEvidence = stageRow?.data?.small_business_evidence_id;
+    const historyKey = `sbi:${uploadId}:${expected}`;
+    const nextMeta = appendTransformationHistory(stageRow.meta, {
+      key: historyKey,
+      kind: "sbi",
+      comment: `SBI status resolved ${expected} from SBI upload ${uploadId} for payee ABN ${payeeAbn}`,
+      sourceStageRowIds: [stageRow.id],
+      targetStageRowIds: [stageRow.id],
+      details: {
+        payeeAbn,
+        outcome: sbi.outcome,
+        isSmallBusiness: expected,
+        source: "SBI_UPLOAD",
+        evidenceId: uploadId,
+      },
+    });
+    const historyChanged = nextMeta !== stageRow.meta;
+    const dataChanged =
+      before !== expected ||
+      beforeEvidence !== uploadId ||
+      stageRow?.data?.small_business_source !== "SBI_UPLOAD" ||
+      stageRow?.data?.small_business_outcome !== sbi.outcome;
+
+    if (!dataChanged && !historyChanged) continue;
+
+    if (dataChanged) {
+      stats.affectedRows += 1;
+      rowChanges.push({
+        customerId,
+        ptrsId,
+        sbiUploadId: uploadId,
+        paymentRowId: stageRow.id,
+        supplierAbn: payeeAbn,
+        beforeIsSmallBusiness:
+          before == null
+            ? null
+            : typeof before === "boolean"
+              ? before
+              : !!before,
+        afterIsSmallBusiness: expected,
+        outcome: sbi.outcome,
+        changedBy: userId || null,
+        changedAt: new Date(),
+      });
+      stageRow.data = {
+        ...(stageRow.data || {}),
+        is_small_business: expected,
+        small_business_outcome: sbi.outcome,
+        small_business_source: "SBI_UPLOAD",
+        small_business_evidence_id: uploadId,
+        small_business_checked_at:
+          beforeEvidence === uploadId
+            ? stageRow?.data?.small_business_checked_at || new Date().toISOString()
+            : new Date().toISOString(),
+      };
+    }
+    if (historyChanged) {
+      stats.historyRows += 1;
+      stageRow.meta = nextMeta;
+    }
+    await stageRow.save({ transaction });
+  }
+
+  if (rowChanges.length) {
+    await db.PtrsSbiRowChange.bulkCreate(rowChanges, {
+      transaction,
+      validate: false,
+    });
+  }
+
+  return stats;
+}
+
+async function reapplyLatestResults({ customerId, ptrsId, userId = null }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const latestUpload = await getLatestAppliedUpload({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
+    if (!latestUpload) {
+      await t.commit();
+      return {
+        status: "MISSING",
+        ptrsId,
+        sbiUploadId: null,
+        counts: { affectedRows: 0, historyRows: 0 },
+      };
+    }
+
+    const { map } = await loadSbiMap({
+      customerId,
+      ptrsId,
+      sbiUploadId: latestUpload.id,
+      transaction: t,
+    });
+    const counts = await applySbiMapToStageRows({
+      customerId,
+      ptrsId,
+      userId,
+      uploadId: latestUpload.id,
+      sbiMap: map,
+      transaction: t,
+    });
+    await t.commit();
+    return {
+      status: latestUpload.status,
+      ptrsId,
+      sbiUploadId: latestUpload.id,
+      counts,
+    };
+  } catch (error) {
+    if (!t.finished) await t.rollback();
+    throw error;
+  }
 }
 
 function sha256(buffer) {

@@ -1,16 +1,124 @@
-// If NODE_ENV is already set (like by AWS), do not overwrite it
-process.env.NODE_ENV = process.env.NODE_ENV || "development";
-
-// Load .env.development only in development; other envs use AWS-injected vars
-const dotenv = require("dotenv");
-const fs = require("fs");
-if (process.env.NODE_ENV === "development") {
-  dotenv.config({ path: "../.env.development" });
-}
-
-const GUID = process.env.ABR_GUID;
-
 const messyPatterns = [/C\/-/, /LIQUIDATOR/, /AS TRUSTEE/, /TRUSTEE/i];
+
+const GOVERNMENT_ENTITY_TYPE_CODES = new Set([
+  "GOV",
+  "FGA",
+  "FGD",
+  "FSA",
+  "CCB",
+  "CCC",
+  "CCL",
+  "CCN",
+  "CCO",
+  "CCP",
+  "CCR",
+  "CCS",
+  "CCT",
+  "CCU",
+  "CGA",
+  "CGC",
+  "CGE",
+  "CGP",
+  "CGS",
+  "CGT",
+  "CSA",
+  "CSP",
+  "CSS",
+  "CTC",
+  "CTD",
+  "CTF",
+  "CTH",
+  "CTI",
+  "CTL",
+  "CTQ",
+  "CTT",
+  "CTU",
+  "LOC",
+  "LCB",
+  "LCC",
+  "LCL",
+  "LCN",
+  "LCO",
+  "LCP",
+  "LCR",
+  "LCS",
+  "LCT",
+  "LCU",
+  "LGA",
+  "LGC",
+  "LGE",
+  "LGP",
+  "LGT",
+  "LSA",
+  "LSP",
+  "LSS",
+  "LTC",
+  "LTD",
+  "LTF",
+  "LTH",
+  "LTI",
+  "LTL",
+  "LTQ",
+  "LTT",
+  "LTU",
+  "STA",
+  "SCB",
+  "SCC",
+  "SCL",
+  "SCN",
+  "SCO",
+  "SCP",
+  "SCR",
+  "SCS",
+  "SCT",
+  "SCU",
+  "SGA",
+  "SGC",
+  "SGE",
+  "SGP",
+  "SGT",
+  "SSA",
+  "SSP",
+  "SSS",
+  "STC",
+  "STD",
+  "STF",
+  "STH",
+  "STI",
+  "STL",
+  "STQ",
+  "STT",
+  "STU",
+  "TER",
+  "TCB",
+  "TCC",
+  "TCL",
+  "TCN",
+  "TCO",
+  "TCP",
+  "TCR",
+  "TCS",
+  "TCT",
+  "TCU",
+  "TGA",
+  "TGC",
+  "TGE",
+  "TGP",
+  "TGS",
+  "TGT",
+  "TSA",
+  "TSP",
+  "TSS",
+  "TTC",
+  "TTD",
+  "TTF",
+  "TTH",
+  "TTI",
+  "TTL",
+  "TTQ",
+  "TTT",
+  "TTU",
+]);
 
 const isCleanName = (name) =>
   !messyPatterns.some((pattern) => pattern.test(name));
@@ -105,7 +213,7 @@ const extractAllCandidates = (rawResponse, searchTerm) => {
 };
 
 async function lookupAbnByName(name) {
-  const url = `https://abr.business.gov.au/json/MatchingNames.aspx?name=${encodeURIComponent(name)}&guid=${GUID}`;
+  const url = `https://abr.business.gov.au/json/MatchingNames.aspx?name=${encodeURIComponent(name)}&guid=${process.env.ABR_GUID}`;
   const res = await fetch(url);
   const text = await res.text();
 
@@ -113,4 +221,130 @@ async function lookupAbnByName(name) {
   return matches;
 }
 
-module.exports = { lookupAbnByName };
+function extractTagValue(xml, tag) {
+  if (!xml || !tag) return null;
+  const escapedTag = String(tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = xml.match(
+    new RegExp(`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)</${escapedTag}>`, "i"),
+  );
+  if (!match) return null;
+  return match[1]
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function extractSection(xml, tag) {
+  if (!xml || !tag) return null;
+  const escapedTag = String(tag).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = xml.match(
+    new RegExp(`<${escapedTag}(?:\\s[^>]*)?>([\\s\\S]*?)</${escapedTag}>`, "i"),
+  );
+  return match ? match[1] : null;
+}
+
+function normalizeAbnDigits(abn) {
+  return String(abn || "").replace(/\D/g, "");
+}
+
+function buildLegalName(section) {
+  if (!section) return null;
+  const parts = [
+    extractTagValue(section, "givenName"),
+    extractTagValue(section, "otherGivenName"),
+    extractTagValue(section, "familyName"),
+  ].filter(Boolean);
+  return parts.length ? parts.join(" ") : null;
+}
+
+function classifyGovernmentEntityType(entityTypeCode) {
+  const code = String(entityTypeCode || "").trim().toUpperCase();
+  return GOVERNMENT_ENTITY_TYPE_CODES.has(code);
+}
+
+function parseExactAbnLookupResponse(xml) {
+  const businessEntity = extractSection(xml, "businessEntity");
+  const exception = extractSection(xml, "exception");
+
+  if (exception) {
+    return {
+      found: false,
+      exception: extractTagValue(exception, "exceptionDescription") || null,
+    };
+  }
+
+  if (!businessEntity) {
+    return {
+      found: false,
+      exception: "ABR response did not contain a businessEntity",
+    };
+  }
+
+  const abnSection = extractSection(businessEntity, "ABN");
+  const entityTypeSection = extractSection(businessEntity, "entityType");
+  const entityStatusSection = extractSection(businessEntity, "entityStatus");
+  const mainNameSection = extractSection(businessEntity, "mainName");
+  const businessNameSection = extractSection(businessEntity, "businessName");
+  const legalNameSection = extractSection(businessEntity, "legalName");
+
+  const abn = normalizeAbnDigits(extractTagValue(abnSection, "identifierValue"));
+  const entityTypeCode = extractTagValue(entityTypeSection, "entityTypeCode");
+  const entityTypeDescription = extractTagValue(
+    entityTypeSection,
+    "entityDescription",
+  );
+  const name =
+    extractTagValue(mainNameSection, "organisationName") ||
+    extractTagValue(businessNameSection, "organisationName") ||
+    buildLegalName(legalNameSection);
+
+  return {
+    found: Boolean(abn),
+    abn,
+    isCurrentAbn: extractTagValue(abnSection, "isCurrentIndicator") === "Y",
+    entityStatusCode: extractTagValue(entityStatusSection, "entityStatusCode"),
+    entityTypeCode,
+    entityTypeDescription,
+    name,
+    isGovernmentEntity: classifyGovernmentEntityType(entityTypeCode),
+  };
+}
+
+async function lookupAbnByNumber(abn, { includeHistoricalDetails = "N" } = {}) {
+  const normalizedAbn = normalizeAbnDigits(abn);
+  if (normalizedAbn.length !== 11) {
+    throw new Error("A valid 11-digit ABN is required");
+  }
+  const guid = process.env.ABR_GUID;
+  if (!guid) {
+    throw new Error("ABR_GUID is required for exact ABN lookup");
+  }
+
+  const url =
+    "https://abr.business.gov.au/ABRXMLSearch/AbrXmlSearch.asmx/ABRSearchByABN" +
+    `?searchString=${encodeURIComponent(normalizedAbn)}` +
+    `&includeHistoricalDetails=${encodeURIComponent(includeHistoricalDetails)}` +
+    `&authenticationGuid=${encodeURIComponent(guid)}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`ABR exact ABN lookup failed with status ${res.status}`);
+  }
+
+  const xml = await res.text();
+  const parsed = parseExactAbnLookupResponse(xml);
+  return {
+    ...parsed,
+    requestAbn: normalizedAbn,
+  };
+}
+
+module.exports = {
+  classifyGovernmentEntityType,
+  lookupAbnByName,
+  lookupAbnByNumber,
+  normalizeAbnDigits,
+  parseExactAbnLookupResponse,
+};

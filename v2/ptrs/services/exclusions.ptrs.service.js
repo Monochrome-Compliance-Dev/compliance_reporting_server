@@ -23,6 +23,10 @@ const {
   applyDocTypeExclusion,
   previewDocTypeExclusion,
 } = require("./exclusions.docType");
+const {
+  applyCreditAppliedExclusion,
+  previewCreditAppliedExclusion,
+} = require("./exclusions.creditApplied");
 
 const {
   applyEmployeeExclusion,
@@ -43,12 +47,27 @@ const {
   applyInternationalExclusion,
   previewInternationalExclusion,
 } = require("./exclusions.international");
+const {
+  enrichGovReferenceFromStageRows,
+} = require("./exclusions.gov.enrichment");
 
 /**
  * Exclusions are eligibility decisions, not transformations.
  * Canonical pattern: SQL-first updates against tbl_ptrs_stage_row (jsonb),
  * never destroy/rebuild stage rows for exclusions.
  */
+
+async function runGovEnrichmentPreflight({
+  sequelize,
+  customerId,
+  ptrsId,
+}) {
+  return enrichGovReferenceFromStageRows({
+    sequelize,
+    customerId,
+    ptrsId,
+  });
+}
 
 async function applyExclusionsAndPersist({
   customerId,
@@ -71,6 +90,10 @@ async function applyExclusionsAndPersist({
   const sequelize = db?.sequelize;
   if (!sequelize) {
     throw new Error("Database not initialised: db.sequelize missing");
+  }
+
+  if (category === "all" || category === "gov") {
+    await runGovEnrichmentPreflight({ sequelize, customerId, ptrsId });
   }
 
   const t = await beginTransactionWithCustomerContext(customerId);
@@ -118,6 +141,17 @@ async function applyExclusionsAndPersist({
     if (category === "all" || category === "doc_type") {
       stats.checksRun += 1;
       const affected = await applyDocTypeExclusion({
+        sequelize,
+        transaction: t,
+        customerId,
+        ptrsId,
+      });
+      stats.rowsExcluded += affected;
+    }
+
+    if (category === "all" || category === "credit_applied") {
+      stats.checksRun += 1;
+      const affected = await applyCreditAppliedExclusion({
         sequelize,
         transaction: t,
         customerId,
@@ -243,6 +277,10 @@ async function previewExclusions({
     throw new Error("Database not initialised: db.sequelize missing");
   }
 
+  if (category === "all" || category === "gov") {
+    await runGovEnrichmentPreflight({ sequelize, customerId, ptrsId });
+  }
+
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
@@ -315,6 +353,22 @@ async function previewExclusions({
       result.counts.doc_type = docTypePreview.matched;
       result.alreadyExcludedCounts.doc_type = docTypePreview.alreadyExcluded;
       result.samples.doc_type = docTypePreview.sampleRows;
+    }
+
+    if (category === "all" || category === "credit_applied") {
+      stats.checksRun += 1;
+      const creditAppliedPreview = await previewCreditAppliedExclusion({
+        sequelize,
+        transaction: t,
+        customerId,
+        ptrsId,
+        effectiveLimit,
+      });
+
+      result.counts.credit_applied = creditAppliedPreview.matched;
+      result.alreadyExcludedCounts.credit_applied =
+        creditAppliedPreview.alreadyExcluded;
+      result.samples.credit_applied = creditAppliedPreview.sampleRows;
     }
 
     // Keyword exclusions preview (profile-scoped keyword list)
@@ -396,4 +450,5 @@ module.exports = {
   createKeywordExclusion,
   updateKeywordExclusion,
   deleteKeywordExclusion,
+  runGovEnrichmentPreflight,
 };

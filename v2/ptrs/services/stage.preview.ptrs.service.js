@@ -116,6 +116,7 @@ function collectContractPreviewFields(contract) {
     contract.transaction,
     contract.dates,
     contract.terms,
+    contract.operational_source_fields,
     contract.regulator_flags,
   ];
 
@@ -175,7 +176,12 @@ async function getStagePreview({
 
   let canon = [];
   try {
-    const where = { customerId, ptrsId, deletedAt: null };
+    const where = {
+      customerId,
+      ptrsId,
+      ...(profileId ? { profileId } : {}),
+      deletedAt: null,
+    };
 
     const [rowsRaw, totalRows] = await Promise.all([
       db.PtrsStageRow.findAll({

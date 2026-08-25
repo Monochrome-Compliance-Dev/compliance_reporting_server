@@ -146,9 +146,28 @@ const PTRS_CANONICAL_CONTRACT = {
   },
 
   // ---------------------------------------------------------------------
-  // E) Regulator classification flags (populated during report prep)
+  // E) Optional operational source fields used during staging
+  // ---------------------------------------------------------------------
+  operational_source_fields: {
+    source_account_code: { type: "string", required: false },
+    document_type: { type: "string", required: false },
+    document_currency: { type: "string", required: false },
+    clearing_document: { type: "string", required: false },
+    invoice_created_date: { type: "date", required: false },
+    entry_date: { type: "date", required: false },
+    reconciliation_status: { type: "string", required: false },
+    source_user: { type: "string", required: false },
+  },
+
+  // ---------------------------------------------------------------------
+  // F) Regulator classification flags (populated during report prep)
   // ---------------------------------------------------------------------
   regulator_flags: {
+    payee_entity_abn_valid: {
+      type: "bool",
+      required: false,
+      notes: "Derived payee ABN checksum validity where available.",
+    },
     trade_credit_payment: {
       type: "bool",
       required: false,
@@ -194,7 +213,7 @@ const PTRS_CANONICAL_CONTRACT = {
   },
 
   // ---------------------------------------------------------------------
-  // F) Validation rules applied during canonical validation
+  // G) Validation rules applied during canonical validation
   // ---------------------------------------------------------------------
   rules: {
     required_identity_fields: [

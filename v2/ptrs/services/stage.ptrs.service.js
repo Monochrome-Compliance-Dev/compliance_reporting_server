@@ -10,7 +10,9 @@ const {
 
 const { applyRules } = require("./rules.ptrs.service");
 const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
-const { getColumnMap } = require("@/v2/ptrs/services/maps.config.ptrs.service");
+const {
+  getMap: getColumnMap,
+} = require("@/v2/ptrs/services/maps.config.ptrs.service");
 const {
   PTRS_CANONICAL_CONTRACT,
 } = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
@@ -28,6 +30,8 @@ const {
   toSnakeCase,
   collectCanonicalContractFields,
   computePaymentTimeRegulator,
+  buildPersistedStageRow,
+  buildStageColumnProjection,
 } = require("@/v2/ptrs/services/stage.payment-time.ptrs.service");
 
 const {
@@ -91,6 +95,8 @@ async function stagePtrs({
     collectCanonicalContractFields,
     PTRS_CANONICAL_CONTRACT,
     toSnakeCase,
+    buildPersistedStageRow,
+    buildStageColumnProjection,
     db,
   });
 }

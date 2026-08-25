@@ -21,8 +21,12 @@ const REQUIRED_CANONICAL_FIELDS = Object.entries(
   .map(([key]) => toSnake(key))
   .filter(Boolean);
 
-async function getMap({ customerId, ptrsId }) {
-  const supportConfig = await getSupportConfig({ customerId, ptrsId });
+async function getMap({ customerId, ptrsId, transaction = null }) {
+  const supportConfig = await getSupportConfig({
+    customerId,
+    ptrsId,
+    transaction,
+  });
 
   const maybeParse = (v) => {
     if (v == null || typeof v !== "string") return v;
@@ -547,7 +551,7 @@ async function saveSupportConfig({
   fallbacks = null,
   defaults = null,
   joins,
-  rowRules = null,
+  rowRules,
   profileId = null,
   customFields,
   userId,
@@ -574,11 +578,21 @@ async function saveSupportConfig({
       ? extractMapMetaFromExtras(existingExtrasObj)
       : null;
     const existingSignature = existingMeta?.signature || null;
+    const hasRowRules = rowRules != null;
+    if (hasRowRules && !Array.isArray(rowRules)) {
+      const error = new Error("rowRules must be an array when provided");
+      error.statusCode = 400;
+      throw error;
+    }
+    const rowRulesChanged =
+      hasRowRules &&
+      JSON.stringify(rowRules) !== JSON.stringify(existing?.rowRules ?? []);
 
     if (
       existing &&
       existingSignature &&
-      existingSignature === incomingSignature
+      existingSignature === incomingSignature &&
+      !rowRulesChanged
     ) {
       slog.info(
         "PTRS v2 saveSupportConfig: no material change detected; skipping update",
@@ -606,7 +620,7 @@ async function saveSupportConfig({
       fallbacks: resolveField(fallbacks, existing?.fallbacks || null),
       defaults: resolveField(defaults, existing?.defaults || null),
       joins: nextJoins,
-      rowRules: resolveField(rowRules, existing?.rowRules || null),
+      rowRules: hasRowRules ? rowRules : existing?.rowRules || [],
       profileId: resolveField(profileId, existing?.profileId || null),
       customFields: resolveField(customFields, existing?.customFields || null),
     };

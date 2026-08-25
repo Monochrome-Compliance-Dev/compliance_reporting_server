@@ -3,12 +3,19 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  buildPaymentObservationsCte,
+  getPaymentObservationReplacements,
+} = require("./payment-observations.ptrs.service");
 
 // const {
 //   PTRS_CANONICAL_CONTRACT,
 // } = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
 
 module.exports = {
+  calculatePaymentTermMetricsFromFrequencies,
+  calculateSmallBusinessTradeCreditPaymentsPct,
+  fetchPaymentObservationMetricsAggs,
   getMetrics,
   updateMetricsDraft,
 };
@@ -17,40 +24,41 @@ module.exports = {
 // SQL aggregate helpers for metrics
 // -------------------------
 
-function qTableName(model) {
-  const tn = model.getTableName();
-  if (typeof tn === "string") return `"${tn}"`;
-  // Sequelize may return { tableName, schema }
-  const schema = tn.schema ? `"${tn.schema}".` : "";
-  const tableName = tn.tableName ? `"${tn.tableName}"` : "";
-  return `${schema}${tableName}`;
-}
-
-async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
+async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
   // NOTE: This query intentionally does not return raw rows.
   // It computes only what the dashboard/metrics preview needs.
 
-  const stageTbl = qTableName(db.PtrsStageRow);
-
   const sql = `
-    WITH base AS (
+    WITH ${buildPaymentObservationsCte()},
+    base AS (
       SELECT
         data,
         meta,
+        CASE
+          WHEN NULLIF(
+            regexp_replace(COALESCE(data->>'payer_entity_abn', ''), '\\D', '', 'g'),
+            ''
+          ) IS NOT NULL
+            THEN 'abn:' || regexp_replace(
+              COALESCE(data->>'payer_entity_abn', ''),
+              '\\D',
+              '',
+              'g'
+            )
+          WHEN NULLIF(BTRIM(COALESCE(data->>'payer_entity_name', '')), '') IS NOT NULL
+            THEN 'name:' || lower(
+              regexp_replace(
+                BTRIM(data->>'payer_entity_name'),
+                '\\s+',
+                ' ',
+                'g'
+              )
+            )
+          ELSE NULL
+        END AS payer_entity_key,
         -- Exclusion flags
         COALESCE((data->>'exclude_from_metrics')::boolean, false) AS exclude_from_metrics,
         COALESCE((meta->'rules'->>'exclude')::boolean, false) AS rules_exclude,
-
-        -- Canonical flags (safe parse: only true/false strings become booleans)
-        CASE
-          WHEN lower(data->>'trade_credit_payment') IN ('true','false') THEN (data->>'trade_credit_payment')::boolean
-          ELSE NULL
-        END AS trade_credit_payment,
-
-        CASE
-          WHEN lower(data->>'excluded_trade_credit_payment') IN ('true','false') THEN (data->>'excluded_trade_credit_payment')::boolean
-          ELSE NULL
-        END AS excluded_trade_credit_payment,
 
         CASE
           WHEN lower(data->>'is_small_business') IN ('true','false') THEN (data->>'is_small_business')::boolean
@@ -59,7 +67,8 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
 
         -- Safe numeric parses
         CASE
-          WHEN (data->>'payment_amount') ~ '^-?\\d+(\\.\\d+)?$' THEN (data->>'payment_amount')::numeric
+          WHEN REPLACE(data->>'payment_amount', ',', '') ~ '^-?\\d+(\\.\\d+)?$'
+            THEN REPLACE(data->>'payment_amount', ',', '')::numeric
           ELSE NULL
         END AS payment_amount_num,
 
@@ -73,10 +82,7 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
           ELSE NULL
         END AS payment_term_days_num
 
-      FROM ${stageTbl}
-      WHERE "customerId" = :customerId
-        AND "ptrsId" = :ptrsId
-        AND "deletedAt" IS NULL
+      FROM payment_observations
     ),
 
     non_excluded AS (
@@ -86,12 +92,10 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
     ),
 
     population AS (
-      -- Trade credit population (match existing JS logic):
-      -- include when trade_credit_payment is true AND excluded_trade_credit_payment is not true (false or null)
+      -- The derived relation has already established the reportable payment
+      -- population. Raw Stage classification flags are not payment identity.
       SELECT *
       FROM non_excluded
-      WHERE trade_credit_payment IS TRUE
-        AND COALESCE(excluded_trade_credit_payment, false) IS FALSE
     ),
 
     sb AS (
@@ -101,19 +105,37 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
         GREATEST(0, ROUND(payment_term_days_num)::int) AS payment_term_days_int
       FROM population
       WHERE is_small_business IS TRUE
+    ),
+
+    sb_term_frequencies AS (
+      SELECT
+        payment_term_days_int AS term,
+        COUNT(*)::int AS frequency
+      FROM sb
+      WHERE payment_term_days_num IS NOT NULL
+      GROUP BY payment_term_days_int
+    ),
+
+    sb_entity_term_frequencies AS (
+      SELECT
+        payer_entity_key,
+        payment_term_days_int AS term,
+        COUNT(*)::int AS frequency
+      FROM sb
+      WHERE payer_entity_key IS NOT NULL
+        AND payment_term_days_num IS NOT NULL
+      GROUP BY payer_entity_key, payment_term_days_int
     )
 
     SELECT
       -- Gating counts
-      (SELECT COUNT(*)::int FROM non_excluded) AS "stageRowCount",
-
-      -- Canonical missing flags (non-excluded rows)
-      (SELECT COUNT(*)::int FROM non_excluded WHERE trade_credit_payment IS NULL) AS "missingTradeCreditFlagCount",
-      (SELECT COUNT(*)::int FROM non_excluded WHERE excluded_trade_credit_payment IS NULL) AS "missingExcludedTradeCreditFlagCount",
+      (SELECT COUNT(*)::int FROM payment_observation_source_rows) AS "stageRowCount",
+      (SELECT COUNT(*)::int FROM non_excluded) AS "paymentObservationCount",
 
       -- Population totals
       (SELECT COUNT(*)::int FROM population) AS "totalCount",
       (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM population WHERE payment_amount_num IS NOT NULL) AS "totalValue",
+      (SELECT COALESCE(SUM(ABS("settlementPaymentAmount")),0)::numeric FROM payment_observation_settlement_groups WHERE "settlementPaymentAmount" IS NOT NULL) AS "tcpSettlementValue",
       (SELECT COUNT(*)::int FROM population WHERE payment_amount_num IS NULL) AS "missingAmountCount",
 
       -- SB totals
@@ -147,32 +169,127 @@ async function fetchStageMetricsAggs({ t, customerId, ptrsId }) {
       (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
       (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
 
-      -- Term min/max/mode (population)
-      (SELECT MIN(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMin",
-      (SELECT MAX(GREATEST(0, ROUND(payment_term_days_num)::int))::int FROM population WHERE payment_term_days_num IS NOT NULL) AS "termMax",
-      (SELECT x.term::int
-         FROM (
-           SELECT GREATEST(0, ROUND(payment_term_days_num)::int) AS term, COUNT(*) AS c
-           FROM population
-           WHERE payment_term_days_num IS NOT NULL
-           GROUP BY 1
-           ORDER BY c DESC
-           LIMIT 1
-         ) x
-      ) AS "commonTermMode";
+      -- Payment-term frequency aggregates. Node selects the deterministic
+      -- overall and entity-level modes from these small, set-based results.
+      (SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object('term', term, 'count', frequency)
+          ORDER BY term
+        ),
+        '[]'::jsonb
+      ) FROM sb_term_frequencies) AS "sbTermFrequencies",
+      (SELECT COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'payerEntityKey', payer_entity_key,
+            'term', term,
+            'count', frequency
+          )
+          ORDER BY payer_entity_key, term
+        ),
+        '[]'::jsonb
+      ) FROM sb_entity_term_frequencies) AS "sbEntityTermFrequencies";
   `;
 
   const [rows] = await db.sequelize.query(sql, {
-    replacements: { customerId, ptrsId },
+    replacements: getPaymentObservationReplacements({ customerId, ptrsId }),
     transaction: t,
   });
 
-  return rows && rows[0] ? rows[0] : null;
+  if (!rows || !rows[0]) return null;
+
+  return {
+    ...rows[0],
+    ...calculatePaymentTermMetricsFromFrequencies({
+      sbTermFrequencies: rows[0].sbTermFrequencies,
+      sbEntityTermFrequencies: rows[0].sbEntityTermFrequencies,
+    }),
+  };
 }
 
 // -------------------------
 // Helpers
 // -------------------------
+
+function normaliseFrequencyRows(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function selectDeterministicMode(rows) {
+  let selectedTerm = null;
+  let selectedCount = -1;
+
+  for (const row of rows) {
+    const term = Number(row?.term);
+    const count = Number(row?.count);
+    if (!Number.isInteger(term) || !Number.isFinite(count) || count <= 0) {
+      continue;
+    }
+
+    if (
+      count > selectedCount ||
+      (count === selectedCount &&
+        (selectedTerm == null || term < selectedTerm))
+    ) {
+      selectedTerm = term;
+      selectedCount = count;
+    }
+  }
+
+  return selectedTerm;
+}
+
+function calculatePaymentTermMetricsFromFrequencies({
+  sbTermFrequencies,
+  sbEntityTermFrequencies,
+}) {
+  const commonTermMode = selectDeterministicMode(
+    normaliseFrequencyRows(sbTermFrequencies),
+  );
+  const byEntity = new Map();
+
+  for (const row of normaliseFrequencyRows(sbEntityTermFrequencies)) {
+    const payerEntityKey = String(row?.payerEntityKey || "").trim();
+    if (!payerEntityKey) continue;
+    if (!byEntity.has(payerEntityKey)) byEntity.set(payerEntityKey, []);
+    byEntity.get(payerEntityKey).push(row);
+  }
+
+  const entityModes = Array.from(byEntity.values())
+    .map(selectDeterministicMode)
+    .filter((value) => value != null);
+
+  return {
+    commonTermMode,
+    termMin: entityModes.length ? Math.min(...entityModes) : null,
+    termMax: entityModes.length ? Math.max(...entityModes) : null,
+  };
+}
+
+function calculateSmallBusinessTradeCreditPaymentsPct({
+  sbValue,
+  tcpSettlementValue,
+  blocked = false,
+}) {
+  const numerator = Number(sbValue);
+  const denominator = Number(tcpSettlementValue);
+  if (
+    blocked ||
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    denominator <= 0
+  ) {
+    return null;
+  }
+  return (numerator / denominator) * 100;
+}
 
 // function isExcludedRow(stageRow) {
 //   const data = stageRow?.data || {};
@@ -358,17 +475,18 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     const draft = ptrs.reportPreviewDraft || {};
 
-    const aggs = await fetchStageMetricsAggs({ t, customerId, ptrsId });
+    const aggs = await fetchPaymentObservationMetricsAggs({
+      t,
+      customerId,
+      ptrsId,
+    });
 
     // Defaults when there are no rows yet
     const stageRowCount = aggs?.stageRowCount || 0;
-
-    const missingTradeCreditFlagCount = aggs?.missingTradeCreditFlagCount || 0;
-    const missingExcludedTradeCreditFlagCount =
-      aggs?.missingExcludedTradeCreditFlagCount || 0;
+    const paymentObservationCount = aggs?.paymentObservationCount || 0;
 
     const totalCount = aggs?.totalCount || 0;
-    const totalValue = Number(aggs?.totalValue || 0);
+    const tcpSettlementValue = Number(aggs?.tcpSettlementValue || 0);
     const missingAmountCount = aggs?.missingAmountCount || 0;
 
     const sbCount = aggs?.sbCount || 0;
@@ -410,21 +528,6 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       missing: [],
     };
 
-    // Trade credit population definition requires these booleans to be explicit.
-    if (missingTradeCreditFlagCount > 0) {
-      canonicalQuality.missing.push({
-        field: "trade_credit_payment",
-        count: missingTradeCreditFlagCount,
-      });
-    }
-
-    if (missingExcludedTradeCreditFlagCount > 0) {
-      canonicalQuality.missing.push({
-        field: "excluded_trade_credit_payment",
-        count: missingExcludedTradeCreditFlagCount,
-      });
-    }
-
     // SB metrics quality signals (do NOT block)
     if (missingSbFlagCount > 0) {
       canonicalQuality.missing.push({
@@ -449,7 +552,8 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       });
     }
 
-    // Amount quality signal (do NOT block) – percentage-of-value metrics will be null if totalValue is 0.
+    // Invoice amount quality signal (do NOT block). The SBTCP numerator still
+    // comes from observation amounts; the TCP denominator is settlement-based.
     if (missingAmountCount > 0) {
       canonicalQuality.missing.push({
         field: "payment_amount",
@@ -457,15 +561,8 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
       });
     }
 
-    // Block ONLY if we cannot define the trade credit population.
-    // This happens when:
-    // - the canonical booleans are not explicit for some rows, OR
-    // - we have staged rows, but zero rows qualify as trade credit (likely unmapped flags).
-    if (
-      missingTradeCreditFlagCount > 0 ||
-      missingExcludedTradeCreditFlagCount > 0 ||
-      (stageRowCount > 0 && totalCount === 0)
-    ) {
+    // A staged dataset with no derived payments cannot produce honest metrics.
+    if (stageRowCount > 0 && totalCount === 0) {
       canonicalQuality.blocked = true;
     }
 
@@ -490,9 +587,11 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
         : null;
 
     const sbTradeCreditPaymentsPct =
-      !canonicalQuality.blocked && totalValue > 0
-        ? (sbValue / totalValue) * 100
-        : null;
+      calculateSmallBusinessTradeCreditPaymentsPct({
+        sbValue,
+        tcpSettlementValue,
+        blocked: canonicalQuality.blocked,
+      });
     // logger.logEvent("info", "PTRS v2 metrics debug: SB trade credit %", {
     //   action: "PtrsV2MetricsSbTradeCreditDebug",
     //   ptrsId,
@@ -500,7 +599,7 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     //   totals: {
     //     totalCount,
     //     sbCount,
-    //     totalValue,
+    //     tcpSettlementValue,
     //     sbValue,
     //     missingAmountCount,
     //   },
@@ -580,6 +679,7 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
     const quality = {
       mode,
       stageRowCount,
+      paymentObservationCount,
       basedOnRowCount: totalCount,
       sbRowCount: sbCount,
       missingInputs: makeMissingInputs(declarations),
@@ -613,7 +713,7 @@ async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
 
     if (canonicalQuality.blocked) {
       quality.notes.push(
-        "Metrics are blocked because the trade credit population cannot be reliably determined (see quality.canonical.missing). Ensure trade_credit_payment and excluded_trade_credit_payment are explicitly mapped so the system knows which rows belong to the trade credit population.",
+        "Metrics are blocked because no unambiguous payment observations could be derived from the staged source records.",
       );
     }
 

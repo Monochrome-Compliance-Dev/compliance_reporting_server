@@ -11,6 +11,12 @@ const {
   applyExcludeFlags,
   applyMetaBase,
 } = require("./exclusions.shared");
+const {
+  getStageColumnForCanonicalField,
+} = require("./stage.payment-time.ptrs.service");
+const {
+  appendTransformationHistorySql,
+} = require("./stage.transformation-history");
 
 function validateCrossRowRuleSqlSupport(rule) {
   const match = Array.isArray(rule?.target?.match) ? rule.target.match : [];
@@ -195,11 +201,18 @@ async function applyCrossRowRulesSql({
       mathSql = `x.delta`;
     }
 
+    const transformedTargetValueSql = `ROUND((${mathSql})::numeric, ${dp})`;
+    const targetTypedColumn =
+      getStageColumnForCanonicalField(targetAmountField);
+    const targetTypedAssignmentSql = targetTypedColumn
+      ? `"${targetTypedColumn}" = ${transformedTargetValueSql},`
+      : "";
+
     let targetDataSql = `
       jsonb_set(
         COALESCE(t."data", '{}'::jsonb),
         '{${targetAmountField}}',
-        to_jsonb(ROUND((${mathSql})::numeric, ${dp})),
+        to_jsonb(${transformedTargetValueSql}),
         true
       )
     `;
@@ -220,13 +233,39 @@ async function applyCrossRowRulesSql({
         targetMetaSql,
       );
     }
+    const escapedRuleKey = ruleKey.replace(/'/g, "''");
+    const escapedRuleLabel = String(rule?.label || ruleKey).replace(/'/g, "''");
+    targetMetaSql = appendTransformationHistorySql(
+      targetMetaSql,
+      `jsonb_build_object(
+        'key', 'cross-row-rule:${escapedRuleKey}:target',
+        'kind', 'cross_row_rule_target',
+        'comment', 'Cross-row rule ${escapedRuleLabel} changed ${targetAmountField.replace(/'/g, "''")} from '
+          || COALESCE(x.before_amount::text, '0') || ' to '
+          || (${transformedTargetValueSql})::text || ' using '
+          || x.delta::text || ' from source Stage row(s) '
+          || array_to_string(x.source_row_nos, ', '),
+        'sourceStageRowIds', to_jsonb(x.source_stage_row_ids),
+        'targetStageRowIds', jsonb_build_array(t."id"),
+        'details', jsonb_build_object(
+          'ruleId', '${escapedRuleKey}',
+          'operation', '${op.replace(/'/g, "''")}',
+          'field', '${targetAmountField.replace(/'/g, "''")}',
+          'beforeAmount', x.before_amount,
+          'delta', x.delta,
+          'afterAmount', ${transformedTargetValueSql}
+        )
+      )`,
+    );
     const notAppliedTargetSql = buildNotAppliedSql("t", ruleKey);
 
     const targetSql = `
       WITH curr AS (
         SELECT
           ${currKeyExpr} AS k,
-          SUM(COALESCE(${currAmtExpr}, 0)) AS delta
+          SUM(COALESCE(${currAmtExpr}, 0)) AS delta,
+          ARRAY_AGG(c."id" ORDER BY c."rowNo") AS source_stage_row_ids,
+          ARRAY_AGG(c."rowNo" ORDER BY c."rowNo") AS source_row_nos
         FROM "tbl_ptrs_stage_row" c
         WHERE c."customerId" = :customerId
           AND c."ptrsId" = :ptrsId
@@ -240,7 +279,10 @@ async function applyCrossRowRulesSql({
         SELECT DISTINCT ON (curr.k)
           t."id",
           curr.k,
-          curr.delta
+          curr.delta,
+          curr.source_stage_row_ids,
+          curr.source_row_nos,
+          ${tgtAmtExpr} AS before_amount
         FROM "tbl_ptrs_stage_row" t
         JOIN curr ON curr.k = ${tgtKeyExpr}
         WHERE t."customerId" = :customerId
@@ -254,6 +296,7 @@ async function applyCrossRowRulesSql({
       UPDATE "tbl_ptrs_stage_row" t
       SET
         "data" = ${targetDataSql},
+        ${targetTypedAssignmentSql}
         "meta" = ${targetMetaSql},
         "updatedAt" = now()
       FROM impacted x
@@ -314,6 +357,24 @@ async function applyCrossRowRulesSql({
         currentMetaWithCommentsSql,
         ruleKey,
       );
+      const currentMetaWithHistorySql = appendTransformationHistorySql(
+        currentMetaSql,
+        `jsonb_build_object(
+          'key', 'cross-row-rule:${escapedRuleKey}:source',
+          'kind', 'cross_row_rule_source',
+          'comment', 'Cross-row rule ${escapedRuleLabel} used Stage row '
+            || c."rowNo"::text || ' to update target Stage row '
+            || mk.target_row_no::text,
+          'sourceStageRowIds', jsonb_build_array(c."id"),
+          'targetStageRowIds', jsonb_build_array(mk.target_id),
+          'details', jsonb_build_object(
+            'ruleId', '${escapedRuleKey}',
+            'operation', '${op.replace(/'/g, "''")}',
+            'field', '${targetAmountField.replace(/'/g, "''")}',
+            'targetStageRowId', mk.target_id
+          )
+        )`,
+      );
       const notAppliedCurrentSql = buildNotAppliedSql("c", ruleKey);
 
       const currentSql = `
@@ -330,7 +391,10 @@ async function applyCrossRowRulesSql({
           GROUP BY 1
         ),
         matched_keys AS (
-          SELECT DISTINCT curr.k
+          SELECT DISTINCT ON (curr.k)
+            curr.k,
+            t."id" AS target_id,
+            t."rowNo" AS target_row_no
           FROM curr
           JOIN "tbl_ptrs_stage_row" t
             ON curr.k = ${tgtKeyExpr.replace(/\bt\./g, "t.")}
@@ -339,11 +403,12 @@ async function applyCrossRowRulesSql({
             AND t."deletedAt" IS NULL
             ${tgtWhereSql}
             ${tgtLimitSql}
+          ORDER BY curr.k, t."rowNo" ASC
         )
         UPDATE "tbl_ptrs_stage_row" c
         SET
           "data" = ${currentDataSql},
-          "meta" = ${currentMetaSql},
+          "meta" = ${currentMetaWithHistorySql},
           "updatedAt" = now()
         FROM matched_keys mk
         WHERE c."customerId" = :customerId
