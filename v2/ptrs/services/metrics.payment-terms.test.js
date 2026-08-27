@@ -105,7 +105,7 @@ describe("PTRS payment-term metrics", () => {
     });
   });
 
-  test("single entity produces the same common mode and range values", () => {
+  test("preserves the 370-observation R362 term distribution and single-entity result", () => {
     const overall = [
       { term: 27, count: 168 },
       { term: 60, count: 112 },
@@ -121,6 +121,7 @@ describe("PTRS payment-term metrics", () => {
       })),
     });
 
+    expect(overall.reduce((sum, row) => sum + row.count, 0)).toBe(370);
     expect(result).toEqual({
       commonTermMode: 27,
       termMin: 27,
@@ -162,6 +163,35 @@ describe("PTRS payment-term metrics", () => {
 });
 
 describe("PTRS small-business trade-credit payment value", () => {
+  test("all observation sources share the same SBI, payment-time and payment-term population", async () => {
+    db.sequelize.query.mockResolvedValue([
+      [
+        {
+          sbTermFrequencies: [],
+          sbEntityTermFrequencies: [],
+        },
+      ],
+    ]);
+
+    await fetchPaymentObservationMetricsAggs({
+      t: { id: "transaction" },
+      customerId: "customer01",
+      ptrsId: "ptrs000001",
+    });
+    const sql = db.sequelize.query.mock.calls[0][0];
+    const baseCte = sql.slice(
+      sql.indexOf("base AS"),
+      sql.indexOf("non_excluded AS"),
+    );
+
+    expect(baseCte).toContain("FROM payment_observations");
+    expect(baseCte).toContain("is_small_business");
+    expect(baseCte).toContain("payment_time_days");
+    expect(baseCte).toContain("payment_term_days");
+    expect(baseCte).not.toContain("semanticKind");
+    expect(baseCte).not.toContain("observationSourceType");
+  });
+
   test("uses the distinct ZP settlement aggregate as the denominator", async () => {
     db.sequelize.query.mockResolvedValue([
       [

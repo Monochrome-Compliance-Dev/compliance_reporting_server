@@ -115,7 +115,9 @@ function parseMoney(value) {
 function toIssue(paymentObservation, code, message, extra = {}) {
   return {
     paymentObservationId: paymentObservation.observationId,
-    stageRowId: paymentObservation.sourceInvoiceStageRowId,
+    stageRowId:
+      paymentObservation.primarySourceStageRowId ||
+      paymentObservation.sourceInvoiceStageRowId,
     sourceStageRowIds: paymentObservation.sourceStageRowIds,
     rowNo: paymentObservation.rowNo,
     code,

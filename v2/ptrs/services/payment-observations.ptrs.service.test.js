@@ -19,6 +19,9 @@ describe("PTRS derived payment observations", () => {
       "settlement.company_code = invoice.company_code",
     );
     expect(sql).toContain(
+      "settlement.source_group_key = invoice.source_group_key",
+    );
+    expect(sql).toContain(
       "settlement.source_account_code = invoice.source_account_code",
     );
     expect(sql).toContain(
@@ -52,7 +55,7 @@ describe("PTRS derived payment observations", () => {
   test("exposes each eligible ZP settlement amount once per clearing group", () => {
     const sql = buildPaymentObservationsCte();
     const groupCte = sql.slice(
-      sql.indexOf("payment_observation_settlement_groups AS"),
+      sql.indexOf("payment_observation_accounting_settlement_groups AS"),
     );
 
     expect(sql).toContain('MAX("paymentAmount")');
@@ -69,7 +72,9 @@ describe("PTRS derived payment observations", () => {
     expect(groupCte).toContain(
       'settlement.settlement_payment_amount AS "settlementPaymentAmount"',
     );
-    expect(groupCte).toContain("JOIN payment_observations observation");
+    expect(groupCte).toContain(
+      "JOIN payment_observation_accounting_observations observation",
+    );
   });
 
   test("takes payment date from ZP and excludes the established four-field ET match", () => {
@@ -87,6 +92,112 @@ describe("PTRS derived payment observations", () => {
       "earlytrade.description_reference = invoice.description_reference",
     );
     expect(sql).toContain("earlytrade.company_code IS NULL");
+    expect(sql).toContain(
+      "earlytrade.source_group_key = invoice.source_group_key",
+    );
+  });
+
+  test("isolates identical accounting keys by explicit scope or dataset fallback", () => {
+    const sql = buildPaymentObservationsCte();
+
+    expect(sql).toContain("NULLIF(BTRIM(s.\"sourceGroupScope\"), '')");
+    expect(sql).toContain("'dataset:' || s.\"datasetId\"");
+    expect(sql).toContain(
+      "GROUP BY\n        source_group_key, company_code, source_account_code, clearing_document",
+    );
+    expect(sql).toContain(
+      "settlement.source_group_key = invoice.source_group_key",
+    );
+  });
+
+  test("projects every surviving direct-payment Stage row one-to-one without SAP event fabrication", () => {
+    const sql = buildPaymentObservationsCte();
+    const directCte = sql.slice(
+      sql.indexOf("payment_observation_direct_observations AS"),
+      sql.indexOf("payment_observations AS"),
+    );
+
+    expect(directCte).toContain(
+      "WHERE direct.\"semanticKind\" = 'direct_payment'",
+    );
+    expect(directCte).toContain("AND NOT direct.excluded");
+    expect(directCte).toContain(
+      "'payment-observation:' || direct.\"id\" AS \"observationId\"",
+    );
+    expect(directCte).toContain(
+      "direct.\"id\" AS \"primarySourceStageRowId\"",
+    );
+    expect(directCte).toContain(
+      "NULL::varchar AS \"sourceInvoiceStageRowId\"",
+    );
+    expect(directCte).toContain(
+      "ARRAY[]::varchar[] AS \"settlementStageRowIds\"",
+    );
+    expect(directCte).not.toContain(":paymentObservationInvoiceType");
+    expect(directCte).not.toContain(":paymentObservationSettlementType");
+  });
+
+  test("retains complete canonical, raw-row, adapter, scope and joined-reference provenance", () => {
+    const sql = buildPaymentObservationsCte();
+
+    for (const field of [
+      "canonicalRevisionId",
+      "canonicalSourceRowId",
+      "datasetId",
+      "sourceRawRowId",
+      "sourceRowNo",
+      "adapterType",
+      "adapterVersion",
+      "semanticKind",
+      "sourceGroupScope",
+      "joinedReferences",
+    ]) {
+      expect(sql).toContain(`'${field}'`);
+    }
+    expect(sql).toContain(
+      "jsonb_build_array(direct.source_provenance) AS \"sourceProvenance\"",
+    );
+    expect(sql).toContain(
+      "jsonb_build_array(invoice.source_provenance)\n          || settlement.settlement_source_provenance",
+    );
+  });
+
+  test("unions accounting and direct observations into one format-neutral population", () => {
+    const sql = buildPaymentObservationsCte();
+    const combinedCte = sql.slice(
+      sql.indexOf("payment_observations AS"),
+      sql.indexOf("payment_observation_accounting_settlement_groups AS"),
+    );
+
+    expect(combinedCte).toContain(
+      "SELECT * FROM payment_observation_accounting_observations",
+    );
+    expect(combinedCte).toContain("UNION ALL");
+    expect(combinedCte).toContain(
+      "SELECT * FROM payment_observation_direct_observations",
+    );
+  });
+
+  test("uses one SAP settlement group and one actual amount per direct payment in the TCP denominator", () => {
+    const sql = buildPaymentObservationsCte();
+    const settlementCte = sql.slice(
+      sql.indexOf("payment_observation_accounting_settlement_groups AS"),
+    );
+
+    expect(settlementCte).toContain("SELECT DISTINCT");
+    expect(settlementCte).toContain(
+      'settlement.settlement_payment_amount AS "settlementPaymentAmount"',
+    );
+    expect(settlementCte).toContain("UNION ALL");
+    expect(settlementCte).toContain(
+      'direct."observationId" AS "settlementIdentity"',
+    );
+    expect(settlementCte).toContain(
+      'direct."paymentAmount" AS "settlementPaymentAmount"',
+    );
+    expect(sql).toContain(
+      "'paymentAmountSemantic', 'actual_settlement_amount'",
+    );
   });
 
   test("executes as one tenant-scoped set-based query", async () => {

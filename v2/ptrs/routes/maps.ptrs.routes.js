@@ -13,12 +13,6 @@ const requirePtrs = authorise({
 // Column mapping (get/save)
 router.get("/:id/map", requirePtrs, tmController.getMap);
 router.post("/:id/map", requirePtrs, tmController.saveMap);
-// Build and persist the mapped + joined dataset for this PTRS run
-router.post(
-  "/:id/map/build-mapped",
-  requirePtrs,
-  tmController.buildMappedDataset,
-);
 // Find compatible maps for this PTRS run
 router.get("/compatible-maps", requirePtrs, tmController.listPtrsWithMap);
 

@@ -54,11 +54,14 @@ async function recordStageTransformationHistory({
           FROM payment_observation_source_rows invoice
           JOIN payment_observation_source_rows earlytrade
             ON earlytrade.document_type = :paymentObservationEarlytradeType
+           AND earlytrade."semanticKind" = 'accounting_event'
+           AND earlytrade.source_group_key = invoice.source_group_key
            AND earlytrade.company_code = invoice.company_code
            AND earlytrade.source_account_code = invoice.source_account_code
            AND earlytrade.clearing_document = invoice.clearing_document
            AND earlytrade.description_reference = invoice.description_reference
-          WHERE invoice.document_type = :paymentObservationInvoiceType
+          WHERE invoice."semanticKind" = 'accounting_event'
+            AND invoice.document_type = :paymentObservationInvoiceType
           ORDER BY invoice."rowNo", earlytrade."rowNo"
         `,
         {
@@ -134,7 +137,24 @@ async function recordStageTransformationHistory({
     }
 
     for (const observation of observations) {
-      const invoice = byId.get(observation.sourceInvoiceStageRowId);
+      const primary = byId.get(observation.primarySourceStageRowId);
+      if (observation.observationSourceType === "direct_payment") {
+        append(primary, {
+          key: `direct-payment-observation:${observation.observationId}`,
+          kind: "payment_observation_direct",
+          comment: `Stage row ${displayRow(primary)} produced a direct payment observation without SAP event reconstruction`,
+          sourceStageRowIds: [primary?.id].filter(Boolean),
+          targetStageRowIds: [primary?.id].filter(Boolean),
+          details: {
+            observationId: observation.observationId,
+            sourceDatasetId: observation.sourceDatasetId,
+            canonicalRevisionId: observation.canonicalRevisionId,
+          },
+        });
+        continue;
+      }
+      const invoice =
+        byId.get(observation.sourceInvoiceStageRowId) || primary;
       for (const settlementId of observation.settlementStageRowIds || []) {
         const settlement = byId.get(settlementId);
         const key = `payment-observation-anchor:${invoice?.id}:${settlementId}`;

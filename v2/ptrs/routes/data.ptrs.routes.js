@@ -1,8 +1,9 @@
 const express = require("express");
 const router = express.Router();
 
-const multer = require("multer");
-const upload = multer(); // in-memory storage for multipart/form-data
+const {
+  uploadCsv,
+} = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 const authorise = require("@/middleware/authorise");
 const ptrsController = require("@/v2/ptrs/controllers/data.ptrs.controller");
@@ -16,7 +17,7 @@ const requirePtrs = authorise({
 router.post(
   "/:id/datasets",
   requirePtrs,
-  upload.single("file"),
+  uploadCsv.single("file"),
   ptrsController.addDataset
 );
 router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);

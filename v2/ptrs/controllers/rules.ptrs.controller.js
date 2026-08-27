@@ -42,6 +42,7 @@ async function rulesPreview(req, res, next) {
     const out = await rulesService.getRulesPreview({
       customerId,
       ptrsId,
+      profileId: ptrs.profileId || null,
       mode,
       limit,
       groupName: groupName || null,

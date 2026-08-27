@@ -26,6 +26,18 @@ function model(sequelize) {
       type: DataTypes.STRING(10),
       allowNull: false,
     },
+    canonicalRevisionId: { type: DataTypes.STRING(10), allowNull: false },
+    canonicalSourceRowId: { type: DataTypes.STRING(10), allowNull: false },
+    sourceRawRowId: { type: DataTypes.STRING(10), allowNull: true },
+    sourceRowNo: { type: DataTypes.INTEGER, allowNull: false },
+    adapterType: { type: DataTypes.STRING(50), allowNull: false },
+    adapterVersion: { type: DataTypes.STRING(30), allowNull: true },
+    sourceGroupScope: { type: DataTypes.STRING(100), allowNull: true },
+    semanticKind: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      validate: { isIn: [["accounting_event", "direct_payment"]] },
+    },
     rowNo: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -87,6 +99,14 @@ function model(sequelize) {
       { name: "ptrs_stage_row_ptrs_id_idx", fields: ["ptrsId"] },
       { name: "ptrs_stage_row_profile_id_idx", fields: ["profileId"] },
       { name: "ptrs_stage_row_dataset_id_idx", fields: ["datasetId"] },
+      {
+        name: "ptrs_stage_row_canonical_revision_idx",
+        fields: ["canonicalRevisionId"],
+      },
+      {
+        name: "ptrs_stage_row_canonical_source_row_idx",
+        fields: ["canonicalSourceRowId"],
+      },
       {
         name: "ptrs_stage_row_customer_ptrs_idx",
         fields: ["customerId", "ptrsId"],

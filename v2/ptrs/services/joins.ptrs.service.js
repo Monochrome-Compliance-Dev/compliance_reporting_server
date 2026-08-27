@@ -165,6 +165,54 @@ async function saveJoins({
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const endpointDatasetIds = new Set();
+    for (const condition of joins.conditions) {
+      const from = condition?.from || {};
+      const to = condition?.to || {};
+      const fromDatasetId = String(from.datasetId || "").trim();
+      const toDatasetId = String(to.datasetId || "").trim();
+      if (
+        !fromDatasetId ||
+        !toDatasetId ||
+        !String(from.role || "").trim() ||
+        !String(to.role || "").trim() ||
+        !String(from.column || "").trim() ||
+        !String(to.column || "").trim()
+      ) {
+        const error = new Error(
+          "Every join endpoint requires datasetId, role and column",
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+      endpointDatasetIds.add(fromDatasetId);
+      endpointDatasetIds.add(toDatasetId);
+    }
+
+    if (endpointDatasetIds.size > 0) {
+      const datasets = await db.PtrsDataset.findAll({
+        where: {
+          customerId,
+          ptrsId,
+          id: { [Op.in]: Array.from(endpointDatasetIds) },
+        },
+        attributes: ["id"],
+        raw: true,
+        transaction: t,
+      });
+      const found = new Set((datasets || []).map((dataset) => dataset.id));
+      const missing = Array.from(endpointDatasetIds).filter(
+        (datasetId) => !found.has(datasetId),
+      );
+      if (missing.length) {
+        const error = new Error(
+          `Join references datasets outside this PTRS: ${missing.join(", ")}`,
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     const existing = await db.PtrsColumnMap.findOne({
       where: { customerId, ptrsId },
       transaction: t,
@@ -346,7 +394,18 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
     if (ptrsIds.length) {
       const dsRows = await db.PtrsDataset.findAll({
         where: { customerId, ptrsId: { [Op.in]: ptrsIds } },
-        attributes: ["id", "ptrsId", "role", "fileName", "meta", "createdAt"],
+        attributes: [
+          "id",
+          "ptrsId",
+          "role",
+          "purpose",
+          "referenceKind",
+          "sourceFormat",
+          "adapterType",
+          "fileName",
+          "meta",
+          "createdAt",
+        ],
         order: [
           ["ptrsId", "ASC"],
           ["createdAt", "ASC"],
@@ -363,17 +422,12 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
       }
     }
 
-    const isMainRole = (role) => {
-      const r = String(role || "")
-        .trim()
-        .toLowerCase();
-      return r === "main" || r.startsWith("main_");
-    };
-
     const pickDisplayFileName = (candidatePtrsId) => {
       const list = byPtrsId.get(String(candidatePtrsId || "")) || [];
-      const main = list.find((d) => isMainRole(d?.role));
-      const chosen = main || list[0] || null;
+      const transactionDataset = list.find(
+        (dataset) => dataset?.purpose === "transaction",
+      );
+      const chosen = transactionDataset || list[0] || null;
       return chosen?.fileName || null;
     };
 
@@ -396,6 +450,10 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
         datasets: sourceDatasets.map((dataset) => ({
           id: dataset.id,
           role: dataset.role,
+          purpose: dataset.purpose,
+          referenceKind: dataset.referenceKind || null,
+          sourceFormat: dataset.sourceFormat,
+          adapterType: dataset.adapterType || null,
           fileName: dataset.fileName,
           rowCount:
             dataset?.meta?.rowsCount ??

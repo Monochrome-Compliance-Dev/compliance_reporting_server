@@ -20,6 +20,7 @@ const CONTRACT = {
   dates: {
     payment_date: {},
     invoice_issue_date: {},
+    invoice_receipt_date: {},
     invoice_due_date: {},
   },
   terms: { invoice_payment_terms: {} },
@@ -57,6 +58,7 @@ function makeDependencies(persistedRows) {
     payment_amount: "-9,229.02",
     payment_date: "02/01/2026",
     invoice_issue_date: "08/12/2025",
+    invoice_receipt_date: "08/12/2025",
     invoice_due_date: "01/01/2026",
     invoice_payment_terms: "0027",
     entry_date: "09/12/2025",
@@ -79,6 +81,7 @@ function makeDependencies(persistedRows) {
       "paymentAmount",
       "paymentDate",
       "invoiceIssueDate",
+      "invoiceReceiptDate",
       "invoiceDueDate",
       "entryDate",
       "sourceUser",
@@ -94,7 +97,7 @@ function makeDependencies(persistedRows) {
           : { type: { key: "STRING" } },
     ]),
   );
-  let loaded = false;
+  const loadedRevisions = new Set();
 
   return {
     customerId: "customer-1",
@@ -115,10 +118,33 @@ function makeDependencies(persistedRows) {
     getLatestExecutionRun: jest.fn(async () => null),
     createExecutionRun: jest.fn(async () => ({ id: "run-1" })),
     updateExecutionRun: jest.fn(async () => undefined),
-    loadMappedRowsForPtrs: jest.fn(async ({ afterRowNo }) => {
-      if (afterRowNo != null || loaded) return { rows: [] };
-      loaded = true;
-      return { rows: [{ ...sourceRow }] };
+    resolveCurrentCanonicalRevisions: jest.fn(async () => [
+      {
+        dataset: { id: "dataset-1", purpose: "transaction" },
+        datasetOrder: 0,
+        revision: { id: "revision-1", materialSignature: "sig-1", rowCount: 1 },
+      },
+    ]),
+    loadCanonicalRevisionRows: jest.fn(async ({ revisionId, afterSourceRowNo }) => {
+      if (afterSourceRowNo != null || loadedRevisions.has(revisionId)) return [];
+      loadedRevisions.add(revisionId);
+      const datasetId = revisionId === "revision-2" ? "dataset-2" : "dataset-1";
+      return [{
+        ...sourceRow,
+        invoice_reference_number: revisionId === "revision-2" ? "SECOND" : sourceRow.invoice_reference_number,
+        _canonicalProvenance: {
+          canonicalRevisionId: revisionId,
+          canonicalSourceRowId: `row-${revisionId}`,
+          datasetId,
+          sourceRawRowId: `raw-${revisionId}`,
+          sourceRowNo: 1,
+          adapterType: "sap_accounting_event",
+          adapterVersion: "1",
+          sourceGroupScope: null,
+          semanticKind: "accounting_event",
+          lineage: { joinedReferences: {} },
+        },
+      }];
     }),
     getColumnMap: jest.fn(async () => ({
       rowRules: [
@@ -161,12 +187,18 @@ function makeDependencies(persistedRows) {
     db: {
       PtrsFieldMap: { findAll: jest.fn(async () => []) },
       PtrsDataset: {
-        findAll: jest.fn(async () => [{ id: "dataset-1", role: "main" }]),
+        findAll: jest.fn(async () => [
+          { id: "dataset-1", purpose: "transaction" },
+        ]),
       },
       PtrsImportRaw: { count: jest.fn(async () => 0) },
       PtrsStageRow: {
         rawAttributes: stageAttributes,
-        destroy: jest.fn(async () => 0),
+        destroy: jest.fn(async () => {
+          const removed = persistedRows.length;
+          persistedRows.length = 0;
+          return removed;
+        }),
         bulkCreate: jest.fn(async (rows) => persistedRows.push(...rows)),
       },
     },
@@ -174,13 +206,29 @@ function makeDependencies(persistedRows) {
 }
 
 describe("PTRS stage preview/persist parity", () => {
+  test("refuses Stage when any selected dataset lacks a current canonical revision", async () => {
+    const dependencies = makeDependencies([]);
+    dependencies.resolveCurrentCanonicalRevisions.mockRejectedValue(
+      Object.assign(new Error("Canonical rebuild required for transaction dataset(s): B.csv"), {
+        code: "CANONICAL_REVISION_REQUIRED",
+      }),
+    );
+    await expect(stagePtrs({ ...dependencies, persist: false, limit: 50 }))
+      .rejects.toThrow("B.csv");
+    expect(dependencies.loadCanonicalRevisionRows).not.toHaveBeenCalled();
+  });
+
   test("uses the same canonical transformations and persists typed columns", async () => {
     const previewRows = [];
+    const previewDependencies = makeDependencies(previewRows);
     const preview = await stagePtrs({
-      ...makeDependencies(previewRows),
+      ...previewDependencies,
       persist: false,
       limit: 50,
     });
+    expect(previewDependencies.loadCanonicalRevisionRows).toHaveBeenCalledWith(
+      expect.objectContaining({ revisionId: "revision-1" }),
+    );
 
     const persistedRows = [];
     const persisted = await stagePtrs({
@@ -211,6 +259,7 @@ describe("PTRS stage preview/persist parity", () => {
       paymentAmount: "-9229.02",
       paymentDate: "2026-01-02",
       invoiceIssueDate: "2025-12-08",
+      invoiceReceiptDate: "2025-12-08",
       invoiceDueDate: "2026-01-01",
       entryDate: "2025-12-09",
       sourceUser: "ARIBA_CIG",
@@ -218,7 +267,91 @@ describe("PTRS stage preview/persist parity", () => {
       paymentTermRaw: "CHANGED",
       paymentTermDays: 45,
       paymentTimeDays: preview.sample.payment_time_days,
+      canonicalRevisionId: "revision-1",
+      canonicalSourceRowId: "row-revision-1",
+      datasetId: "dataset-1",
+      sourceRowNo: 1,
+      rowNo: 1,
+      semanticKind: "accounting_event",
     });
+  });
+
+  test("deterministically unions two revisions with overlapping source row numbers", async () => {
+    const persistedRows = [];
+    const dependencies = makeDependencies(persistedRows);
+    dependencies.resolveCurrentCanonicalRevisions.mockResolvedValue([
+      {
+        dataset: { id: "dataset-1" }, datasetOrder: 0,
+        revision: { id: "revision-1", materialSignature: "sig-1", rowCount: 1 },
+      },
+      {
+        dataset: { id: "dataset-2" }, datasetOrder: 1,
+        revision: { id: "revision-2", materialSignature: "sig-2", rowCount: 1 },
+      },
+    ]);
+    const result = await stagePtrs({ ...dependencies, persist: true });
+    expect(result.persistedCount).toBe(2);
+    expect(persistedRows.map((row) => [row.datasetId, row.sourceRowNo, row.rowNo]))
+      .toEqual([["dataset-1", 1, 1], ["dataset-2", 1, 2]]);
+    expect(persistedRows.map((row) => row.canonicalRevisionId))
+      .toEqual(["revision-1", "revision-2"]);
+  });
+
+  test("initial build and rebuild replace the current Stage population", async () => {
+    const persistedRows = [];
+    const initialDependencies = makeDependencies(persistedRows);
+    const rebuiltDependencies = makeDependencies(persistedRows);
+
+    const initial = await stagePtrs({
+      ...initialDependencies,
+      persist: true,
+    });
+    expect(initial.persistedCount).toBe(1);
+    expect(persistedRows).toHaveLength(1);
+
+    const rebuilt = await stagePtrs({
+      ...rebuiltDependencies,
+      persist: true,
+    });
+    expect(rebuilt.persistedCount).toBe(1);
+    expect(persistedRows).toHaveLength(1);
+    expect(rebuiltDependencies.db.PtrsStageRow.destroy).toHaveBeenCalledWith({
+      where: {
+        customerId: "customer-1",
+        ptrsId: "ptrs-1",
+        profileId: "profile-1",
+      },
+      force: true,
+      transaction: expect.any(Object),
+    });
+    expect(rebuiltDependencies.db.PtrsStageRow.destroy.mock.invocationCallOrder[0])
+      .toBeLessThan(
+        rebuiltDependencies.db.PtrsStageRow.bulkCreate.mock.invocationCallOrder[0],
+      );
+    const rebuiltTransaction = await rebuiltDependencies
+      .beginTransactionWithCustomerContext.mock.results[0].value;
+    expect(rebuiltTransaction).toMatchObject({ finished: "commit" });
+    expect(rebuiltTransaction.commit).toHaveBeenCalledTimes(1);
+  });
+
+  test("rolls back the Stage replacement when rebuilt rows cannot be persisted", async () => {
+    const persistedRows = [{ id: "existing-stage-row" }];
+    const dependencies = makeDependencies(persistedRows);
+    dependencies.db.PtrsStageRow.bulkCreate.mockRejectedValue(
+      new Error("persist failed"),
+    );
+
+    await expect(stagePtrs({ ...dependencies, persist: true })).rejects.toThrow(
+      "persist failed",
+    );
+
+    const transaction = await dependencies
+      .beginTransactionWithCustomerContext.mock.results[0].value;
+    expect(dependencies.db.PtrsStageRow.destroy).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true, transaction }),
+    );
+    expect(transaction.rollback).toHaveBeenCalledTimes(1);
+    expect(transaction.commit).not.toHaveBeenCalled();
   });
 
   test("parses ISO and Australian date-only values deterministically", () => {

@@ -76,6 +76,7 @@ async function applyDocTypeExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND (
         ${docTypeExpr} = 'K1'
         OR (
@@ -121,6 +122,7 @@ async function previewDocTypeExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND (
         COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
         OR (
@@ -172,6 +174,7 @@ async function previewDocTypeExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND (
         COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
         OR (

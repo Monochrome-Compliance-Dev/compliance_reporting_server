@@ -20,6 +20,11 @@ describe("PTRS credit-applied clearing-group exclusion", () => {
     expect(sql).toContain("SELECT DISTINCT");
     expect(sql).toContain("LIKE '200%'");
     expect(sql).toContain(
+      'matched_group."sourceGroupKey" = COALESCE(NULLIF(BTRIM(s."sourceGroupScope"), \'\'), \'dataset:\' || s."datasetId")',
+    );
+    expect(sql).toContain('candidate."semanticKind" = \'accounting_event\'');
+    expect(sql).toContain('s."semanticKind" = \'accounting_event\'');
+    expect(sql).toContain(
       'matched_group."companyCode" = COALESCE(NULLIF(BTRIM(COALESCE(s."data"->>\'company_code\'',
     );
     expect(sql).toContain(
@@ -97,6 +102,8 @@ describe("PTRS credit-applied clearing-group exclusion", () => {
       expect(sql).toContain('matched_group."companyCode" =');
       expect(sql).toContain('matched_group."account" =');
       expect(sql).toContain('matched_group."clearingDocument" =');
+      expect(sql).toContain('matched_group."sourceGroupKey" =');
+      expect(sql).toContain('s."semanticKind" = \'accounting_event\'');
       expect(sql).not.toMatch(/\bUPDATE\s+"tbl_ptrs_stage_row"/i);
     }
     expect(result).toEqual({

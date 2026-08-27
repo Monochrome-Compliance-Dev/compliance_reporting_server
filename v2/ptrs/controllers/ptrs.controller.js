@@ -1,6 +1,10 @@
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
+const ptrsDataService = require("@/v2/ptrs/services/data.ptrs.service");
+const {
+  cleanupUploadedFile,
+} = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 function safeMeta(meta) {
   try {
@@ -153,9 +157,9 @@ async function importCsv(req, res, next) {
 
     // Choose input source:
     const isTextCsv = (req.headers["content-type"] || "").includes("text/csv");
-    const fileBuffer = req.file?.buffer;
+    const filePath = req.file?.path || null;
     const fileMeta =
-      req.file && fileBuffer
+      req.file && filePath
         ? {
             originalName: req.file.originalname || null,
             mimeType: req.file.mimetype || null,
@@ -163,7 +167,7 @@ async function importCsv(req, res, next) {
           }
         : null;
 
-    if (!isTextCsv && !fileBuffer) {
+    if (!isTextCsv && !filePath) {
       return res.status(400).json({
         status: "error",
         message:
@@ -176,7 +180,7 @@ async function importCsv(req, res, next) {
 
     if (isTextCsv) {
       // Stream directly from request
-      rowsInserted = await ptrsService.importCsvStream({
+      rowsInserted = await ptrsDataService.importCsvStream({
         customerId,
         ptrsId,
         stream: req, // readable
@@ -187,13 +191,10 @@ async function importCsv(req, res, next) {
         },
       });
     } else {
-      // Parse the in-memory buffer (if using Multer)
-      const { Readable } = require("stream");
-      const stream = Readable.from(fileBuffer);
-      rowsInserted = await ptrsService.importCsvStream({
+      rowsInserted = await ptrsDataService.importCsvStream({
         customerId,
         ptrsId,
-        stream,
+        filePath,
         fileMeta,
       });
     }
@@ -225,6 +226,20 @@ async function importCsv(req, res, next) {
       timestamp: new Date().toISOString(),
     });
     return next(error);
+  } finally {
+    if (req.file?.path) {
+      try {
+        await cleanupUploadedFile(req.file);
+      } catch (cleanupError) {
+        logger.logEvent("warn", "Could not clean PTRS upload temporary file", {
+          action: "PtrsV2ImportCsvTempCleanup",
+          ptrsId,
+          customerId,
+          path: req.file.path,
+          error: cleanupError.message,
+        });
+      }
+    }
   }
 }
 

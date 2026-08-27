@@ -1,6 +1,9 @@
 const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/data.ptrs.service");
+const {
+  cleanupUploadedFile,
+} = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 module.exports = {
   addDataset,
@@ -11,7 +14,7 @@ module.exports = {
 
 /**
  * POST /api/v2/ptrs/:id/datasets
- * Multipart (file) + fields: role, sourceName (optional)
+ * Multipart (file) + classification fields and optional sourceName.
  */
 async function addDataset(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -19,7 +22,32 @@ async function addDataset(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
-  const role = (req.body?.role || req.query?.role || "").trim();
+  const purpose = (req.body?.purpose || req.query?.purpose || "").trim();
+  const sourceFormat = (
+    req.body?.sourceFormat ||
+    req.query?.sourceFormat ||
+    "csv"
+  ).trim();
+  const referenceKind = (
+    req.body?.referenceKind ||
+    req.query?.referenceKind ||
+    ""
+  ).trim();
+  const adapterType = (
+    req.body?.adapterType ||
+    req.query?.adapterType ||
+    ""
+  ).trim();
+  const adapterVersion = (
+    req.body?.adapterVersion ||
+    req.query?.adapterVersion ||
+    ""
+  ).trim();
+  const sourceGroupScope = (
+    req.body?.sourceGroupScope ||
+    req.query?.sourceGroupScope ||
+    ""
+  ).trim();
   const sourceName = req.body?.sourceName || req.query?.sourceName || null;
   const file = req.file;
 
@@ -29,26 +57,31 @@ async function addDataset(req, res, next) {
         .status(400)
         .json({ status: "error", message: "Customer ID missing" });
     }
-    if (!file || !file.buffer) {
+    if (!file || !file.path) {
       return res
         .status(400)
         .json({ status: "error", message: "File is required" });
     }
-    if (!role) {
+    if (!purpose) {
       return res
         .status(400)
-        .json({ status: "error", message: "role is required" });
+        .json({ status: "error", message: "purpose is required" });
     }
 
     const created = await ptrsService.addDataset({
       customerId,
       ptrsId,
-      role,
+      purpose,
+      sourceFormat,
+      referenceKind: referenceKind || null,
+      adapterType: adapterType || null,
+      adapterVersion: adapterVersion || null,
+      sourceGroupScope: sourceGroupScope || null,
       sourceName,
       fileName: file.originalname || null,
       fileSize: file.size || null,
       mimeType: file.mimetype || null,
-      buffer: file.buffer,
+      uploadPath: file.path,
       userId,
     });
 
@@ -61,7 +94,9 @@ async function addDataset(req, res, next) {
       entity: "PtrsRawDataset",
       entityId: created.id,
       details: {
-        role,
+        purpose: created.purpose,
+        referenceKind: created.referenceKind || null,
+        sourceFormat: created.sourceFormat,
         fileName: created.fileName,
         rowsCount: created.meta?.rowsCount || 0,
       },
@@ -78,6 +113,18 @@ async function addDataset(req, res, next) {
       statusCode: error.statusCode || 500,
     });
     return next(error);
+  } finally {
+    try {
+      await cleanupUploadedFile(file);
+    } catch (cleanupError) {
+      logger.logEvent("warn", "Could not clean PTRS upload temporary file", {
+        action: "PtrsV2AddDatasetTempCleanup",
+        ptrsId,
+        customerId,
+        path: file?.path || null,
+        error: cleanupError.message,
+      });
+    }
   }
 }
 

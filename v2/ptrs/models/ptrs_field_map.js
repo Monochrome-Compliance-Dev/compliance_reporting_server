@@ -47,7 +47,7 @@ function model(sequelize) {
     },
 
     // Where the value comes from.
-    // Common roles: "main" | "entitystructure" | "termschanges" | "custom" | "computed"
+    // Display/source namespace only. Concrete dataset identity is held in datasetId.
     sourceRole: {
       type: DataTypes.STRING(50),
       allowNull: false,
@@ -111,11 +111,17 @@ function model(sequelize) {
         fields: ["customerId", "ptrsId", "profileId"],
       },
 
-      // One mapping per canonical field per profile per ptrs
+      // One mapping per canonical field per dataset/profile/PTRS scope.
       {
         name: "ux_ptrs_field_map_canon",
         unique: true,
-        fields: ["customerId", "ptrsId", "profileId", "canonicalField"],
+        fields: [
+          "customerId",
+          "ptrsId",
+          "profileId",
+          "datasetId",
+          "canonicalField",
+        ],
       },
 
       // Useful for quickly finding where a source role is used

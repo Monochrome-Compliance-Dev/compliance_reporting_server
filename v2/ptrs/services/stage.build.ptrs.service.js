@@ -209,7 +209,8 @@ async function stagePtrs({
   getLatestExecutionRun,
   createExecutionRun,
   updateExecutionRun,
-  loadMappedRowsForPtrs,
+  resolveCurrentCanonicalRevisions,
+  loadCanonicalRevisionRows,
   getColumnMap,
   applyRules,
   loadEffectiveTermChangesForRows,
@@ -275,11 +276,18 @@ async function stagePtrs({
   });
 
   try {
+    const canonicalSelections = await resolveCurrentCanonicalRevisions({
+      customerId,
+      ptrsId,
+      profileId,
+      transaction,
+    });
     if (persist) {
       const staleness = await getStageStaleness({
         customerId,
         ptrsId,
         profileId,
+        canonicalSelections,
         transaction,
       });
       inputHash = staleness.inputHash;
@@ -334,10 +342,14 @@ async function stagePtrs({
     const termMap = profileId
       ? await loadPaymentTermMap({ customerId, profileId, transaction })
       : new Map();
-    const [mappedFieldRows, joinDatasets] = await Promise.all([
+    const mappedFieldRows =
       profileId && db.PtrsFieldMap
-        ? db.PtrsFieldMap.findAll({
-            where: { customerId, ptrsId, profileId },
+        ? await db.PtrsFieldMap.findAll({
+            where: {
+              customerId,
+              ptrsId,
+              profileId,
+            },
             attributes: [
               "canonicalField",
               "sourceRole",
@@ -347,20 +359,13 @@ async function stagePtrs({
             raw: true,
             transaction,
           })
-        : Promise.resolve([]),
-      db.PtrsDataset.findAll({
-        where: { customerId, ptrsId },
-        attributes: ["id", "role"],
-        raw: true,
-        transaction,
-      }),
-    ]);
-    const joinContext = {
-      customerId,
-      ptrsId,
-      datasets: joinDatasets,
-      fieldMapRows: mappedFieldRows,
-    };
+        : [];
+    const joinDatasets = await db.PtrsDataset.findAll({
+      where: { customerId, ptrsId },
+      attributes: ["id", "purpose", "referenceKind"],
+      raw: true,
+      transaction,
+    });
     const mappedFields = (mappedFieldRows || [])
       .map((row) => toSnakeCase(row?.canonicalField))
       .filter(Boolean);
@@ -381,7 +386,14 @@ async function stagePtrs({
       ]),
     );
 
-    const transform = async (rows) => {
+    const transform = async (rows, transactionDatasetId) => {
+      const joinContext = {
+        customerId,
+        ptrsId,
+        transactionDatasetId,
+        datasets: joinDatasets,
+        fieldMapRows: mappedFieldRows,
+      };
       const result = await transformStageRows({
         rows,
         rowRules,
@@ -406,72 +418,102 @@ async function stagePtrs({
     let rowsOut = 0;
     let persistedCount = null;
     if (!persist) {
-      const loaded = await loadMappedRowsForPtrs({
-        customerId,
-        ptrsId,
-        limit,
-        transaction,
-      });
-      rowsIn = loaded.rows.length;
-      stagedRows = await transform(loaded.rows);
+      const previewLimit = Math.min(Math.max(Number(limit) || 50, 1), 5000);
+      for (const selection of canonicalSelections) {
+        if (stagedRows.length >= previewLimit) break;
+        const rows = await loadCanonicalRevisionRows({
+          customerId,
+          ptrsId,
+          revisionId: selection.revision.id,
+          limit: previewLimit - stagedRows.length,
+          transaction,
+        });
+        rowsIn += rows.length;
+        const transformed = await transform(rows, selection.dataset.id);
+        stagedRows.push(...transformed);
+      }
       rowsOut = stagedRows.length;
     } else {
-      const defaultDatasetId = await resolveDefaultDatasetId({
-        customerId,
-        ptrsId,
-        userId,
-        transaction,
-        db,
-      });
       await db.PtrsStageRow.destroy({
         where: { customerId, ptrsId, profileId },
+        force: true,
         transaction,
       });
 
-      let afterRowNo = null;
-      while (true) {
-        const loaded = await loadMappedRowsForPtrs({
-          customerId,
-          ptrsId,
-          limit: PERSIST_BATCH_SIZE,
-          afterRowNo,
-          transaction,
-        });
-        if (!loaded.rows.length) break;
-        rowsIn += loaded.rows.length;
-        const batch = await transform(loaded.rows);
-        const persistenceRows = batch.map((row) => {
-          const data = buildPersistedStageRow(row, persistedStageFields);
-          return {
+      let combinedRowNo = 0;
+      for (const selection of canonicalSelections) {
+        let afterSourceRowNo = null;
+        while (true) {
+          const rows = await loadCanonicalRevisionRows({
             customerId,
             ptrsId,
-            profileId,
-            datasetId: row._dataset_id || defaultDatasetId,
-            rowNo: row.row_no,
-            ...buildStageColumnProjection(data, db.PtrsStageRow),
-            data,
-            errors: Array.isArray(row._stageErrors)
-              ? row._stageErrors
-              : null,
-            meta: {
-              ...(row._transformationMeta || {}),
-              _stage: "ptrs.v2.stagePtrs",
-              at: new Date().toISOString(),
-              appliedRules: Array.isArray(row._appliedRules)
-                ? row._appliedRules
-                : [],
-            },
-            createdBy: userId || null,
-            updatedBy: userId || null,
-          };
-        });
-        await db.PtrsStageRow.bulkCreate(persistenceRows, {
-          transaction,
-          validate: true,
-        });
-        rowsOut += persistenceRows.length;
-        afterRowNo = Number(loaded.rows.at(-1)?.row_no);
-        if (loaded.rows.length < PERSIST_BATCH_SIZE) break;
+            revisionId: selection.revision.id,
+            limit: PERSIST_BATCH_SIZE,
+            afterSourceRowNo,
+            transaction,
+          });
+          if (!rows.length) break;
+          rowsIn += rows.length;
+          const batch = await transform(rows, selection.dataset.id);
+          const persistenceRows = batch.map((row) => {
+            const provenance = row._canonicalProvenance;
+            if (
+              !provenance?.canonicalRevisionId ||
+              !provenance?.canonicalSourceRowId
+            ) {
+              throw new Error(
+                "Canonical Stage source row is missing required provenance",
+              );
+            }
+            combinedRowNo += 1;
+            const data = buildPersistedStageRow(row, persistedStageFields);
+            return {
+              customerId,
+              ptrsId,
+              profileId,
+              datasetId: selection.dataset.id,
+              canonicalRevisionId: provenance.canonicalRevisionId,
+              canonicalSourceRowId: provenance.canonicalSourceRowId,
+              sourceRawRowId: provenance.sourceRawRowId,
+              sourceRowNo: provenance.sourceRowNo,
+              adapterType: provenance.adapterType,
+              adapterVersion: provenance.adapterVersion,
+              sourceGroupScope: provenance.sourceGroupScope,
+              semanticKind: provenance.semanticKind,
+              rowNo: combinedRowNo,
+              ...buildStageColumnProjection(data, db.PtrsStageRow),
+              data,
+              errors: Array.isArray(row._stageErrors)
+                ? row._stageErrors
+                : null,
+              meta: {
+                ...(row._transformationMeta || {}),
+                _stage: "ptrs.v2.stagePtrs",
+                at: new Date().toISOString(),
+                appliedRules: Array.isArray(row._appliedRules)
+                  ? row._appliedRules
+                  : [],
+                canonical: provenance,
+              },
+              createdBy: userId || null,
+              updatedBy: userId || null,
+            };
+          });
+          await db.PtrsStageRow.bulkCreate(persistenceRows, {
+            transaction,
+            validate: true,
+          });
+          rowsOut += persistenceRows.length;
+          afterSourceRowNo = Number(
+            rows.at(-1)?._canonicalProvenance?.sourceRowNo,
+          );
+          if (!Number.isFinite(afterSourceRowNo)) {
+            throw new Error(
+              "Canonical Stage source row is missing deterministic ordering",
+            );
+          }
+          if (rows.length < PERSIST_BATCH_SIZE) break;
+        }
       }
       persistedCount = rowsOut;
     }
@@ -531,59 +573,6 @@ async function stagePtrs({
     if (trace) await trace.close();
     throw error;
   }
-}
-
-async function resolveDefaultDatasetId({
-  customerId,
-  ptrsId,
-  userId,
-  transaction,
-  db,
-}) {
-  const datasets = await db.PtrsDataset.findAll({
-    where: { customerId, ptrsId },
-    attributes: ["id", "role", "updatedAt", "createdAt"],
-    order: [
-      ["updatedAt", "DESC"],
-      ["createdAt", "DESC"],
-    ],
-    raw: true,
-    transaction,
-  });
-  const normaliseRole = (role) => String(role || "").trim().toLowerCase();
-  const main = datasets.find((row) => normaliseRole(row.role) === "main");
-  const mainLike = datasets.find((row) =>
-    normaliseRole(row.role).startsWith("main"),
-  );
-  if (main?.id || mainLike?.id) return main?.id || mainLike.id;
-
-  const rawCount = await db.PtrsImportRaw.count({
-    where: { customerId, ptrsId },
-    transaction,
-  });
-  if (rawCount > 0) {
-    const created = await db.PtrsDataset.create(
-      {
-        customerId,
-        ptrsId,
-        role: "main",
-        fileName: "Main input",
-        storageRef: null,
-        rowsCount: rawCount,
-        status: "uploaded",
-        meta: { source: "raw", rowsCount: rawCount },
-        createdBy: userId || null,
-        updatedBy: userId || null,
-      },
-      { transaction },
-    );
-    if (created?.id) return created.id;
-  }
-  const error = new Error(
-    "No dataset is available for staging. Upload a dataset or complete an import first.",
-  );
-  error.statusCode = 400;
-  throw error;
 }
 
 module.exports = {

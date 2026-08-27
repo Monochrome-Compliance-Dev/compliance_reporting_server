@@ -22,7 +22,7 @@ const {
 } = require("./stage.payment-terms.ptrs.service");
 const { transformStageRows } = require("./stage.build.ptrs.service");
 
-const MAIN_DATASET_ID = "main-dataset";
+const TRANSACTION_DATASET_ID = "transaction-dataset";
 const TERM_CHANGES_DATASET_ID = "term-changes-dataset";
 
 function makeJoin(from, to) {
@@ -34,15 +34,31 @@ function makeContext() {
     customerId: "customer-1",
     ptrsId: "ptrs-1",
     datasets: [
-      { id: MAIN_DATASET_ID, role: "main_csv" },
-      { id: "vendor-dataset", role: "vendormaster" },
-      { id: "entity-dataset", role: "entitystructure" },
-      { id: TERM_CHANGES_DATASET_ID, role: "termschanges" },
+      {
+        id: TRANSACTION_DATASET_ID,
+        purpose: "transaction",
+        referenceKind: null,
+      },
+      {
+        id: "vendor-dataset",
+        purpose: "reference",
+        referenceKind: "vendormaster",
+      },
+      {
+        id: "entity-dataset",
+        purpose: "reference",
+        referenceKind: "entitystructure",
+      },
+      {
+        id: TERM_CHANGES_DATASET_ID,
+        purpose: "reference",
+        referenceKind: "termschanges",
+      },
     ],
     fieldMapRows: [
       {
-        datasetId: MAIN_DATASET_ID,
-        sourceRole: "main_csv",
+        datasetId: TRANSACTION_DATASET_ID,
+        sourceRole: "transaction",
         sourceColumn: "Account",
         canonicalField: "source_account_code",
       },
@@ -56,8 +72,8 @@ function makeTermChangeMapRow() {
       conditions: [
         makeJoin(
           {
-            datasetId: MAIN_DATASET_ID,
-            role: "main_csv",
+            datasetId: TRANSACTION_DATASET_ID,
+            role: "transaction",
             column: "Account",
           },
           {
@@ -82,8 +98,8 @@ describe("PTRS effective-term join resolution", () => {
         conditions: [
           makeJoin(
             {
-              datasetId: MAIN_DATASET_ID,
-              role: "main_csv",
+              datasetId: TRANSACTION_DATASET_ID,
+              role: "transaction",
               column: "Account",
             },
             {
@@ -94,8 +110,8 @@ describe("PTRS effective-term join resolution", () => {
           ),
           makeJoin(
             {
-              datasetId: MAIN_DATASET_ID,
-              role: "main_csv",
+              datasetId: TRANSACTION_DATASET_ID,
+              role: "transaction",
               column: "Company Code",
             },
             {
@@ -106,8 +122,8 @@ describe("PTRS effective-term join resolution", () => {
           ),
           makeJoin(
             {
-              datasetId: MAIN_DATASET_ID,
-              role: "main_csv",
+              datasetId: TRANSACTION_DATASET_ID,
+              role: "transaction",
               column: "Account",
             },
             {
@@ -122,7 +138,7 @@ describe("PTRS effective-term join resolution", () => {
 
     expect(extractTermChangesJoinSpec(mapRow, makeContext())).toEqual([
       {
-        mainField: "source_account_code",
+        transactionField: "source_account_code",
         changeColumn: "supplier",
       },
     ]);
@@ -327,8 +343,8 @@ describe("PTRS effective-term join resolution", () => {
               column: "Supplier",
             },
             {
-              datasetId: MAIN_DATASET_ID,
-              role: "main_csv",
+              datasetId: TRANSACTION_DATASET_ID,
+              role: "transaction",
               column: "Account",
             },
           ),
@@ -338,7 +354,7 @@ describe("PTRS effective-term join resolution", () => {
 
     expect(extractTermChangesJoinSpec(mapRow, makeContext())).toEqual([
       {
-        mainField: "source_account_code",
+        transactionField: "source_account_code",
         changeColumn: "supplier",
       },
     ]);
@@ -350,8 +366,8 @@ describe("PTRS effective-term join resolution", () => {
         conditions: [
           makeJoin(
             {
-              datasetId: MAIN_DATASET_ID,
-              role: "main_csv",
+              datasetId: TRANSACTION_DATASET_ID,
+              role: "transaction",
               column: "Unmapped account header",
             },
             {

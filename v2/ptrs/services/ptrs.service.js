@@ -1,7 +1,4 @@
 const db = require("@/db/database");
-const csv = require("fast-csv");
-const { Readable } = require("stream");
-const fs = require("fs");
 const crypto = require("crypto");
 
 const { emitCsvUploadStatus } = require("@/v2/ptrs/services/data.ptrs.service");
@@ -215,32 +212,6 @@ function mergeJoinedRow(mainRowData, joinedRow) {
   const merged = { ...joinedRow, ...mainRowData };
 
   return merged;
-}
-
-// Helper: count CSV data rows from already-buffered text
-async function countCsvRowsFromBufferedText(text, headersArray) {
-  const fixedStream = Readable.from(text);
-  return new Promise((resolve, reject) => {
-    let count = 0;
-
-    fixedStream
-      .pipe(
-        csv.parse({
-          headers: headersArray,
-          renameHeaders: false,
-          ignoreEmpty: true,
-          trim: true,
-          strictColumnHandling: false,
-          skipLines: 1,
-          discardUnmappedColumns: true,
-        }),
-      )
-      .on("error", (err) => reject(err))
-      .on("data", () => {
-        count += 1;
-      })
-      .on("end", () => resolve(count));
-  });
 }
 
 // // ----- RULE ENGINE HELPERS -----

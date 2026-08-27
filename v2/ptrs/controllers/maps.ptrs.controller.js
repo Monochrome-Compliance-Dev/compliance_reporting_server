@@ -3,7 +3,6 @@ const { logger } = require("@/helpers/logger");
 const { safeLog } = require("@/v2/ptrs/controllers/ptrs.controller");
 const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const ptrsService = require("@/v2/ptrs/services/ptrs.service");
-const mapsRuntimeService = require("@/v2/ptrs/services/maps.ptrs.service");
 const mapsConfigService = require("@/v2/ptrs/services/maps.config.ptrs.service");
 const mapsHeadersService = require("@/v2/ptrs/services/maps.headers.ptrs.service");
 
@@ -11,7 +10,6 @@ module.exports = {
   getMap,
   saveMap,
   getSample,
-  buildMappedDataset,
   getFieldMap,
   saveFieldMap,
   importFieldMap,
@@ -46,6 +44,7 @@ async function getMap(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+  const datasetId = req.query.datasetId || null;
 
   try {
     if (!customerId) {
@@ -80,14 +79,14 @@ async function getMap(req, res, next) {
     const datasets = Array.isArray(sampleResult?.datasets)
       ? sampleResult.datasets
       : [];
-    const mainDataset =
-      datasets.find((d) => d?.isMain) ||
-      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
-      datasets[0] ||
-      null;
+    const selectedDataset = datasetId
+      ? datasets.find(
+          (dataset) => String(dataset?.datasetId) === String(datasetId),
+        ) || null
+      : null;
 
-    const headers = Array.isArray(mainDataset?.headers)
-      ? mainDataset.headers
+    const headers = Array.isArray(selectedDataset?.headers)
+      ? selectedDataset.headers
       : [];
     const total = datasets.length;
     const headerMeta = {
@@ -300,7 +299,6 @@ async function getFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
   const profileId = req.query.profileId || null;
-  const datasetId = req.query.datasetId || null;
 
   try {
     if (!customerId) {
@@ -313,12 +311,6 @@ async function getFieldMap(req, res, next) {
         .status(400)
         .json({ status: "error", message: "profileId is required" });
     }
-    if (!datasetId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "datasetId is required" });
-    }
-
     const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
     if (!ptrs) {
       return res
@@ -330,7 +322,6 @@ async function getFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
-      datasetId,
     });
 
     await auditService.logEvent({
@@ -343,7 +334,6 @@ async function getFieldMap(req, res, next) {
       entityId: ptrsId,
       details: {
         profileId,
-        datasetId,
         count: Array.isArray(fieldMap) ? fieldMap.length : 0,
       },
     });
@@ -585,101 +575,6 @@ async function importFieldMap(req, res, next) {
 }
 
 /**
- * POST /api/v2/ptrs/:id/map/build-mapped
- * Builds and persists the mapped + joined dataset into PtrsMappedRow for this PTRS run.
- */
-async function buildMappedDataset(req, res, next) {
-  const customerId = req.effectiveCustomerId;
-  const userId = req.auth?.id;
-  const ip = req.ip;
-  const device = req.headers["user-agent"];
-  const ptrsId = req.params.id;
-  const profileId = req.query.profileId || req.body?.profileId || null;
-
-  try {
-    if (!customerId) {
-      return res
-        .status(400)
-        .json({ status: "error", message: "Customer ID missing" });
-    }
-
-    // Confirm the PTRS run exists and belongs to this tenant
-    const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
-    if (!ptrs) {
-      return res
-        .status(404)
-        .json({ status: "error", message: "Ptrs not found" });
-    }
-
-    slog.info(
-      "[PTRS v2 buildMappedDataset] begin",
-      safeMeta({ customerId, ptrsId, userId }),
-    );
-
-    const result = await mapsRuntimeService.buildMappedDatasetForPtrs({
-      customerId,
-      ptrsId,
-      profileId,
-      actorId: userId || null,
-    });
-
-    await auditService.logEvent({
-      customerId,
-      userId,
-      ip,
-      device,
-      action: "PtrsV2BuildMappedDataset",
-      entity: "PtrsUpload",
-      entityId: ptrsId,
-      details: {
-        profileId,
-        rowsPersisted: result?.count || 0,
-        headersCount: Array.isArray(result?.headers)
-          ? result.headers.length
-          : 0,
-        skipped: !!result?.skipped,
-        reason: result?.reason || null,
-        inputHash: result?.inputHash || null,
-        previousRunId: result?.previousRunId || null,
-      },
-    });
-
-    slog.info(
-      "[PTRS v2 buildMappedDataset] complete",
-      safeMeta({
-        customerId,
-        ptrsId,
-        rowsPersisted: result?.count || 0,
-      }),
-    );
-
-    return res.status(200).json({
-      status: "success",
-      data: {
-        count: result?.count || 0,
-        headers: result?.headers || [],
-        skipped: !!result?.skipped,
-        reason: result?.reason || null,
-        inputHash: result?.inputHash || null,
-        previousRunId: result?.previousRunId || null,
-        profileId,
-      },
-    });
-  } catch (error) {
-    logger.logEvent("error", "Error building PTRS v2 mapped dataset", {
-      action: "PtrsV2BuildMappedDataset",
-      ptrsId,
-      customerId,
-      userId,
-      error: error.message,
-      statusCode: error.statusCode || 500,
-      timestamp: new Date().toISOString(),
-    });
-    return next(error);
-  }
-}
-
-/**
  * GET /api/v2/ptrs/:id/sample?limit=10&offset=0
  * Returns a small window of staged rows + total count + inferred headers.
  */
@@ -689,6 +584,7 @@ async function getSample(req, res, next) {
   const ip = req.ip;
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
+  const datasetId = req.query.datasetId || null;
   const limit = Math.min(parseInt(req.query.limit || "10", 10), 200);
   const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
 
@@ -697,6 +593,11 @@ async function getSample(req, res, next) {
       return res
         .status(400)
         .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
     }
 
     // Confirm the PTRS run exists and belongs to this tenant
@@ -717,16 +618,15 @@ async function getSample(req, res, next) {
     const datasets = Array.isArray(sampleResult?.datasets)
       ? sampleResult.datasets
       : [];
-    const mainDataset =
-      datasets.find((d) => d?.isMain) ||
-      datasets.find((d) => String(d?.role || "").toLowerCase() === "main") ||
-      datasets[0] ||
-      null;
+    const selectedDataset =
+      datasets.find(
+        (dataset) => String(dataset?.datasetId) === String(datasetId),
+      ) || null;
 
-    const rows = mainDataset?.sampleRow ? [mainDataset.sampleRow] : [];
+    const rows = selectedDataset?.sampleRow ? [selectedDataset.sampleRow] : [];
     const total = datasets.length;
-    const headers = Array.isArray(mainDataset?.headers)
-      ? mainDataset.headers
+    const headers = Array.isArray(selectedDataset?.headers)
+      ? selectedDataset.headers
       : [];
     const headerMeta = { datasets };
 

@@ -93,6 +93,25 @@ CREATE POLICY tbl_ptrs_import_raw_rls_policy
   WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
 ALTER TABLE tbl_ptrs_import_raw FORCE ROW LEVEL SECURITY;
 
+-- PTRS immutable canonical revisions and rows
+ALTER TABLE tbl_ptrs_canonical_revision ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS ptrs_canonical_revision_rls_policy ON tbl_ptrs_canonical_revision;
+CREATE POLICY ptrs_canonical_revision_rls_policy
+  ON tbl_ptrs_canonical_revision
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_canonical_revision FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE tbl_ptrs_canonical_source_row ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS ptrs_canonical_source_row_rls_policy ON tbl_ptrs_canonical_source_row;
+CREATE POLICY ptrs_canonical_source_row_rls_policy
+  ON tbl_ptrs_canonical_source_row
+  FOR ALL
+  USING ("customerId" = current_setting('app.current_customer_id', true)::text)
+  WITH CHECK ("customerId" = current_setting('app.current_customer_id', true)::text);
+ALTER TABLE tbl_ptrs_canonical_source_row FORCE ROW LEVEL SECURITY;
+
 -- PTRS Staging rows (post-join, pre-rules)
 ALTER TABLE tbl_ptrs_stage_row ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tbl_ptrs_stage_row_rls_policy ON tbl_ptrs_stage_row;

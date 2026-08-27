@@ -31,6 +31,7 @@ describe("PTRS document-type exclusion", () => {
     expect(sql).toContain("= 'K1'");
     expect(sql).toContain("IN ('Z', 'KZ', 'AB')");
     expect(sql).toContain("LIKE '5%'");
+    expect(sql.match(/s\."semanticKind" = 'accounting_event'/g)).toHaveLength(3);
     expect(sql).not.toContain("LIKE '2000%'");
     expect(sql).not.toContain("clearing document begins 2000");
   });

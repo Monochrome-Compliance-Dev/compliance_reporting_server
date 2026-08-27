@@ -7,6 +7,9 @@ const { Op } = require("sequelize");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  XERO_TRANSACTION_DATASET,
+} = require("@/v2/ptrs/services/datasets.ptrs.service");
 
 const xeroClient = require("@/v2/core/xero/xeroClient.service");
 const xeroApi = require("@/v2/core/xero/xeroApi");
@@ -14,10 +17,6 @@ const {
   paginateXeroApi,
   callXeroApiWithAutoRefresh,
 } = require("@/v2/core/xero/xeroApiUtils");
-const {
-  upsertMainDatasetFromRaw,
-} = require("@/v2/ptrs/services/data.ptrs.service");
-
 module.exports = {
   connect,
   handleCallback,
@@ -1697,15 +1696,13 @@ async function buildRawDatasetFromXeroCache({
 
   // 🔐 Everything must run inside customer-context txn to satisfy RLS
   return await withCustomerTxn(customerId, async (t) => {
-    // Ensure a single MAIN dataset row exists for Xero imports. We do not create a separate
-    // "xero" dataset row because that makes the FE think there are supporting datasets.
+    // A repeated import updates the explicit Xero transaction dataset only. It
+    // never selects or replaces another transaction dataset in this PTRS.
     let datasetId = null;
 
-    // Serialise synthetic main dataset creation across concurrent callers (e.g. FE listDatasets
-    // calling upsertMainDatasetFromRaw while the import transaction is still running).
-    // Must use the exact same lock key as upsertMainDatasetFromRaw.
+    // Serialise creation for this concrete adapter within the PTRS.
     try {
-      const key = `${customerId}:${ptrsId}:ptrs_dataset:main`;
+      const key = `${customerId}:${ptrsId}:ptrs_dataset:xero`;
       if (db?.sequelize?.query) {
         await db.sequelize.query(
           "SELECT pg_advisory_xact_lock(hashtext(:key))",
@@ -1723,7 +1720,8 @@ async function buildRawDatasetFromXeroCache({
       where: {
         customerId,
         ptrsId,
-        role: "main",
+        purpose: XERO_TRANSACTION_DATASET.purpose,
+        adapterType: XERO_TRANSACTION_DATASET.adapterType,
         ...(PtrsDataset.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
       },
       order: [["createdAt", "DESC"]],
@@ -1762,7 +1760,7 @@ async function buildRawDatasetFromXeroCache({
         pickModelFields(PtrsDataset, {
           fileName: "Xero import",
           status: "uploaded",
-          sourceType: "xero",
+          ...XERO_TRANSACTION_DATASET,
           meta: { ...currentMeta, ...desiredMeta },
           updatedAt: new Date(),
         }),
@@ -1773,8 +1771,7 @@ async function buildRawDatasetFromXeroCache({
         pickModelFields(PtrsDataset, {
           customerId,
           ptrsId,
-          role: "main",
-          sourceType: "xero",
+          ...XERO_TRANSACTION_DATASET,
           sourceName: "Xero",
           fileName: "Xero import",
           storageRef: null,
@@ -2522,7 +2519,7 @@ async function selectOrganisations({ customerId, ptrsId, tenantIds, userId }) {
     });
   }
 
-  // Best-effort: if a main dataset already exists, keep its meta in sync.
+  // Best-effort: if the Xero transaction dataset exists, keep its meta in sync.
   // (Do not create one here — schema requirements may change.)
   try {
     const PtrsDataset = getModel("PtrsDataset");
@@ -2532,7 +2529,8 @@ async function selectOrganisations({ customerId, ptrsId, tenantIds, userId }) {
           where: {
             customerId,
             ptrsId,
-            role: "main",
+            purpose: XERO_TRANSACTION_DATASET.purpose,
+            adapterType: XERO_TRANSACTION_DATASET.adapterType,
             ...(PtrsDataset.rawAttributes?.deletedAt
               ? { deletedAt: null }
               : {}),
@@ -2614,7 +2612,7 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
       });
     }
 
-    // Best-effort: sync existing main dataset meta if present
+    // Best-effort: sync the existing Xero transaction dataset meta if present.
     const PtrsDataset = getModel("PtrsDataset");
     if (PtrsDataset) {
       await withCustomerTxn(customerId, async (t) => {
@@ -2622,7 +2620,8 @@ async function removeOrganisation({ customerId, ptrsId, tenantId, userId }) {
           where: {
             customerId,
             ptrsId,
-            role: "main",
+            purpose: XERO_TRANSACTION_DATASET.purpose,
+            adapterType: XERO_TRANSACTION_DATASET.adapterType,
             ...(PtrsDataset.rawAttributes?.deletedAt
               ? { deletedAt: null }
               : {}),
@@ -3422,33 +3421,10 @@ async function startImport({ customerId, ptrsId, userId }) {
         });
 
         heartbeat(
-          `PTRS raw dataset built (${rawBuild?.insertedRows ?? 0} rows). Creating main dataset record…`,
+          `PTRS raw dataset built (${rawBuild?.insertedRows ?? 0} rows). Finalising transaction dataset…`,
           { insertedRows: rawBuild?.insertedRows ?? 0 },
           "info",
         );
-
-        // Ensure the standard PTRS flow can proceed: funnel Xero main-dataset creation
-        // through the shared PTRS upsert path instead of writing PtrsDataset directly here.
-        await upsertMainDatasetFromRaw({
-          customerId,
-          ptrsId,
-          source: "xero",
-          userId,
-          meta: {
-            importRunId,
-            createdFrom: "xero_import",
-            displayName: "Xero import",
-            selectedTenantIds,
-            tenantIds: selectedTenantIds,
-            extractLimit: extractLimit ?? null,
-            importStartedAt: importStartedAt?.toISOString?.()
-              ? importStartedAt.toISOString()
-              : null,
-            importedAt: importStartedAt?.toISOString?.()
-              ? importStartedAt.toISOString()
-              : new Date().toISOString(),
-          },
-        });
 
         updateStatus(customerId, ptrsId, {
           status: "COMPLETE",
@@ -3859,7 +3835,7 @@ async function resolveSelectedTenantIds({ customerId, ptrsId }) {
     }
   }
 
-  // 3) Fall back to latest PtrsDataset meta if present (legacy/secondary persistence)
+  // 3) Fall back to the Xero transaction dataset metadata if present.
   const PtrsDataset = getModel("PtrsDataset");
   if (!PtrsDataset) return [];
 
@@ -3869,7 +3845,8 @@ async function resolveSelectedTenantIds({ customerId, ptrsId }) {
         where: {
           customerId,
           ptrsId,
-          role: "main",
+          purpose: XERO_TRANSACTION_DATASET.purpose,
+          adapterType: XERO_TRANSACTION_DATASET.adapterType,
           ...(PtrsDataset.rawAttributes?.deletedAt ? { deletedAt: null } : {}),
         },
         order: [["createdAt", "DESC"]],

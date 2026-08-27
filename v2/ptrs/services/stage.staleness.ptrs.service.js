@@ -11,11 +11,15 @@ const {
 const {
   buildMaterialMapSignature,
 } = require("@/v2/ptrs/services/maps.staleness.ptrs.service");
+const {
+  resolveCurrentCanonicalRevisions,
+} = require("@/v2/ptrs/services/canonical.ptrs.service");
 
 async function buildStageInputSnapshot({
   customerId,
   ptrsId,
   profileId,
+  canonicalSelections = null,
   transaction,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -23,39 +27,12 @@ async function buildStageInputSnapshot({
   if (!profileId) throw new Error("profileId is required");
 
   const [
-    latestSuccessfulMapRun,
-    mappedRowCount,
-    mappedRowMaxUpdatedAt,
     paymentTermMapUpdatedAt,
     paymentTermMapCount,
     paymentTermChangeUpdatedAt,
     paymentTermChangeCount,
     stageConfig,
   ] = await Promise.all([
-    db.PtrsExecutionRun.findOne({
-      where: {
-        customerId,
-        ptrsId,
-        profileId,
-        step: "map",
-        status: "success",
-      },
-      attributes: ["id", "inputHash", "finishedAt"],
-      order: [
-        ["startedAt", "DESC"],
-        ["id", "DESC"],
-      ],
-      raw: true,
-      transaction,
-    }),
-    db.PtrsMappedRow.count({
-      where: { customerId, ptrsId },
-      transaction,
-    }),
-    db.PtrsMappedRow.max("updatedAt", {
-      where: { customerId, ptrsId },
-      transaction,
-    }),
     (async () => {
       const rows = await db.sequelize.query(
         `
@@ -143,15 +120,14 @@ async function buildStageInputSnapshot({
     ptrsId,
     customerId,
     profileId: profileId || null,
-    latestSuccessfulMapRun: {
-      id: latestSuccessfulMapRun?.id || null,
-      inputHash: latestSuccessfulMapRun?.inputHash || null,
-      finishedAt: latestSuccessfulMapRun?.finishedAt || null,
-    },
-    mappedRows: {
-      rowCount: Number(mappedRowCount) || 0,
-      maxUpdatedAt: mappedRowMaxUpdatedAt || null,
-    },
+    canonicalRevisions: (canonicalSelections || []).map((selection) => ({
+      datasetId: selection.dataset.id,
+      datasetOrder: selection.datasetOrder,
+      canonicalRevisionId: selection.revision.id,
+      materialSignature: selection.revision.materialSignature,
+      rowCount: Number(selection.revision.rowCount) || 0,
+      completedAt: selection.revision.completedAt || null,
+    })),
     paymentTermMap: {
       profileId: profileId || null,
       count: Number(paymentTermMapCount) || 0,
@@ -181,6 +157,7 @@ async function getStageStaleness({
   customerId,
   ptrsId,
   profileId,
+  canonicalSelections = null,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -192,10 +169,17 @@ async function getStageStaleness({
   const isExternalTx = !!transaction;
 
   try {
+    const selected = canonicalSelections || await resolveCurrentCanonicalRevisions({
+      customerId,
+      ptrsId,
+      profileId,
+      transaction: t,
+    });
     const snapshot = await buildStageInputSnapshot({
       customerId,
       ptrsId,
       profileId,
+      canonicalSelections: selected,
       transaction: t,
     });
 
@@ -235,13 +219,9 @@ async function getStageStaleness({
       hasChanged,
       previousRunId: previous?.id || null,
       existingStageCount: Number(existingStageCount) || 0,
-      latestSuccessfulMapRunId: snapshot?.latestSuccessfulMapRun?.id || null,
-      latestSuccessfulMapInputHash:
-        snapshot?.latestSuccessfulMapRun?.inputHash || null,
-      latestSuccessfulMapFinishedAt:
-        snapshot?.latestSuccessfulMapRun?.finishedAt || null,
-      mappedRowCount: Number(snapshot?.mappedRows?.rowCount) || 0,
-      mappedRowMaxUpdatedAt: snapshot?.mappedRows?.maxUpdatedAt || null,
+      canonicalRevisionIds: snapshot.canonicalRevisions.map(
+        (revision) => revision.canonicalRevisionId,
+      ),
       paymentTermMapCount: Number(snapshot?.paymentTermMap?.count) || 0,
       paymentTermMapMaxUpdatedAt:
         snapshot?.paymentTermMap?.maxUpdatedAt || null,

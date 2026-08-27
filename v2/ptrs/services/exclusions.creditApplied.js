@@ -16,6 +16,7 @@ function firstNonEmptyText(...expressions) {
 
 function buildClearingGroupExpressions(alias) {
   return {
+    sourceGroupKey: `COALESCE(NULLIF(BTRIM(${alias}."sourceGroupScope"), ''), 'dataset:' || ${alias}."datasetId")`,
     companyCode: firstNonEmptyText(
       `${alias}."data"->>'company_code'`,
       `${alias}."data"->>'Company Code'`,
@@ -41,6 +42,7 @@ function buildMatchedGroupsCte() {
   return `
     matched_credit_groups AS (
       SELECT DISTINCT
+        ${candidate.sourceGroupKey} AS "sourceGroupKey",
         ${candidate.companyCode} AS "companyCode",
         ${candidate.account} AS "account",
         ${candidate.clearingDocument} AS "clearingDocument"
@@ -49,6 +51,7 @@ function buildMatchedGroupsCte() {
         candidate."customerId" = :customerId
         AND candidate."ptrsId" = :ptrsId
         AND candidate."deletedAt" IS NULL
+        AND candidate."semanticKind" = 'accounting_event'
         AND ${candidate.companyCode} IS NOT NULL
         AND ${candidate.account} IS NOT NULL
         AND ${candidate.clearingDocument} LIKE '200%'
@@ -63,7 +66,8 @@ function buildGroupMatchCondition(alias) {
     EXISTS (
       SELECT 1
       FROM matched_credit_groups matched_group
-      WHERE matched_group."companyCode" = ${target.companyCode}
+      WHERE matched_group."sourceGroupKey" = ${target.sourceGroupKey}
+        AND matched_group."companyCode" = ${target.companyCode}
         AND matched_group."account" = ${target.account}
         AND matched_group."clearingDocument" = ${target.clearingDocument}
     )
@@ -123,6 +127,7 @@ async function applyCreditAppliedExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND ${buildGroupMatchCondition("s")}
       AND NOT (
         COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('CREDIT_APPLIED'::text)
@@ -163,6 +168,7 @@ async function previewCreditAppliedExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND ${buildGroupMatchCondition("s")}
   `;
 
@@ -199,6 +205,7 @@ async function previewCreditAppliedExclusion({
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+      AND s."semanticKind" = 'accounting_event'
       AND ${buildGroupMatchCondition("s")}
     ORDER BY s."rowNo" ASC
     LIMIT :limit

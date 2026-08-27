@@ -8,50 +8,41 @@ const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const { getDatasetSample } = require("@/v2/ptrs/services/data.ptrs.service");
 
 /**
- * Cheap header + example extraction for the MAIN dataset.
+ * Cheap header + example extraction for one explicitly selected transaction dataset.
  *
  * This is intentionally lightweight and should NOT touch PtrsImportRaw.
  * It prefers PtrsDataset.meta.headers and only falls back to a small dataset sample.
  */
-async function getMainDatasetHeaderInfo({
+async function getTransactionDatasetHeaderInfo({
   customerId,
   ptrsId,
+  datasetId,
   limit = 3,
   offset = 0,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
   const isExternalTx = !!transaction;
 
-  const isMainRole = (role) => {
-    const r = String(role || "").toLowerCase();
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("[PTRS:getMainDatasetHeaderInfo] dataset role check", {
-        originalRole: role,
-        normalisedRole: r,
-      });
-    }
-    return r === "main" || r.startsWith("main_");
-  };
-
   try {
-    const dsRows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId },
-      attributes: ["id", "meta", "role"],
+    const selected = await db.PtrsDataset.findOne({
+      where: { id: datasetId, customerId, ptrsId, purpose: "transaction" },
+      attributes: ["id", "meta", "purpose"],
       raw: true,
       transaction: t,
     });
-
-    const datasets = Array.isArray(dsRows) ? dsRows : [];
-    const main =
-      datasets.find((d) => isMainRole(d?.role)) || datasets[0] || null;
-
-    const datasetId = main?.id || null;
-    const meta = main?.meta && typeof main.meta === "object" ? main.meta : {};
+    if (!selected) {
+      const error = new Error("Transaction dataset not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    const meta =
+      selected?.meta && typeof selected.meta === "object" ? selected.meta : {};
 
     let headers = Array.isArray(meta.headers) ? meta.headers : [];
     let examplesByHeader = {};
@@ -91,7 +82,7 @@ async function getMainDatasetHeaderInfo({
     }
 
     return {
-      datasetId,
+      datasetId: selected.id,
       headers: Array.isArray(headers) ? headers.map((h) => String(h)) : [],
       examplesByHeader,
     };
@@ -177,14 +168,13 @@ async function getImportSample({ customerId, ptrsId }) {
         SELECT
           d."id" AS "datasetId",
           d."role" AS "role",
+          d."purpose" AS "purpose",
+          d."sourceFormat" AS "sourceFormat",
+          d."adapterType" AS "adapterType",
+          d."referenceKind" AS "referenceKind",
           d."meta" AS "meta",
           d."createdAt" AS "createdAt",
-          CASE
-            WHEN lower(btrim(coalesce(d."role", ''))) = 'main'
-              OR lower(btrim(coalesce(d."role", ''))) LIKE 'main\\_%' ESCAPE '\\'
-            THEN true
-            ELSE false
-          END AS "isMain"
+          (d."purpose" = 'transaction') AS "isTransaction"
         FROM "tbl_ptrs_dataset" d
         WHERE d."customerId" = :customerId
           AND d."ptrsId" = :ptrsId
@@ -194,9 +184,13 @@ async function getImportSample({ customerId, ptrsId }) {
         SELECT
           b."datasetId",
           b."role",
+          b."purpose",
+          b."sourceFormat",
+          b."adapterType",
+          b."referenceKind",
           b."meta",
           b."createdAt",
-          b."isMain",
+          b."isTransaction",
           s."data" AS "sampleRow"
         FROM dataset_base b
         LEFT JOIN LATERAL (
@@ -212,7 +206,11 @@ async function getImportSample({ customerId, ptrsId }) {
       SELECT
         dws."datasetId",
         dws."role",
-        dws."isMain",
+        dws."purpose",
+        dws."sourceFormat",
+        dws."adapterType",
+        dws."referenceKind",
+        dws."isTransaction",
         COALESCE(
           CASE
             WHEN jsonb_typeof(dws."meta"->'headers') = 'array'
@@ -229,7 +227,7 @@ async function getImportSample({ customerId, ptrsId }) {
         COALESCE(dws."sampleRow", '{}'::jsonb) AS "sampleRow"
       FROM dataset_with_sample dws
       ORDER BY
-        CASE WHEN dws."isMain" THEN 0 ELSE 1 END,
+        CASE WHEN dws."isTransaction" THEN 0 ELSE 1 END,
         lower(btrim(coalesce(dws."role", ''))) ASC,
         dws."createdAt" ASC,
         dws."datasetId" ASC
@@ -267,6 +265,6 @@ async function getImportSample({ customerId, ptrsId }) {
 
 module.exports = {
   getImportSample,
-  getMainDatasetHeaderInfo,
+  getTransactionDatasetHeaderInfo,
   getAllDatasetHeaderInfo,
 };

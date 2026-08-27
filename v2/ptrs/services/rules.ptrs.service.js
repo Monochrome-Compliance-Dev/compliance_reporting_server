@@ -4,7 +4,10 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { slog, safeMeta } = require("./ptrs.service");
-const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
+const {
+  resolveCurrentCanonicalRevisions,
+  loadCanonicalRevisionRows,
+} = require("./canonical.ptrs.service");
 const {
   applyRowRulesSql,
   buildRowRulesProjectionSql: importedBuildRowRulesProjectionSql,
@@ -576,6 +579,7 @@ async function loadRulesForPtrs({
 async function getRulesPreview({
   customerId,
   ptrsId,
+  profileId,
   limit = 50,
   mode = "sample",
   groupName = null,
@@ -1102,13 +1106,27 @@ LIMIT 20;
     // SAMPLE PREVIEW MODE (existing behaviour)
     // ------------------------------------------------------------------
 
-    // 1) Compose mapped rows (main import + joins)
-    const { rows: baseRows, headers } = await loadMappedRowsForPtrs({
+    const selections = await resolveCurrentCanonicalRevisions({
       customerId,
       ptrsId,
-      limit: effectiveLimit,
+      profileId,
       transaction: t,
     });
+    const baseRows = [];
+    for (const selection of selections) {
+      if (baseRows.length >= effectiveLimit) break;
+      const rows = await loadCanonicalRevisionRows({
+        customerId,
+        ptrsId,
+        revisionId: selection.revision.id,
+        limit: effectiveLimit - baseRows.length,
+        transaction: t,
+      });
+      baseRows.push(...rows);
+    }
+    const headers = Array.from(
+      new Set(baseRows.flatMap((row) => Object.keys(row || {}))),
+    );
 
     const rowResult = applyRules(baseRows, rowRules);
     const rulesResult = applyCrossRowRules(
@@ -1666,7 +1684,7 @@ async function applyRulesAndPersist({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  // Current implementation applies rules in memory via loadMappedRowsForPtrs.
+  // Diagnostic preview applies rules in memory to a bounded canonical sample.
   // That is acceptable only for explicitly limited diagnostic runs.
   // Full dataset runs must use a SQL-based implementation instead.
   const effectiveLimit =

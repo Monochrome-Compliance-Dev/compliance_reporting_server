@@ -9,7 +9,10 @@ const {
 } = require("./ptrs.service");
 
 const { applyRules } = require("./rules.ptrs.service");
-const { loadMappedRowsForPtrs } = require("./maps.ptrs.service");
+const {
+  resolveCurrentCanonicalRevisions,
+  loadCanonicalRevisionRows,
+} = require("./canonical.ptrs.service");
 const {
   getMap: getColumnMap,
 } = require("@/v2/ptrs/services/maps.config.ptrs.service");
@@ -84,7 +87,8 @@ async function stagePtrs({
     getLatestExecutionRun,
     createExecutionRun,
     updateExecutionRun,
-    loadMappedRowsForPtrs,
+    resolveCurrentCanonicalRevisions,
+    loadCanonicalRevisionRows,
     getColumnMap,
     applyRules,
     loadEffectiveTermChangesForRows,

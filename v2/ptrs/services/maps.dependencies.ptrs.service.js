@@ -1,35 +1,21 @@
 const db = require("@/db/database");
+const { Op } = require("sequelize");
 const { logger } = require("@/helpers/logger");
 const { safeMeta, slog } = require("@/v2/ptrs/services/ptrs.service");
 const {
   getSupportConfig,
-  getFieldMap,
 } = require("@/v2/ptrs/services/maps.config.ptrs.service");
 
 function normaliseJoinRole(role) {
-  const value = String(role || "")
+  return String(role || "")
     .trim()
     .toLowerCase();
-
-  return value === "main" || value.startsWith("main_") ? "main" : value;
-}
-
-function isMainJoinRole(role) {
-  return normaliseJoinRole(role) === "main";
-}
-
-function isPaymentTermChangeJoinRole(role) {
-  const compact = String(role || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-
-  return compact.includes("term") && compact.includes("change");
 }
 
 async function loadComposeDependencies({
   customerId,
   ptrsId,
+  datasetId,
   transaction,
   trace,
   stageStart,
@@ -57,10 +43,44 @@ async function loadComposeDependencies({
   let fieldMapRows = [];
   try {
     if (profileId) {
-      fieldMapRows = await getFieldMap({
-        customerId,
-        ptrsId,
-        profileId,
+      const joins = supportConfig?.joins;
+      const parsedJoins =
+        typeof joins === "string" ? JSON.parse(joins) : joins || {};
+      const reachableDatasetIds = new Set([String(datasetId)]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const condition of Array.isArray(parsedJoins?.conditions)
+          ? parsedJoins.conditions
+          : []) {
+          const fromDatasetId = String(condition?.from?.datasetId || "");
+          const toDatasetId = String(condition?.to?.datasetId || "");
+          if (!fromDatasetId || !toDatasetId) continue;
+          if (
+            reachableDatasetIds.has(fromDatasetId) &&
+            !reachableDatasetIds.has(toDatasetId)
+          ) {
+            reachableDatasetIds.add(toDatasetId);
+            changed = true;
+          }
+          if (
+            reachableDatasetIds.has(toDatasetId) &&
+            !reachableDatasetIds.has(fromDatasetId)
+          ) {
+            reachableDatasetIds.add(fromDatasetId);
+            changed = true;
+          }
+        }
+      }
+      fieldMapRows = await db.PtrsFieldMap.findAll({
+        where: {
+          customerId,
+          ptrsId,
+          profileId,
+          datasetId: { [Op.in]: Array.from(reachableDatasetIds) },
+        },
+        order: [["canonicalField", "ASC"]],
+        raw: true,
         transaction,
       });
     }
@@ -96,6 +116,7 @@ async function loadComposeDependencies({
         customerId,
         ptrsId,
         profileId,
+        datasetId,
         fieldMapCount: Array.isArray(fieldMapRows) ? fieldMapRows.length : 0,
       }),
     );
@@ -158,15 +179,31 @@ function normaliseConfiguredJoins({
     const fromCol = from.column;
     const toCol = to.column;
 
-    if (!fromRole || !toRole || !fromCol || !toCol) continue;
+    const fromDatasetId = String(from.datasetId || "").trim();
+    const toDatasetId = String(to.datasetId || "").trim();
+
+    if (
+      !fromRole ||
+      !toRole ||
+      !fromDatasetId ||
+      !toDatasetId ||
+      !fromCol ||
+      !toCol
+    ) {
+      const error = new Error(
+        "Every join endpoint requires datasetId, role and column",
+      );
+      error.statusCode = 400;
+      throw error;
+    }
 
     normalisedJoins.push({
       fromRole,
-      fromDatasetId: from.datasetId || null,
+      fromDatasetId,
       fromColumn: fromCol,
       fromTransform: from.transform || null,
       toRole,
-      toDatasetId: to.datasetId || null,
+      toDatasetId,
       toColumn: toCol,
       toTransform: to.transform || null,
     });
@@ -233,83 +270,74 @@ function normaliseConfiguredCustomFields({
   return customFields;
 }
 
-async function resolveMainDatasetForCompose({
+async function resolveTransactionDatasetForCompose({
   customerId,
   ptrsId,
+  datasetId,
   transaction,
   stageStart,
   stageEnd,
 }) {
-  let mainDatasetId = null;
-  const sMainDataset = stageStart("resolve_main_dataset");
-  try {
-    const dsRows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId },
-      attributes: ["id", "role", "createdAt"],
-      raw: true,
-      transaction,
-    });
-
-    const normRole = (r) =>
-      String(r || "")
-        .trim()
-        .toLowerCase();
-
-    const main =
-      (dsRows || []).find((dataset) => {
-        const role = normRole(dataset?.role);
-        return role === "main" || role.startsWith("main_");
-      }) || null;
-
-    const anchor =
-      (dsRows || []).find((dataset) => normRole(dataset?.role) === "anchor") ||
-      null;
-
-    if (main?.id) {
-      mainDatasetId = main.id;
-    } else if (anchor?.id) {
-      mainDatasetId = anchor.id;
-    } else if (Array.isArray(dsRows) && dsRows.length === 1) {
-      mainDatasetId = dsRows[0].id;
-    }
-
-    slog.info(
-      "PTRS v2 composeMappedRowsForPtrs: resolved main dataset",
-      safeMeta({
-        customerId,
-        ptrsId,
-        mainDatasetId,
-        datasetCount: Array.isArray(dsRows) ? dsRows.length : 0,
-        roles: Array.isArray(dsRows) ? dsRows.map((d) => d.role) : [],
-      }),
-    );
-  } catch (e) {
-    slog.warn(
-      "PTRS v2 composeMappedRowsForPtrs: failed to resolve main dataset; falling back to unscoped import_raw",
-      safeMeta({ customerId, ptrsId, error: e.message }),
-    );
-    mainDatasetId = null;
+  if (!datasetId) {
+    const error = new Error("datasetId is required for mapped dataset compose");
+    error.statusCode = 400;
+    throw error;
   }
-  stageEnd(sMainDataset, { mainDatasetId });
-  return mainDatasetId;
+
+  const stage = stageStart("resolve_transaction_dataset");
+  const dataset = await db.PtrsDataset.findOne({
+    where: { id: datasetId, customerId, ptrsId, purpose: "transaction" },
+    attributes: [
+      "id",
+      "purpose",
+      "sourceFormat",
+      "adapterType",
+      "status",
+    ],
+    raw: true,
+    transaction,
+  });
+
+  if (!dataset) {
+    const error = new Error(
+      "Selected dataset is not a transaction dataset for this PTRS",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+  if (dataset.status !== "parsed" && dataset.sourceFormat !== "api") {
+    const error = new Error("Selected transaction dataset has not been parsed");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  stageEnd(stage, { datasetId: dataset.id });
+  return dataset;
 }
 
-async function loadMainRowsForCompose({
+async function loadTransactionRowsForCompose({
   customerId,
   ptrsId,
-  mainDatasetId,
+  datasetId,
   limit,
   offset,
+  afterRowNo = null,
   transaction,
   stageStart,
   stageEnd,
 }) {
+  if (!datasetId) throw new Error("datasetId is required");
   const findOpts = {
-    where: mainDatasetId
-      ? { customerId, ptrsId, datasetId: mainDatasetId }
-      : { customerId, ptrsId },
+    where: {
+      customerId,
+      ptrsId,
+      datasetId,
+      ...(afterRowNo == null
+        ? {}
+        : { rowNo: { [Op.gt]: Number(afterRowNo) } }),
+    },
     order: [["rowNo", "ASC"]],
-    attributes: ["rowNo", "data"],
+    attributes: ["id", "rowNo", "data"],
     raw: true,
     transaction,
   };
@@ -318,32 +346,17 @@ async function loadMainRowsForCompose({
   if (Number.isFinite(numericLimit) && numericLimit > 0) {
     findOpts.limit = Math.min(numericLimit, 5000);
   }
-  if (Number.isFinite(offset) && offset >= 0) {
+  if (afterRowNo == null && Number.isFinite(offset) && offset >= 0) {
     findOpts.offset = offset;
   }
 
-  const sLoadMain = stageStart("load_main_rows");
-  const mainRows = await db.PtrsImportRaw.findAll(findOpts);
-  stageEnd(sLoadMain, {
-    rowsLoaded: Array.isArray(mainRows) ? mainRows.length : 0,
+  const stage = stageStart("load_transaction_rows");
+  const rows = await db.PtrsImportRaw.findAll(findOpts);
+  stageEnd(stage, {
+    datasetId,
+    rowsLoaded: Array.isArray(rows) ? rows.length : 0,
   });
-
-  if (!mainDatasetId) {
-    try {
-      const dsCount = await db.PtrsDataset.count({
-        where: { customerId, ptrsId },
-        transaction,
-      });
-      if (dsCount > 1) {
-        slog.warn(
-          "PTRS v2 composeMappedRowsForPtrs: mainDatasetId not resolved while multiple datasets exist; mapped rows may include supporting datasets",
-          safeMeta({ customerId, ptrsId, datasetCount: dsCount }),
-        );
-      }
-    } catch (_) {}
-  }
-
-  return mainRows;
+  return rows;
 }
 
 function buildHeadersFromComposedRows(rows) {
@@ -362,11 +375,9 @@ function buildHeadersFromComposedRows(rows) {
 module.exports = {
   loadComposeDependencies,
   normaliseJoinRole,
-  isMainJoinRole,
-  isPaymentTermChangeJoinRole,
   normaliseConfiguredJoins,
   normaliseConfiguredCustomFields,
-  resolveMainDatasetForCompose,
-  loadMainRowsForCompose,
+  resolveTransactionDatasetForCompose,
+  loadTransactionRowsForCompose,
   buildHeadersFromComposedRows,
 };

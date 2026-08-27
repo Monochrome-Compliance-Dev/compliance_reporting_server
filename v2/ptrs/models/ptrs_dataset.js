@@ -21,14 +21,43 @@ function model(sequelize) {
       allowNull: false,
     },
 
-    // What role this dataset plays in the PTRS workflow:
-    //   - "main"           -> primary PTRS CSV
-    //   - "vendor_master"  -> vendor master data
-    //   - "entity_master"  -> entity list
-    //   - "other_*"        -> any additional supporting datasets
+    // Retained as a display/source namespace. Dataset purpose and concrete id
+    // are authoritative for orchestration and joins.
     role: {
       type: DataTypes.STRING(50),
       allowNull: false,
+    },
+
+    purpose: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      validate: { isIn: [["transaction", "reference"]] },
+    },
+
+    sourceFormat: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      validate: { isIn: [["csv", "xlsx", "api"]] },
+    },
+
+    adapterType: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+
+    adapterVersion: {
+      type: DataTypes.STRING(30),
+      allowNull: true,
+    },
+
+    referenceKind: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+
+    sourceGroupScope: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
     },
 
     // Where this dataset came from (e.g. "xero", "excel", "myob_excel")
@@ -55,6 +84,7 @@ function model(sequelize) {
     },
 
     // Simple lifecycle status for the dataset:
+    //   - "uploading"
     //   - "uploaded"
     //   - "parsed"
     //   - "failed"
@@ -93,7 +123,8 @@ function model(sequelize) {
     indexes: [
       { fields: ["customerId"] },
       { fields: ["ptrsId"] },
-      { fields: ["ptrsId", "role"] },
+      { fields: ["ptrsId", "purpose"] },
+      { fields: ["ptrsId", "purpose", "referenceKind"] },
       { fields: ["sourceType"] },
       { fields: ["customerId", "ptrsId"] },
     ],

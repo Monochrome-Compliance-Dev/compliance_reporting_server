@@ -1,8 +1,9 @@
 const express = require("express");
 const router = express.Router();
 
-const multer = require("multer");
-const upload = multer(); // in-memory storage for multipart/form-data
+const {
+  uploadCsv,
+} = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 const authorise = require("@/middleware/authorise");
 const ptrsController = require("@/v2/ptrs/controllers/ptrs.controller");
@@ -45,7 +46,7 @@ router.patch(
 router.post(
   "/:id/import",
   requirePtrs,
-  upload.single("file"),
+  uploadCsv.single("file"),
   ptrsController.importCsv,
 );
 
@@ -65,6 +66,7 @@ router.get("/profiles", requirePtrs, ptrsController.listProfiles);
 const dataRoutes = require("@/v2/ptrs/routes/data.ptrs.routes");
 const joinsRoutes = require("@/v2/ptrs/routes/joins.ptrs.routes");
 const mapsRoutes = require("@/v2/ptrs/routes/maps.ptrs.routes");
+const canonicalRoutes = require("@/v2/ptrs/routes/canonical.ptrs.routes");
 const stageRoutes = require("@/v2/ptrs/routes/stage.ptrs.routes");
 const exclusionsRoutes = require("@/v2/ptrs/routes/exclusions.ptrs.routes");
 const rulesRoutes = require("@/v2/ptrs/routes/rules.ptrs.routes");
@@ -83,6 +85,9 @@ router.use("/", joinsRoutes);
 
 // tables + map (mappings, header meta)
 router.use("/", mapsRoutes);
+
+// immutable dataset-specific canonical revisions
+router.use("/", canonicalRoutes);
 
 // staging
 router.use("/", stageRoutes);

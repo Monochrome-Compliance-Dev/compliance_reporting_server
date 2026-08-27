@@ -5,10 +5,7 @@ const {
   parseISODateOnly,
 } = require("@/v2/ptrs/services/stage.payment-time.ptrs.service");
 const {
-  isMainJoinRole,
-  isPaymentTermChangeJoinRole,
   normaliseConfiguredJoins,
-  normaliseJoinRole,
 } = require("@/v2/ptrs/services/maps.dependencies.ptrs.service");
 
 function deriveSupplierKey(row) {
@@ -84,18 +81,19 @@ function normaliseHeaderToDbColumn(header) {
   return camel;
 }
 
-function getCanonicalFieldForMainHeader(
+function getCanonicalFieldForTransactionHeader(
   mapRow,
   header,
-  { fieldMapRows = [], mainEndpoint = null } = {},
+  { fieldMapRows = [], transactionEndpoint = null } = {},
 ) {
   if (!header) return null;
   const h = String(header).trim();
   if (!h) return null;
 
   const comparableHeader = normaliseHeaderToRowField(h);
-  const endpointDatasetId = String(mainEndpoint?.datasetId || "").trim();
-  const endpointRole = normaliseJoinRole(mainEndpoint?.role);
+  const endpointDatasetId = String(
+    transactionEndpoint?.datasetId || "",
+  ).trim();
   const currentFieldMapRows = Array.isArray(fieldMapRows) ? fieldMapRows : [];
 
   const fieldMapMatch = currentFieldMapRows.find((mapping) => {
@@ -103,13 +101,8 @@ function getCanonicalFieldForMainHeader(
     if (!sourceColumn || sourceColumn !== comparableHeader) return false;
 
     const mappingDatasetId = String(mapping?.datasetId || "").trim();
-    if (endpointDatasetId && mappingDatasetId) {
-      return endpointDatasetId === mappingDatasetId;
-    }
-
-    return (
-      isMainJoinRole(mapping?.sourceRole) ||
-      normaliseJoinRole(mapping?.sourceRole) === endpointRole
+    return Boolean(
+      endpointDatasetId && mappingDatasetId === endpointDatasetId,
     );
   });
 
@@ -153,7 +146,13 @@ function getCanonicalFieldForMainHeader(
 
 function extractTermChangesJoinSpec(
   mapRow,
-  { customerId = null, ptrsId = null, datasets = [], fieldMapRows = [] } = {},
+  {
+    customerId = null,
+    ptrsId = null,
+    transactionDatasetId = null,
+    datasets = [],
+    fieldMapRows = [],
+  } = {},
 ) {
   const { normalisedJoins } = normaliseConfiguredJoins({
     supportConfig: mapRow || {},
@@ -162,57 +161,58 @@ function extractTermChangesJoinSpec(
     trace: null,
   });
 
-  const roleByDatasetId = new Map(
+  const datasetById = new Map(
     (datasets || [])
       .filter((dataset) => dataset?.id)
-      .map((dataset) => [String(dataset.id), dataset.role]),
+      .map((dataset) => [String(dataset.id), dataset]),
   );
-  const endpointRole = (endpoint) =>
-    roleByDatasetId.get(String(endpoint.datasetId || "")) || endpoint.role;
 
   const spec = [];
   for (const join of normalisedJoins) {
     const from = {
       datasetId: join.fromDatasetId,
-      role: endpointRole({
-        datasetId: join.fromDatasetId,
-        role: join.fromRole,
-      }),
+      dataset: datasetById.get(String(join.fromDatasetId || "")) || null,
       column: join.fromColumn,
     };
     const to = {
       datasetId: join.toDatasetId,
-      role: endpointRole({ datasetId: join.toDatasetId, role: join.toRole }),
+      dataset: datasetById.get(String(join.toDatasetId || "")) || null,
       column: join.toColumn,
     };
-    const mainEndpoint = isMainJoinRole(from.role)
+    const transactionEndpoint = from.dataset?.purpose === "transaction"
       ? from
-      : isMainJoinRole(to.role)
+      : to.dataset?.purpose === "transaction"
         ? to
         : null;
-    const changeEndpoint = isPaymentTermChangeJoinRole(from.role)
+    const changeEndpoint = from.dataset?.referenceKind === "termschanges"
       ? from
-      : isPaymentTermChangeJoinRole(to.role)
+      : to.dataset?.referenceKind === "termschanges"
         ? to
         : null;
 
-    if (!mainEndpoint || !changeEndpoint || mainEndpoint === changeEndpoint) {
+    if (
+      !transactionEndpoint ||
+      !changeEndpoint ||
+      transactionEndpoint === changeEndpoint ||
+      (transactionDatasetId &&
+        String(transactionEndpoint.datasetId) !== String(transactionDatasetId))
+    ) {
       continue;
     }
 
-    const mainField = getCanonicalFieldForMainHeader(
+    const transactionField = getCanonicalFieldForTransactionHeader(
       mapRow,
-      mainEndpoint.column,
-      { fieldMapRows, mainEndpoint },
+      transactionEndpoint.column,
+      { fieldMapRows, transactionEndpoint },
     );
     const changeColumn = normaliseHeaderToDbColumn(changeEndpoint.column);
-    if (!mainField || !changeColumn) continue;
-    spec.push({ mainField, changeColumn });
+    if (!transactionField || !changeColumn) continue;
+    spec.push({ transactionField, changeColumn });
   }
 
   const seen = new Set();
   return spec.filter((s) => {
-    const k = `${s.mainField}::${s.changeColumn}`;
+    const k = `${s.transactionField}::${s.changeColumn}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
@@ -254,7 +254,7 @@ async function loadEffectiveTermChangesForRows({
   const safeJoinSpec = joinSpec.filter(
     (s) =>
       s &&
-      s.mainField &&
+      s.transactionField &&
       s.changeColumn &&
       allowedJoinColumns.has(s.changeColumn),
   );
@@ -270,7 +270,7 @@ async function loadEffectiveTermChangesForRows({
     });
 
     const err = new Error(
-      "Effective-dated payment term changes require an explicit resolvable join spec. Fix the term-changes join configuration and main-header mappings.",
+      "Effective-dated payment term changes require an explicit resolvable join spec. Fix the term-changes join configuration and transaction-dataset mappings.",
     );
     err.statusCode = 400;
     throw err;
@@ -279,7 +279,7 @@ async function loadEffectiveTermChangesForRows({
   const sample = rows && rows[0] ? rows[0] : null;
   if (sample) {
     const missingMainFields = effectiveJoinSpec
-      .map((s) => s.mainField)
+      .map((s) => s.transactionField)
       .filter((f) => f && !Object.prototype.hasOwnProperty.call(sample, f));
 
     if (missingMainFields.length) {
@@ -318,7 +318,7 @@ async function loadEffectiveTermChangesForRows({
     let missingAnyJoin = false;
 
     for (const spec of effectiveJoinSpec) {
-      const v = getRowValueByField(r, spec.mainField);
+      const v = getRowValueByField(r, spec.transactionField);
       if (!v) {
         missingAnyJoin = true;
         break;
@@ -436,7 +436,7 @@ function applyEffectiveTermChangesToRows(
   const safeJoinSpec = joinSpec.filter(
     (s) =>
       s &&
-      s.mainField &&
+      s.transactionField &&
       s.changeColumn &&
       allowedJoinColumns.has(s.changeColumn),
   );
@@ -445,7 +445,7 @@ function applyEffectiveTermChangesToRows(
 
   if (!effectiveJoinSpec.length) {
     const err = new Error(
-      "Effective-dated payment term changes require an explicit resolvable join spec. Fix the term-changes join configuration and main-header mappings.",
+      "Effective-dated payment term changes require an explicit resolvable join spec. Fix the term-changes join configuration and transaction-dataset mappings.",
     );
     err.statusCode = 400;
     throw err;
@@ -461,7 +461,7 @@ function applyEffectiveTermChangesToRows(
     let missing = false;
 
     for (const spec of effectiveJoinSpec) {
-      const v = getRowValueByField(r, spec.mainField);
+      const v = getRowValueByField(r, spec.transactionField);
       if (!v) {
         missing = true;
         break;
@@ -700,7 +700,7 @@ module.exports = {
   buildEffectiveTermChangeKey,
   normaliseHeaderToRowField,
   normaliseHeaderToDbColumn,
-  getCanonicalFieldForMainHeader,
+  getCanonicalFieldForTransactionHeader,
   extractTermChangesJoinSpec,
   getRowValueByField,
   loadEffectiveTermChangesForRows,

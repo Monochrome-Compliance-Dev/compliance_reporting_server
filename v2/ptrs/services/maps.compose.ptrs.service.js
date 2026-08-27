@@ -14,40 +14,96 @@ const {
   loadComposeDependencies,
   normaliseConfiguredJoins,
   normaliseConfiguredCustomFields,
-  resolveMainDatasetForCompose,
-  loadMainRowsForCompose,
+  resolveTransactionDatasetForCompose,
+  loadTransactionRowsForCompose,
   buildHeadersFromComposedRows,
 } = require("@/v2/ptrs/services/maps.dependencies.ptrs.service");
+const {
+  applyCanonicalInvoiceDatePolicy,
+} = require("@/v2/ptrs/services/canonical.date-policy.ptrs.service");
 
-function applyCustomFields({ row, rawRow, customFields }) {
+function orderJoinsForTransactionDataset(joins, transactionDatasetId) {
+  const list = Array.isArray(joins) ? joins.slice() : [];
+  const available = new Set([String(transactionDatasetId || "")]);
+  let remaining = list;
+  const ordered = [];
+
+  let guard = 0;
+  while (remaining.length) {
+    guard += 1;
+    if (guard > list.length + 10) break;
+
+    const passPicked = [];
+    const passLeft = [];
+
+    for (const join of remaining) {
+      const fromDatasetId = String(join.fromDatasetId || "");
+      const toDatasetId = String(join.toDatasetId || "");
+
+      if (!fromDatasetId || !toDatasetId) {
+        passPicked.push(join);
+        continue;
+      }
+
+      if (available.has(fromDatasetId) || available.has(toDatasetId)) {
+        passPicked.push(join);
+      } else {
+        passLeft.push(join);
+      }
+    }
+
+    if (!passPicked.length) {
+      // The stored config can contain independent join graphs for other
+      // transaction datasets. Composition is scoped to the graph reachable
+      // from the explicitly selected transaction dataset only.
+      break;
+    }
+
+    for (const join of passPicked) {
+      ordered.push(join);
+      if (join.fromDatasetId) available.add(String(join.fromDatasetId));
+      if (join.toDatasetId) available.add(String(join.toDatasetId));
+    }
+
+    remaining = passLeft;
+  }
+
+  return ordered;
+}
+
+function applyCustomFields({
+  row,
+  rawRow,
+  customFields,
+  rowDatasetId,
+}) {
   const out = { ...(row || {}) };
   const source = rawRow && typeof rawRow === "object" ? rawRow : {};
+  const currentDatasetId = String(rowDatasetId || "").trim();
 
-  const isMainRole = (role) => {
-    const r = String(role || "")
-      .trim()
-      .toLowerCase();
-    return !r || r === "main" || r.startsWith("main_");
-  };
-
-  const nsKey = (role, col) => `${String(role)}__${String(col)}`;
+  const nsKey = (datasetId, col) => `${String(datasetId)}__${String(col)}`;
 
   for (const cf of Array.isArray(customFields) ? customFields : []) {
     if (!cf || typeof cf !== "object") continue;
+
+    const customFieldDatasetId = String(cf.datasetId || "").trim();
+    if (
+      !currentDatasetId ||
+      !customFieldDatasetId ||
+      customFieldDatasetId !== currentDatasetId
+    ) {
+      continue;
+    }
 
     const target = cf.key || cf.field || cf.target || cf.name;
     if (!target) continue;
 
     let value = null;
 
-    const resolveFieldValue = (sourceRole, sourceColumn) => {
-      const role = String(sourceRole || cf.role || "")
-        .trim()
-        .toLowerCase();
-
+    const resolveFieldValue = (sourceDatasetId, sourceColumn) => {
       if (!sourceColumn) return null;
-
-      if (isMainRole(role)) {
+      const datasetId = String(sourceDatasetId || cf.datasetId || "").trim();
+      if (!datasetId || datasetId === currentDatasetId) {
         return (
           pickFromRowLoose(out, sourceColumn) ??
           pickFromRowLoose(source, sourceColumn)
@@ -55,10 +111,8 @@ function applyCustomFields({ row, rawRow, customFields }) {
       }
 
       return (
-        pickFromRowLoose(out, nsKey(role, sourceColumn)) ??
-        pickFromRowLoose(source, nsKey(role, sourceColumn)) ??
-        pickFromRowLoose(out, sourceColumn) ??
-        pickFromRowLoose(source, sourceColumn)
+        pickFromRowLoose(out, nsKey(datasetId, sourceColumn)) ??
+        pickFromRowLoose(source, nsKey(datasetId, sourceColumn))
       );
     };
 
@@ -86,8 +140,8 @@ function applyCustomFields({ row, rawRow, customFields }) {
 
         const fieldName =
           segment.name || segment.field || segment.column || null;
-        const fieldRole = segment.role || cf.role || cf.sourceRole || null;
-        const fieldValue = resolveFieldValue(fieldRole, fieldName);
+        const fieldDatasetId = segment.datasetId || cf.datasetId || null;
+        const fieldValue = resolveFieldValue(fieldDatasetId, fieldName);
 
         parts.push(fieldValue == null ? "" : String(fieldValue));
       }
@@ -99,7 +153,7 @@ function applyCustomFields({ row, rawRow, customFields }) {
 
       if (!sourceColumn) continue;
 
-      value = resolveFieldValue(cf.sourceRole || cf.role || "", sourceColumn);
+      value = resolveFieldValue(cf.datasetId || null, sourceColumn);
     }
 
     out[target] = value == null ? null : value;
@@ -128,6 +182,7 @@ function applyCanonicalProjectionForCompose({
 
     const rawValue = resolveCanonicalValue({
       sourceRole: fm.sourceRole,
+      sourceDatasetId: fm.datasetId || null,
       sourceColumn: fm.sourceColumn,
       srcRow,
       outRow: nextOut,
@@ -149,6 +204,7 @@ function applyCanonicalProjectionForCompose({
         outRow: nextOut,
         canonicalField: canonicalKey,
         sourceRole: fm.sourceRole || null,
+        sourceDatasetId: fm.datasetId || null,
         sourceColumn: fm.sourceColumn || null,
         transformType: fm.transformType || null,
       });
@@ -164,6 +220,21 @@ function applyCanonicalProjectionForCompose({
   };
 }
 
+function attachCanonicalSourceLineage({ row, rawRow, transactionDatasetId }) {
+  const out = { ...(row || {}) };
+  const existing =
+    out._ptrsMeta && typeof out._ptrsMeta === "object"
+      ? { ...out._ptrsMeta }
+      : {};
+  out._ptrsMeta = {
+    ...existing,
+    sourceDatasetId: String(transactionDatasetId),
+    sourceRawRowId: rawRow?.id || null,
+    sourceRowNo: Number(rawRow?.rowNo),
+  };
+  return out;
+}
+
 async function composeSingleMappedRow({
   rawRow,
   orderedJoins,
@@ -175,8 +246,8 @@ async function composeSingleMappedRow({
   ptrsId,
   logger,
   loggedJoinProbeRef,
-  isMainRole,
-  hasRoleInRow,
+  transactionDatasetId,
+  adapterType,
   getJoinLhsValue,
   mergeRoleRowNamespaced,
   joinIndexKey,
@@ -206,6 +277,7 @@ async function composeSingleMappedRow({
           row: base,
           rawRow: base,
           customFields,
+          rowDatasetId: transactionDatasetId,
         })
       : { ...(base || {}) };
 
@@ -213,11 +285,14 @@ async function composeSingleMappedRow({
 
   if (orderedJoins.length) {
     let workingRow = srcRow;
+    const presentDatasetIds = new Set([String(transactionDatasetId)]);
 
     for (const j of orderedJoins) {
       counters.joinAttempts += 1;
       const fromRole = String(j.fromRole || "").toLowerCase();
       const toRole = String(j.toRole || "").toLowerCase();
+      const fromDatasetId = String(j.fromDatasetId || "");
+      const toDatasetId = String(j.toDatasetId || "");
 
       const fromCol = j.fromColumn;
       const toCol = j.toColumn;
@@ -225,36 +300,53 @@ async function composeSingleMappedRow({
       const fromTransform = j.fromTransform || null;
       const toTransform = j.toTransform || null;
 
-      if (!fromRole || !toRole || !fromCol || !toCol) continue;
+      if (
+        !fromRole ||
+        !toRole ||
+        !fromDatasetId ||
+        !toDatasetId ||
+        !fromCol ||
+        !toCol
+      ) {
+        continue;
+      }
 
-      const fromPresent =
-        isMainRole(fromRole) || hasRoleInRow(workingRow, fromRole);
-      const toPresent = isMainRole(toRole) || hasRoleInRow(workingRow, toRole);
+      const fromPresent = presentDatasetIds.has(fromDatasetId);
+      const toPresent = presentDatasetIds.has(toDatasetId);
 
       let sourceRole = null;
+      let sourceDatasetId = null;
       let sourceCol = null;
       let sourceTransform = null;
       let lookupRole = null;
+      let lookupDatasetId = null;
       let lookupCol = null;
       let lookupTransform = null;
       let mergeRole = null;
+      let mergeDatasetId = null;
 
       if (fromPresent && !toPresent) {
         sourceRole = fromRole;
+        sourceDatasetId = fromDatasetId;
         sourceCol = fromCol;
         sourceTransform = fromTransform;
         lookupRole = toRole;
+        lookupDatasetId = toDatasetId;
         lookupCol = toCol;
         lookupTransform = toTransform;
         mergeRole = toRole;
+        mergeDatasetId = toDatasetId;
       } else if (!fromPresent && toPresent) {
         sourceRole = toRole;
+        sourceDatasetId = toDatasetId;
         sourceCol = toCol;
         sourceTransform = toTransform;
         lookupRole = fromRole;
+        lookupDatasetId = fromDatasetId;
         lookupCol = fromCol;
         lookupTransform = fromTransform;
         mergeRole = fromRole;
+        mergeDatasetId = fromDatasetId;
       } else if (fromPresent && toPresent) {
         continue;
       } else {
@@ -275,13 +367,17 @@ async function composeSingleMappedRow({
         continue;
       }
 
-      if (isMainRole(lookupRole)) {
+      if (lookupDatasetId === String(transactionDatasetId)) {
         throw new Error(
-          `Invalid join target: lookupRole '${lookupRole}' must be a supporting dataset role`,
+          "Invalid join target: the selected transaction dataset cannot be a lookup dataset",
         );
       }
 
-      const lhsVal = getJoinLhsValue(workingRow, sourceRole, sourceCol);
+      const lhsVal = getJoinLhsValue(
+        workingRow,
+        sourceDatasetId,
+        sourceCol,
+      );
       const key = normalizeJoinKeyValue(lhsVal, sourceTransform);
 
       if (!key) {
@@ -304,14 +400,23 @@ async function composeSingleMappedRow({
       }
 
       counters.joinIndexLookups += 1;
-      const preparedKey = joinIndexKey(lookupRole, lookupCol, lookupTransform);
+      const preparedKey = joinIndexKey(
+        lookupDatasetId,
+        lookupCol,
+        lookupTransform,
+      );
       const idx = preparedJoinIndexes.get(preparedKey) || new Map();
 
       const joined = idx.get(key);
 
       if (joined) {
         counters.joinMatched += 1;
-        workingRow = mergeRoleRowNamespaced(workingRow, mergeRole, joined);
+        workingRow = mergeRoleRowNamespaced(
+          workingRow,
+          mergeDatasetId,
+          joined,
+        );
+        presentDatasetIds.add(mergeDatasetId);
 
         logComposeJoinProbeOnce({
           logger,
@@ -387,15 +492,21 @@ async function composeSingleMappedRow({
       counters,
     });
   }
-
-  return out;
+  out = applyCanonicalInvoiceDatePolicy({ row: out, adapterType });
+  return attachCanonicalSourceLineage({
+    row: out,
+    rawRow,
+    transactionDatasetId,
+  });
 }
 
 async function composeMappedRowsForPtrs({
   customerId,
   ptrsId,
+  datasetId,
   limit = 50,
   offset = 0,
+  afterRowNo = null,
   transaction = null,
   trace = null,
   hrMsSince,
@@ -403,6 +514,7 @@ async function composeMappedRowsForPtrs({
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
   if (typeof hrMsSince !== "function") {
     throw new Error("hrMsSince is required");
   }
@@ -426,11 +538,21 @@ async function composeMappedRowsForPtrs({
     });
   };
 
-  trace?.write("compose_begin", { limit, offset });
+  trace?.write("compose_begin", { datasetId, limit, offset, afterRowNo });
+
+  const transactionDataset = await resolveTransactionDatasetForCompose({
+    customerId,
+    ptrsId,
+    datasetId,
+    transaction,
+    stageStart,
+    stageEnd,
+  });
 
   const { supportConfig, fieldMapRows } = await loadComposeDependencies({
     customerId,
     ptrsId,
+    datasetId,
     transaction,
     trace,
     stageStart,
@@ -467,82 +589,13 @@ async function composeMappedRowsForPtrs({
       : [],
   });
 
-  const orderJoinsForExecution = (joins) => {
-    const list = Array.isArray(joins) ? joins.slice() : [];
-    if (list.length <= 1) return list;
-
-    const norm = (r) =>
-      String(r || "")
-        .trim()
-        .toLowerCase();
-
-    const available = new Set(["main"]);
-    let remaining = list.slice();
-    const ordered = [];
-
-    let guard = 0;
-    while (remaining.length) {
-      guard += 1;
-      if (guard > list.length + 10) break;
-
-      const passPicked = [];
-      const passLeft = [];
-
-      for (const j of remaining) {
-        const fromRole = norm(j.fromRole);
-        const toRole = norm(j.toRole);
-
-        if (!fromRole || !toRole) {
-          passPicked.push(j);
-          continue;
-        }
-
-        const fromAvailable = fromRole === "main" || available.has(fromRole);
-        const toAvailable = toRole === "main" || available.has(toRole);
-
-        if (fromAvailable || toAvailable) {
-          passPicked.push(j);
-        } else {
-          passLeft.push(j);
-        }
-      }
-
-      if (!passPicked.length) {
-        const rolesKnown = Array.from(available);
-        const missing = Array.from(
-          new Set(
-            passLeft
-              .flatMap((j) => [norm(j.fromRole), norm(j.toRole)])
-              .filter((r) => r && r !== "main" && !available.has(r)),
-          ),
-        );
-
-        const e = new Error(
-          `Invalid join dependency chain: cannot resolve join order. ` +
-            `Roles available: ${rolesKnown.join(", ") || "(none)"}. ` +
-            `Missing/blocked roles: ${missing.join(", ") || "(unknown)"}.`,
-        );
-        e.statusCode = 400;
-        throw e;
-      }
-
-      for (const j of passPicked) {
-        ordered.push(j);
-        const fromRole = norm(j.fromRole);
-        const toRole = norm(j.toRole);
-        if (fromRole) available.add(fromRole);
-        if (toRole) available.add(toRole);
-      }
-
-      remaining = passLeft;
-    }
-
-    return ordered;
-  };
-
-  const orderedJoins = orderJoinsForExecution(normalisedJoins);
+  const orderedJoins = orderJoinsForTransactionDataset(
+    normalisedJoins,
+    datasetId,
+  );
   trace?.write("compose_joins_ordered", {
     orderedJoinsCount: orderedJoins.length,
+    configuredJoinsCount: normalisedJoins.length,
   });
 
   const _toNum = (v) => {
@@ -581,15 +634,12 @@ async function composeMappedRowsForPtrs({
     return value;
   };
 
-  const isMainRole = (role) => {
-    const r = String(role || "").toLowerCase();
-    return r === "main" || r.startsWith("main_");
-  };
-
-  const nsKey = (role, col) => `${String(role)}__${String(col)}`;
+  const nsKey = (sourceDatasetId, col) =>
+    `${String(sourceDatasetId)}__${String(col)}`;
 
   const resolveCanonicalValue = ({
     sourceRole,
+    sourceDatasetId,
     sourceColumn,
     srcRow,
     outRow,
@@ -597,16 +647,20 @@ async function composeMappedRowsForPtrs({
     const col = sourceColumn;
     if (!col) return null;
 
-    const role = String(sourceRole || "")
-      .trim()
-      .toLowerCase();
+    const resolvedSourceDatasetId = String(
+      sourceDatasetId ||
+        (String(sourceRole || "").toLowerCase() === "transaction"
+          ? datasetId
+          : ""),
+    ).trim();
     const colSnake = toSnake(col);
 
     const candidateKeys =
-      role && !isMainRole(role)
-        ? [nsKey(role, col), colSnake ? nsKey(role, colSnake) : null].filter(
-            Boolean,
-          )
+      resolvedSourceDatasetId && resolvedSourceDatasetId !== String(datasetId)
+        ? [
+            nsKey(resolvedSourceDatasetId, col),
+            colSnake ? nsKey(resolvedSourceDatasetId, colSnake) : null,
+          ].filter(Boolean)
         : [col, colSnake].filter(Boolean);
 
     for (const key of candidateKeys) {
@@ -626,6 +680,7 @@ async function composeMappedRowsForPtrs({
     outRow,
     canonicalField,
     sourceRole,
+    sourceDatasetId,
     sourceColumn,
     transformType = null,
   }) => {
@@ -645,6 +700,7 @@ async function composeMappedRowsForPtrs({
 
     canonicalSources[String(canonicalField)] = {
       sourceRole: String(sourceRole),
+      sourceDatasetId: sourceDatasetId ? String(sourceDatasetId) : null,
       sourceColumn: String(sourceColumn),
       transformType: transformType ? String(transformType) : null,
     };
@@ -654,96 +710,99 @@ async function composeMappedRowsForPtrs({
     return next;
   };
 
-  const getJoinLhsValue = (row, role, col) => {
+  const getJoinLhsValue = (row, sourceDatasetId, col) => {
     if (!row) return undefined;
-    const r = String(role || "").toLowerCase();
-    if (isMainRole(r)) {
+    if (String(sourceDatasetId) === String(datasetId)) {
       return pickFromRowLoose(row, col);
     }
-    return pickFromRowLoose(row, nsKey(r, col));
+    return pickFromRowLoose(row, nsKey(sourceDatasetId, col));
   };
 
-  const mergeRoleRowNamespaced = (row, role, joined) => {
-    const r = String(role || "").toLowerCase();
+  const mergeRoleRowNamespaced = (row, sourceDatasetId, joined) => {
     if (!joined || typeof joined !== "object") return row;
     const out = { ...(row || {}) };
     for (const [k, v] of Object.entries(joined)) {
-      out[nsKey(r, k)] = v;
+      if (k === "_ptrsSource") continue;
+      out[nsKey(sourceDatasetId, k)] = v;
+    }
+    const joinedSource = joined._ptrsSource;
+    if (joinedSource && typeof joinedSource === "object") {
+      const meta =
+        out._ptrsMeta && typeof out._ptrsMeta === "object"
+          ? { ...out._ptrsMeta }
+          : {};
+      meta.joinedReferences = {
+        ...(meta.joinedReferences || {}),
+        [String(sourceDatasetId)]: { ...joinedSource },
+      };
+      out._ptrsMeta = meta;
     }
     return out;
   };
 
-  const hasRoleInRow = (row, role) => {
-    const r = String(role || "").toLowerCase();
-    if (isMainRole(r)) return true;
-    const prefix = `${r}__`;
-    return Object.keys(row || {}).some((k) => String(k).startsWith(prefix));
-  };
-
-  const datasetIdByRole = new Map();
+  const datasetById = new Map();
 
   const preloadDatasetIdsForCompose = async () => {
     const sPreload = stageStart("preload_dataset_ids");
     const dsRows = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId },
-      attributes: ["id", "role"],
+      attributes: ["id", "role", "purpose", "referenceKind"],
       raw: true,
       transaction,
     });
 
     for (const ds of dsRows || []) {
-      const role = String(ds?.role || "")
-        .trim()
-        .toLowerCase();
-      if (!role || !ds?.id) continue;
-      if (!datasetIdByRole.has(role)) {
-        datasetIdByRole.set(role, ds.id);
+      if (!ds?.id) continue;
+      datasetById.set(String(ds.id), ds);
+    }
+
+    for (const join of normalisedJoins) {
+      if (
+        !datasetById.has(String(join.fromDatasetId)) ||
+        !datasetById.has(String(join.toDatasetId))
+      ) {
+        const error = new Error(
+          "Join references a dataset outside the current PTRS",
+        );
+        error.statusCode = 400;
+        throw error;
       }
     }
 
     stageEnd(sPreload, {
-      datasetRoleCount: datasetIdByRole.size,
+      datasetCount: datasetById.size,
     });
 
     trace?.write("compose_dataset_ids_preloaded", {
-      datasetRoleCount: datasetIdByRole.size,
+      datasetCount: datasetById.size,
     });
   };
 
   const joinIndexCache = new Map();
   const datasetRowsCache = new Map();
 
-  const joinIndexKey = (role, column, transform) => {
+  const joinIndexKey = (sourceDatasetId, column, transform) => {
     const op = transform?.op ? String(transform.op) : "";
     const arg = transform?.arg != null ? String(transform.arg) : "";
-    return `${role}|${column}|${op}|${arg}`;
+    return `${sourceDatasetId}|${column}|${op}|${arg}`;
   };
 
-  const loadRowsForRole = async (role) => {
-    const r = String(role || "").toLowerCase();
-    if (!r) return [];
-    if (datasetRowsCache.has(r)) return datasetRowsCache.get(r);
+  const loadRowsForDataset = async (sourceDatasetId) => {
+    const id = String(sourceDatasetId || "");
+    if (!id) return [];
+    if (datasetRowsCache.has(id)) return datasetRowsCache.get(id);
 
-    const datasetId = datasetIdByRole.get(r) || null;
-
-    if (!datasetId) {
-      datasetRowsCache.set(r, []);
+    if (!datasetById.has(id)) {
+      datasetRowsCache.set(id, []);
       return [];
     }
 
-    const where = { customerId, datasetId };
-    if (
-      db.PtrsImportRaw.rawAttributes &&
-      db.PtrsImportRaw.rawAttributes.ptrsDatasetId
-    ) {
-      delete where.datasetId;
-      where.datasetId = datasetId;
-    }
+    const where = { customerId, ptrsId, datasetId: id };
 
     const rows = await db.PtrsImportRaw.findAll({
       where,
       order: [["rowNo", "ASC"]],
-      attributes: ["data"],
+      attributes: ["id", "rowNo", "data"],
       raw: true,
       transaction,
     });
@@ -758,35 +817,43 @@ async function composeMappedRowsForPtrs({
         }
       }
 
-      const baseRow = d && typeof d === "object" ? d : {};
+      const baseRow = {
+        ...(d && typeof d === "object" ? d : {}),
+        _ptrsSource: {
+          sourceDatasetId: id,
+          sourceRawRowId: x?.id || null,
+          sourceRowNo: Number(x?.rowNo),
+        },
+      };
 
       return Array.isArray(customFields) && customFields.length
         ? applyCustomFields({
             row: baseRow,
             rawRow: baseRow,
             customFields,
+            rowDatasetId: id,
           })
         : baseRow;
     });
 
-    datasetRowsCache.set(r, parsed);
+    datasetRowsCache.set(id, parsed);
     return parsed;
   };
 
-  const getJoinIndex = async ({ role, column, transform }) => {
-    const r = String(role || "").toLowerCase();
-    if (!r) return new Map();
-    if (isMainRole(r)) {
+  const getJoinIndex = async ({ sourceDatasetId, column, transform }) => {
+    const id = String(sourceDatasetId || "");
+    if (!id) return new Map();
+    if (id === String(datasetId)) {
       throw new Error(
-        `Invalid join target role '${r}' — cannot build an index for main roles`,
+        "Cannot build a lookup index for the selected transaction dataset",
       );
     }
 
-    const cacheKey = joinIndexKey(r, column, transform);
+    const cacheKey = joinIndexKey(id, column, transform);
     if (joinIndexCache.has(cacheKey)) return joinIndexCache.get(cacheKey);
 
     const sIdx = stageStart("build_join_index");
-    const rows = await loadRowsForRole(r);
+    const rows = await loadRowsForDataset(id);
     const idx = new Map();
 
     for (const row of rows) {
@@ -797,7 +864,7 @@ async function composeMappedRowsForPtrs({
     }
 
     stageEnd(sIdx, {
-      role: r,
+      datasetId: id,
       column,
       transform: transform || null,
       rowsScanned: Array.isArray(rows) ? rows.length : 0,
@@ -819,20 +886,30 @@ async function composeMappedRowsForPtrs({
 
       const candidates = [
         {
-          role: String(j.toRole || "").toLowerCase(),
+          sourceDatasetId: String(j.toDatasetId || ""),
           column: j.toColumn,
           transform: j.toTransform || null,
         },
         {
-          role: String(j.fromRole || "").toLowerCase(),
+          sourceDatasetId: String(j.fromDatasetId || ""),
           column: j.fromColumn,
           transform: j.fromTransform || null,
         },
       ];
 
       for (const spec of candidates) {
-        if (!spec.role || !spec.column || isMainRole(spec.role)) continue;
-        const key = joinIndexKey(spec.role, spec.column, spec.transform);
+        if (
+          !spec.sourceDatasetId ||
+          !spec.column ||
+          spec.sourceDatasetId === String(datasetId)
+        ) {
+          continue;
+        }
+        const key = joinIndexKey(
+          spec.sourceDatasetId,
+          spec.column,
+          spec.transform,
+        );
         if (seen.has(key)) continue;
         seen.add(key);
         specs.push({ ...spec, cacheKey: key });
@@ -841,7 +918,7 @@ async function composeMappedRowsForPtrs({
 
     for (const spec of specs) {
       const idx = await getJoinIndex({
-        role: spec.role,
+        sourceDatasetId: spec.sourceDatasetId,
         column: spec.column,
         transform: spec.transform,
       });
@@ -861,20 +938,13 @@ async function composeMappedRowsForPtrs({
     return prepared;
   };
 
-  const mainDatasetId = await resolveMainDatasetForCompose({
+  const transactionRows = await loadTransactionRowsForCompose({
     customerId,
     ptrsId,
-    transaction,
-    stageStart,
-    stageEnd,
-  });
-
-  const mainRows = await loadMainRowsForCompose({
-    customerId,
-    ptrsId,
-    mainDatasetId,
+    datasetId: transactionDataset.id,
     limit,
     offset,
+    afterRowNo,
     transaction,
     stageStart,
     stageEnd,
@@ -886,7 +956,7 @@ async function composeMappedRowsForPtrs({
   const loopStartNs = process.hrtime.bigint();
 
   const counters = {
-    rowsInput: Array.isArray(mainRows) ? mainRows.length : 0,
+    rowsInput: Array.isArray(transactionRows) ? transactionRows.length : 0,
     joinsOrdered: Array.isArray(orderedJoins) ? orderedJoins.length : 0,
     joinAttempts: 0,
     joinSkippedMissingFromRole: 0,
@@ -903,7 +973,7 @@ async function composeMappedRowsForPtrs({
 
   const loggedJoinProbeRef = { logged: false };
 
-  for (const r of mainRows) {
+  for (const r of transactionRows) {
     const out = await composeSingleMappedRow({
       rawRow: r,
       orderedJoins,
@@ -915,8 +985,8 @@ async function composeMappedRowsForPtrs({
       ptrsId,
       logger,
       loggedJoinProbeRef,
-      isMainRole,
-      hasRoleInRow,
+      transactionDatasetId: datasetId,
+      adapterType: transactionDataset.adapterType,
       getJoinLhsValue,
       mergeRoleRowNamespaced,
       joinIndexKey,
@@ -949,8 +1019,10 @@ async function composeMappedRowsForPtrs({
 }
 
 module.exports = {
+  orderJoinsForTransactionDataset,
   applyCustomFields,
   applyCanonicalProjectionForCompose,
+  attachCanonicalSourceLineage,
   composeSingleMappedRow,
   composeMappedRowsForPtrs,
 };
