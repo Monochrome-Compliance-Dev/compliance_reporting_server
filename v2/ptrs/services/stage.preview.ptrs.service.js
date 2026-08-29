@@ -183,17 +183,15 @@ async function getStagePreview({
       deletedAt: null,
     };
 
-    const [rowsRaw, totalRows] = await Promise.all([
-      db.PtrsStageRow.findAll({
-        where,
-        attributes: ["rowNo", "data"],
-        order: [["rowNo", "ASC"]],
-        limit,
-        raw: true,
-        transaction: t,
-      }),
-      db.PtrsStageRow.count({ where, transaction: t }),
-    ]);
+    const rowsRaw = await db.PtrsStageRow.findAll({
+      where,
+      attributes: ["rowNo", "data"],
+      order: [["rowNo", "ASC"]],
+      limit,
+      raw: true,
+      transaction: t,
+    });
+    const totalRows = await db.PtrsStageRow.count({ where, transaction: t });
 
     const dbRows = rowsRaw;
 

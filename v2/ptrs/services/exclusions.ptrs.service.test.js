@@ -1,5 +1,5 @@
 jest.mock("@/db/database", () => ({
-  sequelize: {},
+  sequelize: { query: jest.fn() },
 }));
 jest.mock("@/helpers/setCustomerIdRLS", () => ({
   beginTransactionWithCustomerContext: jest.fn(),
@@ -57,6 +57,7 @@ jest.mock("./exclusions.gov.enrichment", () => ({
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const db = require("@/db/database");
 const { applyGovExclusion, previewGovExclusion } = require("./exclusions.gov");
 const {
   applyCreditAppliedExclusion,
@@ -90,6 +91,7 @@ describe("PTRS gov exclusions preflight", () => {
     previewGovExclusion.mockReset();
     applyCreditAppliedExclusion.mockReset();
     previewCreditAppliedExclusion.mockReset();
+    db.sequelize.query.mockReset();
   });
 
   test("runs shared government enrichment before gov preview", async () => {
@@ -170,6 +172,25 @@ describe("PTRS gov exclusions preflight", () => {
     expect(result.persisted).toBe(7);
   });
 
+  test("does not scan or rewrite Stage rows to stamp profile metadata", async () => {
+    const transaction = makeTransaction();
+    beginTransactionWithCustomerContext.mockResolvedValue(transaction);
+    applyCreditAppliedExclusion.mockResolvedValue(0);
+
+    const result = await applyExclusionsAndPersist({
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+      profileId: "profile-1",
+      category: "credit_applied",
+    });
+
+    expect(db.sequelize.query).not.toHaveBeenCalled();
+    expect(result.stats).not.toHaveProperty("profileRowsStamped");
+    expect(result.stats.timings).toEqual({
+      creditAppliedMs: expect.any(Number),
+    });
+  });
+
   test("previews credit_applied independently", async () => {
     const transaction = makeTransaction();
     beginTransactionWithCustomerContext.mockResolvedValue(transaction);
@@ -230,7 +251,8 @@ describe("PTRS gov exclusions preflight", () => {
       jest.requireMock("./exclusions.docType").applyDocTypeExclusion,
       jest.requireMock("./exclusions.keyword.engine").applyKeywordExclusion,
       jest.requireMock("./exclusions.prepaid").applyPrepaidExclusion,
-      jest.requireMock("./exclusions.international").applyInternationalExclusion,
+      jest.requireMock("./exclusions.international")
+        .applyInternationalExclusion,
     ];
     for (const applyMock of applyMocks) {
       applyMock.mockResolvedValue(0);
@@ -264,12 +286,14 @@ describe("PTRS gov exclusions preflight", () => {
     };
     const previewMocks = [
       jest.requireMock("./exclusions.gov").previewGovExclusion,
-      jest.requireMock("./exclusions.intraCompany").previewIntraCompanyExclusion,
+      jest.requireMock("./exclusions.intraCompany")
+        .previewIntraCompanyExclusion,
       jest.requireMock("./exclusions.employee").previewEmployeeExclusion,
       jest.requireMock("./exclusions.docType").previewDocTypeExclusion,
       jest.requireMock("./exclusions.keyword.engine").previewKeywordExclusion,
       jest.requireMock("./exclusions.prepaid").previewPrepaidExclusion,
-      jest.requireMock("./exclusions.international").previewInternationalExclusion,
+      jest.requireMock("./exclusions.international")
+        .previewInternationalExclusion,
     ];
     for (const previewMock of previewMocks) {
       previewMock.mockResolvedValue(emptyPreview);

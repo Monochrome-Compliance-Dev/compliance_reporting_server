@@ -22,7 +22,19 @@ module.exports = {
   getRules,
   getProfileRules,
   sandboxRulesPreview,
+  countCurrentStageRowsForRules,
 };
+
+async function countCurrentStageRowsForRules({
+  customerId,
+  ptrsId,
+  transaction,
+}) {
+  return db.PtrsStageRow.count({
+    where: { customerId, ptrsId, deletedAt: null },
+    transaction,
+  });
+}
 
 // Helper to ensure cross-row rules are not dangerously broad
 function validateCrossRowRule(rule) {
@@ -1714,8 +1726,9 @@ async function applyRulesAndPersist({
     groupName,
   });
 
-  const totalRows = await db.PtrsImportRaw.count({
-    where: { customerId, ptrsId },
+  const totalRows = await countCurrentStageRowsForRules({
+    customerId,
+    ptrsId,
     transaction: t,
   });
 

@@ -3,13 +3,26 @@ const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const { lookupAbnByNumber } = require("@/data_cleanse/abn-lookup.util");
+const {
+  isValidAbn,
+  lookupAbnByNumber,
+  normalizeAbnDigits,
+} = require("@/data_cleanse/abn-lookup.util");
 
 const UNKNOWN_GOV_ABNS_SQL = `
-  WITH distinct_stage_abns AS (
+  WITH distinct_stage_abns AS MATERIALIZED (
     SELECT DISTINCT
       NULLIF(
-        regexp_replace(COALESCE(s."data"->>'payee_entity_abn', ''), '\\D', '', 'g'),
+        regexp_replace(
+          COALESCE(
+            NULLIF(BTRIM(s."payeeEntityAbn"), ''),
+            s."data"->>'payee_entity_abn',
+            ''
+          ),
+          '\\D',
+          '',
+          'g'
+        ),
         ''
       ) AS "abn"
     FROM "tbl_ptrs_stage_row" s
@@ -17,14 +30,29 @@ const UNKNOWN_GOV_ABNS_SQL = `
       s."customerId" = :customerId
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
+  ),
+  existing_gov_abns AS MATERIALIZED (
+    SELECT DISTINCT
+      NULLIF(
+        regexp_replace(COALESCE(g."abn", ''), '\\D', '', 'g'),
+        ''
+      ) AS "abn"
+    FROM "tbl_ptrs_gov_entity_ref" g
+    WHERE g."deletedAt" IS NULL
+  ),
+  current_negative_abr_results AS MATERIALIZED (
+    SELECT cache."abn"
+    FROM "tbl_ptrs_abr_lookup_cache" cache
+    WHERE cache."expiresAt" > now()
   )
   SELECT d."abn"
   FROM distinct_stage_abns d
-  LEFT JOIN "tbl_ptrs_gov_entity_ref" g
-    ON g."deletedAt" IS NULL
-    AND NULLIF(regexp_replace(COALESCE(g."abn", ''), '\\D', '', 'g'), '') = d."abn"
+  LEFT JOIN existing_gov_abns g ON g."abn" = d."abn"
+  LEFT JOIN current_negative_abr_results cache ON cache."abn" = d."abn"
   WHERE d."abn" IS NOT NULL
-    AND g."id" IS NULL
+    AND d."abn" ~ '^[0-9]{11}$'
+    AND g."abn" IS NULL
+    AND cache."abn" IS NULL
   ORDER BY d."abn" ASC
 `;
 
@@ -39,6 +67,8 @@ const EXISTING_GOV_ABNS_SQL = `
 const LOCK_GOV_ABN_SQL = `
   SELECT pg_advisory_xact_lock(hashtext(:abn))
 `;
+
+const ABR_NEGATIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 async function mapWithConcurrency(items, concurrency, worker) {
   const results = new Array(items.length);
@@ -68,9 +98,7 @@ async function findUnknownGovCandidateAbns({
     transaction,
   });
 
-  return Array.isArray(rows)
-    ? rows.map((row) => row.abn).filter(Boolean)
-    : [];
+  return Array.isArray(rows) ? rows.map((row) => row.abn).filter(Boolean) : [];
 }
 
 async function persistNewGovernmentReferences({
@@ -104,9 +132,7 @@ async function persistNewGovernmentReferences({
         .filter(Boolean),
     );
 
-    const rowsToInsert = candidates.filter(
-      (row) => !existingAbns.has(row.abn),
-    );
+    const rowsToInsert = candidates.filter((row) => !existingAbns.has(row.abn));
 
     if (rowsToInsert.length) {
       await govEntityModel.bulkCreate(rowsToInsert, { transaction });
@@ -124,12 +150,30 @@ async function persistNewGovernmentReferences({
   }
 }
 
+async function persistNegativeAbrResults({ abrCacheModel, candidates }) {
+  if (!Array.isArray(candidates) || !candidates.length) return 0;
+  if (!abrCacheModel || typeof abrCacheModel.bulkCreate !== "function") {
+    throw new Error("PtrsAbrLookupCache model is required");
+  }
+
+  await abrCacheModel.bulkCreate(candidates, {
+    updateOnDuplicate: [
+      "classification",
+      "checkedAt",
+      "expiresAt",
+      "updatedAt",
+    ],
+  });
+  return candidates.length;
+}
+
 async function enrichGovReferenceFromStageRows({
   sequelize = db.sequelize,
   customerId,
   ptrsId,
   lookupAbnByNumberFn = lookupAbnByNumber,
   govEntityModel = db.PtrsGovEntityRef,
+  abrCacheModel = db.PtrsAbrLookupCache,
   beginCustomerTransaction = beginTransactionWithCustomerContext,
 }) {
   if (!sequelize) throw new Error("sequelize is required");
@@ -159,12 +203,14 @@ async function enrichGovReferenceFromStageRows({
   const stats = {
     distinctStageAbnsToCheck: unknownAbns.length,
     lookupAttempts: 0,
+    invalidCandidateAbnsSkipped: 0,
     lookupFailures: 0,
     unresolvedCount: 0,
     nonGovernmentCount: 0,
     inactiveGovernmentCount: 0,
     governmentMatches: 0,
     inserted: 0,
+    negativeResultsCached: 0,
   };
 
   if (!unknownAbns.length) {
@@ -172,53 +218,83 @@ async function enrichGovReferenceFromStageRows({
   }
 
   if (!process.env.ABR_GUID) {
-    logger.logEvent("warn", "PTRS government ABN enrichment skipped: ABR_GUID missing", {
-      action: "PtrsV2GovAbnEnrichmentSkipped",
-      customerId,
-      ptrsId,
-      candidateCount: unknownAbns.length,
-    });
+    logger.logEvent(
+      "warn",
+      "PTRS government ABN enrichment skipped: ABR_GUID missing",
+      {
+        action: "PtrsV2GovAbnEnrichmentSkipped",
+        customerId,
+        ptrsId,
+        candidateCount: unknownAbns.length,
+      },
+    );
     return {
       ...stats,
       skipped: "ABR_GUID missing",
     };
   }
 
-  const lookupResults = await mapWithConcurrency(unknownAbns, 5, async (abn) => {
-    stats.lookupAttempts += 1;
-    try {
-      const result = await lookupAbnByNumberFn(abn);
-      if (result?.exception) {
-        stats.lookupFailures += 1;
-        logger.logEvent("warn", "PTRS government ABN enrichment lookup failed", {
-          action: "PtrsV2GovAbnLookupFailed",
-          customerId,
-          ptrsId,
-          abn,
-          error: result.exception,
-        });
-        return { ...result, error: result.exception };
+  const lookupResults = await mapWithConcurrency(
+    unknownAbns,
+    5,
+    async (abn) => {
+      const normalizedAbn = normalizeAbnDigits(abn);
+      if (!isValidAbn(normalizedAbn)) {
+        stats.invalidCandidateAbnsSkipped += 1;
+        return {
+          requestAbn: normalizedAbn,
+          found: false,
+          invalidCandidate: true,
+        };
       }
-      return result;
-    } catch (error) {
-      stats.lookupFailures += 1;
-      logger.logEvent("warn", "PTRS government ABN enrichment lookup failed", {
-        action: "PtrsV2GovAbnLookupFailed",
-        customerId,
-        ptrsId,
-        abn,
-        error: error.message,
-      });
-      return {
-        requestAbn: abn,
-        found: false,
-        error: error.message,
-      };
-    }
-  });
+
+      stats.lookupAttempts += 1;
+      try {
+        const result = await lookupAbnByNumberFn(normalizedAbn);
+        if (result?.exception) {
+          stats.lookupFailures += 1;
+          logger.logEvent(
+            "warn",
+            "PTRS government ABN enrichment lookup failed",
+            {
+              action: "PtrsV2GovAbnLookupFailed",
+              customerId,
+              ptrsId,
+              abn: normalizedAbn,
+              error: result.exception,
+            },
+          );
+          return { ...result, error: result.exception };
+        }
+        return result;
+      } catch (error) {
+        stats.lookupFailures += 1;
+        logger.logEvent(
+          "warn",
+          "PTRS government ABN enrichment lookup failed",
+          {
+            action: "PtrsV2GovAbnLookupFailed",
+            customerId,
+            ptrsId,
+            abn: normalizedAbn,
+            error: error.message,
+          },
+        );
+        return {
+          requestAbn: normalizedAbn,
+          found: false,
+          error: error.message,
+        };
+      }
+    },
+  );
 
   const inserts = [];
+  const negativeCacheRows = [];
+  const checkedAt = new Date();
+  const expiresAt = new Date(checkedAt.getTime() + ABR_NEGATIVE_CACHE_TTL_MS);
   for (const result of lookupResults) {
+    if (result?.invalidCandidate) continue;
     if (!result?.found || !result?.abn) {
       if (!result?.error) stats.unresolvedCount += 1;
       continue;
@@ -226,14 +302,28 @@ async function enrichGovReferenceFromStageRows({
 
     if (!result.isGovernmentEntity) {
       stats.nonGovernmentCount += 1;
+      negativeCacheRows.push({
+        abn: result.abn,
+        classification: "NON_GOVERNMENT",
+        checkedAt,
+        expiresAt,
+      });
       continue;
     }
 
     if (
       result.isCurrentAbn !== true ||
-      String(result.entityStatusCode || "").trim().toLowerCase() !== "active"
+      String(result.entityStatusCode || "")
+        .trim()
+        .toLowerCase() !== "active"
     ) {
       stats.inactiveGovernmentCount += 1;
+      negativeCacheRows.push({
+        abn: result.abn,
+        classification: "INACTIVE_GOVERNMENT",
+        checkedAt,
+        expiresAt,
+      });
       continue;
     }
 
@@ -241,23 +331,27 @@ async function enrichGovReferenceFromStageRows({
     inserts.push({
       abn: result.abn,
       name: result.name || result.abn,
-      category: result.entityTypeDescription || result.entityTypeCode || "Government",
+      category:
+        result.entityTypeDescription || result.entityTypeCode || "Government",
     });
   }
 
-  if (!inserts.length) {
-    return stats;
-  }
+  stats.negativeResultsCached = await persistNegativeAbrResults({
+    abrCacheModel,
+    candidates: negativeCacheRows,
+  });
 
   const uniqueInserts = Array.from(
     new Map(inserts.map((row) => [row.abn, row])).values(),
   );
 
-  stats.inserted = await persistNewGovernmentReferences({
-    sequelize,
-    govEntityModel,
-    candidates: uniqueInserts,
-  });
+  if (uniqueInserts.length) {
+    stats.inserted = await persistNewGovernmentReferences({
+      sequelize,
+      govEntityModel,
+      candidates: uniqueInserts,
+    });
+  }
 
   logger.logEvent("info", "PTRS government ABN enrichment completed", {
     action: "PtrsV2GovAbnEnrichmentDone",
@@ -265,9 +359,11 @@ async function enrichGovReferenceFromStageRows({
     ptrsId,
     distinctStageAbnsToCheck: stats.distinctStageAbnsToCheck,
     lookupAttempts: stats.lookupAttempts,
+    invalidCandidateAbnsSkipped: stats.invalidCandidateAbnsSkipped,
     lookupFailures: stats.lookupFailures,
     governmentMatches: stats.governmentMatches,
     inserted: stats.inserted,
+    negativeResultsCached: stats.negativeResultsCached,
   });
 
   return stats;
@@ -276,5 +372,6 @@ async function enrichGovReferenceFromStageRows({
 module.exports = {
   enrichGovReferenceFromStageRows,
   findUnknownGovCandidateAbns,
+  persistNegativeAbrResults,
   persistNewGovernmentReferences,
 };

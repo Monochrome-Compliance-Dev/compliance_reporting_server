@@ -1,12 +1,9 @@
-const mockStageRows = [];
-
 jest.mock("@/db/database", () => ({
   PtrsSbiUpload: { findOne: jest.fn() },
-  PtrsSbiResult: { findAll: jest.fn() },
-  PtrsStageRow: {
-    findAll: jest.fn(async () => mockStageRows),
+  sequelize: {
+    QueryTypes: { SELECT: "SELECT" },
+    query: jest.fn(),
   },
-  PtrsSbiRowChange: { bulkCreate: jest.fn() },
 }));
 jest.mock("@/helpers/setCustomerIdRLS", () => ({
   beginTransactionWithCustomerContext: jest.fn(async () => ({
@@ -24,39 +21,33 @@ const { reapplyLatestResults } = require("./sbi.ptrs.service");
 describe("reapplyLatestResults", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockStageRows.splice(0);
     db.PtrsSbiUpload.findOne.mockResolvedValue({
       id: "upload0001",
       status: "APPLIED",
     });
-    db.PtrsSbiResult.findAll.mockResolvedValue([
-      {
-        abn: "12345678901",
-        outcome: "Small business for payment times reporting",
-        isValidAbn: true,
-      },
-    ]);
   });
 
-  test("reapplies the latest evidence once and honours standard exclusions", async () => {
-    const included = {
-      id: "stage00001",
-      rowNo: 1,
-      data: { payee_entity_abn: "12 345 678 901" },
-      meta: {},
-      save: jest.fn(),
+  test("reapplies SBI evidence set-wise without hydrating Stage JSON", async () => {
+    const aggregateStats = {
+      totalRows: 309280,
+      excludedRows: 39445,
+      rowsWithPayeeAbn: 260000,
+      matchedAbns: 250000,
+      missingAbnRows: 9835,
+      invalidMatchRows: 0,
+      unknownOutcomeRows: 0,
+      dataChangeRows: 250000,
+      historyCheckRows: 250000,
     };
-    const excluded = {
-      id: "stage00002",
-      rowNo: 2,
-      data: {
-        payee_entity_abn: "12345678901",
-        exclude_from_metrics: true,
-      },
-      meta: {},
-      save: jest.fn(),
+    const noOpStats = {
+      ...aggregateStats,
+      dataChangeRows: 0,
+      historyCheckRows: 0,
     };
-    mockStageRows.push(included, excluded);
+    db.sequelize.query
+      .mockResolvedValueOnce([aggregateStats])
+      .mockResolvedValueOnce([{ affectedRows: 250000, historyRows: 250000 }])
+      .mockResolvedValueOnce([noOpStats]);
 
     const first = await reapplyLatestResults({
       customerId: "customer01",
@@ -69,25 +60,36 @@ describe("reapplyLatestResults", () => {
       userId: "user000001",
     });
 
-    expect(first.counts).toEqual(
-      expect.objectContaining({
-        affectedRows: 1,
-        historyRows: 1,
-        excludedRows: 1,
-      }),
-    );
-    expect(second.counts).toEqual(
-      expect.objectContaining({ affectedRows: 0, historyRows: 0 }),
-    );
-    expect(included.save).toHaveBeenCalledTimes(1);
-    expect(excluded.save).not.toHaveBeenCalled();
-    expect(included.meta.transformationHistory).toEqual([
-      expect.objectContaining({
-        key: "sbi:upload0001:true",
-        sourceStageRowIds: ["stage00001"],
-        targetStageRowIds: ["stage00001"],
-      }),
-    ]);
-    expect(db.PtrsSbiRowChange.bulkCreate).toHaveBeenCalledTimes(1);
+    const publicStats = {
+      totalRows: 309280,
+      excludedRows: 39445,
+      rowsWithPayeeAbn: 260000,
+      matchedAbns: 250000,
+      missingAbnRows: 9835,
+      invalidMatchRows: 0,
+      unknownOutcomeRows: 0,
+    };
+    expect(first.counts).toEqual({
+      ...publicStats,
+      affectedRows: 250000,
+      historyRows: 250000,
+    });
+    expect(second.counts).toEqual({
+      ...publicStats,
+      affectedRows: 0,
+      historyRows: 0,
+    });
+    expect(db.sequelize.query).toHaveBeenCalledTimes(3);
+
+    const updateSql = db.sequelize.query.mock.calls[1][0];
+    expect(updateSql).toContain('UPDATE "tbl_ptrs_stage_row" stage_row');
+    expect(updateSql).toContain('INSERT INTO "tbl_ptrs_sbi_row_change"');
+    expect(updateSql).toContain("jsonb_build_object(");
+    expect(updateSql).toContain('AS "affectedRows"');
+    expect(updateSql).toContain('AS "historyRows"');
+    expect(updateSql).not.toContain('RETURNING stage_row."data"');
+    expect(updateSql).not.toContain('RETURNING stage_row."meta"');
+    expect(updateSql).toContain("existing_changes AS MATERIALIZED");
+    expect(updateSql).toContain("candidate_ids AS MATERIALIZED");
   });
 });

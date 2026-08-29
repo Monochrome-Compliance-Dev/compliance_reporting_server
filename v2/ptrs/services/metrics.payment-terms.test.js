@@ -7,6 +7,7 @@ jest.mock("./payment-observations.ptrs.service", () => ({
     customerId,
     ptrsId,
   })),
+  setPaymentObservationWorkMem: jest.fn().mockResolvedValue(undefined),
 }));
 
 const db = require("@/db/database");

@@ -120,6 +120,23 @@ const GOVERNMENT_ENTITY_TYPE_CODES = new Set([
   "TTU",
 ]);
 
+function isValidAbn(value) {
+  const abn = normalizeAbnDigits(value);
+  if (!/^\d{11}$/.test(abn)) return false;
+
+  const weights = [10, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19];
+  const digits = abn.split("").map(Number);
+  digits[0] -= 1;
+
+  return (
+    digits.reduce(
+      (total, digit, index) => total + digit * weights[index],
+      0,
+    ) % 89 ===
+    0
+  );
+}
+
 const isCleanName = (name) =>
   !messyPatterns.some((pattern) => pattern.test(name));
 
@@ -314,8 +331,8 @@ function parseExactAbnLookupResponse(xml) {
 
 async function lookupAbnByNumber(abn, { includeHistoricalDetails = "N" } = {}) {
   const normalizedAbn = normalizeAbnDigits(abn);
-  if (normalizedAbn.length !== 11) {
-    throw new Error("A valid 11-digit ABN is required");
+  if (!isValidAbn(normalizedAbn)) {
+    throw new Error("A valid ABN is required");
   }
   const guid = process.env.ABR_GUID;
   if (!guid) {
@@ -343,6 +360,7 @@ async function lookupAbnByNumber(abn, { includeHistoricalDetails = "N" } = {}) {
 
 module.exports = {
   classifyGovernmentEntityType,
+  isValidAbn,
   lookupAbnByName,
   lookupAbnByNumber,
   normalizeAbnDigits,

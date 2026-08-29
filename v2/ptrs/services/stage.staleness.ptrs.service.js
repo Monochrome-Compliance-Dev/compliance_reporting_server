@@ -26,95 +26,50 @@ async function buildStageInputSnapshot({
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
 
-  const [
-    paymentTermMapUpdatedAt,
-    paymentTermMapCount,
-    paymentTermChangeUpdatedAt,
-    paymentTermChangeCount,
-    stageConfig,
-  ] = await Promise.all([
-    (async () => {
-      const rows = await db.sequelize.query(
-        `
-        SELECT MAX("updatedAt") AS "maxUpdatedAt"
-        FROM "tbl_ptrs_payment_term_map"
-        WHERE "customerId" = :customerId
-          AND "profileId" = :profileId
-          AND "deletedAt" IS NULL
-        `,
-        {
-          type: QueryTypes.SELECT,
-          replacements: { customerId, profileId },
-          transaction,
-        },
-      );
-      return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
-    })(),
-    (async () => {
-      const rows = await db.sequelize.query(
-        `
-        SELECT COUNT(1)::int AS "count"
-        FROM "tbl_ptrs_payment_term_map"
-        WHERE "customerId" = :customerId
-          AND "profileId" = :profileId
-          AND "deletedAt" IS NULL
-        `,
-        {
-          type: QueryTypes.SELECT,
-          replacements: { customerId, profileId },
-          transaction,
-        },
-      );
-      return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
-    })(),
-    (async () => {
-      const rows = await db.sequelize.query(
-        `
-        SELECT MAX("updatedAt") AS "maxUpdatedAt"
-        FROM "tbl_ptrs_payment_term_change"
-        WHERE "customerId" = :customerId
-          AND "profileId" = :profileId
-          AND "deletedAt" IS NULL
-        `,
-        {
-          type: QueryTypes.SELECT,
-          replacements: { customerId, profileId },
-          transaction,
-        },
-      );
-      return rows && rows[0] ? rows[0].maxUpdatedAt || null : null;
-    })(),
-    (async () => {
-      const rows = await db.sequelize.query(
-        `
-        SELECT COUNT(1)::int AS "count"
-        FROM "tbl_ptrs_payment_term_change"
-        WHERE "customerId" = :customerId
-          AND "profileId" = :profileId
-          AND "deletedAt" IS NULL
-        `,
-        {
-          type: QueryTypes.SELECT,
-          replacements: { customerId, profileId },
-          transaction,
-        },
-      );
-      return rows && rows[0] ? Number(rows[0].count) || 0 : 0;
-    })(),
-    db.PtrsColumnMap.findOne({
-      where: { customerId, ptrsId },
-      attributes: [
-        "id",
-        "mappings",
-        "joins",
-        "customFields",
-        "rowRules",
-        "updatedAt",
-      ],
-      raw: true,
+  const termRows = await db.sequelize.query(
+    `
+    WITH payment_term_map_stats AS (
+      SELECT COUNT(1)::int AS count, MAX("updatedAt") AS "maxUpdatedAt"
+      FROM "tbl_ptrs_payment_term_map"
+      WHERE "customerId" = :customerId
+        AND "profileId" = :profileId
+        AND "deletedAt" IS NULL
+    ),
+    payment_term_change_stats AS (
+      SELECT COUNT(1)::int AS count, MAX("updatedAt") AS "maxUpdatedAt"
+      FROM "tbl_ptrs_payment_term_change"
+      WHERE "customerId" = :customerId
+        AND "profileId" = :profileId
+        AND "deletedAt" IS NULL
+    )
+    SELECT
+      payment_term_map_stats.count AS "paymentTermMapCount",
+      payment_term_map_stats."maxUpdatedAt" AS "paymentTermMapUpdatedAt",
+      payment_term_change_stats.count AS "paymentTermChangeCount",
+      payment_term_change_stats."maxUpdatedAt" AS "paymentTermChangeUpdatedAt"
+    FROM payment_term_map_stats
+    CROSS JOIN payment_term_change_stats
+    `,
+    {
+      type: QueryTypes.SELECT,
+      replacements: { customerId, profileId },
       transaction,
-    }),
-  ]);
+    },
+  );
+  const termStats = termRows?.[0] || {};
+  const stageConfig = await db.PtrsColumnMap.findOne({
+    where: { customerId, ptrsId },
+    attributes: [
+      "id",
+      "mappings",
+      "joins",
+      "customFields",
+      "rowRules",
+      "updatedAt",
+    ],
+    raw: true,
+    transaction,
+  });
 
   return {
     ptrsId,
@@ -130,13 +85,13 @@ async function buildStageInputSnapshot({
     })),
     paymentTermMap: {
       profileId: profileId || null,
-      count: Number(paymentTermMapCount) || 0,
-      maxUpdatedAt: paymentTermMapUpdatedAt || null,
+      count: Number(termStats.paymentTermMapCount) || 0,
+      maxUpdatedAt: termStats.paymentTermMapUpdatedAt || null,
     },
     paymentTermChanges: {
       profileId: profileId || null,
-      count: Number(paymentTermChangeCount) || 0,
-      maxUpdatedAt: paymentTermChangeUpdatedAt || null,
+      count: Number(termStats.paymentTermChangeCount) || 0,
+      maxUpdatedAt: termStats.paymentTermChangeUpdatedAt || null,
     },
     stageConfig: {
       id: stageConfig?.id || null,
@@ -169,12 +124,14 @@ async function getStageStaleness({
   const isExternalTx = !!transaction;
 
   try {
-    const selected = canonicalSelections || await resolveCurrentCanonicalRevisions({
-      customerId,
-      ptrsId,
-      profileId,
-      transaction: t,
-    });
+    const selected =
+      canonicalSelections ||
+      (await resolveCurrentCanonicalRevisions({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction: t,
+      }));
     const snapshot = await buildStageInputSnapshot({
       customerId,
       ptrsId,

@@ -1,11 +1,3 @@
-const {
-  jsonText,
-  appendJsonbTextArray,
-  appendJsonbTextArrayAtPath,
-  applyExcludeFlags,
-  applyMetaBase,
-} = require("./exclusions.shared");
-
 function buildInternationalCommentSql(currencyExpr) {
   return `
     CASE
@@ -23,52 +15,117 @@ function buildInternationalPredicate(currencyExpr) {
   )`;
 }
 
+function buildJsonbTextArrayValue(sourceSql, path, valueSql) {
+  return `
+    CASE
+      WHEN jsonb_typeof(COALESCE(${sourceSql}->'${path}', '[]'::jsonb)) = 'array'
+        THEN CASE
+          WHEN COALESCE(${sourceSql}->'${path}', '[]'::jsonb) @> jsonb_build_array((${valueSql})::text)
+            THEN COALESCE(${sourceSql}->'${path}', '[]'::jsonb)
+          ELSE COALESCE(${sourceSql}->'${path}', '[]'::jsonb) || to_jsonb((${valueSql})::text)
+        END
+      WHEN ${sourceSql} ? '${path}'
+        THEN CASE
+          WHEN ${sourceSql}->'${path}' = to_jsonb((${valueSql})::text)
+            THEN jsonb_build_array((${valueSql})::text)
+          ELSE jsonb_build_array(${sourceSql}->>'${path}') || to_jsonb((${valueSql})::text)
+        END
+      ELSE jsonb_build_array((${valueSql})::text)
+    END
+  `;
+}
+
+function buildInternationalDataSql({ dataSql, reasonSql, commentSql }) {
+  return `
+    ${dataSql} || jsonb_build_object(
+      'exclude', true,
+      'exclude_from_metrics', true,
+      'exclude_reason', CASE
+        WHEN trim(COALESCE(${dataSql}->>'exclude_reason', '')) <> ''
+          THEN to_jsonb(${dataSql}->>'exclude_reason')
+        ELSE to_jsonb((${reasonSql})::text)
+      END,
+      'exclude_reasons', ${buildJsonbTextArrayValue(
+        dataSql,
+        "exclude_reasons",
+        reasonSql,
+      )},
+      'exclude_comment', ${buildJsonbTextArrayValue(
+        dataSql,
+        "exclude_comment",
+        commentSql,
+      )}
+    )
+  `;
+}
+
+function buildInternationalMetaSql({ metaSql, reasonSql, commentSql }) {
+  const sourceSql = `COALESCE(${metaSql}, '{}'::jsonb)`;
+  const baseSql = `
+    jsonb_set(
+      jsonb_set(
+        ${sourceSql},
+        '{_stage}',
+        to_jsonb('ptrs.v2.exclusionsApply'::text),
+        true
+      ),
+      '{at}',
+      to_jsonb(now()::text),
+      true
+    )
+  `;
+  const exclusionsSql = `${sourceSql}->'exclusions'`;
+
+  return `
+    ${baseSql} ||
+    CASE
+      WHEN jsonb_typeof(${exclusionsSql}) = 'object'
+        THEN jsonb_build_object(
+          'exclusions',
+          ${exclusionsSql} || jsonb_build_object(
+            'excluded', true,
+            'reason', CASE
+              WHEN trim(COALESCE(${exclusionsSql}->>'reason', '')) <> ''
+                THEN to_jsonb(${exclusionsSql}->>'reason')
+              ELSE to_jsonb((${reasonSql})::text)
+            END,
+            'reasons', ${buildJsonbTextArrayValue(
+              exclusionsSql,
+              "reasons",
+              reasonSql,
+            )},
+            'comments', ${buildJsonbTextArrayValue(
+              exclusionsSql,
+              "comments",
+              commentSql,
+            )}
+          )
+        )
+      ELSE '{}'::jsonb
+    END
+  `;
+}
+
 async function applyInternationalExclusion({
   sequelize,
   transaction,
   customerId,
   ptrsId,
 }) {
-  const currencyExpr = jsonText("s", "document_currency", "Document Currency");
+  const currencyExpr = `s."documentCurrency"`;
   const predicateSql = buildInternationalPredicate(currencyExpr);
   const reasonSql = `'INTERNATIONAL'`;
   const commentSql = buildInternationalCommentSql(currencyExpr);
-
-  const dataBaseSql = applyExcludeFlags(`s."data"`, reasonSql);
-  const dataWithReasonsSql = appendJsonbTextArray(
-    "exclude_reasons",
+  const dataFinalSql = buildInternationalDataSql({
+    dataSql: `s."data"`,
     reasonSql,
-    dataBaseSql,
-  );
-  const dataFinalSql = appendJsonbTextArray(
-    "exclude_comment",
     commentSql,
-    dataWithReasonsSql,
-  );
-
-  const metaBaseSql = applyMetaBase(`s."meta"`);
-  const metaWithReasonSql = `
-    jsonb_set(
-      ${metaBaseSql},
-      '{exclusions,reason}',
-      CASE
-        WHEN trim(COALESCE(${metaBaseSql}#>>'{exclusions,reason}', '')) <> ''
-          THEN to_jsonb(${metaBaseSql}#>>'{exclusions,reason}')
-        ELSE to_jsonb((${reasonSql})::text)
-      END,
-      true
-    )
-  `;
-  const metaWithReasonsSql = appendJsonbTextArrayAtPath(
-    "exclusions,reasons",
+  });
+  const metaFinalSql = buildInternationalMetaSql({
+    metaSql: `s."meta"`,
     reasonSql,
-    metaWithReasonSql,
-  );
-  const metaFinalSql = appendJsonbTextArrayAtPath(
-    "exclusions,comments",
     commentSql,
-    metaWithReasonsSql,
-  );
+  });
 
   const sql = `
     UPDATE "tbl_ptrs_stage_row" s
@@ -102,7 +159,7 @@ async function previewInternationalExclusion({
   ptrsId,
   effectiveLimit,
 }) {
-  const currencyExpr = `COALESCE(s."data"->>'document_currency', s."data"->>'Document Currency', '')`;
+  const currencyExpr = `s."documentCurrency"`;
   const predicateSql = buildInternationalPredicate(currencyExpr);
   const commentSql = buildInternationalCommentSql(currencyExpr);
 
@@ -141,7 +198,7 @@ async function previewInternationalExclusion({
       s."data"->>'payer_entity_name' AS "payer_entity_name",
       s."data"->>'payee_entity_name' AS "payee_entity_name",
       s."data"->>'payee_entity_abn' AS "payee_entity_abn",
-      COALESCE(s."data"->>'document_currency', s."data"->>'Document Currency') AS "document_currency",
+      s."documentCurrency" AS "document_currency",
       s."data"->>'invoice_reference_number' AS "invoice_reference_number",
       s."data"->>'payment_date' AS "payment_date",
       s."data"->>'payment_amount' AS "payment_amount",

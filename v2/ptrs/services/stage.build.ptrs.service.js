@@ -1,4 +1,8 @@
-const PERSIST_BATCH_SIZE = 2000;
+const PERSIST_BATCH_SIZE = 5000;
+
+function elapsedMs(startedAt) {
+  return Number(process.hrtime.bigint() - startedAt) / 1e6;
+}
 
 const {
   appendTransformationHistory,
@@ -75,8 +79,17 @@ async function transformStageRows({
   applyPaymentTermDaysFromMap,
   computePaymentTimeRegulator,
 }) {
+  const timings = {
+    rulesMs: 0,
+    paymentTermChangeLookupMs: 0,
+    paymentTermChangeApplyMs: 0,
+    paymentTermMapMs: 0,
+    paymentTimeMs: 0,
+  };
   let stagedRows = Array.isArray(rows) ? rows : [];
+  let phaseStarted = process.hrtime.bigint();
   const rulesResult = applyRules(stagedRows, rowRules);
+  timings.rulesMs = elapsedMs(phaseStarted);
   stagedRows = rulesResult.rows || stagedRows;
 
   let paymentTermChangeStats = null;
@@ -90,6 +103,7 @@ async function transformStageRows({
           null,
       ]),
     );
+    phaseStarted = process.hrtime.bigint();
     const changeMap = await loadEffectiveTermChangesForRows({
       customerId,
       profileId,
@@ -98,6 +112,8 @@ async function transformStageRows({
       joinContext,
       transaction,
     });
+    timings.paymentTermChangeLookupMs = elapsedMs(phaseStarted);
+    phaseStarted = process.hrtime.bigint();
     const changeResult = applyEffectiveTermChangesToRows(
       stagedRows,
       changeMap,
@@ -131,14 +147,18 @@ async function transformStageRows({
         },
       );
     }
+    timings.paymentTermChangeApplyMs = elapsedMs(phaseStarted);
 
+    phaseStarted = process.hrtime.bigint();
     const termResult = applyPaymentTermDaysFromMap(stagedRows, termMap);
     stagedRows = termResult.rows || stagedRows;
     paymentTermStats = termResult.stats || null;
+    timings.paymentTermMapMs = elapsedMs(phaseStarted);
   }
 
   let paymentTimeDerived = 0;
   let paymentTimeUnderived = 0;
+  phaseStarted = process.hrtime.bigint();
   for (const row of stagedRows) {
     if (!row || typeof row !== "object") continue;
     const result = computePaymentTimeRegulator(row);
@@ -176,6 +196,7 @@ async function transformStageRows({
     );
     paymentTimeDerived += 1;
   }
+  timings.paymentTimeMs = elapsedMs(phaseStarted);
 
   return {
     rows: stagedRows,
@@ -187,6 +208,7 @@ async function transformStageRows({
         derived: paymentTimeDerived,
         underived: paymentTimeUnderived,
       },
+      timings,
     },
   };
 }
@@ -250,6 +272,7 @@ async function stagePtrs({
     paymentTerms: null,
     paymentTermChanges: null,
     paymentTime: null,
+    timings: null,
   };
   const accumulateStats = (stats) => {
     totalStats.rules = addStats(totalStats.rules, stats?.rules);
@@ -265,6 +288,7 @@ async function stagePtrs({
       totalStats.paymentTime,
       stats?.paymentTime,
     );
+    totalStats.timings = addStats(totalStats.timings, stats?.timings);
   };
 
   trace?.write("stage_begin", {
@@ -276,6 +300,18 @@ async function stagePtrs({
   });
 
   try {
+    const stageTimings = {
+      setupMs: 0,
+      replaceDeleteMs: 0,
+      canonicalReadMs: 0,
+      transformMs: 0,
+      persistenceBuildMs: 0,
+      persistenceWriteMs: 0,
+      persistenceBatchAverageMs: 0,
+      persistenceBatchMaxMs: 0,
+      batchCount: 0,
+    };
+    let phaseStarted = process.hrtime.bigint();
     const canonicalSelections = await resolveCurrentCanonicalRevisions({
       customerId,
       ptrsId,
@@ -385,6 +421,7 @@ async function stagePtrs({
         "exclude_reason",
       ]),
     );
+    stageTimings.setupMs = elapsedMs(phaseStarted);
 
     const transform = async (rows, transactionDatasetId) => {
       const joinContext = {
@@ -421,6 +458,7 @@ async function stagePtrs({
       const previewLimit = Math.min(Math.max(Number(limit) || 50, 1), 5000);
       for (const selection of canonicalSelections) {
         if (stagedRows.length >= previewLimit) break;
+        phaseStarted = process.hrtime.bigint();
         const rows = await loadCanonicalRevisionRows({
           customerId,
           ptrsId,
@@ -428,22 +466,28 @@ async function stagePtrs({
           limit: previewLimit - stagedRows.length,
           transaction,
         });
+        stageTimings.canonicalReadMs += elapsedMs(phaseStarted);
         rowsIn += rows.length;
+        phaseStarted = process.hrtime.bigint();
         const transformed = await transform(rows, selection.dataset.id);
+        stageTimings.transformMs += elapsedMs(phaseStarted);
         stagedRows.push(...transformed);
       }
       rowsOut = stagedRows.length;
     } else {
+      phaseStarted = process.hrtime.bigint();
       await db.PtrsStageRow.destroy({
         where: { customerId, ptrsId, profileId },
         force: true,
         transaction,
       });
+      stageTimings.replaceDeleteMs = elapsedMs(phaseStarted);
 
       let combinedRowNo = 0;
       for (const selection of canonicalSelections) {
         let afterSourceRowNo = null;
         while (true) {
+          phaseStarted = process.hrtime.bigint();
           const rows = await loadCanonicalRevisionRows({
             customerId,
             ptrsId,
@@ -452,9 +496,13 @@ async function stagePtrs({
             afterSourceRowNo,
             transaction,
           });
+          stageTimings.canonicalReadMs += elapsedMs(phaseStarted);
           if (!rows.length) break;
           rowsIn += rows.length;
+          phaseStarted = process.hrtime.bigint();
           const batch = await transform(rows, selection.dataset.id);
+          stageTimings.transformMs += elapsedMs(phaseStarted);
+          phaseStarted = process.hrtime.bigint();
           const persistenceRows = batch.map((row) => {
             const provenance = row._canonicalProvenance;
             if (
@@ -483,13 +531,12 @@ async function stagePtrs({
               rowNo: combinedRowNo,
               ...buildStageColumnProjection(data, db.PtrsStageRow),
               data,
-              errors: Array.isArray(row._stageErrors)
-                ? row._stageErrors
-                : null,
+              errors: Array.isArray(row._stageErrors) ? row._stageErrors : null,
               meta: {
                 ...(row._transformationMeta || {}),
                 _stage: "ptrs.v2.stagePtrs",
                 at: new Date().toISOString(),
+                profileId,
                 appliedRules: Array.isArray(row._appliedRules)
                   ? row._appliedRules
                   : [],
@@ -499,10 +546,20 @@ async function stagePtrs({
               updatedBy: userId || null,
             };
           });
+          stageTimings.persistenceBuildMs += elapsedMs(phaseStarted);
+          phaseStarted = process.hrtime.bigint();
           await db.PtrsStageRow.bulkCreate(persistenceRows, {
             transaction,
             validate: true,
+            returning: false,
           });
+          const persistenceBatchMs = elapsedMs(phaseStarted);
+          stageTimings.persistenceWriteMs += persistenceBatchMs;
+          stageTimings.persistenceBatchMaxMs = Math.max(
+            stageTimings.persistenceBatchMaxMs,
+            persistenceBatchMs,
+          );
+          stageTimings.batchCount += 1;
           rowsOut += persistenceRows.length;
           afterSourceRowNo = Number(
             rows.at(-1)?._canonicalProvenance?.sourceRowNo,
@@ -516,7 +573,14 @@ async function stagePtrs({
         }
       }
       persistedCount = rowsOut;
+      stageTimings.persistenceBatchAverageMs = stageTimings.batchCount
+        ? stageTimings.persistenceWriteMs / stageTimings.batchCount
+        : 0;
     }
+    totalStats.timings = {
+      ...(totalStats.timings || {}),
+      ...stageTimings,
+    };
 
     if (executionRun?.id) {
       await updateExecutionRun({
@@ -536,9 +600,19 @@ async function stagePtrs({
       rowsIn,
       rowsOut,
       persistedCount,
+      timings: totalStats.timings,
       totalMs: hrMsSince(jobStartNs),
     });
+    phaseStarted = process.hrtime.bigint();
     await transaction.commit();
+    totalStats.timings.commitMs = elapsedMs(phaseStarted);
+    trace?.write("stage_commit_done", {
+      rowsIn,
+      rowsOut,
+      persistedCount,
+      commitMs: totalStats.timings.commitMs,
+      totalMs: hrMsSince(jobStartNs),
+    });
     if (trace) await trace.close();
     return {
       rowsIn,

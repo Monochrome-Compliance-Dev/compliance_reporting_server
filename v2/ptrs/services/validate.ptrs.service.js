@@ -5,145 +5,62 @@ const {
 const {
   buildPaymentObservationsCte,
   getPaymentObservationReplacements,
-  listPaymentObservations,
+  setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
 
 module.exports = {
   validate,
   getValidate,
+  buildProcessValidateSummarySql,
+  getProcessValidateSummary,
   getValidateSummary,
   setStageRowExclusion,
   getStageRow,
 };
 
-// -------------------------
-// Helpers
-// -------------------------
+function buildValidDateSql(valueSql) {
+  const text = `BTRIM(COALESCE(${valueSql}, ''))`;
+  const isoYear = `substring(${text} from 1 for 4)::int`;
+  const isoMonth = `substring(${text} from 6 for 2)::int`;
+  const isoDay = `substring(${text} from 9 for 2)::int`;
+  const auParts = `regexp_match(${text}, '^(\\d{1,2})/(\\d{1,2})/(\\d{4})$')`;
+  const auDay = `(${auParts})[1]::int`;
+  const auMonth = `(${auParts})[2]::int`;
+  const auYear = `(${auParts})[3]::int`;
+  const daysInMonth = (year, month) => `CASE
+    WHEN ${month} IN (4, 6, 9, 11) THEN 30
+    WHEN ${month} = 2 THEN CASE
+      WHEN (${year} % 400 = 0) OR (${year} % 4 = 0 AND ${year} % 100 <> 0)
+        THEN 29
+      ELSE 28
+    END
+    ELSE 31
+  END`;
 
-function isExcludedRow(stageRow) {
-  const data = stageRow?.data || {};
-  if (data?.exclude_from_metrics === true) return true;
-
-  const meta = stageRow?.meta || {};
-  return meta?.rules?.exclude === true;
+  return `CASE
+    WHEN ${text} ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN
+      ${isoMonth} BETWEEN 1 AND 12
+      AND ${isoDay} BETWEEN 1 AND ${daysInMonth(isoYear, isoMonth)}
+    WHEN ${text} ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN
+      ${auMonth} BETWEEN 1 AND 12
+      AND ${auDay} BETWEEN 1 AND ${daysInMonth(auYear, auMonth)}
+    ELSE false
+  END`;
 }
 
-function normalizeAbn(value) {
-  if (value == null) return "";
-  return String(value).replace(/\D+/g, "");
-}
-
-function isProbablyAbn(abn) {
-  return typeof abn === "string" && /^\d{11}$/.test(abn);
-}
-
-function parseAusDate(value) {
-  // Accept canonical ISO (yyyy-mm-dd) and legacy AU format (dd/mm/yyyy).
-  // Returns a Date (UTC midnight) or null.
-  if (value == null) return null;
-  const s = String(value).trim();
-  if (!s) return null;
-
-  // ISO: yyyy-mm-dd (canonical stage format)
-  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (m) {
-    const yyyy = Number(m[1]);
-    const mm = Number(m[2]);
-    const dd = Number(m[3]);
-
-    if (
-      !Number.isFinite(dd) ||
-      !Number.isFinite(mm) ||
-      !Number.isFinite(yyyy)
-    ) {
-      return null;
-    }
-
-    const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-
-    if (
-      d.getUTCFullYear() !== yyyy ||
-      d.getUTCMonth() !== mm - 1 ||
-      d.getUTCDate() !== dd
-    ) {
-      return null;
-    }
-
-    return d;
-  }
-
-  // AU: dd/mm/yyyy (common in uploaded CSVs)
-  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
-  if (!m) return null;
-
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
-
-  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) {
-    return null;
-  }
-
-  // JS Date months are 0-based
-  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-
-  // Validate round-trip to avoid things like 32/13/2024 coercing
-  if (
-    d.getUTCFullYear() !== yyyy ||
-    d.getUTCMonth() !== mm - 1 ||
-    d.getUTCDate() !== dd
-  ) {
-    return null;
-  }
-
-  return d;
-}
-
-function parseMoney(value) {
-  // Handles "-11,183.65" and "11183.65" etc. Returns number or null.
-  if (value == null) return null;
-  const s = String(value).trim();
-  if (!s) return null;
-
-  const cleaned = s.replace(/,/g, "");
-  const n = Number(cleaned);
-
-  if (!Number.isFinite(n)) return null;
-  return n;
-}
-
-function toIssue(paymentObservation, code, message, extra = {}) {
-  return {
-    paymentObservationId: paymentObservation.observationId,
-    stageRowId:
-      paymentObservation.primarySourceStageRowId ||
-      paymentObservation.sourceInvoiceStageRowId,
-    sourceStageRowIds: paymentObservation.sourceStageRowIds,
-    rowNo: paymentObservation.rowNo,
-    code,
-    message,
-    ...extra,
-  };
-}
-
-function makeRowKey(data) {
-  // MVP duplicate heuristic: prefer vlookup if present; else composite key.
-  const vlookup = data?.vlookup ? String(data.vlookup).trim() : "";
-  if (vlookup) return `vlookup:${vlookup}`;
-
-  const companyCode = data?.company_code
-    ? String(data.company_code).trim()
-    : "";
-  const supplier = normalizeAbn(data?.payee_entity_abn);
-  const ref = data?.invoice_reference_number
-    ? String(data.invoice_reference_number).trim()
-    : "";
-  const invoiceDate = data?.invoice_issue_date
-    ? String(data.invoice_issue_date).trim()
-    : "";
-  const amount = data?.payment_amount ? String(data.payment_amount).trim() : "";
-
-  return `cc:${companyCode}|abn:${supplier}|ref:${ref}|inv:${invoiceDate}|amt:${amount}`;
+function buildComparableDateSql(valueSql) {
+  const text = `BTRIM(COALESCE(${valueSql}, ''))`;
+  return `CASE
+    WHEN ${text} ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN
+      substring(${text} from 1 for 4)::int * 10000
+      + substring(${text} from 6 for 2)::int * 100
+      + substring(${text} from 9 for 2)::int
+    WHEN ${text} ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN
+      (regexp_match(${text}, '^(\\d{1,2})/(\\d{1,2})/(\\d{4})$'))[3]::int * 10000
+      + (regexp_match(${text}, '^(\\d{1,2})/(\\d{1,2})/(\\d{4})$'))[2]::int * 100
+      + (regexp_match(${text}, '^(\\d{1,2})/(\\d{1,2})/(\\d{4})$'))[1]::int
+    ELSE NULL
+  END`;
 }
 
 // -------------------------
@@ -176,405 +93,531 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       throw e;
     }
 
-    const paymentObservations = await listPaymentObservations({
+    const result = await queryBoundedValidation({
       customerId,
       ptrsId,
+      mode,
       transaction: t,
     });
-
-    const LIMIT = 200;
-
-    const blockers = [];
-    const warnings = [];
-
-    let excludedRows = 0;
-
-    let missingPayeeAbnCount = 0;
-    let invalidPayeeAbnCount = 0;
-
-    let missingPayerAbnCount = 0;
-    let invalidPayerAbnCount = 0;
-
-    let missingPaymentTimeReferenceDateCount = 0;
-    let invalidPaymentTimeReferenceDateCount = 0;
-
-    // Optional raw invoice issue date (NOT required by contract)
-    let invalidInvoiceIssueDateCount = 0;
-
-    let missingPaymentDateCount = 0;
-    let invalidPaymentDateCount = 0;
-
-    let paymentBeforeInvoiceCount = 0;
-
-    let missingPaymentAmountCount = 0;
-    let invalidPaymentAmountCount = 0;
-
-    let duplicatesSuspectedCount = 0;
-
-    let smallBusinessUnknownCount = 0;
-
-    const seenKeys = new Map(); // key -> firstRowNo
-
-    for (const r of paymentObservations) {
-      if (isExcludedRow(r)) {
-        excludedRows += 1;
-        continue;
-      }
-
-      const data = r?.data || {};
-
-      // ---- Payee ABN ----
-      const payeeAbn = normalizeAbn(data?.payee_entity_abn);
-      if (!payeeAbn) {
-        missingPayeeAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn", {
-              field: "payee_entity_abn",
-            }),
-          );
-        }
-      } else if (!isProbablyAbn(payeeAbn)) {
-        invalidPayeeAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYEE_ABN_INVALID",
-              "payee_entity_abn is not a valid 11-digit ABN",
-              {
-                field: "payee_entity_abn",
-                value: data?.payee_entity_abn,
-              },
-            ),
-          );
-        }
-      }
-
-      // ---- Payer ABN (if present in dataset, treat as required for report grouping) ----
-      const payerAbn = normalizeAbn(data?.payer_entity_abn);
-      if (!payerAbn) {
-        missingPayerAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "PAYER_ABN_MISSING", "Missing payer_entity_abn", {
-              field: "payer_entity_abn",
-            }),
-          );
-        }
-      } else if (!isProbablyAbn(payerAbn)) {
-        invalidPayerAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYER_ABN_INVALID",
-              "payer_entity_abn is not a valid 11-digit ABN",
-              {
-                field: "payer_entity_abn",
-                value: data?.payer_entity_abn,
-              },
-            ),
-          );
-        }
-      }
-
-      //     // ---- Dates (contract-aligned) ----
-      // Required for report/metrics:
-      // - payment_date
-      // - payment_time_reference_date
-      // Optional raw:
-      // - invoice_issue_date (only validate format if provided)
-
-      const paymentDateRaw = data?.payment_date;
-      const paymentTimeRefRaw = data?.payment_time_reference_date;
-      const invoiceIssueDateRaw = data?.invoice_issue_date;
-
-      const paymentDate = parseAusDate(paymentDateRaw);
-      const paymentTimeReferenceDate = parseAusDate(paymentTimeRefRaw);
-      const invoiceIssueDate = parseAusDate(invoiceIssueDateRaw);
-
-      // payment_date (required)
-      if (!paymentDateRaw) {
-        missingPaymentDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "PAYMENT_DATE_MISSING", "Missing payment_date", {
-              field: "payment_date",
-            }),
-          );
-        }
-      } else if (!paymentDate) {
-        invalidPaymentDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_DATE_INVALID",
-              "payment_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
-              {
-                field: "payment_date",
-                value: paymentDateRaw,
-              },
-            ),
-          );
-        }
-      }
-
-      // payment_time_reference_date (required)
-      if (!paymentTimeRefRaw) {
-        missingPaymentTimeReferenceDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TIME_REFERENCE_DATE_MISSING",
-              "Missing payment_time_reference_date",
-              {
-                field: "payment_time_reference_date",
-              },
-            ),
-          );
-        }
-      } else if (!paymentTimeReferenceDate) {
-        invalidPaymentTimeReferenceDateCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TIME_REFERENCE_DATE_INVALID",
-              "payment_time_reference_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
-              {
-                field: "payment_time_reference_date",
-                value: paymentTimeRefRaw,
-              },
-            ),
-          );
-        }
-      }
-
-      // invoice_issue_date (optional): warn only if present but invalid
-      if (invoiceIssueDateRaw && !invoiceIssueDate) {
-        invalidInvoiceIssueDateCount += 1;
-        if (warnings.length < LIMIT) {
-          warnings.push(
-            toIssue(
-              r,
-              "INVOICE_ISSUE_DATE_INVALID",
-              "invoice_issue_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)",
-              {
-                field: "invoice_issue_date",
-                value: invoiceIssueDateRaw,
-              },
-            ),
-          );
-        }
-      }
-
-      // Sanity check only (warning): payment before reference date can happen (credits/adjustments), but is worth flagging
-      if (paymentDate && paymentTimeReferenceDate) {
-        if (paymentDate.getTime() < paymentTimeReferenceDate.getTime()) {
-          paymentBeforeInvoiceCount += 1;
-          if (warnings.length < LIMIT) {
-            warnings.push(
-              toIssue(
-                r,
-                "PAYMENT_BEFORE_REFERENCE_DATE",
-                "payment_date is earlier than payment_time_reference_date (check for credit notes/adjustments)",
-                {
-                  payment_date: paymentDateRaw,
-                  payment_time_reference_date: paymentTimeRefRaw,
-                  payment_time_reference_kind:
-                    data?.payment_time_reference_kind || null,
-                },
-              ),
-            );
-          }
-        }
-      }
-
-      // ---- Amounts ----
-      const paymentAmountRaw = data?.payment_amount;
-      const paymentAmount = parseMoney(paymentAmountRaw);
-
-      if (paymentAmountRaw == null || String(paymentAmountRaw).trim() === "") {
-        missingPaymentAmountCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "PAYMENT_AMOUNT_MISSING", "Missing payment_amount", {
-              field: "payment_amount",
-            }),
-          );
-        }
-      } else if (paymentAmount == null) {
-        invalidPaymentAmountCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_AMOUNT_INVALID",
-              "payment_amount is not a valid number",
-              {
-                field: "payment_amount",
-                value: paymentAmountRaw,
-              },
-            ),
-          );
-        }
-      }
-
-      // ---- Contract-required derived fields for report/metrics ----
-      // payment_term_days (required)
-      const paymentTermDaysRaw = data?.payment_term_days;
-      const paymentTermDays =
-        paymentTermDaysRaw == null || String(paymentTermDaysRaw).trim() === ""
-          ? null
-          : Number(paymentTermDaysRaw);
-
-      if (paymentTermDays == null) {
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TERM_DAYS_MISSING",
-              "Missing payment_term_days",
-              { field: "payment_term_days" },
-            ),
-          );
-        }
-      } else if (
-        !Number.isFinite(paymentTermDays) ||
-        !Number.isInteger(paymentTermDays) ||
-        paymentTermDays < 0
-      ) {
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TERM_DAYS_INVALID",
-              "payment_term_days is not a valid non-negative integer",
-              { field: "payment_term_days", value: paymentTermDaysRaw },
-            ),
-          );
-        }
-      }
-
-      // payment_time_days (required)
-      const paymentTimeDaysRaw = data?.payment_time_days;
-      const paymentTimeDays =
-        paymentTimeDaysRaw == null || String(paymentTimeDaysRaw).trim() === ""
-          ? null
-          : Number(paymentTimeDaysRaw);
-
-      if (paymentTimeDays == null) {
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TIME_DAYS_MISSING",
-              "Missing payment_time_days",
-              { field: "payment_time_days" },
-            ),
-          );
-        }
-      } else if (
-        !Number.isFinite(paymentTimeDays) ||
-        !Number.isInteger(paymentTimeDays) ||
-        paymentTimeDays < 0
-      ) {
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYMENT_TIME_DAYS_INVALID",
-              "payment_time_days is not a valid non-negative integer",
-              { field: "payment_time_days", value: paymentTimeDaysRaw },
-            ),
-          );
-        }
-      }
-
-      // is_small_business (required by contract for report/metrics)
-      if (data?.is_small_business == null) {
-        smallBusinessUnknownCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "SMALL_BUSINESS_MISSING",
-              "Missing is_small_business (required for report/metrics)",
-              { field: "is_small_business" },
-            ),
-          );
-        }
-      }
-
-      // ---- Duplicates (heuristic) ----
-      const key = makeRowKey(data);
-      if (seenKeys.has(key)) {
-        duplicatesSuspectedCount += 1;
-        const firstRowNo = seenKeys.get(key);
-        if (warnings.length < LIMIT) {
-          warnings.push(
-            toIssue(
-              r,
-              "DUPLICATE_SUSPECTED",
-              "Duplicate-suspected row based on key heuristic",
-              {
-                duplicateOfRowNo: firstRowNo,
-                key,
-              },
-            ),
-          );
-        }
-      } else {
-        seenKeys.set(key, r.rowNo);
-      }
-    }
-
-    const status =
-      blockers.length > 0
-        ? "BLOCKED"
-        : warnings.length > 0
-          ? "PASSED_WITH_WARNINGS"
-          : "PASSED";
-
     await t.commit();
-
-    return {
-      status,
-      ptrsId,
-      mode,
-      counts: {
-        totalRows: paymentObservations.length,
-        paymentObservationRows: paymentObservations.length,
-        excludedRows,
-        blockers: blockers.length,
-        warnings: warnings.length,
-        missingPayeeAbnCount,
-        invalidPayeeAbnCount,
-        missingPayerAbnCount,
-        invalidPayerAbnCount,
-        missingPaymentTimeReferenceDateCount,
-        invalidPaymentTimeReferenceDateCount,
-        invalidInvoiceIssueDateCount,
-        missingPaymentDateCount,
-        invalidPaymentDateCount,
-        paymentBeforeInvoiceCount,
-        missingPaymentAmountCount,
-        invalidPaymentAmountCount,
-        duplicatesSuspectedCount,
-        smallBusinessUnknownCount,
-      },
-      blockers,
-      warnings,
-    };
+    return result;
   } catch (err) {
     try {
       await t.rollback();
     } catch (_) {
       // ignore rollback errors
     }
+    throw err;
+  }
+}
+
+function buildProcessValidateSummarySql() {
+  const paymentDateSql = `source.payment_date_raw`;
+  const referenceDateSql = `source.reference_date_raw`;
+  const invoiceDateSql = `source.invoice_date_raw`;
+  const paymentDateValidSql = buildValidDateSql(paymentDateSql);
+  const referenceDateValidSql = buildValidDateSql(referenceDateSql);
+  const invoiceDateValidSql = buildValidDateSql(invoiceDateSql);
+
+  return `
+    WITH ${buildPaymentObservationsCte()},
+    validation_source AS MATERIALIZED (
+      SELECT
+        'payment-observation:' || invoice."id" AS "observationId",
+        invoice."id" AS "primarySourceStageRowId",
+        invoice."id" AS "sourceInvoiceStageRowId",
+        ARRAY[invoice."id", invoice.settlement_stage_row_id]
+          AS "sourceStageRowIds",
+        invoice."rowNo",
+        invoice_payload."data"->>'payee_entity_abn' AS payee_abn_raw,
+        invoice_payload."data"->>'payer_entity_abn' AS payer_abn_raw,
+        invoice.settlement_payment_date::text AS payment_date_raw,
+        invoice_payload."data"->>'payment_time_reference_date'
+          AS reference_date_raw,
+        invoice_payload."data"->>'payment_time_reference_kind'
+          AS reference_kind_raw,
+        invoice_payload."data"->>'invoice_issue_date' AS invoice_date_raw,
+        invoice_payload."data"->>'payment_amount' AS payment_amount_raw,
+        invoice_payload."data"->>'payment_term_days' AS payment_term_days_raw,
+        invoice_payload."data"->>'payment_time_days' AS payment_time_days_raw,
+        invoice_payload."data"->>'vlookup' AS vlookup_raw,
+        invoice_payload."data"->>'company_code' AS company_code_raw,
+        invoice_payload."data"->>'invoice_reference_number'
+          AS invoice_reference_number_raw,
+        invoice_payload."data"->'is_small_business'
+          AS is_small_business_value
+      FROM payment_observation_accounting_keys invoice
+      JOIN "tbl_ptrs_stage_row" invoice_payload
+        ON invoice_payload."id" = invoice."id"
+       AND invoice_payload."customerId" = :customerId
+       AND invoice_payload."ptrsId" = :ptrsId
+       AND invoice_payload."deletedAt" IS NULL
+
+      UNION ALL
+
+      SELECT
+        'payment-observation:' || direct."id" AS "observationId",
+        direct."id" AS "primarySourceStageRowId",
+        NULL::varchar AS "sourceInvoiceStageRowId",
+        ARRAY[direct."id"] AS "sourceStageRowIds",
+        direct."rowNo",
+        direct_payload."data"->>'payee_entity_abn' AS payee_abn_raw,
+        direct_payload."data"->>'payer_entity_abn' AS payer_abn_raw,
+        direct_payload."data"->>'payment_date' AS payment_date_raw,
+        direct_payload."data"->>'payment_time_reference_date'
+          AS reference_date_raw,
+        direct_payload."data"->>'payment_time_reference_kind'
+          AS reference_kind_raw,
+        direct_payload."data"->>'invoice_issue_date' AS invoice_date_raw,
+        direct_payload."data"->>'payment_amount' AS payment_amount_raw,
+        direct_payload."data"->>'payment_term_days' AS payment_term_days_raw,
+        direct_payload."data"->>'payment_time_days' AS payment_time_days_raw,
+        direct_payload."data"->>'vlookup' AS vlookup_raw,
+        direct_payload."data"->>'company_code' AS company_code_raw,
+        direct_payload."data"->>'invoice_reference_number'
+          AS invoice_reference_number_raw,
+        direct_payload."data"->'is_small_business'
+          AS is_small_business_value
+      FROM payment_observation_direct_keys direct
+      JOIN "tbl_ptrs_stage_row" direct_payload
+        ON direct_payload."id" = direct."id"
+       AND direct_payload."customerId" = :customerId
+       AND direct_payload."ptrsId" = :ptrsId
+       AND direct_payload."deletedAt" IS NULL
+    ),
+    classified AS (
+      SELECT
+        source."observationId",
+        source."primarySourceStageRowId",
+        source."sourceInvoiceStageRowId",
+        source."sourceStageRowIds",
+        source."rowNo",
+        source.is_small_business_value,
+        source.payee_abn_raw,
+        source.payer_abn_raw,
+        source.payment_date_raw,
+        source.reference_date_raw,
+        source.reference_kind_raw,
+        source.invoice_date_raw,
+        source.payment_amount_raw,
+        source.payment_term_days_raw,
+        source.payment_time_days_raw,
+        NULLIF(
+          regexp_replace(
+            COALESCE(source.payee_abn_raw, ''),
+            '\\D',
+            '',
+            'g'
+          ),
+          ''
+        ) AS payee_abn,
+        NULLIF(
+          regexp_replace(
+            COALESCE(source.payer_abn_raw, ''),
+            '\\D',
+            '',
+            'g'
+          ),
+          ''
+        ) AS payer_abn,
+        BTRIM(COALESCE(source.payment_date_raw, '')) AS payment_date,
+        BTRIM(COALESCE(source.reference_date_raw, ''))
+          AS reference_date,
+        BTRIM(COALESCE(source.invoice_date_raw, ''))
+          AS invoice_date,
+        BTRIM(COALESCE(source.payment_amount_raw, ''))
+          AS payment_amount,
+        BTRIM(COALESCE(source.payment_term_days_raw, ''))
+          AS payment_term_days,
+        BTRIM(COALESCE(source.payment_time_days_raw, ''))
+          AS payment_time_days,
+        ${paymentDateValidSql} AS payment_date_valid,
+        ${referenceDateValidSql} AS reference_date_valid,
+        ${invoiceDateValidSql} AS invoice_date_valid,
+        ${buildComparableDateSql(paymentDateSql)} AS payment_date_sort,
+        ${buildComparableDateSql(referenceDateSql)} AS reference_date_sort,
+        CASE
+          WHEN NULLIF(BTRIM(source.vlookup_raw), '') IS NOT NULL
+            THEN 'vlookup:' || BTRIM(source.vlookup_raw)
+          ELSE 'cc:' || BTRIM(COALESCE(source.company_code_raw, ''))
+            || '|abn:' || regexp_replace(
+              COALESCE(source.payee_abn_raw, ''),
+              '\\D',
+              '',
+              'g'
+            )
+            || '|ref:' || BTRIM(
+              COALESCE(source.invoice_reference_number_raw, '')
+            )
+            || '|inv:' || BTRIM(
+              COALESCE(source.invoice_date_raw, '')
+            )
+            || '|amt:' || BTRIM(
+              COALESCE(source.payment_amount_raw, '')
+            )
+        END AS duplicate_key
+      FROM validation_source source
+    ),
+    numbered AS MATERIALIZED (
+      SELECT
+        classified.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY duplicate_key
+          ORDER BY "rowNo", "observationId"
+        ) AS duplicate_number,
+        FIRST_VALUE("rowNo") OVER (
+          PARTITION BY duplicate_key
+          ORDER BY "rowNo", "observationId"
+        ) AS duplicate_of_row_no
+      FROM classified
+    ),
+    validation_counts AS (
+      SELECT
+        COUNT(*)::int AS "totalRows",
+        COUNT(*) FILTER (WHERE payee_abn IS NULL)::int
+          AS "missingPayeeAbnCount",
+        COUNT(*) FILTER (
+          WHERE payee_abn IS NOT NULL AND payee_abn !~ '^\\d{11}$'
+        )::int AS "invalidPayeeAbnCount",
+        COUNT(*) FILTER (WHERE payer_abn IS NULL)::int
+          AS "missingPayerAbnCount",
+        COUNT(*) FILTER (
+          WHERE payer_abn IS NOT NULL AND payer_abn !~ '^\\d{11}$'
+        )::int AS "invalidPayerAbnCount",
+        COUNT(*) FILTER (WHERE reference_date = '')::int
+          AS "missingPaymentTimeReferenceDateCount",
+        COUNT(*) FILTER (
+          WHERE reference_date <> '' AND NOT reference_date_valid
+        )::int AS "invalidPaymentTimeReferenceDateCount",
+        COUNT(*) FILTER (
+          WHERE invoice_date <> '' AND NOT invoice_date_valid
+        )::int AS "invalidInvoiceIssueDateCount",
+        COUNT(*) FILTER (WHERE payment_date = '')::int
+          AS "missingPaymentDateCount",
+        COUNT(*) FILTER (
+          WHERE payment_date <> '' AND NOT payment_date_valid
+        )::int AS "invalidPaymentDateCount",
+        COUNT(*) FILTER (
+          WHERE payment_date_valid
+            AND reference_date_valid
+            AND payment_date_sort < reference_date_sort
+        )::int AS "paymentBeforeInvoiceCount",
+        COUNT(*) FILTER (WHERE payment_amount = '')::int
+          AS "missingPaymentAmountCount",
+        COUNT(*) FILTER (
+          WHERE payment_amount <> ''
+            AND replace(payment_amount, ',', '') !~ :numericPattern
+        )::int AS "invalidPaymentAmountCount",
+        COUNT(*) FILTER (WHERE duplicate_number > 1)::int
+          AS "duplicatesSuspectedCount",
+        COUNT(*) FILTER (
+          WHERE is_small_business_value IS NULL
+            OR is_small_business_value = 'null'::jsonb
+        )::int AS "smallBusinessUnknownCount",
+        COUNT(*) FILTER (WHERE payment_term_days = '')::int
+          AS missing_term_days,
+        COUNT(*) FILTER (
+          WHERE payment_term_days <> ''
+            AND (
+              payment_term_days !~ :numericPattern
+              OR CASE
+                WHEN payment_term_days ~ :numericPattern
+                  THEN payment_term_days::numeric < 0
+                    OR payment_term_days::numeric <>
+                      trunc(payment_term_days::numeric)
+                ELSE false
+              END
+            )
+        )::int AS invalid_term_days,
+        COUNT(*) FILTER (WHERE payment_time_days = '')::int
+          AS missing_time_days,
+        COUNT(*) FILTER (
+          WHERE payment_time_days <> ''
+            AND (
+              payment_time_days !~ :numericPattern
+              OR CASE
+                WHEN payment_time_days ~ :numericPattern
+                  THEN payment_time_days::numeric < 0
+                    OR payment_time_days::numeric <>
+                      trunc(payment_time_days::numeric)
+                ELSE false
+              END
+            )
+        )::int AS invalid_time_days
+      FROM numbered
+    ),
+    issue_rows AS MATERIALIZED (
+      SELECT
+        numbered."observationId",
+        numbered."rowNo",
+        issue.priority,
+        issue.severity,
+        jsonb_build_object(
+          'paymentObservationId', numbered."observationId",
+          'stageRowId', COALESCE(
+            numbered."primarySourceStageRowId",
+            numbered."sourceInvoiceStageRowId"
+          ),
+          'sourceStageRowIds', to_jsonb(numbered."sourceStageRowIds"),
+          'rowNo', numbered."rowNo",
+          'code', issue.code,
+          'message', issue.message
+        ) || issue.extra AS issue
+      FROM numbered
+      CROSS JOIN LATERAL (
+        SELECT *
+        FROM (VALUES
+          (10, 'blocker', 'PAYEE_ABN_MISSING',
+            numbered.payee_abn IS NULL,
+            'Missing payee_entity_abn',
+            jsonb_build_object('field', 'payee_entity_abn')),
+          (20, 'blocker', 'PAYEE_ABN_INVALID',
+            numbered.payee_abn IS NOT NULL
+              AND numbered.payee_abn !~ '^\\d{11}$',
+            'payee_entity_abn is not a valid 11-digit ABN',
+            jsonb_build_object(
+              'field', 'payee_entity_abn',
+              'value', numbered.payee_abn_raw
+            )),
+          (30, 'blocker', 'PAYER_ABN_MISSING',
+            numbered.payer_abn IS NULL,
+            'Missing payer_entity_abn',
+            jsonb_build_object('field', 'payer_entity_abn')),
+          (40, 'blocker', 'PAYER_ABN_INVALID',
+            numbered.payer_abn IS NOT NULL
+              AND numbered.payer_abn !~ '^\\d{11}$',
+            'payer_entity_abn is not a valid 11-digit ABN',
+            jsonb_build_object(
+              'field', 'payer_entity_abn',
+              'value', numbered.payer_abn_raw
+            )),
+          (50, 'blocker', 'PAYMENT_DATE_MISSING',
+            numbered.payment_date = '',
+            'Missing payment_date',
+            jsonb_build_object('field', 'payment_date')),
+          (60, 'blocker', 'PAYMENT_DATE_INVALID',
+            numbered.payment_date <> '' AND NOT numbered.payment_date_valid,
+            'payment_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)',
+            jsonb_build_object(
+              'field', 'payment_date',
+              'value', numbered.payment_date_raw
+            )),
+          (70, 'blocker', 'PAYMENT_TIME_REFERENCE_DATE_MISSING',
+            numbered.reference_date = '',
+            'Missing payment_time_reference_date',
+            jsonb_build_object('field', 'payment_time_reference_date')),
+          (80, 'blocker', 'PAYMENT_TIME_REFERENCE_DATE_INVALID',
+            numbered.reference_date <> '' AND NOT numbered.reference_date_valid,
+            'payment_time_reference_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)',
+            jsonb_build_object(
+              'field', 'payment_time_reference_date',
+              'value', numbered.reference_date_raw
+            )),
+          (90, 'blocker', 'PAYMENT_AMOUNT_MISSING',
+            numbered.payment_amount = '',
+            'Missing payment_amount',
+            jsonb_build_object('field', 'payment_amount')),
+          (100, 'blocker', 'PAYMENT_AMOUNT_INVALID',
+            numbered.payment_amount <> ''
+              AND replace(numbered.payment_amount, ',', '') !~ :numericPattern,
+            'payment_amount is not a valid number',
+            jsonb_build_object(
+              'field', 'payment_amount',
+              'value', numbered.payment_amount_raw
+            )),
+          (110, 'blocker', 'PAYMENT_TERM_DAYS_MISSING',
+            numbered.payment_term_days = '',
+            'Missing payment_term_days',
+            jsonb_build_object('field', 'payment_term_days')),
+          (120, 'blocker', 'PAYMENT_TERM_DAYS_INVALID',
+            numbered.payment_term_days <> '' AND (
+              numbered.payment_term_days !~ :numericPattern
+              OR CASE WHEN numbered.payment_term_days ~ :numericPattern THEN
+                numbered.payment_term_days::numeric < 0
+                OR numbered.payment_term_days::numeric <>
+                  trunc(numbered.payment_term_days::numeric)
+              ELSE false END
+            ),
+            'payment_term_days is not a valid non-negative integer',
+            jsonb_build_object(
+              'field', 'payment_term_days',
+              'value', numbered.payment_term_days_raw
+            )),
+          (130, 'blocker', 'PAYMENT_TIME_DAYS_MISSING',
+            numbered.payment_time_days = '',
+            'Missing payment_time_days',
+            jsonb_build_object('field', 'payment_time_days')),
+          (140, 'blocker', 'PAYMENT_TIME_DAYS_INVALID',
+            numbered.payment_time_days <> '' AND (
+              numbered.payment_time_days !~ :numericPattern
+              OR CASE WHEN numbered.payment_time_days ~ :numericPattern THEN
+                numbered.payment_time_days::numeric < 0
+                OR numbered.payment_time_days::numeric <>
+                  trunc(numbered.payment_time_days::numeric)
+              ELSE false END
+            ),
+            'payment_time_days is not a valid non-negative integer',
+            jsonb_build_object(
+              'field', 'payment_time_days',
+              'value', numbered.payment_time_days_raw
+            )),
+          (150, 'blocker', 'SMALL_BUSINESS_MISSING',
+            numbered.is_small_business_value IS NULL
+              OR numbered.is_small_business_value = 'null'::jsonb,
+            'Missing is_small_business (required for report/metrics)',
+            jsonb_build_object('field', 'is_small_business')),
+          (10, 'warning', 'INVOICE_ISSUE_DATE_INVALID',
+            numbered.invoice_date <> '' AND NOT numbered.invoice_date_valid,
+            'invoice_issue_date is not a valid date (expected yyyy-mm-dd or dd/mm/yyyy)',
+            jsonb_build_object(
+              'field', 'invoice_issue_date',
+              'value', numbered.invoice_date_raw
+            )),
+          (20, 'warning', 'PAYMENT_BEFORE_REFERENCE_DATE',
+            numbered.payment_date_valid
+              AND numbered.reference_date_valid
+              AND numbered.payment_date_sort < numbered.reference_date_sort,
+            'payment_date is earlier than payment_time_reference_date (check for credit notes/adjustments)',
+            jsonb_build_object(
+              'payment_date', numbered.payment_date_raw,
+              'payment_time_reference_date', numbered.reference_date_raw,
+              'payment_time_reference_kind', numbered.reference_kind_raw
+            )),
+          (30, 'warning', 'DUPLICATE_SUSPECTED',
+            numbered.duplicate_number > 1,
+            'Duplicate-suspected row based on key heuristic',
+            jsonb_build_object(
+              'duplicateOfRowNo', numbered.duplicate_of_row_no,
+              'key', numbered.duplicate_key
+            ))
+        ) AS issues(priority, severity, code, matches, message, extra)
+        WHERE issues.matches
+      ) issue
+    ),
+    ranked_issues AS (
+      SELECT
+        issue_rows.*,
+        ROW_NUMBER() OVER (
+          PARTITION BY severity
+          ORDER BY "rowNo", "observationId", priority
+        ) AS sample_rank
+      FROM issue_rows
+    ),
+    issue_summary AS (
+      SELECT
+        COUNT(*) FILTER (WHERE severity = 'blocker')::int
+          AS "blockerCount",
+        COUNT(*) FILTER (WHERE severity = 'warning')::int
+          AS "warningCount",
+        COALESCE(
+          jsonb_agg(issue ORDER BY "rowNo", "observationId", priority)
+            FILTER (
+              WHERE severity = 'blocker' AND sample_rank <= :sampleLimit
+            ),
+          '[]'::jsonb
+        ) AS blockers,
+        COALESCE(
+          jsonb_agg(issue ORDER BY "rowNo", "observationId", priority)
+            FILTER (
+              WHERE severity = 'warning' AND sample_rank <= :sampleLimit
+            ),
+          '[]'::jsonb
+        ) AS warnings
+      FROM ranked_issues
+    )
+    SELECT validation_counts.*, issue_summary.*
+    FROM validation_counts
+    CROSS JOIN issue_summary
+  `;
+}
+
+function parseIssueArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function queryBoundedValidation({
+  customerId,
+  ptrsId,
+  mode,
+  transaction,
+}) {
+  const numericPattern =
+    "^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$";
+  await setPaymentObservationWorkMem({ transaction });
+  const rows = await db.sequelize.query(buildProcessValidateSummarySql(), {
+    transaction,
+    replacements: {
+      ...getPaymentObservationReplacements({ customerId, ptrsId }),
+      numericPattern,
+      sampleLimit: 200,
+    },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+  const counts = rows?.[0] || {};
+  const blockerCount = Number(counts.blockerCount) || 0;
+  const warningCount = Number(counts.warningCount) || 0;
+  return {
+    status:
+      blockerCount > 0
+        ? "BLOCKED"
+        : warningCount > 0
+          ? "PASSED_WITH_WARNINGS"
+          : "PASSED",
+    ptrsId,
+    mode,
+    counts: {
+      totalRows: Number(counts.totalRows) || 0,
+      paymentObservationRows: Number(counts.totalRows) || 0,
+      excludedRows: 0,
+      blockers: blockerCount,
+      warnings: warningCount,
+      missingPayeeAbnCount: Number(counts.missingPayeeAbnCount) || 0,
+      invalidPayeeAbnCount: Number(counts.invalidPayeeAbnCount) || 0,
+      missingPayerAbnCount: Number(counts.missingPayerAbnCount) || 0,
+      invalidPayerAbnCount: Number(counts.invalidPayerAbnCount) || 0,
+      missingPaymentTimeReferenceDateCount:
+        Number(counts.missingPaymentTimeReferenceDateCount) || 0,
+      invalidPaymentTimeReferenceDateCount:
+        Number(counts.invalidPaymentTimeReferenceDateCount) || 0,
+      invalidInvoiceIssueDateCount:
+        Number(counts.invalidInvoiceIssueDateCount) || 0,
+      missingPaymentDateCount: Number(counts.missingPaymentDateCount) || 0,
+      invalidPaymentDateCount: Number(counts.invalidPaymentDateCount) || 0,
+      paymentBeforeInvoiceCount: Number(counts.paymentBeforeInvoiceCount) || 0,
+      missingPaymentAmountCount: Number(counts.missingPaymentAmountCount) || 0,
+      invalidPaymentAmountCount: Number(counts.invalidPaymentAmountCount) || 0,
+      duplicatesSuspectedCount: Number(counts.duplicatesSuspectedCount) || 0,
+      smallBusinessUnknownCount: Number(counts.smallBusinessUnknownCount) || 0,
+    },
+    blockers: parseIssueArray(counts.blockers),
+    warnings: parseIssueArray(counts.warnings),
+  };
+}
+
+async function getProcessValidateSummary({ customerId, ptrsId }) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  const t = await beginTransactionWithCustomerContext(customerId);
+
+  try {
+    const result = await queryBoundedValidation({
+      customerId,
+      ptrsId,
+      mode: "read",
+      transaction: t,
+    });
+    await t.commit();
+    return result;
+  } catch (err) {
+    if (!t.finished) await t.rollback();
     throw err;
   }
 }
@@ -587,6 +630,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    await setPaymentObservationWorkMem({ transaction: t });
     const paymentObservationCte = buildPaymentObservationsCte();
     const replacements = getPaymentObservationReplacements({
       customerId,
@@ -609,8 +653,8 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       WITH ${paymentObservationCte}
       SELECT
         (SELECT COUNT(*)::int FROM payment_observation_source_rows) AS "stageRowCount",
-        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE ${excludedExpr}) AS "excludedRowCount",
-        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE NOT ${excludedExpr}) AS "includedRowCount",
+        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE excluded) AS "excludedRowCount",
+        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE NOT excluded) AS "includedRowCount",
         COUNT(*)::int AS "paymentObservationCount",
 
         SUM(CASE WHEN ${tradeCreditIncludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditIncludedCount",

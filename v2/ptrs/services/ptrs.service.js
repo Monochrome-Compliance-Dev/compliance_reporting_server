@@ -6,6 +6,12 @@ const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const {
+  tryAcquireProcessExecutionReconciliationLock,
+} = require("./process-lock.ptrs.service");
+
+const PROCESS_INTERRUPTED_ERROR =
+  "Transformation process was interrupted because its backend owner is no longer active.";
 
 // --- Safe logging helpers for service layer ---
 function _svcReplacer() {
@@ -460,7 +466,7 @@ async function getLatestExecutionRun({
   const ownsTx = !transaction;
 
   try {
-    const row = await db.PtrsExecutionRun.findOne({
+    let row = await db.PtrsExecutionRun.findOne({
       where: { customerId, ptrsId, step },
       order: [
         ["startedAt", "DESC"],
@@ -469,6 +475,43 @@ async function getLatestExecutionRun({
       raw: true,
       transaction: t,
     });
+
+    if (
+      step === "process" &&
+      row?.status === "running" &&
+      (await tryAcquireProcessExecutionReconciliationLock({
+        customerId,
+        ptrsId,
+        transaction: t,
+      }))
+    ) {
+      const finishedAt = new Date();
+      const [updatedCount] = await db.PtrsExecutionRun.update(
+        {
+          status: "failed",
+          finishedAt,
+          errorMessage: PROCESS_INTERRUPTED_ERROR,
+        },
+        {
+          where: {
+            id: row.id,
+            customerId,
+            ptrsId,
+            step: "process",
+            status: "running",
+          },
+          transaction: t,
+        },
+      );
+      if (updatedCount > 0) {
+        row = {
+          ...row,
+          status: "failed",
+          finishedAt,
+          errorMessage: PROCESS_INTERRUPTED_ERROR,
+        };
+      }
+    }
 
     if (ownsTx) await t.commit();
     return row || null;
@@ -1356,6 +1399,7 @@ async function getBlueprint({ customerId = null, profileId = null } = {}) {
 }
 
 module.exports = {
+  PROCESS_INTERRUPTED_ERROR,
   safeMeta,
   slog,
   toSnake,

@@ -6,6 +6,9 @@ jest.mock("@/db/database", () => ({
   PtrsGovEntityRef: {
     bulkCreate: jest.fn(),
   },
+  PtrsAbrLookupCache: {
+    bulkCreate: jest.fn(),
+  },
 }));
 jest.mock("@/helpers/logger", () => ({
   logger: {
@@ -16,7 +19,11 @@ jest.mock("@/helpers/setCustomerIdRLS", () => ({
   beginTransactionWithCustomerContext: jest.fn(),
 }));
 jest.mock("@/data_cleanse/abn-lookup.util", () => ({
+  isValidAbn: jest.fn(() => true),
   lookupAbnByNumber: jest.fn(),
+  normalizeAbnDigits: jest.fn((value) =>
+    String(value || "").replace(/\D/g, ""),
+  ),
 }));
 
 const { Sequelize } = require("sequelize");
@@ -25,7 +32,10 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const { lookupAbnByNumber } = require("@/data_cleanse/abn-lookup.util");
+const {
+  isValidAbn,
+  lookupAbnByNumber,
+} = require("@/data_cleanse/abn-lookup.util");
 const {
   enrichGovReferenceFromStageRows,
   findUnknownGovCandidateAbns,
@@ -42,7 +52,9 @@ describe("PTRS government ABN enrichment", () => {
     db.sequelize.query.mockReset();
     db.sequelize.transaction.mockReset();
     db.PtrsGovEntityRef.bulkCreate.mockReset();
+    db.PtrsAbrLookupCache.bulkCreate.mockReset().mockResolvedValue([]);
     lookupAbnByNumber.mockReset();
+    isValidAbn.mockReset().mockReturnValue(true);
     beginTransactionWithCustomerContext.mockReset();
     db.sequelize.transaction.mockResolvedValue(makeTransaction());
     process.env.ABR_GUID = "guid";
@@ -78,14 +90,24 @@ describe("PTRS government ABN enrichment", () => {
       'FROM "tbl_ptrs_stage_row" s',
     );
     expect(db.sequelize.query.mock.calls[0][0]).toContain(
-      'LEFT JOIN "tbl_ptrs_gov_entity_ref" g',
+      "existing_gov_abns AS MATERIALIZED",
+    );
+    expect(db.sequelize.query.mock.calls[0][0]).toContain(
+      "LEFT JOIN existing_gov_abns g",
+    );
+    expect(db.sequelize.query.mock.calls[0][0]).toContain(
+      "LEFT JOIN current_negative_abr_results cache",
+    );
+    expect(db.sequelize.query.mock.calls[0][0]).toContain(
+      "NULLIF(BTRIM(s.\"payeeEntityAbn\"), '')",
+    );
+    expect(db.sequelize.query.mock.calls[0][0]).toContain(
+      `d."abn" ~ '^[0-9]{11}$'`,
     );
   });
 
   test("persists ASIC as a single candidate without PostgreSQL array casting", async () => {
-    db.sequelize.query
-      .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([[]]);
+    db.sequelize.query.mockResolvedValueOnce([[]]).mockResolvedValueOnce([[]]);
 
     const inserted = await persistNewGovernmentReferences({
       sequelize: db.sequelize,
@@ -191,7 +213,11 @@ describe("PTRS government ABN enrichment", () => {
       });
     db.sequelize.query
       .mockResolvedValueOnce([
-        [{ abn: "11111111111" }, { abn: "22222222222" }, { abn: "33333333333" }],
+        [
+          { abn: "11111111111" },
+          { abn: "22222222222" },
+          { abn: "33333333333" },
+        ],
       ])
       .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([[]]);
@@ -221,6 +247,22 @@ describe("PTRS government ABN enrichment", () => {
       ],
       expect.objectContaining({ transaction: expect.any(Object) }),
     );
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          abn: "22222222222",
+          classification: "NON_GOVERNMENT",
+          checkedAt: expect.any(Date),
+          expiresAt: expect.any(Date),
+        }),
+      ],
+      expect.objectContaining({
+        updateOnDuplicate: expect.arrayContaining([
+          "classification",
+          "expiresAt",
+        ]),
+      }),
+    );
     expect(stats).toMatchObject({
       distinctStageAbnsToCheck: 3,
       lookupAttempts: 3,
@@ -228,6 +270,7 @@ describe("PTRS government ABN enrichment", () => {
       inserted: 1,
       nonGovernmentCount: 1,
       unresolvedCount: 1,
+      negativeResultsCached: 1,
     });
   });
 
@@ -243,8 +286,30 @@ describe("PTRS government ABN enrichment", () => {
     });
 
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).not.toHaveBeenCalled();
     expect(stats.lookupFailures).toBe(1);
     expect(stats.inserted).toBe(0);
+  });
+
+  test("skips checksum-invalid candidates before external ABR lookup", async () => {
+    beginTransactionWithCustomerContext.mockResolvedValue(makeTransaction());
+    db.sequelize.query.mockResolvedValueOnce([[{ abn: "11111111111" }]]);
+    isValidAbn.mockReturnValueOnce(false);
+
+    const stats = await enrichGovReferenceFromStageRows({
+      sequelize: db.sequelize,
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+    });
+
+    expect(lookupAbnByNumber).not.toHaveBeenCalled();
+    expect(stats).toMatchObject({
+      distinctStageAbnsToCheck: 1,
+      invalidCandidateAbnsSkipped: 1,
+      lookupAttempts: 0,
+      lookupFailures: 0,
+      unresolvedCount: 0,
+    });
   });
 
   test("keeps an ABR exception distinct from a confirmed non-government result", async () => {
@@ -265,6 +330,7 @@ describe("PTRS government ABN enrichment", () => {
     expect(stats.lookupFailures).toBe(1);
     expect(stats.nonGovernmentCount).toBe(0);
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).not.toHaveBeenCalled();
   });
 
   test("does not call ABR when every staged ABN is already cached", async () => {
@@ -279,6 +345,7 @@ describe("PTRS government ABN enrichment", () => {
 
     expect(lookupAbnByNumber).not.toHaveBeenCalled();
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).not.toHaveBeenCalled();
   });
 
   test("does not call ABR or insert when ABR_GUID is unavailable", async () => {
@@ -297,7 +364,7 @@ describe("PTRS government ABN enrichment", () => {
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
   });
 
-  test("does not cache a government result unless its ABN is current and active", async () => {
+  test("keeps inactive government results out of the exclusion reference and caches their ABR classification", async () => {
     beginTransactionWithCustomerContext.mockResolvedValue(makeTransaction());
     db.sequelize.query.mockResolvedValueOnce([
       [{ abn: "11111111111" }, { abn: "22222222222" }],
@@ -326,6 +393,19 @@ describe("PTRS government ABN enrichment", () => {
 
     expect(stats.inactiveGovernmentCount).toBe(2);
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          abn: "11111111111",
+          classification: "INACTIVE_GOVERNMENT",
+        }),
+        expect.objectContaining({
+          abn: "22222222222",
+          classification: "INACTIVE_GOVERNMENT",
+        }),
+      ],
+      expect.any(Object),
+    );
   });
 
   test("rechecks confirmed candidates and prevents duplicate insertion", async () => {

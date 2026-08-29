@@ -5,7 +5,7 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const {
-  appendTransformationHistory,
+  appendTransformationHistorySql,
 } = require("./stage.transformation-history");
 
 module.exports = {
@@ -14,6 +14,10 @@ module.exports = {
   exportAbnCsv,
   validateAppliedSbi,
   reapplyLatestResults,
+  buildSbiValidationSql,
+  buildSbiExportSql,
+  buildSbiReapplySql,
+  buildSbiReapplyStatsSql,
 };
 async function getLatestAppliedUpload({ customerId, ptrsId, transaction }) {
   // Prefer most recent upload with a usable status
@@ -24,53 +28,219 @@ async function getLatestAppliedUpload({ customerId, ptrsId, transaction }) {
       status: ["APPLIED", "APPLIED_WITH_WARNINGS"],
     },
     order: [["createdAt", "DESC"]],
+    attributes: ["id", "status"],
     raw: true,
     transaction,
   });
 }
 
-async function loadSbiMap({ customerId, ptrsId, sbiUploadId, transaction }) {
-  const rows = await db.PtrsSbiResult.findAll({
-    where: { customerId, ptrsId, sbiUploadId },
-    raw: true,
-    transaction,
-  });
+const SBI_VALIDATION_SAMPLE_LIMIT = 200;
 
-  const map = new Map();
-  const invalid = new Set();
-
-  for (const r of rows) {
-    const abn = normalizeAbn(r.abn);
-    if (!abn) continue;
-
-    const outcome = String(r.outcome || "").trim();
-    const isValidAbn = r.isValidAbn !== false;
-
-    map.set(abn, { outcome, isValidAbn });
-
-    if (!isValidAbn || /not recognised as a valid abn/i.test(outcome)) {
-      invalid.add(abn);
-    }
-  }
-
-  return { map, invalid, totalResults: rows.length };
-}
-
-function expectedSmallBusinessFromOutcome(outcome) {
-  if (outcome === OUTCOME_SMALL) return true;
-  if (outcome === OUTCOME_NOT_SMALL) return false;
-  return null;
-}
-
-function toIssue(stageRow, code, message, extra = {}) {
-  return {
-    stageRowId: stageRow.id,
-    rowNo: stageRow.rowNo,
-    code,
-    message,
-    payeeAbn: normalizeAbn(stageRow?.data?.payee_entity_abn || ""),
-    ...extra,
-  };
+function buildSbiValidationSql() {
+  return `
+    WITH stage AS MATERIALIZED (
+      SELECT
+        stage_row."id",
+        stage_row."rowNo",
+        (
+          COALESCE(
+            stage_row."meta"->'rules'->'exclude',
+            'false'::jsonb
+          ) = 'true'::jsonb
+          OR COALESCE(
+            stage_row."data"->'exclude',
+            'false'::jsonb
+          ) = 'true'::jsonb
+          OR COALESCE(
+            stage_row."data"->'exclude_from_metrics',
+            'false'::jsonb
+          ) = 'true'::jsonb
+        ) AS excluded,
+        NULLIF(
+          regexp_replace(
+            COALESCE(stage_row."data"->>'payee_entity_abn', ''),
+            '\\D',
+            '',
+            'g'
+          ),
+          ''
+        ) AS abn,
+        CASE
+          WHEN jsonb_typeof(
+            stage_row."data"->'is_small_business'
+          ) = 'boolean'
+            THEN (stage_row."data"->>'is_small_business')::boolean
+          ELSE NULL
+        END AS actual,
+        stage_row."data"->>'small_business_evidence_id' AS evidence_id
+      FROM "tbl_ptrs_stage_row" stage_row
+      WHERE stage_row."customerId" = :customerId
+        AND stage_row."ptrsId" = :ptrsId
+        AND stage_row."deletedAt" IS NULL
+    ),
+    joined AS MATERIALIZED (
+      SELECT
+        stage.*,
+        result."id" AS result_id,
+        result."outcome",
+        result."isValidAbn" AS result_is_valid,
+        CASE
+          WHEN result."outcome" = :smallOutcome THEN true
+          WHEN result."outcome" = :notSmallOutcome THEN false
+          ELSE NULL
+        END AS expected
+      FROM stage
+      LEFT JOIN "tbl_ptrs_sbi_result" result
+        ON result."customerId" = :customerId
+       AND result."ptrsId" = :ptrsId
+       AND result."sbiUploadId" = :uploadId
+       AND result."deletedAt" IS NULL
+       AND result."abn" = stage.abn
+    ),
+    classified AS MATERIALIZED (
+      SELECT
+        joined.*,
+        CASE
+          WHEN joined.excluded THEN NULL
+          WHEN joined.abn IS NULL THEN 'PAYEE_ABN_MISSING'
+          WHEN joined.abn !~ '^\\d{11}$' THEN 'PAYEE_ABN_INVALID'
+          WHEN joined.result_id IS NOT NULL
+            AND (
+              joined.result_is_valid IS FALSE
+              OR joined.outcome ~* 'not recognised as a valid abn'
+            ) THEN 'SBI_INVALID_ABN'
+          WHEN joined.result_id IS NULL THEN 'SBI_NO_MATCH'
+          WHEN joined.expected IS NULL THEN 'SBI_UNKNOWN_OUTCOME'
+          WHEN joined.evidence_id IS DISTINCT FROM :uploadId
+            THEN 'SBI_EVIDENCE_MISSING'
+          WHEN joined.actual IS DISTINCT FROM joined.expected
+            THEN 'SBI_FLAG_MISMATCH'
+          ELSE NULL
+        END AS issue_code
+      FROM joined
+    ),
+    counts AS (
+      SELECT
+        COUNT(*)::int AS "totalRows",
+        COUNT(*) FILTER (WHERE classified.excluded)::int AS "excludedRows",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'PAYEE_ABN_MISSING'
+        )::int AS "missingPayeeAbnCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'PAYEE_ABN_INVALID'
+        )::int AS "invalidPayeeAbnCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'SBI_NO_MATCH'
+        )::int AS "abnMissingFromSbiResultsCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'SBI_EVIDENCE_MISSING'
+        )::int AS "sbiEvidenceMismatchCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'SBI_FLAG_MISMATCH'
+        )::int AS "sbiOutcomeMismatchCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code IN (
+            'PAYEE_ABN_MISSING',
+            'PAYEE_ABN_INVALID',
+            'SBI_INVALID_ABN',
+            'SBI_UNKNOWN_OUTCOME',
+            'SBI_EVIDENCE_MISSING',
+            'SBI_FLAG_MISMATCH'
+          )
+        )::int AS "blockerCount",
+        COUNT(*) FILTER (
+          WHERE classified.issue_code = 'SBI_NO_MATCH'
+        )::int AS "warningCount",
+        (
+          SELECT COUNT(*)::int
+          FROM "tbl_ptrs_sbi_result" result
+          WHERE result."customerId" = :customerId
+            AND result."ptrsId" = :ptrsId
+            AND result."sbiUploadId" = :uploadId
+            AND result."deletedAt" IS NULL
+        ) AS "totalResults"
+      FROM classified
+    ),
+    ranked_issues AS (
+      SELECT
+        classified.*,
+        CASE
+          WHEN classified.issue_code = 'SBI_NO_MATCH' THEN 'warning'
+          ELSE 'blocker'
+        END AS issue_type,
+        row_number() OVER (
+          PARTITION BY CASE
+            WHEN classified.issue_code = 'SBI_NO_MATCH' THEN 'warning'
+            ELSE 'blocker'
+          END
+          ORDER BY classified."rowNo", classified."id"
+        ) AS sample_rank
+      FROM classified
+      WHERE classified.issue_code IS NOT NULL
+    ),
+    sample_issues AS (
+      SELECT
+        ranked_issues.issue_type,
+        ranked_issues.sample_rank,
+        jsonb_build_object(
+          'stageRowId', ranked_issues."id",
+          'rowNo', ranked_issues."rowNo",
+          'code', ranked_issues.issue_code,
+          'message', CASE ranked_issues.issue_code
+            WHEN 'PAYEE_ABN_MISSING' THEN 'Missing payee_entity_abn'
+            WHEN 'PAYEE_ABN_INVALID'
+              THEN 'payee_entity_abn is not a valid 11-digit ABN'
+            WHEN 'SBI_INVALID_ABN'
+              THEN 'SBI results indicate this ABN is invalid/unrecognised'
+            WHEN 'SBI_NO_MATCH'
+              THEN 'No SBI outcome found for this payee ABN (possible mismatched SBI file)'
+            WHEN 'SBI_UNKNOWN_OUTCOME'
+              THEN 'SBI outcome is not recognised'
+            WHEN 'SBI_EVIDENCE_MISSING'
+              THEN 'Row is missing the expected small business evidence id for the latest SBI upload'
+            WHEN 'SBI_FLAG_MISMATCH'
+              THEN 'Row small business flag does not match the SBI outcome'
+          END,
+          'payeeAbn', COALESCE(ranked_issues.abn, '')
+        ) || CASE ranked_issues.issue_code
+          WHEN 'SBI_INVALID_ABN' THEN jsonb_build_object(
+            'outcome', ranked_issues.outcome
+          )
+          WHEN 'SBI_UNKNOWN_OUTCOME' THEN jsonb_build_object(
+            'outcome', ranked_issues.outcome
+          )
+          WHEN 'SBI_EVIDENCE_MISSING' THEN jsonb_build_object(
+            'expectedEvidenceId', :uploadId,
+            'actualEvidenceId', ranked_issues.evidence_id
+          )
+          WHEN 'SBI_FLAG_MISMATCH' THEN jsonb_build_object(
+            'outcome', ranked_issues.outcome,
+            'expected', ranked_issues.expected,
+            'actual', ranked_issues.actual
+          )
+          ELSE '{}'::jsonb
+        END AS issue
+      FROM ranked_issues
+      WHERE ranked_issues.sample_rank <= :sampleLimit
+    ),
+    samples AS (
+      SELECT
+        COALESCE(
+          jsonb_agg(sample_issues.issue ORDER BY sample_issues.sample_rank)
+            FILTER (WHERE sample_issues.issue_type = 'blocker'),
+          '[]'::jsonb
+        ) AS blockers,
+        COALESCE(
+          jsonb_agg(sample_issues.issue ORDER BY sample_issues.sample_rank)
+            FILTER (WHERE sample_issues.issue_type = 'warning'),
+          '[]'::jsonb
+        ) AS warnings
+      FROM sample_issues
+    )
+    SELECT counts.*, samples.blockers, samples.warnings
+    FROM counts
+    CROSS JOIN samples
+  `;
 }
 
 /**
@@ -86,6 +256,8 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
   try {
     const ptrs = await db.Ptrs.findOne({
       where: { id: ptrsId, customerId },
+      attributes: ["id"],
+      raw: true,
       transaction: t,
     });
 
@@ -101,16 +273,14 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
       transaction: t,
     });
 
-    const blockers = [];
-    const warnings = [];
-
     if (!latestSbi) {
-      blockers.push({
-        code: "SBI_MISSING",
-        message:
-          "SBI Check has not been applied for this PTRS run. Upload SBI results before validating.",
-      });
-
+      const blockers = [
+        {
+          code: "SBI_MISSING",
+          message:
+            "SBI Check has not been applied for this PTRS run. Upload SBI results before validating.",
+        },
+      ];
       await t.commit();
 
       return {
@@ -122,159 +292,38 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
           totalRows: 0,
           excludedRows: 0,
           blockers: blockers.length,
-          warnings: warnings.length,
+          warnings: 0,
         },
         blockers,
-        warnings,
+        warnings: [],
       };
     }
 
-    const {
-      map: sbiMap,
-      invalid: invalidAbns,
-      totalResults,
-    } = await loadSbiMap({
-      customerId,
-      ptrsId,
-      sbiUploadId: latestSbi.id,
+    const validationRows = await db.sequelize.query(buildSbiValidationSql(), {
+      replacements: {
+        customerId,
+        ptrsId,
+        uploadId: latestSbi.id,
+        smallOutcome: OUTCOME_SMALL,
+        notSmallOutcome: OUTCOME_NOT_SMALL,
+        sampleLimit: SBI_VALIDATION_SAMPLE_LIMIT,
+      },
+      type: db.sequelize.QueryTypes.SELECT,
       transaction: t,
     });
-
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      order: [["rowNo", "ASC"]],
-      raw: false,
-      transaction: t,
-    });
-
-    const LIMIT = 200;
-
-    let excludedRows = 0;
-    let missingPayeeAbnCount = 0;
-    let invalidPayeeAbnCount = 0;
-    let abnMissingFromSbiResultsCount = 0;
-    let sbiOutcomeMismatchCount = 0;
-    let sbiEvidenceMismatchCount = 0;
-
-    for (const r of stageRows) {
-      if (isExcludedRow(r)) {
-        excludedRows += 1;
-        continue;
-      }
-
-      const payeeAbn = normalizeAbn(r?.data?.payee_entity_abn);
-
-      if (!payeeAbn) {
-        missingPayeeAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "PAYEE_ABN_MISSING", "Missing payee_entity_abn"),
-          );
-        }
-        continue;
-      }
-
-      if (!isProbablyAbn(payeeAbn)) {
-        invalidPayeeAbnCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "PAYEE_ABN_INVALID",
-              "payee_entity_abn is not a valid 11-digit ABN",
-            ),
-          );
-        }
-        continue;
-      }
-
-      if (invalidAbns.has(payeeAbn)) {
-        if (blockers.length < LIMIT) {
-          const outcome = sbiMap.get(payeeAbn)?.outcome || null;
-          blockers.push(
-            toIssue(
-              r,
-              "SBI_INVALID_ABN",
-              "SBI results indicate this ABN is invalid/unrecognised",
-              { outcome },
-            ),
-          );
-        }
-        continue;
-      }
-
-      const sbi = sbiMap.get(payeeAbn);
-      if (!sbi) {
-        abnMissingFromSbiResultsCount += 1;
-        if (warnings.length < LIMIT) {
-          warnings.push(
-            toIssue(
-              r,
-              "SBI_NO_MATCH",
-              "No SBI outcome found for this payee ABN (possible mismatched SBI file)",
-            ),
-          );
-        }
-        continue;
-      }
-
-      const expected = expectedSmallBusinessFromOutcome(sbi.outcome);
-      if (expected == null) {
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(r, "SBI_UNKNOWN_OUTCOME", "SBI outcome is not recognised", {
-              outcome: sbi.outcome,
-            }),
-          );
-        }
-        continue;
-      }
-
-      const actual = r?.data?.is_small_business;
-      const evidenceId = r?.data?.small_business_evidence_id;
-
-      if (evidenceId !== latestSbi.id) {
-        sbiEvidenceMismatchCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "SBI_EVIDENCE_MISSING",
-              "Row is missing the expected small business evidence id for the latest SBI upload",
-              {
-                expectedEvidenceId: latestSbi.id,
-                actualEvidenceId: evidenceId || null,
-              },
-            ),
-          );
-        }
-        continue;
-      }
-
-      if (actual !== expected) {
-        sbiOutcomeMismatchCount += 1;
-        if (blockers.length < LIMIT) {
-          blockers.push(
-            toIssue(
-              r,
-              "SBI_FLAG_MISMATCH",
-              "Row small business flag does not match the SBI outcome",
-              {
-                outcome: sbi.outcome,
-                expected,
-                actual: actual == null ? null : !!actual,
-              },
-            ),
-          );
-        }
-        continue;
-      }
-    }
-
+    const validation = validationRows?.[0] || {};
+    const blockers = Array.isArray(validation.blockers)
+      ? validation.blockers
+      : [];
+    const warnings = Array.isArray(validation.warnings)
+      ? validation.warnings
+      : [];
+    const blockerCount = Number(validation.blockerCount) || 0;
+    const warningCount = Number(validation.warningCount) || 0;
     const status =
-      blockers.length > 0
+      blockerCount > 0
         ? "BLOCKED"
-        : warnings.length > 0
+        : warningCount > 0
           ? "PASSED_WITH_WARNINGS"
           : "PASSED";
 
@@ -288,18 +337,21 @@ async function validateAppliedSbi({ customerId, ptrsId, userId = null, mode }) {
         required: true,
         latestUploadId: latestSbi.id,
         uploadStatus: latestSbi.status,
-        totalResults,
+        totalResults: Number(validation.totalResults) || 0,
       },
       counts: {
-        totalRows: stageRows.length,
-        excludedRows,
-        blockers: blockers.length,
-        warnings: warnings.length,
-        missingPayeeAbnCount,
-        invalidPayeeAbnCount,
-        abnMissingFromSbiResultsCount,
-        sbiEvidenceMismatchCount,
-        sbiOutcomeMismatchCount,
+        totalRows: Number(validation.totalRows) || 0,
+        excludedRows: Number(validation.excludedRows) || 0,
+        blockers: blockerCount,
+        warnings: warningCount,
+        missingPayeeAbnCount: Number(validation.missingPayeeAbnCount) || 0,
+        invalidPayeeAbnCount: Number(validation.invalidPayeeAbnCount) || 0,
+        abnMissingFromSbiResultsCount:
+          Number(validation.abnMissingFromSbiResultsCount) || 0,
+        sbiEvidenceMismatchCount:
+          Number(validation.sbiEvidenceMismatchCount) || 0,
+        sbiOutcomeMismatchCount:
+          Number(validation.sbiOutcomeMismatchCount) || 0,
       },
       blockers,
       warnings,
@@ -322,147 +374,403 @@ function normalizeAbn(value) {
   return String(value).replace(/\D+/g, "");
 }
 
-function isProbablyAbn(abn) {
-  return typeof abn === "string" && /^\d{11}$/.test(abn);
+function buildSbiReapplyStatsSql() {
+  const excludedSql = `(
+    COALESCE(s."meta"->'rules'->'exclude', 'false'::jsonb) = 'true'::jsonb
+    OR COALESCE(s."data"->'exclude', 'false'::jsonb) = 'true'::jsonb
+    OR COALESCE(s."data"->'exclude_from_metrics', 'false'::jsonb) = 'true'::jsonb
+  )`;
+  const abnSql = `NULLIF(
+    regexp_replace(COALESCE(s."data"->>'payee_entity_abn', ''), '\\D', '', 'g'),
+    ''
+  )`;
+  return `
+    WITH stage AS MATERIALIZED (
+      SELECT
+        s."id",
+        ${excludedSql} AS excluded,
+        ${abnSql} AS abn,
+        s."data"->'is_small_business' AS current_value,
+        s."data"->>'small_business_evidence_id' AS current_evidence,
+        s."data"->>'small_business_source' AS current_source,
+        s."data"->>'small_business_outcome' AS current_outcome
+      FROM "tbl_ptrs_stage_row" s
+      WHERE s."customerId" = :customerId
+        AND s."ptrsId" = :ptrsId
+        AND s."deletedAt" IS NULL
+    ),
+    existing_changes AS MATERIALIZED (
+      SELECT DISTINCT change."paymentRowId"
+      FROM "tbl_ptrs_sbi_row_change" change
+      WHERE change."customerId" = :customerId
+        AND change."ptrsId" = :ptrsId
+        AND change."sbiUploadId" = :uploadId
+        AND change."deletedAt" IS NULL
+    ),
+    joined AS MATERIALIZED (
+      SELECT
+        stage.*,
+        result."id" AS result_id,
+        result."isValidAbn" AS result_is_valid,
+        result."outcome",
+        CASE
+          WHEN result."outcome" = :smallOutcome THEN true
+          WHEN result."outcome" = :notSmallOutcome THEN false
+          ELSE NULL
+        END AS expected,
+        existing_changes."paymentRowId" IS NOT NULL
+          AS change_record_exists
+      FROM stage
+      LEFT JOIN "tbl_ptrs_sbi_result" result
+        ON result."customerId" = :customerId
+       AND result."ptrsId" = :ptrsId
+       AND result."sbiUploadId" = :uploadId
+       AND result."deletedAt" IS NULL
+       AND result."abn" = stage.abn
+      LEFT JOIN existing_changes
+        ON existing_changes."paymentRowId" = stage."id"
+    )
+    SELECT
+      COUNT(*)::int AS "totalRows",
+      COUNT(*) FILTER (WHERE joined.excluded)::int AS "excludedRows",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded AND joined.abn IS NULL
+      )::int AS "missingAbnRows",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded AND joined.abn IS NOT NULL
+      )::int AS "rowsWithPayeeAbn",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded
+          AND joined.abn ~ '^\\d{11}$'
+          AND joined.result_id IS NOT NULL
+      )::int AS "matchedAbns",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded
+          AND joined.abn ~ '^\\d{11}$'
+          AND joined.result_id IS NOT NULL
+          AND joined.result_is_valid IS FALSE
+      )::int AS "invalidMatchRows",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded
+          AND joined.abn ~ '^\\d{11}$'
+          AND joined.result_id IS NOT NULL
+          AND joined.result_is_valid IS TRUE
+          AND joined.outcome NOT IN (:smallOutcome, :notSmallOutcome)
+      )::int AS "unknownOutcomeRows",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded
+          AND joined.abn ~ '^\\d{11}$'
+          AND joined.result_is_valid IS TRUE
+          AND joined.expected IS NOT NULL
+          AND (
+            joined.current_value IS DISTINCT FROM to_jsonb(joined.expected)
+            OR joined.current_evidence IS DISTINCT FROM :uploadId
+            OR joined.current_source IS DISTINCT FROM 'SBI_UPLOAD'
+            OR joined.current_outcome IS DISTINCT FROM joined.outcome
+          )
+      )::int AS "dataChangeRows",
+      COUNT(*) FILTER (
+        WHERE NOT joined.excluded
+          AND joined.abn ~ '^\\d{11}$'
+          AND joined.result_is_valid IS TRUE
+          AND joined.expected IS NOT NULL
+          AND NOT joined.change_record_exists
+      )::int AS "historyCheckRows"
+    FROM joined
+  `;
 }
 
-function isExcludedRow(stageRow) {
-  const meta = stageRow?.meta || {};
-  const data = stageRow?.data || {};
-  return (
-    meta?.rules?.exclude === true ||
-    data.exclude === true ||
-    data.exclude_from_metrics === true
+function buildSbiReapplySql() {
+  const historyEventSql = `jsonb_build_object(
+    'key', candidate.history_key,
+    'kind', 'sbi',
+    'comment', 'SBI status resolved ' || candidate.expected::text
+      || ' from SBI upload ' || :uploadId
+      || ' for payee ABN ' || candidate.abn,
+    'sourceStageRowIds', jsonb_build_array(candidate."id"),
+    'targetStageRowIds', jsonb_build_array(candidate."id"),
+    'details', jsonb_build_object(
+      'payeeAbn', candidate.abn,
+      'outcome', candidate.outcome,
+      'isSmallBusiness', candidate.expected,
+      'source', 'SBI_UPLOAD',
+      'evidenceId', :uploadId
+    )
+  )`;
+  const nextMetaSql = appendTransformationHistorySql(
+    'stage_row."meta"',
+    historyEventSql,
   );
+
+  return `
+    WITH existing_changes AS MATERIALIZED (
+      SELECT DISTINCT change."paymentRowId"
+      FROM "tbl_ptrs_sbi_row_change" change
+      WHERE change."customerId" = :customerId
+        AND change."ptrsId" = :ptrsId
+        AND change."sbiUploadId" = :uploadId
+        AND change."deletedAt" IS NULL
+    ),
+    stage_source AS MATERIALIZED (
+      SELECT
+        stage_row."id",
+        stage_row."rowNo",
+        NULLIF(
+          regexp_replace(
+            COALESCE(stage_row."data"->>'payee_entity_abn', ''),
+            '\\D',
+            '',
+            'g'
+          ),
+          ''
+        ) AS abn,
+        (
+          COALESCE(
+            stage_row."meta"->'rules'->'exclude',
+            'false'::jsonb
+          ) = 'true'::jsonb
+          OR COALESCE(stage_row."data"->'exclude', 'false'::jsonb)
+            = 'true'::jsonb
+          OR COALESCE(
+            stage_row."data"->'exclude_from_metrics',
+            'false'::jsonb
+          ) = 'true'::jsonb
+        ) AS excluded,
+        CASE
+          WHEN jsonb_typeof(stage_row."data"->'is_small_business') = 'boolean'
+            THEN (stage_row."data"->>'is_small_business')::boolean
+          ELSE NULL
+        END AS before_value,
+        stage_row."data"->'is_small_business' AS current_value,
+        stage_row."data"->>'small_business_evidence_id' AS before_evidence,
+        stage_row."data"->>'small_business_source' AS current_source,
+        stage_row."data"->>'small_business_outcome' AS current_outcome
+      FROM "tbl_ptrs_stage_row" stage_row
+      WHERE stage_row."customerId" = :customerId
+        AND stage_row."ptrsId" = :ptrsId
+        AND stage_row."deletedAt" IS NULL
+    ),
+    eligible AS MATERIALIZED (
+      SELECT
+        stage_source."id",
+        stage_source."rowNo",
+        stage_source.abn,
+        CASE
+          WHEN result."outcome" = :smallOutcome THEN true
+          WHEN result."outcome" = :notSmallOutcome THEN false
+          ELSE NULL
+        END AS expected,
+        result."outcome" AS outcome,
+        stage_source.before_value,
+        stage_source.before_evidence,
+        'sbi:' || :uploadId || ':' || CASE
+          WHEN result."outcome" = :smallOutcome THEN 'true'
+          ELSE 'false'
+        END AS history_key,
+        (
+          stage_source.current_value
+            IS DISTINCT FROM to_jsonb(CASE
+              WHEN result."outcome" = :smallOutcome THEN true
+              ELSE false
+            END)
+          OR stage_source.before_evidence
+            IS DISTINCT FROM :uploadId
+          OR stage_source.current_source
+            IS DISTINCT FROM 'SBI_UPLOAD'
+          OR stage_source.current_outcome
+            IS DISTINCT FROM result."outcome"
+        ) AS data_changed,
+        existing_changes."paymentRowId" IS NOT NULL
+          AS change_record_exists
+      FROM stage_source
+      JOIN "tbl_ptrs_sbi_result" result
+        ON result."customerId" = :customerId
+       AND result."ptrsId" = :ptrsId
+       AND result."sbiUploadId" = :uploadId
+       AND result."deletedAt" IS NULL
+       AND result."abn" = stage_source.abn
+      LEFT JOIN existing_changes
+        ON existing_changes."paymentRowId" = stage_source."id"
+      WHERE NOT stage_source.excluded
+        AND stage_source.abn ~ '^\\d{11}$'
+        AND result."isValidAbn" IS TRUE
+        AND result."outcome" IN (:smallOutcome, :notSmallOutcome)
+    ),
+    candidate_ids AS MATERIALIZED (
+      SELECT
+        eligible.*
+      FROM eligible
+      WHERE eligible.data_changed OR NOT eligible.change_record_exists
+    ),
+    candidate AS MATERIALIZED (
+      SELECT
+        candidate_ids.*,
+        stage_row."data" AS current_data,
+        stage_row."meta" AS current_meta,
+        CASE
+          WHEN candidate_ids.change_record_exists THEN false
+          ELSE NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof(
+                COALESCE(stage_row."meta", '{}'::jsonb)
+                  ->'transformationHistory'
+              ) = 'array'
+                THEN COALESCE(stage_row."meta", '{}'::jsonb)
+                  ->'transformationHistory'
+              ELSE '[]'::jsonb
+            END
+          ) history_item
+          WHERE history_item->>'key' = candidate_ids.history_key
+        ) END AS history_changed
+      FROM candidate_ids
+      JOIN "tbl_ptrs_stage_row" stage_row
+        ON stage_row."id" = candidate_ids."id"
+       AND stage_row."customerId" = :customerId
+       AND stage_row."ptrsId" = :ptrsId
+       AND stage_row."deletedAt" IS NULL
+    ),
+    changes_inserted AS (
+      INSERT INTO "tbl_ptrs_sbi_row_change" (
+        "id", "customerId", "ptrsId", "sbiUploadId", "paymentRowId",
+        "supplierAbn", "beforeIsSmallBusiness", "afterIsSmallBusiness",
+        "outcome", "changedBy", "changedAt", "createdAt", "updatedAt",
+        "deletedAt"
+      )
+      SELECT
+        translate(
+          substr(
+            encode(
+              decode(
+                md5(
+                  candidate."id" || clock_timestamp()::text || random()::text
+                ),
+                'hex'
+              ),
+              'base64'
+            ),
+            1,
+            10
+          ),
+          '/+',
+          '_-'
+        ),
+        :customerId,
+        :ptrsId,
+        :uploadId,
+        candidate."id",
+        candidate.abn,
+        candidate.before_value,
+        candidate.expected,
+        candidate.outcome,
+        :userId,
+        :checkedAt::timestamptz,
+        now(),
+        now(),
+        NULL
+      FROM candidate
+      WHERE candidate.data_changed
+        AND NOT candidate.change_record_exists
+      RETURNING 1
+    ),
+    updated AS (
+      UPDATE "tbl_ptrs_stage_row" stage_row
+      SET
+        "data" = CASE
+          WHEN candidate.data_changed THEN
+            COALESCE(stage_row."data", '{}'::jsonb) || jsonb_build_object(
+              'is_small_business', candidate.expected,
+              'small_business_outcome', candidate.outcome,
+              'small_business_source', 'SBI_UPLOAD',
+              'small_business_evidence_id', :uploadId,
+              'small_business_checked_at', CASE
+                WHEN candidate.before_evidence = :uploadId
+                  THEN COALESCE(
+                    stage_row."data"->>'small_business_checked_at',
+                    :checkedAt
+                  )
+                ELSE :checkedAt
+              END
+            )
+          ELSE stage_row."data"
+        END,
+        "meta" = CASE
+          WHEN candidate.history_changed THEN ${nextMetaSql}
+          ELSE stage_row."meta"
+        END,
+        "updatedAt" = now()
+      FROM candidate
+      WHERE stage_row."id" = candidate."id"
+        AND stage_row."customerId" = :customerId
+        AND stage_row."ptrsId" = :ptrsId
+        AND stage_row."deletedAt" IS NULL
+      RETURNING
+        candidate."id",
+        candidate."rowNo",
+        candidate.abn,
+        candidate.before_value AS "beforeIsSmallBusiness",
+        candidate.expected AS "afterIsSmallBusiness",
+        candidate.outcome,
+        candidate.data_changed AS "dataChanged",
+        candidate.history_changed AS "historyChanged"
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM changes_inserted) AS "affectedRows",
+      COUNT(*) FILTER (WHERE updated."historyChanged")::int AS "historyRows"
+    FROM updated
+  `;
 }
 
-async function applySbiMapToStageRows({
+async function applySbiResultsToStageRowsSql({
   customerId,
   ptrsId,
   userId,
   uploadId,
-  sbiMap,
   transaction,
 }) {
-  const stageRows = await db.PtrsStageRow.findAll({
-    where: { customerId, ptrsId, deletedAt: null },
-    order: [["rowNo", "ASC"]],
-    raw: false,
+  const replacements = {
+    customerId,
+    ptrsId,
+    uploadId,
+    smallOutcome: OUTCOME_SMALL,
+    notSmallOutcome: OUTCOME_NOT_SMALL,
+  };
+  const statsRows = await db.sequelize.query(buildSbiReapplyStatsSql(), {
+    replacements,
+    type: db.sequelize.QueryTypes.SELECT,
     transaction,
   });
-
+  const sourceStats = statsRows?.[0] || {};
   const stats = {
-    totalRows: stageRows.length,
-    excludedRows: 0,
-    rowsWithPayeeAbn: 0,
-    matchedAbns: 0,
+    totalRows: Number(sourceStats.totalRows) || 0,
+    excludedRows: Number(sourceStats.excludedRows) || 0,
+    rowsWithPayeeAbn: Number(sourceStats.rowsWithPayeeAbn) || 0,
+    matchedAbns: Number(sourceStats.matchedAbns) || 0,
     affectedRows: 0,
     historyRows: 0,
-    missingAbnRows: 0,
-    invalidMatchRows: 0,
-    unknownOutcomeRows: 0,
+    missingAbnRows: Number(sourceStats.missingAbnRows) || 0,
+    invalidMatchRows: Number(sourceStats.invalidMatchRows) || 0,
+    unknownOutcomeRows: Number(sourceStats.unknownOutcomeRows) || 0,
   };
-  const rowChanges = [];
-
-  for (const stageRow of stageRows) {
-    if (isExcludedRow(stageRow)) {
-      stats.excludedRows += 1;
-      continue;
-    }
-
-    const payeeAbn = normalizeAbn(stageRow?.data?.payee_entity_abn);
-    if (!payeeAbn) {
-      stats.missingAbnRows += 1;
-      continue;
-    }
-    stats.rowsWithPayeeAbn += 1;
-    if (!isProbablyAbn(payeeAbn)) continue;
-
-    const sbi = sbiMap.get(payeeAbn);
-    if (!sbi) continue;
-    stats.matchedAbns += 1;
-
-    if (!sbi.isValidAbn) {
-      stats.invalidMatchRows += 1;
-      continue;
-    }
-
-    const expected = classifyOutcome(sbi.outcome).isSmallBusiness;
-    if (expected == null) {
-      stats.unknownOutcomeRows += 1;
-      continue;
-    }
-
-    const before = stageRow?.data?.is_small_business;
-    const beforeEvidence = stageRow?.data?.small_business_evidence_id;
-    const historyKey = `sbi:${uploadId}:${expected}`;
-    const nextMeta = appendTransformationHistory(stageRow.meta, {
-      key: historyKey,
-      kind: "sbi",
-      comment: `SBI status resolved ${expected} from SBI upload ${uploadId} for payee ABN ${payeeAbn}`,
-      sourceStageRowIds: [stageRow.id],
-      targetStageRowIds: [stageRow.id],
-      details: {
-        payeeAbn,
-        outcome: sbi.outcome,
-        isSmallBusiness: expected,
-        source: "SBI_UPLOAD",
-        evidenceId: uploadId,
-      },
-    });
-    const historyChanged = nextMeta !== stageRow.meta;
-    const dataChanged =
-      before !== expected ||
-      beforeEvidence !== uploadId ||
-      stageRow?.data?.small_business_source !== "SBI_UPLOAD" ||
-      stageRow?.data?.small_business_outcome !== sbi.outcome;
-
-    if (!dataChanged && !historyChanged) continue;
-
-    if (dataChanged) {
-      stats.affectedRows += 1;
-      rowChanges.push({
-        customerId,
-        ptrsId,
-        sbiUploadId: uploadId,
-        paymentRowId: stageRow.id,
-        supplierAbn: payeeAbn,
-        beforeIsSmallBusiness:
-          before == null
-            ? null
-            : typeof before === "boolean"
-              ? before
-              : !!before,
-        afterIsSmallBusiness: expected,
-        outcome: sbi.outcome,
-        changedBy: userId || null,
-        changedAt: new Date(),
-      });
-      stageRow.data = {
-        ...(stageRow.data || {}),
-        is_small_business: expected,
-        small_business_outcome: sbi.outcome,
-        small_business_source: "SBI_UPLOAD",
-        small_business_evidence_id: uploadId,
-        small_business_checked_at:
-          beforeEvidence === uploadId
-            ? stageRow?.data?.small_business_checked_at || new Date().toISOString()
-            : new Date().toISOString(),
-      };
-    }
-    if (historyChanged) {
-      stats.historyRows += 1;
-      stageRow.meta = nextMeta;
-    }
-    await stageRow.save({ transaction });
+  const dataChangeRows = Number(sourceStats.dataChangeRows) || 0;
+  const historyCheckRows = Number(sourceStats.historyCheckRows) || 0;
+  if (dataChangeRows === 0 && historyCheckRows === 0) {
+    return stats;
   }
-
-  if (rowChanges.length) {
-    await db.PtrsSbiRowChange.bulkCreate(rowChanges, {
-      transaction,
-      validate: false,
-    });
-  }
+  const checkedAt = new Date().toISOString();
+  const updateRows = await db.sequelize.query(buildSbiReapplySql(), {
+    replacements: {
+      ...replacements,
+      userId: userId || null,
+      checkedAt,
+    },
+    type: db.sequelize.QueryTypes.SELECT,
+    transaction,
+  });
+  const updateStats = updateRows?.[0] || {};
+  stats.affectedRows = Number(updateStats.affectedRows) || 0;
+  stats.historyRows = Number(updateStats.historyRows) || 0;
 
   return stats;
 }
@@ -488,18 +796,11 @@ async function reapplyLatestResults({ customerId, ptrsId, userId = null }) {
       };
     }
 
-    const { map } = await loadSbiMap({
-      customerId,
-      ptrsId,
-      sbiUploadId: latestUpload.id,
-      transaction: t,
-    });
-    const counts = await applySbiMapToStageRows({
+    const counts = await applySbiResultsToStageRowsSql({
       customerId,
       ptrsId,
       userId,
       uploadId: latestUpload.id,
-      sbiMap: map,
       transaction: t,
     });
     await t.commit();
@@ -598,6 +899,16 @@ async function getLatestUpload({ customerId, ptrsId, transaction }) {
   return db.PtrsSbiUpload.findOne({
     where: { customerId, ptrsId },
     order: [["createdAt", "DESC"]],
+    attributes: [
+      "id",
+      "status",
+      "fileName",
+      "fileHash",
+      "rawRowCount",
+      "parsedAbnCount",
+      "summary",
+      "createdAt",
+    ],
     raw: true,
     transaction,
   });
@@ -640,6 +951,48 @@ async function getStatus({ customerId, ptrsId }) {
   }
 }
 
+function buildSbiExportSql() {
+  return `
+    WITH abns AS (
+      SELECT DISTINCT
+        NULLIF(
+          regexp_replace(
+            COALESCE(stage_row."data"->>'payee_entity_abn', ''),
+            '\\D',
+            '',
+            'g'
+          ),
+          ''
+        ) AS abn
+      FROM "tbl_ptrs_stage_row" stage_row
+      WHERE stage_row."customerId" = :customerId
+        AND stage_row."ptrsId" = :ptrsId
+        AND stage_row."deletedAt" IS NULL
+        AND COALESCE(
+          stage_row."meta"->'rules'->'exclude',
+          'false'::jsonb
+        ) <> 'true'::jsonb
+        AND COALESCE(
+          stage_row."data"->'exclude',
+          'false'::jsonb
+        ) <> 'true'::jsonb
+        AND COALESCE(
+          stage_row."data"->'exclude_from_metrics',
+          'false'::jsonb
+        ) <> 'true'::jsonb
+    )
+    SELECT
+      'ABN'
+      || COALESCE(
+        E'\\n' || string_agg(abns.abn, E'\\n' ORDER BY abns.abn),
+        ''
+      )
+      || E'\\n' AS "csvText"
+    FROM abns
+    WHERE abns.abn ~ '^\\d{11}$'
+  `;
+}
+
 async function exportAbnCsv({ customerId, ptrsId }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -650,6 +1003,8 @@ async function exportAbnCsv({ customerId, ptrsId }) {
     // Ensure ptrs exists for tenant
     const ptrs = await db.Ptrs.findOne({
       where: { id: ptrsId, customerId },
+      attributes: ["id"],
+      raw: true,
       transaction: t,
     });
 
@@ -659,31 +1014,12 @@ async function exportAbnCsv({ customerId, ptrsId }) {
       throw e;
     }
 
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      raw: false,
+    const exportRows = await db.sequelize.query(buildSbiExportSql(), {
+      replacements: { customerId, ptrsId },
+      type: db.sequelize.QueryTypes.SELECT,
       transaction: t,
     });
-
-    const abns = new Set();
-
-    for (const r of stageRows) {
-      if (isExcludedRow(r)) continue;
-
-      const payeeAbn = normalizeAbn(r?.data?.payee_entity_abn);
-      if (!payeeAbn) continue;
-      if (!isProbablyAbn(payeeAbn)) continue;
-
-      abns.add(payeeAbn);
-    }
-
-    // Deterministic ordering
-    const ordered = Array.from(abns).sort();
-
-    // SBI tool typically expects headers Year, ABN, Outcome in the *response* file.
-    // For the *export* file, MVP is a single ABN column.
-    const lines = ["ABN", ...ordered];
-    const csvText = `${lines.join("\n")}\n`;
+    const csvText = exportRows?.[0]?.csvText || "ABN\n";
 
     await t.commit();
 
@@ -709,6 +1045,8 @@ async function importResults({ customerId, ptrsId, userId, file }) {
     // Ensure ptrs exists for tenant
     const ptrs = await db.Ptrs.findOne({
       where: { id: ptrsId, customerId },
+      attributes: ["id"],
+      raw: true,
       transaction: t,
     });
 
@@ -832,113 +1170,24 @@ async function importResults({ customerId, ptrsId, userId, file }) {
       validate: false,
     });
 
-    // Apply to stage rows
-    const stageRows = await db.PtrsStageRow.findAll({
-      where: { customerId, ptrsId, deletedAt: null },
-      order: [["rowNo", "ASC"]],
-      raw: false,
+    const stageCounts = await applySbiResultsToStageRowsSql({
+      customerId,
+      ptrsId,
+      userId,
+      uploadId: uploadRow.id,
       transaction: t,
     });
-
-    let excludedRows = 0;
-    let rowsWithPayeeAbn = 0;
-    let matchedAbns = 0;
-    let affectedRows = 0;
-    let missingAbnRows = 0;
-    let invalidMatchRows = 0;
-    let unknownOutcomeRows = 0;
-
-    const nowIso = new Date().toISOString();
-    const rowChanges = [];
-
-    // Update sequentially for determinism; can be optimised later
-    for (const stageRow of stageRows) {
-      if (isExcludedRow(stageRow)) {
-        excludedRows += 1;
-        continue;
-      }
-
-      const payeeAbn = normalizeAbn(stageRow?.data?.payee_entity_abn);
-      if (!payeeAbn) {
-        missingAbnRows += 1;
-        continue;
-      }
-
-      rowsWithPayeeAbn += 1;
-
-      if (!isProbablyAbn(payeeAbn)) {
-        // dataset issue; do not apply
-        continue;
-      }
-
-      const sbi = byAbn.get(payeeAbn);
-      if (!sbi) {
-        continue;
-      }
-
-      matchedAbns += 1;
-
-      if (!sbi.isValidAbn) {
-        invalidMatchRows += 1;
-        continue;
-      }
-
-      const expected = classifyOutcome(sbi.outcome).isSmallBusiness;
-      if (expected == null) {
-        unknownOutcomeRows += 1;
-        continue;
-      }
-
-      const before = stageRow?.data?.is_small_business;
-      const beforeEvidence = stageRow?.data?.small_business_evidence_id;
-
-      const nextData = {
-        ...(stageRow.data || {}),
-        is_small_business: expected,
-        small_business_outcome: sbi.outcome,
-        small_business_source: "SBI_UPLOAD",
-        small_business_evidence_id: uploadRow.id,
-        small_business_checked_at: nowIso,
-      };
-
-      // Only write if something meaningfully changes (flag OR evidence)
-      const shouldUpdate =
-        before !== expected ||
-        beforeEvidence !== uploadRow.id ||
-        stageRow?.data?.small_business_source !== "SBI_UPLOAD";
-
-      if (shouldUpdate) {
-        affectedRows += 1;
-
-        rowChanges.push({
-          customerId,
-          ptrsId,
-          sbiUploadId: uploadRow.id,
-          paymentRowId: stageRow.id,
-          supplierAbn: payeeAbn,
-          beforeIsSmallBusiness:
-            before == null
-              ? null
-              : typeof before === "boolean"
-                ? before
-                : !!before,
-          afterIsSmallBusiness: expected,
-          outcome: sbi.outcome,
-          changedBy: userId || null,
-          changedAt: new Date(),
-        });
-
-        stageRow.data = nextData;
-        await stageRow.save({ transaction: t });
-      }
-    }
-
-    if (rowChanges.length) {
-      await db.PtrsSbiRowChange.bulkCreate(rowChanges, {
-        transaction: t,
-        validate: false,
-      });
-    }
+    const {
+      totalRows,
+      excludedRows,
+      rowsWithPayeeAbn,
+      matchedAbns,
+      affectedRows,
+      historyRows,
+      missingAbnRows,
+      invalidMatchRows,
+      unknownOutcomeRows,
+    } = stageCounts;
 
     // Decide status
     // MVP rule: unknown outcomes are BLOCKED; invalid matches are WARNINGS unless they match stage rows (we count invalidMatchRows).
@@ -970,11 +1219,12 @@ async function importResults({ customerId, ptrsId, userId, file }) {
       invalidAbns,
       unknownOutcomes,
       stage: {
-        totalRows: stageRows.length,
+        totalRows,
         excludedRows,
         rowsWithPayeeAbn,
         matchedAbns,
         affectedRows,
+        historyRows,
         missingAbnRows,
         invalidMatchRows,
         unknownOutcomeRows,
@@ -998,11 +1248,12 @@ async function importResults({ customerId, ptrsId, userId, file }) {
         parsedAbns,
         invalidAbns,
         unknownOutcomes,
-        totalStageRows: stageRows.length,
+        totalStageRows: totalRows,
         excludedRows,
         rowsWithPayeeAbn,
         matchedAbns,
         affectedRows,
+        historyRows,
         missingAbnRows,
         invalidMatchRows,
         unknownOutcomeRows,

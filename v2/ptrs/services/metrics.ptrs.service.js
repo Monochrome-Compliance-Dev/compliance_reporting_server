@@ -6,6 +6,7 @@ const {
 const {
   buildPaymentObservationsCte,
   getPaymentObservationReplacements,
+  setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
 
 // const {
@@ -27,6 +28,7 @@ module.exports = {
 async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
   // NOTE: This query intentionally does not return raw rows.
   // It computes only what the dashboard/metrics preview needs.
+  await setPaymentObservationWorkMem({ transaction: t });
 
   const sql = `
     WITH ${buildPaymentObservationsCte()},

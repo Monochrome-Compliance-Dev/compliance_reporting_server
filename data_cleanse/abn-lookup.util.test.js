@@ -1,10 +1,21 @@
 const {
   classifyGovernmentEntityType,
+  isValidAbn,
   lookupAbnByNumber,
   parseExactAbnLookupResponse,
 } = require("./abn-lookup.util");
 
 describe("ABR exact ABN lookup parsing", () => {
+  test.each([
+    ["valid ABN", "86 768 265 615", true],
+    ["invalid checksum", "86768265614", false],
+    ["too short", "8676826561", false],
+    ["too long", "867682656150", false],
+    ["non-numeric", "not-an-abn", false],
+  ])("validates %s before ABR lookup", (_case, value, expected) => {
+    expect(isValidAbn(value)).toBe(expected);
+  });
+
   test("classifies government entity types from ABR reference codes", () => {
     expect(classifyGovernmentEntityType("CGE")).toBe(true);
     expect(classifyGovernmentEntityType("LOC")).toBe(true);
@@ -123,9 +134,19 @@ describe("ABR exact ABN lookup parsing", () => {
     }
   });
 
-  test("rejects malformed ABNs before making an ABR request", async () => {
-    await expect(lookupAbnByNumber("1234")).rejects.toThrow(
-      "A valid 11-digit ABN is required",
-    );
-  });
+  test.each(["1234", "86768265614"])(
+    "rejects malformed or checksum-invalid ABN %s before making an ABR request",
+    async (abn) => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn();
+      try {
+        await expect(lookupAbnByNumber(abn)).rejects.toThrow(
+          "A valid ABN is required",
+        );
+        expect(global.fetch).not.toHaveBeenCalled();
+      } finally {
+        global.fetch = originalFetch;
+      }
+    },
+  );
 });

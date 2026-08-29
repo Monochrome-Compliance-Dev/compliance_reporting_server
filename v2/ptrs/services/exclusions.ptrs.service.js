@@ -57,11 +57,7 @@ const {
  * never destroy/rebuild stage rows for exclusions.
  */
 
-async function runGovEnrichmentPreflight({
-  sequelize,
-  customerId,
-  ptrsId,
-}) {
+async function runGovEnrichmentPreflight({ sequelize, customerId, ptrsId }) {
   return enrichGovReferenceFromStageRows({
     sequelize,
     customerId,
@@ -79,6 +75,14 @@ async function applyExclusionsAndPersist({
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const started = Date.now();
+  const timings = {};
+  let governmentEnrichment = null;
+  const timed = async (name, action) => {
+    const phaseStarted = process.hrtime.bigint();
+    const result = await action();
+    timings[name] = Number(process.hrtime.bigint() - phaseStarted) / 1e6;
+    return result;
+  };
 
   slog.info("PTRS v2 exclusions apply: starting", {
     action: "PtrsV2ExclusionsApplyStart",
@@ -93,133 +97,130 @@ async function applyExclusionsAndPersist({
   }
 
   if (category === "all" || category === "gov") {
-    await runGovEnrichmentPreflight({ sequelize, customerId, ptrsId });
+    governmentEnrichment = await timed("governmentEnrichmentMs", () =>
+      runGovEnrichmentPreflight({ sequelize, customerId, ptrsId }),
+    );
   }
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
     const stats = { checksRun: 0, rowsExcluded: 0 };
+    if (governmentEnrichment) stats.governmentEnrichment = governmentEnrichment;
 
     if (category === "all" || category === "gov") {
       stats.checksRun += 1;
-      const affected = await applyGovExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-      });
+      const affected = await timed("govMs", () =>
+        applyGovExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     if (category === "all" || category === "intra_company") {
       stats.checksRun += 1;
-      const affected = await applyIntraCompanyExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-        profileId,
-      });
+      const affected = await timed("intraCompanyMs", () =>
+        applyIntraCompanyExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+          profileId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     // Employee & expense payments (profile-scoped ref list; keyword match)
     if (category === "all" || category === "employee") {
       stats.checksRun += 1;
-      const affected = await applyEmployeeExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-        profileId,
-      });
+      const affected = await timed("employeeMs", () =>
+        applyEmployeeExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+          profileId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     // Document type exclusions
     if (category === "all" || category === "doc_type") {
       stats.checksRun += 1;
-      const affected = await applyDocTypeExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-      });
+      const affected = await timed("docTypeMs", () =>
+        applyDocTypeExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     if (category === "all" || category === "credit_applied") {
       stats.checksRun += 1;
-      const affected = await applyCreditAppliedExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-      });
+      const affected = await timed("creditAppliedMs", () =>
+        applyCreditAppliedExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     // Keyword exclusions (profile-scoped keyword list)
     if (category === "all" || category === "keyword") {
       stats.checksRun += 1;
-      const affected = await applyKeywordExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-        profileId,
-      });
+      const affected = await timed("keywordMs", () =>
+        applyKeywordExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+          profileId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     // Pre-payments (heuristic match on payment terms OR description)
     if (category === "all" || category === "prepaid") {
       stats.checksRun += 1;
-      const affected = await applyPrepaidExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-      });
+      const affected = await timed("prepaidMs", () =>
+        applyPrepaidExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
     // International suppliers (non-AUD currency and/or missing invalid ABN)
     if (category === "all" || category === "international") {
       stats.checksRun += 1;
-      const affected = await applyInternationalExclusion({
-        sequelize,
-        transaction: t,
-        customerId,
-        ptrsId,
-      });
+      const affected = await timed("internationalMs", () =>
+        applyInternationalExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
       stats.rowsExcluded += affected;
     }
 
-    // Stamp profileId onto meta for this run (only if provided), without touching data.
-    if (profileId) {
-      const profileSql = `
-        UPDATE "tbl_ptrs_stage_row" s
-        SET
-          "meta" = jsonb_set(
-            COALESCE(s."meta",'{}'::jsonb),
-            '{profileId}',
-            to_jsonb(:profileId::text),
-            true
-          ),
-          "updatedAt" = now()
-        WHERE
-          s."customerId" = :customerId
-          AND s."ptrsId" = :ptrsId
-          AND s."deletedAt" IS NULL
-      `;
-
-      await sequelize.query(profileSql, {
-        replacements: { customerId, ptrsId, profileId },
-        transaction: t,
-      });
-    }
+    stats.timings = timings;
 
     await t.commit();
 
@@ -231,6 +232,7 @@ async function applyExclusionsAndPersist({
       ptrsId,
       category,
       rowsExcluded: stats.rowsExcluded,
+      timings,
       tookMs,
     });
 

@@ -4,9 +4,7 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { logger } = require("@/helpers/logger");
-const {
-  buildStableInputHash,
-} = require("@/v2/ptrs/services/ptrs.service");
+const { buildStableInputHash } = require("@/v2/ptrs/services/ptrs.service");
 const {
   composeMappedRowsForPtrs,
 } = require("@/v2/ptrs/services/maps.compose.ptrs.service");
@@ -129,9 +127,7 @@ function filterMaterialEnrichment({ joins, customFields, reachableIds }) {
       const toId = String(condition?.to?.datasetId || "");
       return reachableIds.has(fromId) && reachableIds.has(toId);
     })
-    .sort((a, b) =>
-      JSON.stringify(a).localeCompare(JSON.stringify(b)),
-    );
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const scopedCustomFields = (Array.isArray(customFields) ? customFields : [])
     .filter((field) => reachableIds.has(String(field?.datasetId || "")))
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -144,10 +140,11 @@ async function datasetContentSnapshot(dataset, transaction) {
     ptrsId: dataset.ptrsId,
     datasetId: dataset.id,
   };
-  const [rawCount, rawMaxUpdatedAt] = await Promise.all([
-    db.PtrsImportRaw.count({ where, transaction }),
-    db.PtrsImportRaw.max("updatedAt", { where, transaction }),
-  ]);
+  const rawCount = await db.PtrsImportRaw.count({ where, transaction });
+  const rawMaxUpdatedAt = await db.PtrsImportRaw.max("updatedAt", {
+    where,
+    transaction,
+  });
   return {
     id: dataset.id,
     purpose: dataset.purpose,
@@ -308,17 +305,18 @@ async function buildCanonicalInputSnapshot({
         optionalFields: adapter.contract.optionalFields || [],
         canonicalProjection: adapter.contract.canonicalProjection,
         sourceGroupSemantics: adapter.contract.sourceGroupSemantics,
-        paymentAmountSemantic:
-          adapter.contract.paymentAmountSemantic || null,
+        paymentAmountSemantic: adapter.contract.paymentAmountSemantic || null,
       },
     },
   };
 }
 
 function sanitizeJson(value) {
-  return JSON.parse(JSON.stringify(value, (_, item) =>
-    typeof item === "string" ? item.replace(/\u0000/g, "") : item,
-  ));
+  return JSON.parse(
+    JSON.stringify(value, (_, item) =>
+      typeof item === "string" ? item.replace(/\u0000/g, "") : item,
+    ),
+  );
 }
 
 async function materializeCanonicalRevision({
@@ -382,7 +380,8 @@ async function materializeCanonicalRevision({
     throw error;
   }
 
-  const buildTransaction = await beginTransactionWithCustomerContext(customerId);
+  const buildTransaction =
+    await beginTransactionWithCustomerContext(customerId);
   try {
     let afterRowNo = null;
     let rowCount = 0;
@@ -404,7 +403,9 @@ async function materializeCanonicalRevision({
         const meta = data?._ptrsMeta || {};
         const sourceRowNo = Number(meta.sourceRowNo);
         if (!Number.isFinite(sourceRowNo)) {
-          throw new Error("Canonical source row is missing its source row number");
+          throw new Error(
+            "Canonical source row is missing its source row number",
+          );
         }
         validateCanonicalRowForAdapter({
           contract: snapshot.adapter.contract,
@@ -442,7 +443,9 @@ async function materializeCanonicalRevision({
       rowCount += payload.length;
       afterRowNo = Number(payload.at(-1)?.sourceRowNo);
       if (!Number.isFinite(afterRowNo)) {
-        throw new Error("Canonical source rows require deterministic source row numbers");
+        throw new Error(
+          "Canonical source rows require deterministic source row numbers",
+        );
       }
       if (rows.length < CANONICAL_BATCH_SIZE) break;
     }
@@ -535,7 +538,10 @@ async function resolveCurrentCanonicalRevisions({
 }) {
   const datasets = await db.PtrsDataset.findAll({
     where: { customerId, ptrsId, purpose: "transaction" },
-    order: [["createdAt", "ASC"], ["id", "ASC"]],
+    order: [
+      ["createdAt", "ASC"],
+      ["id", "ASC"],
+    ],
     raw: true,
     transaction,
   });
@@ -546,7 +552,11 @@ async function resolveCurrentCanonicalRevisions({
   }
   const selected = [];
   const missing = [];
-  for (let datasetOrder = 0; datasetOrder < datasets.length; datasetOrder += 1) {
+  for (
+    let datasetOrder = 0;
+    datasetOrder < datasets.length;
+    datasetOrder += 1
+  ) {
     const dataset = datasets[datasetOrder];
     const current = await resolveCurrentCanonicalRevision({
       customerId,
@@ -577,16 +587,15 @@ async function resolveCurrentCanonicalRevisions({
   return selected;
 }
 
-async function listCanonicalRevisionStatus({
-  customerId,
-  ptrsId,
-  profileId,
-}) {
+async function listCanonicalRevisionStatus({ customerId, ptrsId, profileId }) {
   const transaction = await beginTransactionWithCustomerContext(customerId);
   try {
     const datasets = await db.PtrsDataset.findAll({
       where: { customerId, ptrsId, purpose: "transaction" },
-      order: [["createdAt", "ASC"], ["id", "ASC"]],
+      order: [
+        ["createdAt", "ASC"],
+        ["id", "ASC"],
+      ],
       raw: true,
       transaction,
     });
@@ -610,7 +619,10 @@ async function listCanonicalRevisionStatus({
       }
       const latest = await db.PtrsCanonicalRevision.findOne({
         where: { customerId, ptrsId, datasetId: dataset.id },
-        order: [["createdAt", "DESC"], ["id", "DESC"]],
+        order: [
+          ["createdAt", "DESC"],
+          ["id", "DESC"],
+        ],
         raw: true,
         transaction,
       });
@@ -649,7 +661,10 @@ async function loadCanonicalRevisionRows({
         ? {}
         : { sourceRowNo: { [Op.gt]: Number(afterSourceRowNo) } }),
     },
-    order: [["sourceRowNo", "ASC"], ["id", "ASC"]],
+    order: [
+      ["sourceRowNo", "ASC"],
+      ["id", "ASC"],
+    ],
     limit: Math.min(Math.max(Number(limit) || 1, 1), 5000),
     raw: true,
     transaction,

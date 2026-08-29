@@ -65,6 +65,7 @@ function makeDependencies(persistedRows) {
     source_user: "ARIBA_CIG",
     document_currency: "AUD",
     supplier: "SUP-1",
+    _transformationMeta: { sourceMetadata: "retained" },
   };
   const stageAttributes = Object.fromEntries(
     [
@@ -125,27 +126,36 @@ function makeDependencies(persistedRows) {
         revision: { id: "revision-1", materialSignature: "sig-1", rowCount: 1 },
       },
     ]),
-    loadCanonicalRevisionRows: jest.fn(async ({ revisionId, afterSourceRowNo }) => {
-      if (afterSourceRowNo != null || loadedRevisions.has(revisionId)) return [];
-      loadedRevisions.add(revisionId);
-      const datasetId = revisionId === "revision-2" ? "dataset-2" : "dataset-1";
-      return [{
-        ...sourceRow,
-        invoice_reference_number: revisionId === "revision-2" ? "SECOND" : sourceRow.invoice_reference_number,
-        _canonicalProvenance: {
-          canonicalRevisionId: revisionId,
-          canonicalSourceRowId: `row-${revisionId}`,
-          datasetId,
-          sourceRawRowId: `raw-${revisionId}`,
-          sourceRowNo: 1,
-          adapterType: "sap_accounting_event",
-          adapterVersion: "1",
-          sourceGroupScope: null,
-          semanticKind: "accounting_event",
-          lineage: { joinedReferences: {} },
-        },
-      }];
-    }),
+    loadCanonicalRevisionRows: jest.fn(
+      async ({ revisionId, afterSourceRowNo }) => {
+        if (afterSourceRowNo != null || loadedRevisions.has(revisionId))
+          return [];
+        loadedRevisions.add(revisionId);
+        const datasetId =
+          revisionId === "revision-2" ? "dataset-2" : "dataset-1";
+        return [
+          {
+            ...sourceRow,
+            invoice_reference_number:
+              revisionId === "revision-2"
+                ? "SECOND"
+                : sourceRow.invoice_reference_number,
+            _canonicalProvenance: {
+              canonicalRevisionId: revisionId,
+              canonicalSourceRowId: `row-${revisionId}`,
+              datasetId,
+              sourceRawRowId: `raw-${revisionId}`,
+              sourceRowNo: 1,
+              adapterType: "sap_accounting_event",
+              adapterVersion: "1",
+              sourceGroupScope: null,
+              semanticKind: "accounting_event",
+              lineage: { joinedReferences: {} },
+            },
+          },
+        ];
+      },
+    ),
     getColumnMap: jest.fn(async () => ({
       rowRules: [
         {
@@ -209,12 +219,18 @@ describe("PTRS stage preview/persist parity", () => {
   test("refuses Stage when any selected dataset lacks a current canonical revision", async () => {
     const dependencies = makeDependencies([]);
     dependencies.resolveCurrentCanonicalRevisions.mockRejectedValue(
-      Object.assign(new Error("Canonical rebuild required for transaction dataset(s): B.csv"), {
-        code: "CANONICAL_REVISION_REQUIRED",
-      }),
+      Object.assign(
+        new Error(
+          "Canonical rebuild required for transaction dataset(s): B.csv",
+        ),
+        {
+          code: "CANONICAL_REVISION_REQUIRED",
+        },
+      ),
     );
-    await expect(stagePtrs({ ...dependencies, persist: false, limit: 50 }))
-      .rejects.toThrow("B.csv");
+    await expect(
+      stagePtrs({ ...dependencies, persist: false, limit: 50 }),
+    ).rejects.toThrow("B.csv");
     expect(dependencies.loadCanonicalRevisionRows).not.toHaveBeenCalled();
   });
 
@@ -231,12 +247,40 @@ describe("PTRS stage preview/persist parity", () => {
     );
 
     const persistedRows = [];
+    const persistedDependencies = makeDependencies(persistedRows);
     const persisted = await stagePtrs({
-      ...makeDependencies(persistedRows),
+      ...persistedDependencies,
       persist: true,
     });
 
     expect(persisted.persistedCount).toBe(1);
+    expect(persisted.stats.timings).toEqual(
+      expect.objectContaining({
+        batchCount: 1,
+        canonicalReadMs: expect.any(Number),
+        transformMs: expect.any(Number),
+        persistenceBuildMs: expect.any(Number),
+        persistenceWriteMs: expect.any(Number),
+        persistenceBatchAverageMs: expect.any(Number),
+        persistenceBatchMaxMs: expect.any(Number),
+        commitMs: expect.any(Number),
+        paymentTermChangeLookupMs: expect.any(Number),
+        paymentTimeMs: expect.any(Number),
+      }),
+    );
+    expect(
+      persistedDependencies.loadCanonicalRevisionRows,
+    ).toHaveBeenCalledWith(expect.objectContaining({ limit: 5000 }));
+    const transaction =
+      await persistedDependencies.beginTransactionWithCustomerContext.mock
+        .results[0].value;
+    expect(
+      persistedDependencies.db.PtrsStageRow.bulkCreate,
+    ).toHaveBeenCalledWith(expect.any(Array), {
+      transaction,
+      validate: true,
+      returning: false,
+    });
     expect(persistedRows).toHaveLength(1);
     const stored = persistedRows[0];
     expect(stored.data).toMatchObject({
@@ -248,6 +292,7 @@ describe("PTRS stage preview/persist parity", () => {
       payment_time_days: preview.sample.payment_time_days,
     });
     expect(stored).toMatchObject({
+      profileId: "profile-1",
       payerEntityName: "Veolia Water Technologies 2 Pty Ltd",
       payerEntityAbn: "30 616 561 829",
       payeeEntityName: "ILLAWARRA GROUNDS & SURROUNDS",
@@ -274,6 +319,17 @@ describe("PTRS stage preview/persist parity", () => {
       rowNo: 1,
       semanticKind: "accounting_event",
     });
+    expect(stored.meta).toMatchObject({
+      _stage: "ptrs.v2.stagePtrs",
+      profileId: "profile-1",
+      sourceMetadata: "retained",
+      appliedRules: [],
+      canonical: expect.objectContaining({
+        canonicalRevisionId: "revision-1",
+        canonicalSourceRowId: "row-revision-1",
+      }),
+    });
+    expect(stored.meta.profileId).toBe(stored.profileId);
   });
 
   test("deterministically unions two revisions with overlapping source row numbers", async () => {
@@ -281,20 +337,28 @@ describe("PTRS stage preview/persist parity", () => {
     const dependencies = makeDependencies(persistedRows);
     dependencies.resolveCurrentCanonicalRevisions.mockResolvedValue([
       {
-        dataset: { id: "dataset-1" }, datasetOrder: 0,
+        dataset: { id: "dataset-1" },
+        datasetOrder: 0,
         revision: { id: "revision-1", materialSignature: "sig-1", rowCount: 1 },
       },
       {
-        dataset: { id: "dataset-2" }, datasetOrder: 1,
+        dataset: { id: "dataset-2" },
+        datasetOrder: 1,
         revision: { id: "revision-2", materialSignature: "sig-2", rowCount: 1 },
       },
     ]);
     const result = await stagePtrs({ ...dependencies, persist: true });
     expect(result.persistedCount).toBe(2);
-    expect(persistedRows.map((row) => [row.datasetId, row.sourceRowNo, row.rowNo]))
-      .toEqual([["dataset-1", 1, 1], ["dataset-2", 1, 2]]);
-    expect(persistedRows.map((row) => row.canonicalRevisionId))
-      .toEqual(["revision-1", "revision-2"]);
+    expect(
+      persistedRows.map((row) => [row.datasetId, row.sourceRowNo, row.rowNo]),
+    ).toEqual([
+      ["dataset-1", 1, 1],
+      ["dataset-2", 1, 2],
+    ]);
+    expect(persistedRows.map((row) => row.canonicalRevisionId)).toEqual([
+      "revision-1",
+      "revision-2",
+    ]);
   });
 
   test("initial build and rebuild replace the current Stage population", async () => {
@@ -324,12 +388,15 @@ describe("PTRS stage preview/persist parity", () => {
       force: true,
       transaction: expect.any(Object),
     });
-    expect(rebuiltDependencies.db.PtrsStageRow.destroy.mock.invocationCallOrder[0])
-      .toBeLessThan(
-        rebuiltDependencies.db.PtrsStageRow.bulkCreate.mock.invocationCallOrder[0],
-      );
-    const rebuiltTransaction = await rebuiltDependencies
-      .beginTransactionWithCustomerContext.mock.results[0].value;
+    expect(
+      rebuiltDependencies.db.PtrsStageRow.destroy.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      rebuiltDependencies.db.PtrsStageRow.bulkCreate.mock
+        .invocationCallOrder[0],
+    );
+    const rebuiltTransaction =
+      await rebuiltDependencies.beginTransactionWithCustomerContext.mock
+        .results[0].value;
     expect(rebuiltTransaction).toMatchObject({ finished: "commit" });
     expect(rebuiltTransaction.commit).toHaveBeenCalledTimes(1);
   });
@@ -345,8 +412,9 @@ describe("PTRS stage preview/persist parity", () => {
       "persist failed",
     );
 
-    const transaction = await dependencies
-      .beginTransactionWithCustomerContext.mock.results[0].value;
+    const transaction =
+      await dependencies.beginTransactionWithCustomerContext.mock.results[0]
+        .value;
     expect(dependencies.db.PtrsStageRow.destroy).toHaveBeenCalledWith(
       expect.objectContaining({ force: true, transaction }),
     );
