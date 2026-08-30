@@ -119,6 +119,23 @@ async function readObservationSummary({ customerId, ptrsId }) {
   }
 }
 
+async function hasActiveStageRows({ customerId, ptrsId }) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const stageRow = await db.PtrsStageRow.findOne({
+      attributes: ["id"],
+      where: { customerId, ptrsId, deletedAt: null },
+      raw: true,
+      transaction,
+    });
+    await transaction.commit();
+    return Boolean(stageRow);
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
 async function processPtrs({
   customerId,
   ptrsId,
@@ -193,14 +210,14 @@ async function processPtrs({
       createdBy: userId,
     });
 
-    const initialCounts = await measureProcessPhase({
+    const stageHasRows = await measureProcessPhase({
       name: "stageGate",
       timings,
       databaseTempDeltas,
       tempCounterDiagnostics,
-      run: () => readObservationSummary({ customerId, ptrsId }),
+      run: () => hasActiveStageRows({ customerId, ptrsId }),
     });
-    if (!initialCounts.sourceStageRows) {
+    if (!stageHasRows) {
       const error = new Error(
         "Stage must be completed before PTRS transformations can run.",
       );
@@ -252,13 +269,15 @@ async function processPtrs({
       run: () =>
         validateService.getProcessValidateSummary({ customerId, ptrsId }),
     });
-    const metrics = await measureProcessPhase({
+    const metricsResult = await measureProcessPhase({
       name: "metrics",
       timings,
       databaseTempDeltas,
       tempCounterDiagnostics,
-      run: () => metricsService.getMetrics({ customerId, ptrsId, userId }),
+      run: () =>
+        metricsService.getMetricsWithExecution({ customerId, ptrsId, userId }),
     });
+    const metrics = metricsResult.preview;
 
     const result = {
       ptrsId,
@@ -300,7 +319,11 @@ async function processPtrs({
         },
         metrics: {
           status: metrics?.status || "ready",
-          generated: true,
+          generated: metricsResult.execution.source === "calculated",
+          resultSource: metricsResult.execution.source,
+          inputSignature: metricsResult.execution.inputSignature,
+          calculationVersion: metricsResult.execution.calculationVersion,
+          metricsResultId: metricsResult.execution.metricsResultId,
         },
       },
     };
@@ -309,7 +332,7 @@ async function processPtrs({
       executionRunId: executionRun.id,
       status: "success",
       finishedAt: new Date(),
-      rowsIn: Number(initialCounts.sourceStageRows) || 0,
+      rowsIn: Number(counts.sourceStageRows) || 0,
       rowsOut: Number(counts.derivedPaymentObservations) || 0,
       stats: result.steps,
       errorMessage: null,

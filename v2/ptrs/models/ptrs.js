@@ -52,6 +52,11 @@ function model(sequelize) {
       allowNull: false,
       defaultValue: {},
     },
+    metricsMaterialRevision: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      defaultValue: 0,
+    },
     createdBy: {
       type: DataTypes.STRING(10),
       allowNull: true,

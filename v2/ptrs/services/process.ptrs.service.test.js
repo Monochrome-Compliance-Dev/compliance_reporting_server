@@ -1,4 +1,7 @@
 jest.mock("@/db/database", () => ({
+  PtrsStageRow: {
+    findOne: jest.fn(),
+  },
   sequelize: {
     QueryTypes: { SELECT: "SELECT" },
     query: jest.fn(),
@@ -22,7 +25,9 @@ jest.mock("./sbi.ptrs.service", () => ({
 jest.mock("./validate.ptrs.service", () => ({
   getProcessValidateSummary: jest.fn(),
 }));
-jest.mock("./metrics.ptrs.service", () => ({ getMetrics: jest.fn() }));
+jest.mock("./metrics.ptrs.service", () => ({
+  getMetricsWithExecution: jest.fn(),
+}));
 jest.mock("./payment-observations.ptrs.service", () => ({
   getPaymentObservationSummary: jest.fn(),
 }));
@@ -90,6 +95,7 @@ describe("processPtrs", () => {
     updateExecutionRun.mockResolvedValue({ id: "process-run-1" });
     executionLock.release.mockResolvedValue(undefined);
     acquireProcessExecutionLock.mockResolvedValue(executionLock);
+    db.PtrsStageRow.findOne.mockResolvedValue({ id: "stage-row-1" });
     db.sequelize.query
       .mockResolvedValueOnce([{ tempFiles: "10", tempBytes: "100" }])
       .mockResolvedValueOnce([{ tempFiles: "11", tempBytes: "200" }])
@@ -101,16 +107,14 @@ describe("processPtrs", () => {
       .mockResolvedValueOnce([{ tempFiles: "17", tempBytes: "1000" }])
       .mockResolvedValueOnce([{ tempFiles: "17", tempBytes: "1000" }])
       .mockResolvedValueOnce([{ tempFiles: "21", tempBytes: "1500" }]);
-    getPaymentObservationSummary
-      .mockResolvedValueOnce({ sourceStageRows: 1786 })
-      .mockResolvedValueOnce({
-        sourceStageRows: 1786,
-        excludedStageRows: 200,
-        survivingStageRows: 1586,
-        derivedPaymentObservations: 1063,
-        sbiPositiveObservations: 370,
-        earlytradeMatches: 13,
-      });
+    getPaymentObservationSummary.mockResolvedValue({
+      sourceStageRows: 1786,
+      excludedStageRows: 200,
+      survivingStageRows: 1586,
+      derivedPaymentObservations: 1063,
+      sbiPositiveObservations: 370,
+      earlytradeMatches: 13,
+    });
     exclusionsService.applyExclusionsAndPersist.mockResolvedValue({
       persisted: 10,
     });
@@ -124,10 +128,18 @@ describe("processPtrs", () => {
       status: "PASS",
       counts: { blockers: 0, warnings: 0 },
     });
-    metricsService.getMetrics.mockResolvedValue({ status: "READY" });
+    metricsService.getMetricsWithExecution.mockResolvedValue({
+      preview: { status: "READY" },
+      execution: {
+        source: "calculated",
+        inputSignature: "metrics-signature",
+        calculationVersion: "metrics-v1",
+        metricsResultId: "metrics001",
+      },
+    });
   });
 
-  test("runs the complete post-Stage chain in the authoritative order", async () => {
+  test("passes a non-empty scoped Stage gate and runs the authoritative post-Stage chain", async () => {
     const result = await processPtrs({
       customerId: "customer01",
       ptrsId: "_2zMv6X3jb",
@@ -140,7 +152,7 @@ describe("processPtrs", () => {
       rulesService.applyRulesAndPersist,
       recordStageTransformationHistory,
       validateService.getProcessValidateSummary,
-      metricsService.getMetrics,
+      metricsService.getMetricsWithExecution,
     ].map((mock) => mock.mock.invocationCallOrder[0]);
     expect(calls).toEqual([...calls].sort((a, b) => a - b));
     expect(exclusionsService.applyExclusionsAndPersist).toHaveBeenCalledWith(
@@ -149,8 +161,48 @@ describe("processPtrs", () => {
     expect(rulesService.applyRulesAndPersist).toHaveBeenCalledWith(
       expect.objectContaining({ limit: null }),
     );
+    expect(db.PtrsStageRow.findOne).toHaveBeenCalledWith({
+      attributes: ["id"],
+      where: {
+        customerId: "customer01",
+        ptrsId: "_2zMv6X3jb",
+        deletedAt: null,
+      },
+      raw: true,
+      transaction: expect.any(Object),
+    });
+    expect(beginTransactionWithCustomerContext).toHaveBeenNthCalledWith(
+      1,
+      "customer01",
+    );
+    expect(beginTransactionWithCustomerContext).toHaveBeenNthCalledWith(
+      2,
+      "customer01",
+    );
+    expect(getPaymentObservationSummary).toHaveBeenCalledTimes(1);
+    expect(getPaymentObservationSummary).toHaveBeenCalledWith({
+      customerId: "customer01",
+      ptrsId: "_2zMv6X3jb",
+      transaction: expect.any(Object),
+    });
+    expect(db.PtrsStageRow.findOne.mock.invocationCallOrder[0]).toBeLessThan(
+      exclusionsService.applyExclusionsAndPersist.mock.invocationCallOrder[0],
+    );
+    expect(
+      getPaymentObservationSummary.mock.invocationCallOrder[0],
+    ).toBeGreaterThan(
+      recordStageTransformationHistory.mock.invocationCallOrder[0],
+    );
     expect(sbiService.reapplyLatestResults).not.toHaveBeenCalled();
     expect(result.steps).not.toHaveProperty("sbi");
+    expect(result.steps.metrics).toEqual({
+      status: "READY",
+      generated: true,
+      resultSource: "calculated",
+      inputSignature: "metrics-signature",
+      calculationVersion: "metrics-v1",
+      metricsResultId: "metrics001",
+    });
     expect(result.steps.timings).toEqual({
       stageGateMs: expect.any(Number),
       exclusionsMs: expect.any(Number),
@@ -214,7 +266,7 @@ describe("processPtrs", () => {
     expect(result.steps).not.toHaveProperty("sbi");
     expect(recordStageTransformationHistory).toHaveBeenCalledTimes(1);
     expect(validateService.getProcessValidateSummary).toHaveBeenCalledTimes(1);
-    expect(metricsService.getMetrics).toHaveBeenCalledTimes(1);
+    expect(metricsService.getMetricsWithExecution).toHaveBeenCalledTimes(1);
   });
 
   test("continues all phases when database temp counters are unavailable", async () => {
@@ -243,17 +295,15 @@ describe("processPtrs", () => {
       metrics: { tempFilesDelta: null, tempBytesDelta: null },
     });
     expect(recordStageTransformationHistory).toHaveBeenCalledTimes(1);
-    expect(getPaymentObservationSummary).toHaveBeenCalledTimes(2);
+    expect(getPaymentObservationSummary).toHaveBeenCalledTimes(1);
     expect(validateService.getProcessValidateSummary).toHaveBeenCalledTimes(1);
-    expect(metricsService.getMetrics).toHaveBeenCalledTimes(1);
+    expect(metricsService.getMetricsWithExecution).toHaveBeenCalledTimes(1);
     expect(db.sequelize.query).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   test("rejects a run without Stage rows before mutating anything", async () => {
-    getPaymentObservationSummary.mockReset().mockResolvedValue({
-      sourceStageRows: 0,
-    });
+    db.PtrsStageRow.findOne.mockResolvedValueOnce(null);
 
     await expect(
       processPtrs({
@@ -261,10 +311,14 @@ describe("processPtrs", () => {
         ptrsId: "ptrs000001",
         profileId: "profile01",
       }),
-    ).rejects.toMatchObject({ statusCode: 409 });
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Stage must be completed before PTRS transformations can run.",
+    });
     expect(exclusionsService.applyExclusionsAndPersist).not.toHaveBeenCalled();
     expect(rulesService.applyRulesAndPersist).not.toHaveBeenCalled();
     expect(sbiService.reapplyLatestResults).not.toHaveBeenCalled();
+    expect(getPaymentObservationSummary).not.toHaveBeenCalled();
     expect(updateExecutionRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
         executionRunId: "process-run-1",
@@ -274,11 +328,9 @@ describe("processPtrs", () => {
   });
 
   test("marks a cancelled transformation query as failed and releases the run", async () => {
-    getPaymentObservationSummary
-      .mockReset()
-      .mockRejectedValueOnce(
-        new Error("canceling statement due to user request"),
-      );
+    db.PtrsStageRow.findOne.mockRejectedValueOnce(
+      new Error("canceling statement due to user request"),
+    );
 
     await expect(
       processPtrs({

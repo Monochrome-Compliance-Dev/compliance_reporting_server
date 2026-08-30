@@ -1,25 +1,152 @@
 const db = require("@/db/database");
-// const { logger } = require("@/helpers/logger");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
+const { buildStableInputHash } = require("./ptrs.service");
 const {
   buildPaymentObservationsCte,
   getPaymentObservationReplacements,
   setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
 
-// const {
-//   PTRS_CANONICAL_CONTRACT,
-// } = require("@/v2/ptrs/contracts/ptrs.canonical.contract");
+// Bump whenever the analytical calculation or quality interpretation changes.
+// This is deliberately explicit; source-code hashing would be unstable and opaque.
+const PTRS_METRICS_CALCULATION_VERSION = "ptrs-payment-observation-metrics-v1";
+const MATERIAL_STATE_CHANGED = "PTRS_METRICS_MATERIAL_STATE_CHANGED";
+const MAX_MATERIAL_STATE_ATTEMPTS = 2;
 
 module.exports = {
+  PTRS_METRICS_CALCULATION_VERSION,
+  buildMetricsInputSignature,
   calculatePaymentTermMetricsFromFrequencies,
   calculateSmallBusinessTradeCreditPaymentsPct,
+  computeReportPreview,
   fetchPaymentObservationMetricsAggs,
   getMetrics,
+  getMetricsWithExecution,
+  readMetricsMaterialState,
   updateMetricsDraft,
 };
+
+function buildMetricsInputSignature({
+  materialState,
+  calculationVersion = PTRS_METRICS_CALCULATION_VERSION,
+}) {
+  return buildStableInputHash({
+    calculationVersion,
+    stageExecution: materialState?.stageExecution
+      ? {
+          id: materialState.stageExecution.id || null,
+          inputHash: materialState.stageExecution.inputHash || null,
+        }
+      : null,
+    transformationExecution: materialState?.transformationExecution
+      ? {
+          id: materialState.transformationExecution.id || null,
+          inputHash: materialState.transformationExecution.inputHash || null,
+        }
+      : null,
+    sbiApplication: materialState?.sbiApplication
+      ? {
+          id: materialState.sbiApplication.id || null,
+          fileHash: materialState.sbiApplication.fileHash || null,
+        }
+      : null,
+    stageMaterialState: materialState?.stageMaterialState || {
+      revision: "0",
+    },
+  });
+}
+
+async function readMetricsMaterialState({ transaction, customerId, ptrsId }) {
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        (
+          SELECT jsonb_build_object(
+            'id', run."id",
+            'inputHash', run."inputHash",
+            'status', run."status"
+          )
+          FROM "tbl_ptrs_execution_run" run
+          WHERE run."customerId" = :customerId
+            AND run."ptrsId" = :ptrsId
+            AND run."step" = 'stage'
+            AND run."status" = 'success'
+          ORDER BY run."startedAt" DESC, run."id" DESC
+          LIMIT 1
+        ) AS "stageExecution",
+        (
+          SELECT jsonb_build_object(
+            'id', run."id",
+            'inputHash', run."inputHash",
+            'status', run."status"
+          )
+          FROM "tbl_ptrs_execution_run" run
+          WHERE run."customerId" = :customerId
+            AND run."ptrsId" = :ptrsId
+            AND run."step" = 'process'
+          ORDER BY run."startedAt" DESC, run."id" DESC
+          LIMIT 1
+        ) AS "transformationExecution",
+        (
+          SELECT jsonb_build_object(
+            'id', upload."id",
+            'fileHash', upload."fileHash",
+            'status', upload."status"
+          )
+          FROM "tbl_ptrs_sbi_upload" upload
+          WHERE upload."customerId" = :customerId
+            AND upload."ptrsId" = :ptrsId
+            AND upload."deletedAt" IS NULL
+          ORDER BY upload."createdAt" DESC, upload."id" DESC
+          LIMIT 1
+        ) AS "sbiApplication",
+        -- Statement-level Stage triggers advance this revision for rebuilds,
+        -- Transformation, SBI application, and direct row exclusions.
+        (
+          SELECT jsonb_build_object(
+            'revision', report."metricsMaterialRevision"
+          )
+          FROM "tbl_ptrs" report
+          WHERE report."customerId" = :customerId
+            AND report."id" = :ptrsId
+        ) AS "stageMaterialState"
+    `,
+    {
+      replacements: { customerId, ptrsId },
+      type: db.sequelize.QueryTypes.SELECT,
+      transaction,
+    },
+  );
+
+  const state = rows?.[0] || {};
+  return {
+    stageExecution: state.stageExecution || null,
+    transformationExecution: state.transformationExecution || null,
+    sbiApplication: state.sbiApplication || null,
+    stageMaterialState: state.stageMaterialState || {
+      revision: "0",
+    },
+  };
+}
+
+async function acquireMetricsSignatureLock({ transaction, inputSignature }) {
+  await db.sequelize.query(
+    `
+      SELECT pg_advisory_xact_lock(
+        hashtextextended(:metricsResultLockKey, 0)
+      )
+    `,
+    {
+      replacements: {
+        metricsResultLockKey: `ptrs:metrics-result:${inputSignature}`,
+      },
+      type: db.sequelize.QueryTypes.SELECT,
+      transaction,
+    },
+  );
+}
 
 // -------------------------
 // SQL aggregate helpers for metrics
@@ -237,8 +364,7 @@ function selectDeterministicMode(rows) {
 
     if (
       count > selectedCount ||
-      (count === selectedCount &&
-        (selectedTerm == null || term < selectedTerm))
+      (count === selectedCount && (selectedTerm == null || term < selectedTerm))
     ) {
       selectedTerm = term;
       selectedCount = count;
@@ -385,11 +511,285 @@ async function getMetrics({ customerId, ptrsId, userId = null }) {
   return computeReportPreview({ customerId, ptrsId, userId, mode: "read" });
 }
 
+async function findCurrentMetricsResult({
+  transaction,
+  customerId,
+  ptrsId,
+  inputSignature,
+}) {
+  return db.PtrsMetricsResult.findOne({
+    where: {
+      customerId,
+      ptrsId,
+      inputSignature,
+      status: "succeeded",
+    },
+    raw: true,
+    transaction,
+  });
+}
+
+async function recordMetricsCalculationFailure({
+  customerId,
+  ptrsId,
+  userId,
+  calculationVersion,
+  inputSignature,
+  provenance,
+  error,
+}) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+  try {
+    await acquireMetricsSignatureLock({ transaction, inputSignature });
+    const existing = await db.PtrsMetricsResult.findOne({
+      where: { customerId, ptrsId, inputSignature },
+      transaction,
+    });
+    if (!existing) {
+      await db.PtrsMetricsResult.create(
+        {
+          customerId,
+          ptrsId,
+          inputSignature,
+          calculationVersion,
+          status: "failed",
+          aggregateResult: null,
+          provenance,
+          errorMessage: error?.message || "PTRS metrics calculation failed",
+          createdBy: userId || null,
+          startedAt: new Date(),
+          completedAt: new Date(),
+        },
+        { transaction },
+      );
+    } else if (existing.status !== "succeeded") {
+      await existing.update(
+        {
+          status: "failed",
+          aggregateResult: null,
+          provenance,
+          errorMessage: error?.message || "PTRS metrics calculation failed",
+          completedAt: new Date(),
+        },
+        { transaction },
+      );
+    }
+    await transaction.commit();
+  } catch (_) {
+    if (!transaction.finished) await transaction.rollback();
+  }
+}
+
+async function calculateOrReuseMetrics({
+  customerId,
+  ptrsId,
+  userId,
+  mode,
+  calculationVersion,
+  fetchAggregates,
+}) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+  let inputSignature = null;
+  let provenance = null;
+  try {
+    const ptrs = await db.Ptrs.findOne({
+      where: { id: ptrsId, customerId },
+      transaction,
+    });
+    if (!ptrs) {
+      const error = new Error("Ptrs not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    provenance = await readMetricsMaterialState({
+      transaction,
+      customerId,
+      ptrsId,
+    });
+    inputSignature = buildMetricsInputSignature({
+      materialState: provenance,
+      calculationVersion,
+    });
+    await acquireMetricsSignatureLock({ transaction, inputSignature });
+
+    const lockedProvenance = await readMetricsMaterialState({
+      transaction,
+      customerId,
+      ptrsId,
+    });
+    const lockedSignature = buildMetricsInputSignature({
+      materialState: lockedProvenance,
+      calculationVersion,
+    });
+    if (lockedSignature !== inputSignature) {
+      const error = new Error(
+        "PTRS material state changed before metrics calculation started",
+      );
+      error.code = MATERIAL_STATE_CHANGED;
+      throw error;
+    }
+    provenance = lockedProvenance;
+
+    const persisted = await findCurrentMetricsResult({
+      transaction,
+      customerId,
+      ptrsId,
+      inputSignature,
+    });
+    if (persisted) {
+      const preview = composeReportPreview({
+        ptrs,
+        aggs: persisted.aggregateResult,
+        mode,
+      });
+      await transaction.commit();
+      return {
+        preview,
+        execution: {
+          source: "persisted",
+          inputSignature,
+          calculationVersion,
+          metricsResultId: persisted.id,
+        },
+      };
+    }
+
+    let resultRow = await db.PtrsMetricsResult.findOne({
+      where: { customerId, ptrsId, inputSignature },
+      transaction,
+    });
+    if (resultRow) {
+      await resultRow.update(
+        {
+          status: "calculating",
+          aggregateResult: null,
+          provenance,
+          errorMessage: null,
+          startedAt: new Date(),
+          completedAt: null,
+        },
+        { transaction },
+      );
+    } else {
+      resultRow = await db.PtrsMetricsResult.create(
+        {
+          customerId,
+          ptrsId,
+          inputSignature,
+          calculationVersion,
+          status: "calculating",
+          aggregateResult: null,
+          provenance,
+          errorMessage: null,
+          createdBy: userId || null,
+          startedAt: new Date(),
+          completedAt: null,
+        },
+        { transaction },
+      );
+    }
+
+    const aggregateResult = await fetchAggregates({
+      t: transaction,
+      customerId,
+      ptrsId,
+    });
+    const finalProvenance = await readMetricsMaterialState({
+      transaction,
+      customerId,
+      ptrsId,
+    });
+    const finalSignature = buildMetricsInputSignature({
+      materialState: finalProvenance,
+      calculationVersion,
+    });
+    if (finalSignature !== inputSignature) {
+      const error = new Error(
+        "PTRS material state changed while metrics were being calculated",
+      );
+      error.code = MATERIAL_STATE_CHANGED;
+      throw error;
+    }
+
+    await resultRow.update(
+      {
+        status: "succeeded",
+        aggregateResult,
+        provenance: finalProvenance,
+        errorMessage: null,
+        completedAt: new Date(),
+      },
+      { transaction },
+    );
+    const preview = composeReportPreview({ ptrs, aggs: aggregateResult, mode });
+    await transaction.commit();
+    return {
+      preview,
+      execution: {
+        source: "calculated",
+        inputSignature,
+        calculationVersion,
+        metricsResultId: resultRow.id,
+      },
+    };
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    if (error.code !== MATERIAL_STATE_CHANGED && inputSignature && provenance) {
+      await recordMetricsCalculationFailure({
+        customerId,
+        ptrsId,
+        userId,
+        calculationVersion,
+        inputSignature,
+        provenance,
+        error,
+      });
+    }
+    throw error;
+  }
+}
+
+async function getMetricsWithExecution({
+  customerId,
+  ptrsId,
+  userId = null,
+  mode = "read",
+  calculationVersion = PTRS_METRICS_CALCULATION_VERSION,
+  fetchAggregates = fetchPaymentObservationMetricsAggs,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+
+  for (let attempt = 1; attempt <= MAX_MATERIAL_STATE_ATTEMPTS; attempt += 1) {
+    try {
+      return await calculateOrReuseMetrics({
+        customerId,
+        ptrsId,
+        userId,
+        mode,
+        calculationVersion,
+        fetchAggregates,
+      });
+    } catch (error) {
+      if (
+        error.code !== MATERIAL_STATE_CHANGED ||
+        attempt === MAX_MATERIAL_STATE_ATTEMPTS
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("PTRS metrics calculation did not complete");
+}
+
 async function updateMetricsDraft({
   customerId,
   ptrsId,
   userId = null,
   patch,
+  fetchAggregates = fetchPaymentObservationMetricsAggs,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -446,7 +846,13 @@ async function updateMetricsDraft({
     await t.commit();
 
     // Return the full preview after update so the FE can render a single source of truth.
-    return computeReportPreview({ customerId, ptrsId, userId, mode: "read" });
+    return computeReportPreview({
+      customerId,
+      ptrsId,
+      userId,
+      mode: "read",
+      fetchAggregates,
+    });
   } catch (err) {
     try {
       await t.rollback();
@@ -457,282 +863,268 @@ async function updateMetricsDraft({
   }
 }
 
-async function computeReportPreview({ customerId, ptrsId, userId, mode }) {
-  if (!customerId) throw new Error("customerId is required");
-  if (!ptrsId) throw new Error("ptrsId is required");
+async function computeReportPreview({
+  customerId,
+  ptrsId,
+  userId,
+  mode,
+  calculationVersion = PTRS_METRICS_CALCULATION_VERSION,
+  fetchAggregates = fetchPaymentObservationMetricsAggs,
+}) {
+  const result = await getMetricsWithExecution({
+    customerId,
+    ptrsId,
+    userId,
+    mode,
+    calculationVersion,
+    fetchAggregates,
+  });
+  return result.preview;
+}
 
-  const t = await beginTransactionWithCustomerContext(customerId);
+function composeReportPreview({ ptrs, aggs, mode }) {
+  const draft = ptrs.reportPreviewDraft || {};
 
-  try {
-    const ptrs = await db.Ptrs.findOne({
-      where: { id: ptrsId, customerId },
-      transaction: t,
+  // Defaults when there are no rows yet
+  const stageRowCount = aggs?.stageRowCount || 0;
+  const paymentObservationCount = aggs?.paymentObservationCount || 0;
+
+  const totalCount = aggs?.totalCount || 0;
+  const tcpSettlementValue = Number(aggs?.tcpSettlementValue || 0);
+  const missingAmountCount = aggs?.missingAmountCount || 0;
+
+  const sbCount = aggs?.sbCount || 0;
+  const sbValue = Number(aggs?.sbValue || 0);
+  const missingSbFlagCount = aggs?.missingSbFlagCount || 0;
+
+  const missingTermDaysCount = aggs?.missingTermDaysCount || 0;
+  const missingDatesCount = aggs?.missingDatesCount || 0;
+
+  const sbBand0to30Count = aggs?.sbBand0to30Count || 0;
+  const sbBand31to60Count = aggs?.sbBand31to60Count || 0;
+  const sbBandOver60Count = aggs?.sbBandOver60Count || 0;
+
+  // const sbBand0to30Value = Number(aggs?.sbBand0to30Value || 0);
+  // const sbBand31to60Value = Number(aggs?.sbBand31to60Value || 0);
+  // const sbBandOver60Value = Number(aggs?.sbBandOver60Value || 0);
+
+  const sbWithinTermsKnownCount = aggs?.sbWithinTermsKnownCount || 0;
+  const sbWithinTermsYesCount = aggs?.sbWithinTermsYesCount || 0;
+
+  const avgDays = aggs?.avgDays == null ? null : Number(aggs.avgDays);
+  const medianDays = aggs?.medianDays == null ? null : Number(aggs.medianDays);
+  const p80Days = aggs?.p80Days == null ? null : Number(aggs.p80Days);
+  const p95Days = aggs?.p95Days == null ? null : Number(aggs.p95Days);
+
+  const commonTermMode =
+    aggs?.commonTermMode == null ? null : Number(aggs.commonTermMode);
+
+  const termMinFinal = aggs?.termMin == null ? null : Number(aggs.termMin);
+  const termMaxFinal = aggs?.termMax == null ? null : Number(aggs.termMax);
+
+  // Canonical-mode quality gate
+  // IMPORTANT:
+  // - We only *block* metrics when we can't even define the trade credit population.
+  // - Missing term days / SB flag / etc should degrade specific metrics, not blank everything.
+  const canonicalQuality = {
+    blocked: false,
+    missing: [],
+  };
+
+  // SB metrics quality signals (do NOT block)
+  if (missingSbFlagCount > 0) {
+    canonicalQuality.missing.push({
+      field: "is_small_business",
+      count: missingSbFlagCount,
     });
-
-    if (!ptrs) {
-      const e = new Error("Ptrs not found");
-      e.statusCode = 404;
-      throw e;
-    }
-
-    const draft = ptrs.reportPreviewDraft || {};
-
-    const aggs = await fetchPaymentObservationMetricsAggs({
-      t,
-      customerId,
-      ptrsId,
-    });
-
-    // Defaults when there are no rows yet
-    const stageRowCount = aggs?.stageRowCount || 0;
-    const paymentObservationCount = aggs?.paymentObservationCount || 0;
-
-    const totalCount = aggs?.totalCount || 0;
-    const tcpSettlementValue = Number(aggs?.tcpSettlementValue || 0);
-    const missingAmountCount = aggs?.missingAmountCount || 0;
-
-    const sbCount = aggs?.sbCount || 0;
-    const sbValue = Number(aggs?.sbValue || 0);
-    const missingSbFlagCount = aggs?.missingSbFlagCount || 0;
-
-    const missingTermDaysCount = aggs?.missingTermDaysCount || 0;
-    const missingDatesCount = aggs?.missingDatesCount || 0;
-
-    const sbBand0to30Count = aggs?.sbBand0to30Count || 0;
-    const sbBand31to60Count = aggs?.sbBand31to60Count || 0;
-    const sbBandOver60Count = aggs?.sbBandOver60Count || 0;
-
-    // const sbBand0to30Value = Number(aggs?.sbBand0to30Value || 0);
-    // const sbBand31to60Value = Number(aggs?.sbBand31to60Value || 0);
-    // const sbBandOver60Value = Number(aggs?.sbBandOver60Value || 0);
-
-    const sbWithinTermsKnownCount = aggs?.sbWithinTermsKnownCount || 0;
-    const sbWithinTermsYesCount = aggs?.sbWithinTermsYesCount || 0;
-
-    const avgDays = aggs?.avgDays == null ? null : Number(aggs.avgDays);
-    const medianDays =
-      aggs?.medianDays == null ? null : Number(aggs.medianDays);
-    const p80Days = aggs?.p80Days == null ? null : Number(aggs.p80Days);
-    const p95Days = aggs?.p95Days == null ? null : Number(aggs.p95Days);
-
-    const commonTermMode =
-      aggs?.commonTermMode == null ? null : Number(aggs.commonTermMode);
-
-    const termMinFinal = aggs?.termMin == null ? null : Number(aggs.termMin);
-    const termMaxFinal = aggs?.termMax == null ? null : Number(aggs.termMax);
-
-    // Canonical-mode quality gate
-    // IMPORTANT:
-    // - We only *block* metrics when we can't even define the trade credit population.
-    // - Missing term days / SB flag / etc should degrade specific metrics, not blank everything.
-    const canonicalQuality = {
-      blocked: false,
-      missing: [],
-    };
-
-    // SB metrics quality signals (do NOT block)
-    if (missingSbFlagCount > 0) {
-      canonicalQuality.missing.push({
-        field: "is_small_business",
-        count: missingSbFlagCount,
-      });
-    }
-
-    // Term days quality signal (do NOT block) – we can still compute payment-time stats without it.
-    if (missingTermDaysCount > 0) {
-      canonicalQuality.missing.push({
-        field: "payment_term_days",
-        count: missingTermDaysCount,
-      });
-    }
-
-    // Payment time quality signal (do NOT block) – affected metrics will be null if we have no SB payment days.
-    if (missingDatesCount > 0) {
-      canonicalQuality.missing.push({
-        field: "payment_time_days",
-        count: missingDatesCount,
-      });
-    }
-
-    // Invoice amount quality signal (do NOT block). The SBTCP numerator still
-    // comes from observation amounts; the TCP denominator is settlement-based.
-    if (missingAmountCount > 0) {
-      canonicalQuality.missing.push({
-        field: "payment_amount",
-        count: missingAmountCount,
-      });
-    }
-
-    // A staged dataset with no derived payments cannot produce honest metrics.
-    if (stageRowCount > 0 && totalCount === 0) {
-      canonicalQuality.blocked = true;
-    }
-
-    const sbWithinTermsPct =
-      !canonicalQuality.blocked && sbWithinTermsKnownCount > 0
-        ? (sbWithinTermsYesCount / sbWithinTermsKnownCount) * 100
-        : null;
-
-    const payments0to30Pct =
-      !canonicalQuality.blocked && sbCount > 0
-        ? (sbBand0to30Count / sbCount) * 100
-        : null;
-
-    const payments31to60Pct =
-      !canonicalQuality.blocked && sbCount > 0
-        ? (sbBand31to60Count / sbCount) * 100
-        : null;
-
-    const paymentsOver60Pct =
-      !canonicalQuality.blocked && sbCount > 0
-        ? (sbBandOver60Count / sbCount) * 100
-        : null;
-
-    const sbTradeCreditPaymentsPct =
-      calculateSmallBusinessTradeCreditPaymentsPct({
-        sbValue,
-        tcpSettlementValue,
-        blocked: canonicalQuality.blocked,
-      });
-    // logger.logEvent("info", "PTRS v2 metrics debug: SB trade credit %", {
-    //   action: "PtrsV2MetricsSbTradeCreditDebug",
-    //   ptrsId,
-    //   customerId,
-    //   totals: {
-    //     totalCount,
-    //     sbCount,
-    //     tcpSettlementValue,
-    //     sbValue,
-    //     missingAmountCount,
-    //   },
-    //   rawAmountSigns: {
-    //     rawNegativeAmountCount,
-    //     rawPositiveAmountCount,
-    //     rawZeroAmountCount,
-    //   },
-    //   computed: {
-    //     sbTradeCreditPaymentsPct,
-    //     rounded: round2(sbTradeCreditPaymentsPct),
-    //   },
-    //   samples: amountSample,
-    // });
-
-    // Peppol: we don’t have a reliable field yet.
-    const peppolEnabledSbProcurementPct = null;
-
-    // -------------------------
-    // Compose regulator-shaped preview
-    // -------------------------
-
-    const header = {
-      reportId: ptrs.id,
-      businessName: ptrs.reportingEntityName || null,
-      abn: ptrs?.meta?.abn || null,
-      acn: ptrs?.meta?.acn || null,
-      arbn: ptrs?.meta?.arbn || null,
-      type: "Standard",
-      reportingPeriodStartDate: ptrs.periodStart || null,
-      reportingPeriodEndDate: ptrs.periodEnd || null,
-      revisedReport: Boolean(draft.revisedReport),
-      redactedReport: Boolean(draft.redactedReport),
-      submittedDate: null,
-    };
-
-    const declarations = {
-      supplyChainFinanceOffered: draft.supplyChainFinanceOffered ?? null,
-      procurementFeesCharged: draft.procurementFeesCharged ?? null,
-      smallBusinessPaymentObligations:
-        draft.smallBusinessPaymentObligations ?? null,
-      anzsicSubdivision: draft.anzsicSubdivision ?? null,
-      industryDivision: draft.industryDivision ?? null,
-      reportComments: safeText(draft.reportComments),
-      descriptionOfChanges: safeText(draft.descriptionOfChanges),
-    };
-
-    const computed = {
-      commonPaymentTermsDays: commonTermMode,
-      commonPaymentTermMinimum: termMinFinal,
-      commonPaymentTermMaximum: termMaxFinal,
-
-      forecastPaymentTerm: commonTermMode,
-      forecastMinimumPaymentTerm: termMinFinal,
-      forecastMaximumPaymentTerm: termMaxFinal,
-
-      receivableTermsComparedToCommonPaymentTerm: "Unknown",
-
-      percentageOfSbInvoicesPaidWithinPaymentTerm: round2(sbWithinTermsPct),
-
-      averagePaymentTimeDays: round2(avgDays),
-      medianPaymentTimeDays: round2(medianDays),
-      p80PaymentTimeDays: round2(p80Days),
-      p95PaymentTimeDays: round2(p95Days),
-
-      payments30DaysOrLessPct: round2(payments0to30Pct),
-      payments31To60DaysPct: round2(payments31to60Pct),
-      paymentsMoreThan60DaysPct: round2(paymentsOver60Pct),
-
-      percentageOfSmallBusinessTradeCreditPayments: round2(
-        sbTradeCreditPaymentsPct,
-      ),
-      percentagePeppolEnabledSmallBusinessProcurement:
-        peppolEnabledSbProcurementPct,
-    };
-
-    const quality = {
-      mode,
-      stageRowCount,
-      paymentObservationCount,
-      basedOnRowCount: totalCount,
-      sbRowCount: sbCount,
-      missingInputs: makeMissingInputs(declarations),
-      canonical: canonicalQuality,
-      notes: [],
-      dataSignals: {
-        missingTermDaysCount,
-        missingSbFlagCount,
-        missingDatesCount,
-        missingAmountCount,
-      },
-    };
-
-    if (missingTermDaysCount > 0) {
-      quality.notes.push(
-        "Some rows are missing payment term days; within-terms and term metrics may be incomplete.",
-      );
-    }
-
-    if (missingSbFlagCount > 0) {
-      quality.notes.push(
-        "Some rows are missing small business status; SB metrics are computed only for rows where is_small_business is true.",
-      );
-    }
-
-    if (peppolEnabledSbProcurementPct == null) {
-      quality.notes.push(
-        "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null).",
-      );
-    }
-
-    if (canonicalQuality.blocked) {
-      quality.notes.push(
-        "Metrics are blocked because no unambiguous payment observations could be derived from the staged source records.",
-      );
-    }
-
-    await t.commit();
-
-    return {
-      header,
-      declarations,
-      computed,
-      quality,
-    };
-  } catch (err) {
-    try {
-      await t.rollback();
-    } catch (_) {
-      // ignore
-    }
-    throw err;
   }
+
+  // Term days quality signal (do NOT block) – we can still compute payment-time stats without it.
+  if (missingTermDaysCount > 0) {
+    canonicalQuality.missing.push({
+      field: "payment_term_days",
+      count: missingTermDaysCount,
+    });
+  }
+
+  // Payment time quality signal (do NOT block) – affected metrics will be null if we have no SB payment days.
+  if (missingDatesCount > 0) {
+    canonicalQuality.missing.push({
+      field: "payment_time_days",
+      count: missingDatesCount,
+    });
+  }
+
+  // Invoice amount quality signal (do NOT block). The SBTCP numerator still
+  // comes from observation amounts; the TCP denominator is settlement-based.
+  if (missingAmountCount > 0) {
+    canonicalQuality.missing.push({
+      field: "payment_amount",
+      count: missingAmountCount,
+    });
+  }
+
+  // A staged dataset with no derived payments cannot produce honest metrics.
+  if (stageRowCount > 0 && totalCount === 0) {
+    canonicalQuality.blocked = true;
+  }
+
+  const sbWithinTermsPct =
+    !canonicalQuality.blocked && sbWithinTermsKnownCount > 0
+      ? (sbWithinTermsYesCount / sbWithinTermsKnownCount) * 100
+      : null;
+
+  const payments0to30Pct =
+    !canonicalQuality.blocked && sbCount > 0
+      ? (sbBand0to30Count / sbCount) * 100
+      : null;
+
+  const payments31to60Pct =
+    !canonicalQuality.blocked && sbCount > 0
+      ? (sbBand31to60Count / sbCount) * 100
+      : null;
+
+  const paymentsOver60Pct =
+    !canonicalQuality.blocked && sbCount > 0
+      ? (sbBandOver60Count / sbCount) * 100
+      : null;
+
+  const sbTradeCreditPaymentsPct = calculateSmallBusinessTradeCreditPaymentsPct(
+    {
+      sbValue,
+      tcpSettlementValue,
+      blocked: canonicalQuality.blocked,
+    },
+  );
+  // logger.logEvent("info", "PTRS v2 metrics debug: SB trade credit %", {
+  //   action: "PtrsV2MetricsSbTradeCreditDebug",
+  //   ptrsId,
+  //   customerId,
+  //   totals: {
+  //     totalCount,
+  //     sbCount,
+  //     tcpSettlementValue,
+  //     sbValue,
+  //     missingAmountCount,
+  //   },
+  //   rawAmountSigns: {
+  //     rawNegativeAmountCount,
+  //     rawPositiveAmountCount,
+  //     rawZeroAmountCount,
+  //   },
+  //   computed: {
+  //     sbTradeCreditPaymentsPct,
+  //     rounded: round2(sbTradeCreditPaymentsPct),
+  //   },
+  //   samples: amountSample,
+  // });
+
+  // Peppol: we don’t have a reliable field yet.
+  const peppolEnabledSbProcurementPct = null;
+
+  // -------------------------
+  // Compose regulator-shaped preview
+  // -------------------------
+
+  const header = {
+    reportId: ptrs.id,
+    businessName: ptrs.reportingEntityName || null,
+    abn: ptrs?.meta?.abn || null,
+    acn: ptrs?.meta?.acn || null,
+    arbn: ptrs?.meta?.arbn || null,
+    type: "Standard",
+    reportingPeriodStartDate: ptrs.periodStart || null,
+    reportingPeriodEndDate: ptrs.periodEnd || null,
+    revisedReport: Boolean(draft.revisedReport),
+    redactedReport: Boolean(draft.redactedReport),
+    submittedDate: null,
+  };
+
+  const declarations = {
+    supplyChainFinanceOffered: draft.supplyChainFinanceOffered ?? null,
+    procurementFeesCharged: draft.procurementFeesCharged ?? null,
+    smallBusinessPaymentObligations:
+      draft.smallBusinessPaymentObligations ?? null,
+    anzsicSubdivision: draft.anzsicSubdivision ?? null,
+    industryDivision: draft.industryDivision ?? null,
+    reportComments: safeText(draft.reportComments),
+    descriptionOfChanges: safeText(draft.descriptionOfChanges),
+  };
+
+  const computed = {
+    commonPaymentTermsDays: commonTermMode,
+    commonPaymentTermMinimum: termMinFinal,
+    commonPaymentTermMaximum: termMaxFinal,
+
+    forecastPaymentTerm: commonTermMode,
+    forecastMinimumPaymentTerm: termMinFinal,
+    forecastMaximumPaymentTerm: termMaxFinal,
+
+    receivableTermsComparedToCommonPaymentTerm: "Unknown",
+
+    percentageOfSbInvoicesPaidWithinPaymentTerm: round2(sbWithinTermsPct),
+
+    averagePaymentTimeDays: round2(avgDays),
+    medianPaymentTimeDays: round2(medianDays),
+    p80PaymentTimeDays: round2(p80Days),
+    p95PaymentTimeDays: round2(p95Days),
+
+    payments30DaysOrLessPct: round2(payments0to30Pct),
+    payments31To60DaysPct: round2(payments31to60Pct),
+    paymentsMoreThan60DaysPct: round2(paymentsOver60Pct),
+
+    percentageOfSmallBusinessTradeCreditPayments: round2(
+      sbTradeCreditPaymentsPct,
+    ),
+    percentagePeppolEnabledSmallBusinessProcurement:
+      peppolEnabledSbProcurementPct,
+  };
+
+  const quality = {
+    mode,
+    stageRowCount,
+    paymentObservationCount,
+    basedOnRowCount: totalCount,
+    sbRowCount: sbCount,
+    missingInputs: makeMissingInputs(declarations),
+    canonical: canonicalQuality,
+    notes: [],
+    dataSignals: {
+      missingTermDaysCount,
+      missingSbFlagCount,
+      missingDatesCount,
+      missingAmountCount,
+    },
+  };
+
+  if (missingTermDaysCount > 0) {
+    quality.notes.push(
+      "Some rows are missing payment term days; within-terms and term metrics may be incomplete.",
+    );
+  }
+
+  if (missingSbFlagCount > 0) {
+    quality.notes.push(
+      "Some rows are missing small business status; SB metrics are computed only for rows where is_small_business is true.",
+    );
+  }
+
+  if (peppolEnabledSbProcurementPct == null) {
+    quality.notes.push(
+      "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null).",
+    );
+  }
+
+  if (canonicalQuality.blocked) {
+    quality.notes.push(
+      "Metrics are blocked because no unambiguous payment observations could be derived from the staged source records.",
+    );
+  }
+
+  return {
+    header,
+    declarations,
+    computed,
+    quality,
+  };
 }

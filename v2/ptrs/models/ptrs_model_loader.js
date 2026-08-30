@@ -5,16 +5,20 @@ const path = require("path");
  * Initialize all PTRS v2 models in this folder using CamelCase model names exactly as
  * defined inside each model file.
  */
+function isPtrsV2RuntimeModelFile(file) {
+  if (file === "ptrs_model_loader.js") return false;
+  if (/\.(test|spec)\.js$/i.test(file)) return false;
+  return file.endsWith(".js");
+}
+
+function listPtrsV2RuntimeModelFiles(dir = __dirname) {
+  return fs.readdirSync(dir).filter(isPtrsV2RuntimeModelFile);
+}
+
 function initPtrsV2Models(sequelize) {
   const models = {};
   const dir = __dirname;
-
-  // Load *.js files except loader + old_models folder
-  const files = fs.readdirSync(dir).filter((f) => {
-    if (f === "ptrs_model_loader.js") return false;
-    if (f === "old_models") return false;
-    return f.endsWith(".js");
-  });
+  const files = listPtrsV2RuntimeModelFiles(dir);
 
   for (const file of files) {
     const define = require(path.join(dir, file));
@@ -86,4 +90,6 @@ function initPtrsV2Models(sequelize) {
 
 module.exports = {
   initPtrsV2Models,
+  isPtrsV2RuntimeModelFile,
+  listPtrsV2RuntimeModelFiles,
 };
