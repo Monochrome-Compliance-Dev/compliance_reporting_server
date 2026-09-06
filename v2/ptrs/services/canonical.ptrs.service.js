@@ -1,4 +1,5 @@
 const { Op } = require("sequelize");
+const { randomUUID } = require("crypto");
 const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
@@ -7,6 +8,7 @@ const { logger } = require("@/helpers/logger");
 const { buildStableInputHash } = require("@/v2/ptrs/services/ptrs.service");
 const {
   composeMappedRowsForPtrs,
+  prepareMappedRowsContext,
 } = require("@/v2/ptrs/services/maps.compose.ptrs.service");
 const {
   buildStageColumnProjection,
@@ -20,7 +22,7 @@ const {
   SAP_INVOICE_DATE_POLICY_VERSION,
 } = require("@/v2/ptrs/services/canonical.date-policy.ptrs.service");
 
-const CANONICAL_VERSION = "ptrs-canonical-v2";
+const CANONICAL_VERSION = "ptrs-canonical-v3";
 const CANONICAL_BATCH_SIZE = 2000;
 
 function parseDateFlexible(value) {
@@ -121,16 +123,16 @@ function getReachableDatasetIds(
 }
 
 function filterMaterialEnrichment({ joins, customFields, reachableIds }) {
-  const conditions = (Array.isArray(joins?.conditions) ? joins.conditions : [])
-    .filter((condition) => {
-      const fromId = String(condition?.from?.datasetId || "");
-      const toId = String(condition?.to?.datasetId || "");
-      return reachableIds.has(fromId) && reachableIds.has(toId);
-    })
-    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  const scopedCustomFields = (Array.isArray(customFields) ? customFields : [])
-    .filter((field) => reachableIds.has(String(field?.datasetId || "")))
-    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const conditions = (
+    Array.isArray(joins?.conditions) ? joins.conditions : []
+  ).filter((condition) => {
+    const fromId = String(condition?.from?.datasetId || "");
+    const toId = String(condition?.to?.datasetId || "");
+    return reachableIds.has(fromId) && reachableIds.has(toId);
+  });
+  const scopedCustomFields = (
+    Array.isArray(customFields) ? customFields : []
+  ).filter((field) => reachableIds.has(String(field?.datasetId || "")));
   return { joins: { conditions }, customFields: scopedCustomFields };
 }
 
@@ -182,6 +184,11 @@ async function buildCanonicalInputSnapshot({
     throw error;
   }
   const adapter = resolveCanonicalAdapter(dataset);
+  if (dataset.status !== "parsed" && dataset.sourceFormat !== "api") {
+    const error = new Error("Selected transaction dataset has not been parsed");
+    error.statusCode = 400;
+    throw error;
+  }
   const supportConfig = await db.PtrsColumnMap.findOne({
     where: { customerId, ptrsId },
     attributes: ["joins", "customFields"],
@@ -222,7 +229,10 @@ async function buildCanonicalInputSnapshot({
       "transformConfig",
       "meta",
     ],
-    order: [["canonicalField", "ASC"]],
+    order: [
+      ["canonicalField", "ASC"],
+      ["datasetId", "ASC"],
+    ],
     raw: true,
     transaction,
   });
@@ -265,6 +275,7 @@ async function buildCanonicalInputSnapshot({
   const source = contentSnapshots.find((item) => item.id === datasetId);
   const references = contentSnapshots.filter((item) => item.id !== datasetId);
   const mappingMaterial = fieldMap.map((row) => ({
+    datasetId: row.datasetId,
     canonicalField: row.canonicalField,
     sourceRole: row.sourceRole,
     sourceColumn: row.sourceColumn,
@@ -294,11 +305,25 @@ async function buildCanonicalInputSnapshot({
     mappingSignature,
     enrichmentSignature,
     materialSignature: buildStableInputHash(material),
+    preparedInput: freezeInput(
+      JSON.parse(
+        JSON.stringify({
+          customerId,
+          ptrsId,
+          profileId,
+          transactionDataset: dataset,
+          datasets: relatedDatasets,
+          supportConfig: { profileId, ...enrichment },
+          fieldMapRows: mappingMaterial,
+        }),
+      ),
+    ),
     inputSnapshot: {
       ...material,
       source,
       references,
       enrichment,
+      mappings: mappingMaterial,
       adapterContract: {
         requiredFields: adapter.contract.requiredFields,
         requiredAnyGroups: adapter.contract.requiredAnyGroups,
@@ -311,6 +336,14 @@ async function buildCanonicalInputSnapshot({
   };
 }
 
+function freezeInput(value) {
+  if (value && typeof value === "object") {
+    Object.values(value).forEach(freezeInput);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function sanitizeJson(value) {
   return JSON.parse(
     JSON.stringify(value, (_, item) =>
@@ -319,18 +352,154 @@ function sanitizeJson(value) {
   );
 }
 
+async function rollbackCanonicalTransaction(transaction, meta) {
+  if (!transaction || transaction.finished) return;
+  try {
+    await transaction.rollback();
+  } catch (rollbackError) {
+    logger.error("PTRS canonical rollback failed", {
+      ...meta,
+      rollbackError: rollbackError.message,
+    });
+  }
+}
+
+async function beginCanonicalTransaction(customerId) {
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+  try {
+    // SET LOCAL tenant context does not take a data snapshot. Set isolation
+    // before the first read, for both configuration capture and the build.
+    await db.sequelize.query(
+      "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+      {
+        transaction,
+      },
+    );
+    return transaction;
+  } catch (error) {
+    await rollbackCanonicalTransaction(transaction, { customerId });
+    throw error;
+  }
+}
+
+async function assertCanonicalSourcesUnchanged(snapshot, transaction) {
+  const { customerId, ptrsId, datasets } = snapshot.preparedInput;
+  const current = await db.PtrsDataset.findAll({
+    where: {
+      customerId,
+      ptrsId,
+      id: { [Op.in]: datasets.map((item) => item.id) },
+    },
+    order: [["id", "ASC"]],
+    raw: true,
+    transaction,
+  });
+  const actual = [];
+  for (const dataset of current) {
+    actual.push(await datasetContentSnapshot(dataset, transaction));
+  }
+  const expected = [
+    snapshot.inputSnapshot.source,
+    ...snapshot.inputSnapshot.references,
+  ].sort((a, b) => a.id.localeCompare(b.id));
+  actual.sort((a, b) => a.id.localeCompare(b.id));
+  if (buildStableInputHash(actual) !== buildStableInputHash(expected)) {
+    const error = new Error(
+      "Canonical source data changed before execution; retry with current inputs",
+    );
+    error.code = "CANONICAL_INPUT_CHANGED";
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+async function recordCanonicalFailure(revision, error, meta) {
+  let transaction;
+  try {
+    transaction = await beginTransactionWithCustomerContext(meta.customerId);
+    const failed = await db.PtrsCanonicalRevision.findOne({
+      where: {
+        id: revision.id,
+        customerId: meta.customerId,
+        ptrsId: meta.ptrsId,
+        datasetId: meta.datasetId,
+        status: "building",
+      },
+      transaction,
+      lock: "UPDATE",
+    });
+    // A commit acknowledgement can fail after successful publication. Never
+    // overwrite succeeded output, including in that ambiguous failure case.
+    if (failed)
+      await failed.update(
+        {
+          status: "failed",
+          completedAt: new Date(),
+          failure: { message: error.message, code: error.code || null },
+        },
+        { transaction },
+      );
+    await transaction.commit();
+  } catch (failureError) {
+    await rollbackCanonicalTransaction(transaction, meta);
+    logger.error(
+      "Could not persist failed PTRS canonical revision; recovery required",
+      {
+        ...meta,
+        canonicalRevisionId: revision.id,
+        error: failureError.message,
+        originalError: error.message,
+      },
+    );
+  }
+}
+
 async function materializeCanonicalRevision({
   customerId,
   ptrsId,
   datasetId,
   profileId,
   actorId = null,
+  requestId = null,
   compose = composeMappedRowsForPtrs,
+  prepare = prepareMappedRowsContext,
 }) {
-  let setupTransaction = await beginTransactionWithCustomerContext(customerId);
+  const started = process.hrtime.bigint();
+  const elapsed = (since) => Number(process.hrtime.bigint() - since) / 1e6;
+  const meta = {
+    customerId,
+    ptrsId,
+    datasetId,
+    primaryDatasetId: datasetId,
+    profileId,
+    requestId,
+    operationId: randomUUID(),
+  };
+  const emit = (event, details = {}) =>
+    logger.info("PTRS canonical lifecycle", {
+      ...meta,
+      event,
+      ...details,
+    });
+  const memory = () => {
+    const { rss, heapUsed } = process.memoryUsage();
+    return { rssBytes: rss, heapUsedBytes: heapUsed };
+  };
+  const activeWhere = (materialSignature) => ({
+    customerId,
+    ptrsId,
+    datasetId,
+    materialSignature,
+    status: { [Op.in]: ["building", "succeeded"] },
+  });
+  let setupTransaction;
+  let buildTransaction;
   let revision;
   let snapshot;
+  let ownsRevision = false;
+  emit("start", memory());
   try {
+    setupTransaction = await beginCanonicalTransaction(customerId);
     snapshot = await buildCanonicalInputSnapshot({
       customerId,
       ptrsId,
@@ -339,18 +508,17 @@ async function materializeCanonicalRevision({
       transaction: setupTransaction,
     });
     const existing = await db.PtrsCanonicalRevision.findOne({
-      where: {
-        customerId,
-        ptrsId,
-        datasetId,
-        materialSignature: snapshot.materialSignature,
-        status: "succeeded",
-      },
+      where: activeWhere(snapshot.materialSignature),
       raw: true,
       transaction: setupTransaction,
     });
+    meta.materialSignature = snapshot.materialSignature;
+    emit("input_prepared", { durationMs: elapsed(started) });
     if (existing) {
       await setupTransaction.commit();
+      emit(existing.status === "succeeded" ? "reused" : "contended", {
+        canonicalRevisionId: existing.id,
+      });
       return { revision: existing, reused: true };
     }
     revision = await db.PtrsCanonicalRevision.create(
@@ -374,18 +542,54 @@ async function materializeCanonicalRevision({
       },
       { transaction: setupTransaction },
     );
+    // The committed unique active-material insert is the ownership claim.
+    // Only this request may enter the build. No age-based takeover exists.
+    ownsRevision = true;
     await setupTransaction.commit();
-  } catch (error) {
-    if (!setupTransaction.finished) await setupTransaction.rollback();
-    throw error;
-  }
-
-  const buildTransaction =
-    await beginTransactionWithCustomerContext(customerId);
-  try {
+    meta.canonicalRevisionId = revision.id;
+    emit("ownership_acquired");
+    buildTransaction = await beginCanonicalTransaction(customerId);
+    revision = await db.PtrsCanonicalRevision.findOne({
+      where: {
+        id: revision.id,
+        customerId,
+        ptrsId,
+        datasetId,
+        status: "building",
+      },
+      transaction: buildTransaction,
+      lock: "UPDATE",
+    });
+    if (!revision)
+      throw new Error("Canonical execution claim is no longer building");
+    const [pidRows] = await db.sequelize.query(
+      "SELECT pg_backend_pid() AS pid",
+      {
+        transaction: buildTransaction,
+      },
+    );
+    meta.backendPid = pidRows[0].pid;
+    await assertCanonicalSourcesUnchanged(snapshot, buildTransaction);
+    const preparationStarted = process.hrtime.bigint();
+    const preparedContext = await prepare({
+      customerId,
+      ptrsId,
+      datasetId,
+      preparedInput: snapshot.preparedInput,
+      transaction: buildTransaction,
+      hrMsSince: elapsed,
+      parseDateFlexible,
+      trace: { write: emit },
+    });
+    emit("context_prepared", {
+      durationMs: elapsed(preparationStarted),
+      ...memory(),
+    });
     let afterRowNo = null;
     let rowCount = 0;
+    let batchNumber = 0;
     while (true) {
+      const composeStarted = process.hrtime.bigint();
       const result = await compose({
         customerId,
         ptrsId,
@@ -393,11 +597,14 @@ async function materializeCanonicalRevision({
         limit: CANONICAL_BATCH_SIZE,
         afterRowNo,
         transaction: buildTransaction,
-        hrMsSince: () => 0,
+        preparedContext,
+        hrMsSince: elapsed,
         parseDateFlexible,
       });
       const rows = Array.isArray(result?.rows) ? result.rows : [];
       if (!rows.length) break;
+      const composeMs = elapsed(composeStarted);
+      const persistenceStarted = process.hrtime.bigint();
       const payload = rows.map((row) => {
         const data = sanitizeJson(row);
         const meta = data?._ptrsMeta || {};
@@ -441,12 +648,26 @@ async function materializeCanonicalRevision({
         transaction: buildTransaction,
       });
       rowCount += payload.length;
+      batchNumber += 1;
+      const previousRowNo = afterRowNo;
       afterRowNo = Number(payload.at(-1)?.sourceRowNo);
-      if (!Number.isFinite(afterRowNo)) {
+      if (
+        !Number.isFinite(afterRowNo) ||
+        (previousRowNo != null && afterRowNo <= previousRowNo)
+      ) {
         throw new Error(
           "Canonical source rows require deterministic source row numbers",
         );
       }
+      emit("batch_complete", {
+        batchNumber,
+        rows: payload.length,
+        firstRowNo: payload[0].sourceRowNo,
+        lastRowNo: afterRowNo,
+        cumulativeRows: rowCount,
+        composeMs,
+        persistenceMs: elapsed(persistenceStarted),
+      });
       if (rows.length < CANONICAL_BATCH_SIZE) break;
     }
     await revision.update(
@@ -454,6 +675,12 @@ async function materializeCanonicalRevision({
       { transaction: buildTransaction },
     );
     await buildTransaction.commit();
+    emit("complete", {
+      rowCount,
+      batchCount: batchNumber,
+      durationMs: elapsed(started),
+      ...memory(),
+    });
     logger.info("PTRS canonical revision materialised", {
       action: "PtrsCanonicalRevisionMaterialised",
       customerId,
@@ -468,35 +695,42 @@ async function materializeCanonicalRevision({
       reused: false,
     };
   } catch (error) {
-    if (!buildTransaction.finished) await buildTransaction.rollback();
-    const failureTransaction =
-      await beginTransactionWithCustomerContext(customerId);
-    try {
-      const failed = await db.PtrsCanonicalRevision.findOne({
-        where: { id: revision.id, customerId, ptrsId, datasetId },
-        transaction: failureTransaction,
-      });
-      if (failed) {
-        await failed.update(
-          {
-            status: "failed",
-            completedAt: new Date(),
-            failure: { message: error.message, code: error.code || null },
-          },
-          { transaction: failureTransaction },
-        );
+    await rollbackCanonicalTransaction(buildTransaction, meta);
+    await rollbackCanonicalTransaction(setupTransaction, meta);
+    // A concurrent claimant may have committed since our repeatable-read
+    // snapshot. Resolve the unique-key race in a fresh transaction.
+    if (
+      !ownsRevision &&
+      error.original?.constraint ===
+        "ptrs_canonical_revision_active_material_ux"
+    ) {
+      let lookupTransaction;
+      try {
+        lookupTransaction =
+          await beginTransactionWithCustomerContext(customerId);
+        const active = await db.PtrsCanonicalRevision.findOne({
+          where: activeWhere(snapshot.materialSignature),
+          raw: true,
+          transaction: lookupTransaction,
+        });
+        await lookupTransaction.commit();
+        if (active) {
+          emit(active.status === "succeeded" ? "reused" : "contended", {
+            canonicalRevisionId: active.id,
+          });
+          return { revision: active, reused: true };
+        }
+      } catch (lookupError) {
+        await rollbackCanonicalTransaction(lookupTransaction, meta);
+        logger.error("PTRS canonical claim lookup failed", {
+          ...meta,
+          error: lookupError.message,
+        });
       }
-      await failureTransaction.commit();
-    } catch (failureError) {
-      if (!failureTransaction.finished) await failureTransaction.rollback();
-      logger.error("Could not persist failed PTRS canonical revision", {
-        customerId,
-        ptrsId,
-        datasetId,
-        canonicalRevisionId: revision.id,
-        error: failureError.message,
-      });
     }
+    if (ownsRevision && revision)
+      await recordCanonicalFailure(revision, error, meta);
+    emit("failed", { error: error.message, durationMs: elapsed(started) });
     throw error;
   }
 }

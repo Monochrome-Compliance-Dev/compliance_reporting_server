@@ -68,7 +68,9 @@ const LOCK_GOV_ABN_SQL = `
   SELECT pg_advisory_xact_lock(hashtext(:abn))
 `;
 
-const ABR_NEGATIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Expiry makes a cached classification eligible for refresh; it does not
+// invalidate the ABN or entity. Existing rows are renewed on the ABN key.
+const ABR_NEGATIVE_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 async function mapWithConcurrency(items, concurrency, worker) {
   const results = new Array(items.length);
@@ -156,7 +158,15 @@ async function persistNegativeAbrResults({ abrCacheModel, candidates }) {
     throw new Error("PtrsAbrLookupCache model is required");
   }
 
-  await abrCacheModel.bulkCreate(candidates, {
+  // Match government-reference deduplication: the last result for an ABN wins.
+  // PostgreSQL cannot update the same conflict row twice within one INSERT.
+  const uniqueCandidates = Array.from(
+    new Map(candidates.map((row) => [row.abn, row])).values(),
+  );
+
+  await abrCacheModel.bulkCreate(uniqueCandidates, {
+    conflictAttributes: ["abn"],
+    // Never replace the existing row identity or original creation timestamp.
     updateOnDuplicate: [
       "classification",
       "checkedAt",
@@ -164,7 +174,7 @@ async function persistNegativeAbrResults({ abrCacheModel, candidates }) {
       "updatedAt",
     ],
   });
-  return candidates.length;
+  return uniqueCandidates.length;
 }
 
 async function enrichGovReferenceFromStageRows({

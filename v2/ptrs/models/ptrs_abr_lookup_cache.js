@@ -15,6 +15,7 @@ function model(sequelize) {
       abn: {
         type: DataTypes.STRING(11),
         allowNull: false,
+        unique: true,
       },
       classification: {
         type: DataTypes.STRING(32),

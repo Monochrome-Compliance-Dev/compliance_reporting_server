@@ -18,6 +18,9 @@ jest.mock("@/helpers/logger", () => ({
 jest.mock("@/helpers/setCustomerIdRLS", () => ({
   beginTransactionWithCustomerContext: jest.fn(),
 }));
+jest.mock("@/helpers/nanoid_helper", () => ({
+  getNanoid: () => "newcache01",
+}));
 jest.mock("@/data_cleanse/abn-lookup.util", () => ({
   isValidAbn: jest.fn(() => true),
   lookupAbnByNumber: jest.fn(),
@@ -39,6 +42,7 @@ const {
 const {
   enrichGovReferenceFromStageRows,
   findUnknownGovCandidateAbns,
+  persistNegativeAbrResults,
   persistNewGovernmentReferences,
 } = require("./exclusions.gov.enrichment");
 
@@ -272,6 +276,88 @@ describe("PTRS government ABN enrichment", () => {
       unresolvedCount: 1,
       negativeResultsCached: 1,
     });
+    const [cached] = db.PtrsAbrLookupCache.bulkCreate.mock.calls[0][0];
+    expect(cached.expiresAt.getTime() - cached.checkedAt.getTime()).toBe(
+      365 * 24 * 60 * 60 * 1000,
+    );
+  });
+
+  test("deduplicates negative results by ABN and targets only refresh fields", async () => {
+    const first = {
+      abn: "62008528523",
+      classification: "NON_GOVERNMENT",
+      checkedAt: new Date("2026-08-31T00:00:00Z"),
+      expiresAt: new Date("2027-08-31T00:00:00Z"),
+    };
+    const latest = { ...first, classification: "INACTIVE_GOVERNMENT" };
+    const other = { ...first, abn: "86768265615" };
+
+    const persisted = await persistNegativeAbrResults({
+      abrCacheModel: db.PtrsAbrLookupCache,
+      candidates: [first, other, latest],
+    });
+
+    expect(persisted).toBe(2);
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [latest, other],
+      {
+        conflictAttributes: ["abn"],
+        updateOnDuplicate: [
+          "classification",
+          "checkedAt",
+          "expiresAt",
+          "updatedAt",
+        ],
+      },
+    );
+  });
+
+  test("generates an ABN conflict target with the installed Sequelize and real model", async () => {
+    const sequelize = new Sequelize({ dialect: "postgres", logging: false });
+    const cacheModel = require("../models/ptrs_abr_lookup_cache")(sequelize);
+    const query = jest.spyOn(sequelize, "query").mockResolvedValue([]);
+    try {
+      await persistNegativeAbrResults({
+        abrCacheModel: cacheModel,
+        candidates: [
+          {
+            abn: "62008528523",
+            classification: "NON_GOVERNMENT",
+            checkedAt: new Date("2026-08-31T00:00:00Z"),
+            expiresAt: new Date("2027-08-31T00:00:00Z"),
+          },
+        ],
+      });
+
+      const sql = query.mock.calls[0][0];
+      expect(sql).toContain('ON CONFLICT ("abn") DO UPDATE SET');
+      expect(sql).not.toContain('ON CONFLICT ("id")');
+      const updateClause = sql.split("DO UPDATE SET")[1].split("RETURNING")[0];
+      expect(updateClause).not.toMatch(/"(?:id|createdAt)"=/);
+      for (const field of [
+        "classification",
+        "checkedAt",
+        "expiresAt",
+        "updatedAt",
+      ]) {
+        expect(updateClause).toContain(`"${field}"=EXCLUDED."${field}"`);
+      }
+    } finally {
+      query.mockRestore();
+      await sequelize.close();
+    }
+  });
+
+  test("does not suppress a cache persistence failure", async () => {
+    db.PtrsAbrLookupCache.bulkCreate.mockRejectedValueOnce(
+      new Error("write failed"),
+    );
+    await expect(
+      persistNegativeAbrResults({
+        abrCacheModel: db.PtrsAbrLookupCache,
+        candidates: [{ abn: "62008528523", classification: "NON_GOVERNMENT" }],
+      }),
+    ).rejects.toThrow("write failed");
   });
 
   test("preserves exclusion safety when ABR lookup fails", async () => {

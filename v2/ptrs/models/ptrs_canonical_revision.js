@@ -1,4 +1,4 @@
-const { DataTypes } = require("sequelize");
+const { DataTypes, Op } = require("sequelize");
 const { getNanoid } = require("@/helpers/nanoid_helper");
 
 module.exports = model;
@@ -48,6 +48,12 @@ function model(sequelize) {
       updatedAt: false,
       paranoid: false,
       indexes: [
+        {
+          name: "ptrs_canonical_revision_active_material_ux",
+          unique: true,
+          fields: ["customerId", "ptrsId", "datasetId", "materialSignature"],
+          where: { status: { [Op.in]: ["building", "succeeded"] } },
+        },
         {
           name: "ptrs_canonical_revision_customer_idx",
           fields: ["customerId"],

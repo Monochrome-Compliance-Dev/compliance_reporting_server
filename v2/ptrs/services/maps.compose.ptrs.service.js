@@ -71,12 +71,7 @@ function orderJoinsForTransactionDataset(joins, transactionDatasetId) {
   return ordered;
 }
 
-function applyCustomFields({
-  row,
-  rawRow,
-  customFields,
-  rowDatasetId,
-}) {
+function applyCustomFields({ row, rawRow, customFields, rowDatasetId }) {
   const out = { ...(row || {}) };
   const source = rawRow && typeof rawRow === "object" ? rawRow : {};
   const currentDatasetId = String(rowDatasetId || "").trim();
@@ -373,11 +368,7 @@ async function composeSingleMappedRow({
         );
       }
 
-      const lhsVal = getJoinLhsValue(
-        workingRow,
-        sourceDatasetId,
-        sourceCol,
-      );
+      const lhsVal = getJoinLhsValue(workingRow, sourceDatasetId, sourceCol);
       const key = normalizeJoinKeyValue(lhsVal, sourceTransform);
 
       if (!key) {
@@ -411,11 +402,7 @@ async function composeSingleMappedRow({
 
       if (joined) {
         counters.joinMatched += 1;
-        workingRow = mergeRoleRowNamespaced(
-          workingRow,
-          mergeDatasetId,
-          joined,
-        );
+        workingRow = mergeRoleRowNamespaced(workingRow, mergeDatasetId, joined);
         presentDatasetIds.add(mergeDatasetId);
 
         logComposeJoinProbeOnce({
@@ -500,13 +487,11 @@ async function composeSingleMappedRow({
   });
 }
 
-async function composeMappedRowsForPtrs({
+async function prepareMappedRowsContext({
   customerId,
   ptrsId,
   datasetId,
-  limit = 50,
-  offset = 0,
-  afterRowNo = null,
+  preparedInput = null,
   transaction = null,
   trace = null,
   hrMsSince,
@@ -522,8 +507,6 @@ async function composeMappedRowsForPtrs({
     throw new Error("parseDateFlexible is required");
   }
 
-  const composeStartNs = process.hrtime.bigint();
-
   const stageStart = (name) => ({
     name,
     startNs: process.hrtime.bigint(),
@@ -538,26 +521,36 @@ async function composeMappedRowsForPtrs({
     });
   };
 
-  trace?.write("compose_begin", { datasetId, limit, offset, afterRowNo });
+  if (
+    preparedInput &&
+    (preparedInput.customerId !== customerId ||
+      preparedInput.ptrsId !== ptrsId ||
+      preparedInput.transactionDataset.id !== datasetId)
+  )
+    throw new Error("Prepared mapping input scope mismatch");
 
-  const transactionDataset = await resolveTransactionDatasetForCompose({
-    customerId,
-    ptrsId,
-    datasetId,
-    transaction,
-    stageStart,
-    stageEnd,
-  });
+  const transactionDataset =
+    preparedInput?.transactionDataset ||
+    (await resolveTransactionDatasetForCompose({
+      customerId,
+      ptrsId,
+      datasetId,
+      transaction,
+      stageStart,
+      stageEnd,
+    }));
 
-  const { supportConfig, fieldMapRows } = await loadComposeDependencies({
-    customerId,
-    ptrsId,
-    datasetId,
-    transaction,
-    trace,
-    stageStart,
-    stageEnd,
-  });
+  const { supportConfig, fieldMapRows } =
+    preparedInput ||
+    (await loadComposeDependencies({
+      customerId,
+      ptrsId,
+      datasetId,
+      transaction,
+      trace,
+      stageStart,
+      stageEnd,
+    }));
 
   const { normalisedJoins } = normaliseConfiguredJoins({
     supportConfig,
@@ -744,12 +737,14 @@ async function composeMappedRowsForPtrs({
 
   const preloadDatasetIdsForCompose = async () => {
     const sPreload = stageStart("preload_dataset_ids");
-    const dsRows = await db.PtrsDataset.findAll({
-      where: { customerId, ptrsId },
-      attributes: ["id", "role", "purpose", "referenceKind"],
-      raw: true,
-      transaction,
-    });
+    const dsRows =
+      preparedInput?.datasets ||
+      (await db.PtrsDataset.findAll({
+        where: { customerId, ptrsId },
+        attributes: ["id", "role", "purpose", "referenceKind"],
+        raw: true,
+        transaction,
+      }));
 
     for (const ds of dsRows || []) {
       if (!ds?.id) continue;
@@ -799,6 +794,7 @@ async function composeMappedRowsForPtrs({
 
     const where = { customerId, ptrsId, datasetId: id };
 
+    const loadStarted = process.hrtime.bigint();
     const rows = await db.PtrsImportRaw.findAll({
       where,
       order: [["rowNo", "ASC"]],
@@ -837,6 +833,12 @@ async function composeMappedRowsForPtrs({
     });
 
     datasetRowsCache.set(id, parsed);
+    trace?.write("canonical_support_loaded", {
+      datasetId: id,
+      loadCount: 1,
+      rowsLoaded: parsed.length,
+      durationMs: hrMsSince(loadStarted),
+    });
     return parsed;
   };
 
@@ -938,84 +940,115 @@ async function composeMappedRowsForPtrs({
     return prepared;
   };
 
-  const transactionRows = await loadTransactionRowsForCompose({
-    customerId,
-    ptrsId,
-    datasetId: transactionDataset.id,
-    limit,
-    offset,
-    afterRowNo,
-    transaction,
-    stageStart,
-    stageEnd,
-  });
-
   await preloadDatasetIdsForCompose();
   const preparedJoinIndexes = await prebuildJoinIndexes(orderedJoins);
 
-  const loopStartNs = process.hrtime.bigint();
-
-  const counters = {
-    rowsInput: Array.isArray(transactionRows) ? transactionRows.length : 0,
-    joinsOrdered: Array.isArray(orderedJoins) ? orderedJoins.length : 0,
-    joinAttempts: 0,
-    joinSkippedMissingFromRole: 0,
-    joinNoKey: 0,
-    joinIndexLookups: 0,
-    joinMatched: 0,
-    joinNoMatch: 0,
-    customFieldsApplied: 0,
-    canonicalProjectionApplied: 0,
-    canonicalSourceMetaApplied: 0,
-  };
-
-  const composed = [];
-
-  const loggedJoinProbeRef = { logged: false };
-
-  for (const r of transactionRows) {
-    const out = await composeSingleMappedRow({
-      rawRow: r,
-      orderedJoins,
-      customFields,
-      fieldMapRows,
-      preparedJoinIndexes,
-      counters,
+  // Caches and mapping closures belong to this execution, never the process.
+  const composeBatch = async ({
+    limit = 50,
+    offset = 0,
+    afterRowNo = null,
+  }) => {
+    const composeStartNs = process.hrtime.bigint();
+    trace?.write("compose_begin", { datasetId, limit, offset, afterRowNo });
+    const transactionRows = await loadTransactionRowsForCompose({
       customerId,
       ptrsId,
-      logger,
-      loggedJoinProbeRef,
-      transactionDatasetId: datasetId,
-      adapterType: transactionDataset.adapterType,
-      getJoinLhsValue,
-      mergeRoleRowNamespaced,
-      joinIndexKey,
-      resolveCanonicalValue,
-      applyTransform,
-      setCanonicalSourceMeta,
-      normalizeJoinKeyValue,
-      logComposeJoinProbeOnce,
+      datasetId: transactionDataset.id,
+      limit,
+      offset,
+      afterRowNo,
+      transaction,
+      stageStart,
+      stageEnd,
     });
-    composed.push(out);
-  }
 
-  trace?.write("compose_loop_complete", {
-    durationMs: hrMsSince(loopStartNs),
-    ...counters,
+    const loopStartNs = process.hrtime.bigint();
+
+    const counters = {
+      rowsInput: Array.isArray(transactionRows) ? transactionRows.length : 0,
+      joinsOrdered: Array.isArray(orderedJoins) ? orderedJoins.length : 0,
+      joinAttempts: 0,
+      joinSkippedMissingFromRole: 0,
+      joinNoKey: 0,
+      joinIndexLookups: 0,
+      joinMatched: 0,
+      joinNoMatch: 0,
+      customFieldsApplied: 0,
+      canonicalProjectionApplied: 0,
+      canonicalSourceMetaApplied: 0,
+    };
+
+    const composed = [];
+
+    // Canonical diagnostics are counts/timings only; preview probes may include
+    // raw join values and must not enter the materialisation benchmark log.
+    const loggedJoinProbeRef = { logged: Boolean(preparedInput) };
+
+    for (const r of transactionRows) {
+      const out = await composeSingleMappedRow({
+        rawRow: r,
+        orderedJoins,
+        customFields,
+        fieldMapRows,
+        preparedJoinIndexes,
+        counters,
+        customerId,
+        ptrsId,
+        logger,
+        loggedJoinProbeRef,
+        transactionDatasetId: datasetId,
+        adapterType: transactionDataset.adapterType,
+        getJoinLhsValue,
+        mergeRoleRowNamespaced,
+        joinIndexKey,
+        resolveCanonicalValue,
+        applyTransform,
+        setCanonicalSourceMeta,
+        normalizeJoinKeyValue,
+        logComposeJoinProbeOnce,
+      });
+      composed.push(out);
+    }
+
+    trace?.write("compose_loop_complete", {
+      durationMs: hrMsSince(loopStartNs),
+      ...counters,
+    });
+
+    const headers = buildHeadersFromComposedRows(composed);
+
+    trace?.write("compose_headers_built", {
+      headersCount: Array.isArray(headers) ? headers.length : 0,
+    });
+
+    trace?.write("compose_end", {
+      rowsOut: Array.isArray(composed) ? composed.length : 0,
+      totalMs: hrMsSince(composeStartNs),
+    });
+
+    return { rows: composed, headers };
+  };
+  return Object.freeze({
+    customerId,
+    ptrsId,
+    datasetId,
+    transaction,
+    composeBatch,
   });
+}
 
-  const headers = buildHeadersFromComposedRows(composed);
-
-  trace?.write("compose_headers_built", {
-    headersCount: Array.isArray(headers) ? headers.length : 0,
-  });
-
-  trace?.write("compose_end", {
-    rowsOut: Array.isArray(composed) ? composed.length : 0,
-    totalMs: hrMsSince(composeStartNs),
-  });
-
-  return { rows: composed, headers };
+async function composeMappedRowsForPtrs(options) {
+  const context =
+    options.preparedContext || (await prepareMappedRowsContext(options));
+  if (
+    context.customerId !== options.customerId ||
+    context.ptrsId !== options.ptrsId ||
+    context.datasetId !== options.datasetId ||
+    context.transaction !== (options.transaction || null)
+  )
+    throw new Error("Prepared mapping context scope/transaction mismatch");
+  return context.composeBatch(options);
 }
 
 module.exports = {
@@ -1024,5 +1057,6 @@ module.exports = {
   applyCanonicalProjectionForCompose,
   attachCanonicalSourceLineage,
   composeSingleMappedRow,
+  prepareMappedRowsContext,
   composeMappedRowsForPtrs,
 };

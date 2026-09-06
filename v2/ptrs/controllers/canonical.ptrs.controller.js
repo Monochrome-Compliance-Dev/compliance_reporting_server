@@ -24,7 +24,8 @@ async function requirePtrs(req) {
 async function materializeRevision(req, res, next) {
   try {
     const { customerId, ptrs } = await requirePtrs(req);
-    const profileId = req.body?.profileId || req.query?.profileId || ptrs.profileId;
+    const profileId =
+      req.body?.profileId || req.query?.profileId || ptrs.profileId;
     if (!profileId) {
       const error = new Error("profileId is required");
       error.statusCode = 400;
@@ -36,24 +37,33 @@ async function materializeRevision(req, res, next) {
       datasetId: req.params.datasetId,
       profileId,
       actorId: req.auth?.id || null,
+      requestId: req.id || null,
     });
     await auditService.logEvent({
       customerId,
       userId: req.auth?.id,
       ip: req.ip,
       device: req.headers["user-agent"],
-      action: "PtrsV2CanonicalRevisionMaterialised",
+      action:
+        result.revision.status === "building"
+          ? "PtrsV2CanonicalRevisionInProgress"
+          : "PtrsV2CanonicalRevisionMaterialised",
       entity: "PtrsCanonicalRevision",
       entityId: result.revision.id,
       details: {
         ptrsId: req.params.id,
         datasetId: req.params.datasetId,
         profileId,
-        rowCount: Number(result.revision.rowCount) || 0,
+        rowCount:
+          result.revision.rowCount == null
+            ? null
+            : Number(result.revision.rowCount),
         reused: result.reused,
       },
     });
-    return res.status(200).json({ status: "success", data: result });
+    return res
+      .status(result.revision.status === "building" ? 202 : 200)
+      .json({ status: "success", data: result });
   } catch (error) {
     return next(error);
   }
@@ -73,7 +83,9 @@ async function listRevisionStatus(req, res, next) {
       ptrsId: req.params.id,
       profileId,
     });
-    return res.status(200).json({ status: "success", data: { datasets: statuses } });
+    return res
+      .status(200)
+      .json({ status: "success", data: { datasets: statuses } });
   } catch (error) {
     return next(error);
   }
