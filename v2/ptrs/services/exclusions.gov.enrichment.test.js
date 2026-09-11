@@ -259,6 +259,12 @@ describe("PTRS government ABN enrichment", () => {
           checkedAt: expect.any(Date),
           expiresAt: expect.any(Date),
         }),
+        expect.objectContaining({
+          abn: "33333333333",
+          classification: "ABN_NOT_CONFIRMED",
+          checkedAt: expect.any(Date),
+          expiresAt: expect.any(Date),
+        }),
       ],
       expect.objectContaining({
         updateOnDuplicate: expect.arrayContaining([
@@ -274,7 +280,7 @@ describe("PTRS government ABN enrichment", () => {
       inserted: 1,
       nonGovernmentCount: 1,
       unresolvedCount: 1,
-      negativeResultsCached: 1,
+      negativeResultsCached: 2,
     });
     const [cached] = db.PtrsAbrLookupCache.bulkCreate.mock.calls[0][0];
     expect(cached.expiresAt.getTime() - cached.checkedAt.getTime()).toBe(
@@ -306,6 +312,8 @@ describe("PTRS government ABN enrichment", () => {
           "classification",
           "checkedAt",
           "expiresAt",
+          "lookupStatus",
+          "lookupError",
           "updatedAt",
         ],
       },
@@ -372,7 +380,15 @@ describe("PTRS government ABN enrichment", () => {
     });
 
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
-    expect(db.PtrsAbrLookupCache.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          abn: "11111111111",
+          classification: "ABN_NOT_CONFIRMED",
+        }),
+      ],
+      expect.any(Object),
+    );
     expect(stats.lookupFailures).toBe(1);
     expect(stats.inserted).toBe(0);
   });
@@ -416,7 +432,15 @@ describe("PTRS government ABN enrichment", () => {
     expect(stats.lookupFailures).toBe(1);
     expect(stats.nonGovernmentCount).toBe(0);
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
-    expect(db.PtrsAbrLookupCache.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          abn: "11111111111",
+          classification: "ABN_NOT_CONFIRMED",
+        }),
+      ],
+      expect.any(Object),
+    );
   });
 
   test("does not call ABR when every staged ABN is already cached", async () => {
@@ -448,6 +472,15 @@ describe("PTRS government ABN enrichment", () => {
     expect(stats.skipped).toBe("ABR_GUID missing");
     expect(lookupAbnByNumber).not.toHaveBeenCalled();
     expect(db.PtrsGovEntityRef.bulkCreate).not.toHaveBeenCalled();
+    expect(db.PtrsAbrLookupCache.bulkCreate).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          abn: "11111111111",
+          classification: "ABN_NOT_CONFIRMED",
+        }),
+      ],
+      expect.any(Object),
+    );
   });
 
   test("keeps inactive government results out of the exclusion reference and caches their ABR classification", async () => {

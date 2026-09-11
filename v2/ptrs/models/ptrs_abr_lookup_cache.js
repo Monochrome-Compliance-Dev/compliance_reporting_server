@@ -29,6 +29,14 @@ function model(sequelize) {
         type: DataTypes.DATE,
         allowNull: false,
       },
+      lookupStatus: {
+        type: DataTypes.STRING(32),
+        allowNull: true,
+      },
+      lookupError: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
     },
     {
       tableName: "tbl_ptrs_abr_lookup_cache",

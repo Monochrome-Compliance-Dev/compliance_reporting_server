@@ -50,6 +50,18 @@ const {
 const {
   enrichGovReferenceFromStageRows,
 } = require("./exclusions.gov.enrichment");
+const { applyAbnEligibilityExclusion } = require("./exclusions.abn");
+const {
+  applyTcpGroupExclusionPropagation,
+} = require("./exclusions.group");
+
+const GROUP_PROPAGATION_REASONS_BY_CATEGORY = Object.freeze({
+  all: undefined,
+  gov: ["GOVERNMENT_ENTITY"],
+  abn: ["NO_ABN", "INVALID_ABN", "ABN_NOT_CONFIRMED"],
+  employee: ["EMPLOYEE_PAYMENT"],
+  intra_company: ["INTRA_GROUP"],
+});
 
 /**
  * Exclusions are eligibility decisions, not transformations.
@@ -135,7 +147,7 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // Employee & expense payments (profile-scoped ref list; keyword match)
+    // Veolia employee payments use deterministic supplier/document indicators.
     if (category === "all" || category === "employee") {
       stats.checksRun += 1;
       const affected = await timed("employeeMs", () =>
@@ -150,8 +162,22 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // Document type exclusions
-    if (category === "all" || category === "doc_type") {
+    if (category === "all" || category === "abn") {
+      stats.checksRun += 1;
+      const affected = await timed("abnEligibilityMs", () =>
+        applyAbnEligibilityExclusion({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+        }),
+      );
+      stats.rowsExcluded += affected;
+    }
+
+    // Legacy generic exclusions remain explicitly callable, but are not part of
+    // the automatic Veolia methodology chain.
+    if (category === "doc_type") {
       stats.checksRun += 1;
       const affected = await timed("docTypeMs", () =>
         applyDocTypeExclusion({
@@ -164,7 +190,7 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    if (category === "all" || category === "credit_applied") {
+    if (category === "credit_applied") {
       stats.checksRun += 1;
       const affected = await timed("creditAppliedMs", () =>
         applyCreditAppliedExclusion({
@@ -178,7 +204,7 @@ async function applyExclusionsAndPersist({
     }
 
     // Keyword exclusions (profile-scoped keyword list)
-    if (category === "all" || category === "keyword") {
+    if (category === "keyword") {
       stats.checksRun += 1;
       const affected = await timed("keywordMs", () =>
         applyKeywordExclusion({
@@ -192,8 +218,7 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // Pre-payments (heuristic match on payment terms OR description)
-    if (category === "all" || category === "prepaid") {
+    if (category === "prepaid") {
       stats.checksRun += 1;
       const affected = await timed("prepaidMs", () =>
         applyPrepaidExclusion({
@@ -206,8 +231,24 @@ async function applyExclusionsAndPersist({
       stats.rowsExcluded += affected;
     }
 
-    // International suppliers (non-AUD currency and/or missing invalid ABN)
-    if (category === "all" || category === "international") {
+    if (Object.prototype.hasOwnProperty.call(
+      GROUP_PROPAGATION_REASONS_BY_CATEGORY,
+      category,
+    )) {
+      stats.checksRun += 1;
+      const affected = await timed("groupPropagationMs", () =>
+        applyTcpGroupExclusionPropagation({
+          sequelize,
+          transaction: t,
+          customerId,
+          ptrsId,
+          reasons: GROUP_PROPAGATION_REASONS_BY_CATEGORY[category],
+        }),
+      );
+      stats.rowsExcluded += affected;
+    }
+
+    if (category === "international") {
       stats.checksRun += 1;
       const affected = await timed("internationalMs", () =>
         applyInternationalExclusion({
@@ -342,7 +383,7 @@ async function previewExclusions({
       result.samples.employee = employeePreview.sampleRows;
     }
 
-    if (category === "all" || category === "doc_type") {
+    if (category === "doc_type") {
       stats.checksRun += 1;
       const docTypePreview = await previewDocTypeExclusion({
         sequelize,
@@ -357,7 +398,7 @@ async function previewExclusions({
       result.samples.doc_type = docTypePreview.sampleRows;
     }
 
-    if (category === "all" || category === "credit_applied") {
+    if (category === "credit_applied") {
       stats.checksRun += 1;
       const creditAppliedPreview = await previewCreditAppliedExclusion({
         sequelize,
@@ -374,7 +415,7 @@ async function previewExclusions({
     }
 
     // Keyword exclusions preview (profile-scoped keyword list)
-    if (category === "all" || category === "keyword") {
+    if (category === "keyword") {
       stats.checksRun += 1;
       const keywordPreview = await previewKeywordExclusion({
         sequelize,
@@ -390,7 +431,7 @@ async function previewExclusions({
       result.samples.keyword = keywordPreview.sampleRows;
     }
 
-    if (category === "all" || category === "prepaid") {
+    if (category === "prepaid") {
       stats.checksRun += 1;
       const prepaidPreview = await previewPrepaidExclusion({
         sequelize,
@@ -405,7 +446,7 @@ async function previewExclusions({
       result.samples.prepaid = prepaidPreview.sampleRows;
     }
 
-    if (category === "all" || category === "international") {
+    if (category === "international") {
       stats.checksRun += 1;
       const internationalPreview = await previewInternationalExclusion({
         sequelize,

@@ -4,10 +4,6 @@ const db = require("@/db/database");
 const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
-const {
-  appendTransformationHistorySql,
-} = require("./stage.transformation-history");
-
 module.exports = {
   importResults,
   getStatus,
@@ -381,11 +377,11 @@ function buildSbiReapplyStatsSql() {
     OR COALESCE(s."data"->'exclude_from_metrics', 'false'::jsonb) = 'true'::jsonb
   )`;
   const abnSql = `NULLIF(
-    regexp_replace(COALESCE(s."data"->>'payee_entity_abn', ''), '\\D', '', 'g'),
+    regexp_replace(COALESCE(s."payeeEntityAbn", ''), '\\D', '', 'g'),
     ''
   )`;
   return `
-    WITH stage AS MATERIALIZED (
+    WITH stage AS (
       SELECT
         s."id",
         ${excludedSql} AS excluded,
@@ -399,15 +395,7 @@ function buildSbiReapplyStatsSql() {
         AND s."ptrsId" = :ptrsId
         AND s."deletedAt" IS NULL
     ),
-    existing_changes AS MATERIALIZED (
-      SELECT DISTINCT change."paymentRowId"
-      FROM "tbl_ptrs_sbi_row_change" change
-      WHERE change."customerId" = :customerId
-        AND change."ptrsId" = :ptrsId
-        AND change."sbiUploadId" = :uploadId
-        AND change."deletedAt" IS NULL
-    ),
-    joined AS MATERIALIZED (
+    joined AS (
       SELECT
         stage.*,
         result."id" AS result_id,
@@ -417,9 +405,7 @@ function buildSbiReapplyStatsSql() {
           WHEN result."outcome" = :smallOutcome THEN true
           WHEN result."outcome" = :notSmallOutcome THEN false
           ELSE NULL
-        END AS expected,
-        existing_changes."paymentRowId" IS NOT NULL
-          AS change_record_exists
+        END AS expected
       FROM stage
       LEFT JOIN "tbl_ptrs_sbi_result" result
         ON result."customerId" = :customerId
@@ -427,8 +413,6 @@ function buildSbiReapplyStatsSql() {
        AND result."sbiUploadId" = :uploadId
        AND result."deletedAt" IS NULL
        AND result."abn" = stage.abn
-      LEFT JOIN existing_changes
-        ON existing_changes."paymentRowId" = stage."id"
     )
     SELECT
       COUNT(*)::int AS "totalRows",
@@ -468,40 +452,12 @@ function buildSbiReapplyStatsSql() {
             OR joined.current_source IS DISTINCT FROM 'SBI_UPLOAD'
             OR joined.current_outcome IS DISTINCT FROM joined.outcome
           )
-      )::int AS "dataChangeRows",
-      COUNT(*) FILTER (
-        WHERE NOT joined.excluded
-          AND joined.abn ~ '^\\d{11}$'
-          AND joined.result_is_valid IS TRUE
-          AND joined.expected IS NOT NULL
-          AND NOT joined.change_record_exists
-      )::int AS "historyCheckRows"
+      )::int AS "dataChangeRows"
     FROM joined
   `;
 }
 
 function buildSbiReapplySql() {
-  const historyEventSql = `jsonb_build_object(
-    'key', candidate.history_key,
-    'kind', 'sbi',
-    'comment', 'SBI status resolved ' || candidate.expected::text
-      || ' from SBI upload ' || :uploadId
-      || ' for payee ABN ' || candidate.abn,
-    'sourceStageRowIds', jsonb_build_array(candidate."id"),
-    'targetStageRowIds', jsonb_build_array(candidate."id"),
-    'details', jsonb_build_object(
-      'payeeAbn', candidate.abn,
-      'outcome', candidate.outcome,
-      'isSmallBusiness', candidate.expected,
-      'source', 'SBI_UPLOAD',
-      'evidenceId', :uploadId
-    )
-  )`;
-  const nextMetaSql = appendTransformationHistorySql(
-    'stage_row."meta"',
-    historyEventSql,
-  );
-
   return `
     WITH existing_changes AS MATERIALIZED (
       SELECT DISTINCT change."paymentRowId"
@@ -514,10 +470,9 @@ function buildSbiReapplySql() {
     stage_source AS MATERIALIZED (
       SELECT
         stage_row."id",
-        stage_row."rowNo",
         NULLIF(
           regexp_replace(
-            COALESCE(stage_row."data"->>'payee_entity_abn', ''),
+            COALESCE(stage_row."payeeEntityAbn", ''),
             '\\D',
             '',
             'g'
@@ -553,7 +508,6 @@ function buildSbiReapplySql() {
     eligible AS MATERIALIZED (
       SELECT
         stage_source."id",
-        stage_source."rowNo",
         stage_source.abn,
         CASE
           WHEN result."outcome" = :smallOutcome THEN true
@@ -563,10 +517,6 @@ function buildSbiReapplySql() {
         result."outcome" AS outcome,
         stage_source.before_value,
         stage_source.before_evidence,
-        'sbi:' || :uploadId || ':' || CASE
-          WHEN result."outcome" = :smallOutcome THEN 'true'
-          ELSE 'false'
-        END AS history_key,
         (
           stage_source.current_value
             IS DISTINCT FROM to_jsonb(CASE
@@ -600,36 +550,7 @@ function buildSbiReapplySql() {
       SELECT
         eligible.*
       FROM eligible
-      WHERE eligible.data_changed OR NOT eligible.change_record_exists
-    ),
-    candidate AS MATERIALIZED (
-      SELECT
-        candidate_ids.*,
-        stage_row."data" AS current_data,
-        stage_row."meta" AS current_meta,
-        CASE
-          WHEN candidate_ids.change_record_exists THEN false
-          ELSE NOT EXISTS (
-          SELECT 1
-          FROM jsonb_array_elements(
-            CASE
-              WHEN jsonb_typeof(
-                COALESCE(stage_row."meta", '{}'::jsonb)
-                  ->'transformationHistory'
-              ) = 'array'
-                THEN COALESCE(stage_row."meta", '{}'::jsonb)
-                  ->'transformationHistory'
-              ELSE '[]'::jsonb
-            END
-          ) history_item
-          WHERE history_item->>'key' = candidate_ids.history_key
-        ) END AS history_changed
-      FROM candidate_ids
-      JOIN "tbl_ptrs_stage_row" stage_row
-        ON stage_row."id" = candidate_ids."id"
-       AND stage_row."customerId" = :customerId
-       AND stage_row."ptrsId" = :ptrsId
-       AND stage_row."deletedAt" IS NULL
+      WHERE eligible.data_changed
     ),
     changes_inserted AS (
       INSERT INTO "tbl_ptrs_sbi_row_change" (
@@ -644,7 +565,7 @@ function buildSbiReapplySql() {
             encode(
               decode(
                 md5(
-                  candidate."id" || clock_timestamp()::text || random()::text
+                  candidate_ids."id" || clock_timestamp()::text || random()::text
                 ),
                 'hex'
               ),
@@ -659,66 +580,48 @@ function buildSbiReapplySql() {
         :customerId,
         :ptrsId,
         :uploadId,
-        candidate."id",
-        candidate.abn,
-        candidate.before_value,
-        candidate.expected,
-        candidate.outcome,
+        candidate_ids."id",
+        candidate_ids.abn,
+        candidate_ids.before_value,
+        candidate_ids.expected,
+        candidate_ids.outcome,
         :userId,
         :checkedAt::timestamptz,
         now(),
         now(),
         NULL
-      FROM candidate
-      WHERE candidate.data_changed
-        AND NOT candidate.change_record_exists
+      FROM candidate_ids
+      WHERE NOT candidate_ids.change_record_exists
       RETURNING 1
     ),
     updated AS (
       UPDATE "tbl_ptrs_stage_row" stage_row
       SET
-        "data" = CASE
-          WHEN candidate.data_changed THEN
-            COALESCE(stage_row."data", '{}'::jsonb) || jsonb_build_object(
-              'is_small_business', candidate.expected,
-              'small_business_outcome', candidate.outcome,
+        "data" = COALESCE(stage_row."data", '{}'::jsonb) || jsonb_build_object(
+              'is_small_business', candidate_ids.expected,
+              'small_business_outcome', candidate_ids.outcome,
               'small_business_source', 'SBI_UPLOAD',
               'small_business_evidence_id', :uploadId,
               'small_business_checked_at', CASE
-                WHEN candidate.before_evidence = :uploadId
+                WHEN candidate_ids.before_evidence = :uploadId
                   THEN COALESCE(
                     stage_row."data"->>'small_business_checked_at',
                     :checkedAt
                   )
                 ELSE :checkedAt
               END
-            )
-          ELSE stage_row."data"
-        END,
-        "meta" = CASE
-          WHEN candidate.history_changed THEN ${nextMetaSql}
-          ELSE stage_row."meta"
-        END,
+            ),
         "updatedAt" = now()
-      FROM candidate
-      WHERE stage_row."id" = candidate."id"
+      FROM candidate_ids
+      WHERE stage_row."id" = candidate_ids."id"
         AND stage_row."customerId" = :customerId
         AND stage_row."ptrsId" = :ptrsId
         AND stage_row."deletedAt" IS NULL
-      RETURNING
-        candidate."id",
-        candidate."rowNo",
-        candidate.abn,
-        candidate.before_value AS "beforeIsSmallBusiness",
-        candidate.expected AS "afterIsSmallBusiness",
-        candidate.outcome,
-        candidate.data_changed AS "dataChanged",
-        candidate.history_changed AS "historyChanged"
+      RETURNING candidate_ids."id"
     )
     SELECT
       (SELECT COUNT(*)::int FROM changes_inserted) AS "affectedRows",
-      COUNT(*) FILTER (WHERE updated."historyChanged")::int AS "historyRows"
-    FROM updated
+      (SELECT COUNT(*)::int FROM updated) AS "appliedRows"
   `;
 }
 
@@ -748,14 +651,12 @@ async function applySbiResultsToStageRowsSql({
     rowsWithPayeeAbn: Number(sourceStats.rowsWithPayeeAbn) || 0,
     matchedAbns: Number(sourceStats.matchedAbns) || 0,
     affectedRows: 0,
-    historyRows: 0,
     missingAbnRows: Number(sourceStats.missingAbnRows) || 0,
     invalidMatchRows: Number(sourceStats.invalidMatchRows) || 0,
     unknownOutcomeRows: Number(sourceStats.unknownOutcomeRows) || 0,
   };
   const dataChangeRows = Number(sourceStats.dataChangeRows) || 0;
-  const historyCheckRows = Number(sourceStats.historyCheckRows) || 0;
-  if (dataChangeRows === 0 && historyCheckRows === 0) {
+  if (dataChangeRows === 0) {
     return stats;
   }
   const checkedAt = new Date().toISOString();
@@ -770,7 +671,6 @@ async function applySbiResultsToStageRowsSql({
   });
   const updateStats = updateRows?.[0] || {};
   stats.affectedRows = Number(updateStats.affectedRows) || 0;
-  stats.historyRows = Number(updateStats.historyRows) || 0;
 
   return stats;
 }
@@ -792,7 +692,7 @@ async function reapplyLatestResults({ customerId, ptrsId, userId = null }) {
         status: "MISSING",
         ptrsId,
         sbiUploadId: null,
-        counts: { affectedRows: 0, historyRows: 0 },
+        counts: { affectedRows: 0 },
       };
     }
 
@@ -1183,7 +1083,6 @@ async function importResults({ customerId, ptrsId, userId, file }) {
       rowsWithPayeeAbn,
       matchedAbns,
       affectedRows,
-      historyRows,
       missingAbnRows,
       invalidMatchRows,
       unknownOutcomeRows,
@@ -1224,7 +1123,6 @@ async function importResults({ customerId, ptrsId, userId, file }) {
         rowsWithPayeeAbn,
         matchedAbns,
         affectedRows,
-        historyRows,
         missingAbnRows,
         invalidMatchRows,
         unknownOutcomeRows,
@@ -1253,7 +1151,6 @@ async function importResults({ customerId, ptrsId, userId, file }) {
         rowsWithPayeeAbn,
         matchedAbns,
         affectedRows,
-        historyRows,
         missingAbnRows,
         invalidMatchRows,
         unknownOutcomeRows,

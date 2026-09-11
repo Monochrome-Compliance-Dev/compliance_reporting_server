@@ -53,6 +53,12 @@ jest.mock("./exclusions.international", () => ({
 jest.mock("./exclusions.gov.enrichment", () => ({
   enrichGovReferenceFromStageRows: jest.fn(),
 }));
+jest.mock("./exclusions.group", () => ({
+  applyTcpGroupExclusionPropagation: jest.fn(),
+}));
+jest.mock("./exclusions.abn", () => ({
+  applyAbnEligibilityExclusion: jest.fn(),
+}));
 
 const {
   beginTransactionWithCustomerContext,
@@ -66,6 +72,12 @@ const {
 const {
   enrichGovReferenceFromStageRows,
 } = require("./exclusions.gov.enrichment");
+const {
+  applyTcpGroupExclusionPropagation,
+} = require("./exclusions.group");
+const {
+  applyAbnEligibilityExclusion,
+} = require("./exclusions.abn");
 const {
   applyExclusionsAndPersist,
   previewExclusions,
@@ -91,6 +103,8 @@ describe("PTRS gov exclusions preflight", () => {
     previewGovExclusion.mockReset();
     applyCreditAppliedExclusion.mockReset();
     previewCreditAppliedExclusion.mockReset();
+    applyTcpGroupExclusionPropagation.mockReset().mockResolvedValue(0);
+    applyAbnEligibilityExclusion.mockReset().mockResolvedValue(0);
     db.sequelize.query.mockReset();
   });
 
@@ -160,6 +174,13 @@ describe("PTRS gov exclusions preflight", () => {
       transaction,
       customerId: "customer-1",
       ptrsId: "ptrs-1",
+    });
+    expect(applyTcpGroupExclusionPropagation).toHaveBeenCalledWith({
+      sequelize: expect.any(Object),
+      transaction,
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+      reasons: ["GOVERNMENT_ENTITY"],
     });
     expect(
       enrichGovReferenceFromStageRows.mock.invocationCallOrder[0],
@@ -236,10 +257,11 @@ describe("PTRS gov exclusions preflight", () => {
       customerId: "customer-1",
       ptrsId: "ptrs-1",
     });
+    expect(applyTcpGroupExclusionPropagation).not.toHaveBeenCalled();
     expect(response.persisted).toBe(4);
   });
 
-  test("includes credit_applied when applying all exclusions", async () => {
+  test("applies the automatic eligibility chain and keeps credit_applied manual", async () => {
     const transaction = makeTransaction();
     beginTransactionWithCustomerContext.mockResolvedValue(transaction);
     enrichGovReferenceFromStageRows.mockResolvedValue({});
@@ -257,24 +279,30 @@ describe("PTRS gov exclusions preflight", () => {
     for (const applyMock of applyMocks) {
       applyMock.mockResolvedValue(0);
     }
-    applyCreditAppliedExclusion.mockResolvedValue(4);
-
     const response = await applyExclusionsAndPersist({
       customerId: "customer-1",
       ptrsId: "ptrs-1",
       category: "all",
     });
 
-    expect(applyCreditAppliedExclusion).toHaveBeenCalledWith({
+    expect(applyAbnEligibilityExclusion).toHaveBeenCalledWith({
       sequelize: expect.any(Object),
       transaction,
       customerId: "customer-1",
       ptrsId: "ptrs-1",
     });
-    expect(response.persisted).toBe(4);
+    expect(applyCreditAppliedExclusion).not.toHaveBeenCalled();
+    expect(applyTcpGroupExclusionPropagation).toHaveBeenCalledWith({
+      sequelize: expect.any(Object),
+      transaction,
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+      reasons: undefined,
+    });
+    expect(response.persisted).toBe(0);
   });
 
-  test("includes credit_applied when previewing all exclusions", async () => {
+  test("does not preview manual credit_applied under all", async () => {
     const transaction = makeTransaction();
     beginTransactionWithCustomerContext.mockResolvedValue(transaction);
     enrichGovReferenceFromStageRows.mockResolvedValue({});
@@ -298,12 +326,6 @@ describe("PTRS gov exclusions preflight", () => {
     for (const previewMock of previewMocks) {
       previewMock.mockResolvedValue(emptyPreview);
     }
-    previewCreditAppliedExclusion.mockResolvedValue({
-      matched: 4,
-      alreadyExcluded: 1,
-      sampleRows: [{ row_no: 2 }],
-    });
-
     const response = await previewExclusions({
       customerId: "customer-1",
       ptrsId: "ptrs-1",
@@ -311,13 +333,7 @@ describe("PTRS gov exclusions preflight", () => {
       limit: 10,
     });
 
-    expect(previewCreditAppliedExclusion).toHaveBeenCalledWith({
-      sequelize: expect.any(Object),
-      transaction,
-      customerId: "customer-1",
-      ptrsId: "ptrs-1",
-      effectiveLimit: 10,
-    });
-    expect(response.result.counts.credit_applied).toBe(4);
+    expect(previewCreditAppliedExclusion).not.toHaveBeenCalled();
+    expect(response.result.counts).not.toHaveProperty("credit_applied");
   });
 });

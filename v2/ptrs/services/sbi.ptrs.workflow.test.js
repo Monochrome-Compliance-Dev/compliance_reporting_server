@@ -64,10 +64,9 @@ describe("bounded SBI workflow", () => {
           invalidMatchRows: 0,
           unknownOutcomeRows: 0,
           dataChangeRows: 200000,
-          historyCheckRows: 200000,
         },
       ])
-      .mockResolvedValueOnce([{ affectedRows: 200000, historyRows: 200000 }]);
+      .mockResolvedValueOnce([{ affectedRows: 200000, appliedRows: 200000 }]);
 
     const result = await importResults({
       customerId: "customer-1",
@@ -90,7 +89,6 @@ describe("bounded SBI workflow", () => {
       totalStageRows: 309280,
       matchedAbns: 200000,
       affectedRows: 200000,
-      historyRows: 200000,
     });
     expect(db.PtrsSbiResult.bulkCreate).toHaveBeenCalledWith(
       expect.arrayContaining([

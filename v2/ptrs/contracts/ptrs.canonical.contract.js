@@ -80,14 +80,13 @@ const PTRS_CANONICAL_CONTRACT = {
     supply_date: {
       type: "date",
       required: false,
-      notes:
-        "Fallback reference date if invoice and notice dates are unavailable.",
+      notes: "Reference date for a payment obligation that has no invoice.",
     },
 
     notice_for_payment_issue_date: {
       type: "date",
       required: false,
-      notes: "Fallback reference date if invoice dates are unavailable.",
+      notes: "Reference date for a payment notice that has no invoice.",
     },
 
     invoice_issue_date: {
@@ -150,6 +149,11 @@ const PTRS_CANONICAL_CONTRACT = {
   // ---------------------------------------------------------------------
   operational_source_fields: {
     source_account_code: { type: "string", required: false },
+    supplier_has_no_abn: {
+      type: "bool",
+      required: false,
+      notes: "Explicit source assertion that the supplier has no ABN.",
+    },
     document_type: { type: "string", required: false },
     document_currency: { type: "string", required: false },
     clearing_document: { type: "string", required: false },
@@ -242,7 +246,7 @@ const PTRS_CANONICAL_CONTRACT = {
 
     notes: {
       reference_date_rule:
-        "Payment start-of-clock must be derivable from at least one reference date source. Preferred rule: shorter-of invoice issue/receipt where both exist; otherwise fallback to notice, then supply.",
+        "For an ordinary invoice, both issue and receipt dates are required and the shorter payment duration applies. Notice or supply dates apply only to a mapped no-invoice obligation; invoice due date is not a semantic fallback.",
 
       terms_rule:
         "At least one payment term source should exist unless supplier-level default terms are provided via supporting datasets.",

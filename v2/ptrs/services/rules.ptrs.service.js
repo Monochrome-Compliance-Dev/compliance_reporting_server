@@ -1692,6 +1692,7 @@ async function applyRulesAndPersist({
   profileId = null,
   limit = null, // null = process ALL rows for this ptrsId
   groupName = null,
+  includeCrossRowRules = true,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -1753,13 +1754,25 @@ async function applyRulesAndPersist({
       limit: effectiveLimit,
     });
 
-    const crossRowStats = await applyCrossRowRulesSql({
-      customerId,
-      ptrsId,
-      rules: crossRowRules,
-      transaction: t,
-      limit: effectiveLimit,
-    });
+    const crossRowStats = includeCrossRowRules
+      ? await applyCrossRowRulesSql({
+          customerId,
+          ptrsId,
+          rules: crossRowRules,
+          transaction: t,
+          limit: effectiveLimit,
+        })
+      : {
+          rulesTried: 0,
+          rowsAffected: 0,
+          actions: 0,
+          currentExcluded: 0,
+          skippedConfiguredRules: Array.isArray(crossRowRules)
+            ? crossRowRules.length
+            : 0,
+          skipReason:
+            "Payment normalisation owns SAP financial adjustments during the methodology run",
+        };
 
     const combinedStats = {
       rulesTried:

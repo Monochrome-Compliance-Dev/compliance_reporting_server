@@ -55,13 +55,14 @@ async function getExclusionsSummary({ customerId, ptrsId, profileId = null }) {
           AND COALESCE((s."data"->>'exclude')::boolean, false) = true
       ),
       reason_rows AS (
-        SELECT jsonb_array_elements_text(b."data"->'exclude_reasons') AS reason
+        SELECT jsonb_array_elements_text(b."data"->'exclude_reasons') AS reason,
+          b."data"
         FROM base_rows b
         WHERE jsonb_typeof(COALESCE(b."data"->'exclude_reasons', '[]'::jsonb)) = 'array'
 
         UNION ALL
 
-        SELECT b."data"->>'exclude_reason' AS reason
+        SELECT b."data"->>'exclude_reason' AS reason, b."data"
         FROM base_rows b
         WHERE (
           jsonb_typeof(COALESCE(b."data"->'exclude_reasons', '[]'::jsonb)) <> 'array'
@@ -71,7 +72,13 @@ async function getExclusionsSummary({ customerId, ptrsId, profileId = null }) {
       )
       SELECT
         COALESCE(reason, 'UNKNOWN') AS reason,
-        COUNT(*)::int AS count
+        COUNT(*)::int AS count,
+        COALESCE(SUM(CASE
+          WHEN REPLACE("data"->>'payment_amount', ',', '')
+            ~ '^-?\\d+(\\.\\d+)?$'
+            THEN ABS(REPLACE("data"->>'payment_amount', ',', '')::numeric)
+          ELSE 0
+        END), 0)::numeric AS value
       FROM reason_rows
       GROUP BY COALESCE(reason, 'UNKNOWN')
       ORDER BY COUNT(*) DESC, reason ASC
@@ -100,11 +107,18 @@ async function getExclusionsSummary({ customerId, ptrsId, profileId = null }) {
           return acc;
         }, {})
       : {};
+    const reasonValues = Array.isArray(reasonRows)
+      ? reasonRows.reduce((acc, row) => {
+          acc[row.reason] = Number(row.value || 0);
+          return acc;
+        }, {})
+      : {};
 
     return {
       totalExcludedRows: Number(totalRows?.[0]?.totalExcludedRows || 0),
       multiReasonRows: Number(multiReasonRows?.[0]?.multiReasonRows || 0),
       byReason: reasonCounts,
+      byReasonValue: reasonValues,
     };
   } catch (error) {
     await t.rollback();

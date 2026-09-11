@@ -2,15 +2,86 @@ const auditService = require("@/audit/audit.service");
 const { logger } = require("@/helpers/logger");
 const ptrsService = require("@/v2/ptrs/services/data.ptrs.service");
 const {
+  importConfiguredWorkbook,
+} = require("@/v2/ptrs/services/workbook-import.ptrs.service");
+const {
   cleanupUploadedFile,
 } = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 module.exports = {
   addDataset,
+  addWorkbook,
   listDatasets,
   removeDataset,
   getDatasetSample,
 };
+
+async function addWorkbook(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ptrsId = req.params.id;
+  const file = req.file;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    if (!file?.path) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Workbook file is required" });
+    }
+    const imported = await importConfiguredWorkbook({
+      customerId,
+      ptrsId,
+      uploadPath: file.path,
+      fileName: file.originalname,
+      fileSize: file.size,
+      mimeType: file.mimetype,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+      action: "PtrsV2ImportWorkbook",
+      entity: "PtrsRawDataset",
+      entityId: ptrsId,
+      details: {
+        fileName: file.originalname,
+        datasetIds: imported.datasets.map((dataset) => dataset.id),
+        sheets: imported.datasets.map(
+          (dataset) => dataset.meta?.workbook?.sheetName,
+        ),
+      },
+    });
+    return res.status(201).json({ status: "success", data: imported });
+  } catch (error) {
+    logger.logEvent("error", "Error importing PTRS workbook", {
+      action: "PtrsV2ImportWorkbook",
+      ptrsId,
+      customerId,
+      userId,
+      error: error.message,
+      code: error.code || null,
+    });
+    return next(error);
+  } finally {
+    try {
+      await cleanupUploadedFile(file);
+    } catch (cleanupError) {
+      logger.logEvent("warn", "Could not clean PTRS workbook upload", {
+        action: "PtrsV2ImportWorkbookTempCleanup",
+        ptrsId,
+        customerId,
+        path: file?.path || null,
+        error: cleanupError.message,
+      });
+    }
+  }
+}
 
 /**
  * POST /api/v2/ptrs/:id/datasets

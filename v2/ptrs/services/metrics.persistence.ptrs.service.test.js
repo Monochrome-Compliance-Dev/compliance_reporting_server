@@ -31,6 +31,15 @@ jest.mock("./payment-observations.ptrs.service", () => ({
   getPaymentObservationReplacements: jest.fn(() => ({})),
   setPaymentObservationWorkMem: jest.fn(),
 }));
+jest.mock("./payment-normalisation.ptrs.service", () => ({
+  requireCurrentPaymentNormalisationResult: jest.fn(async () => ({
+    result: {
+      id: "norm000001",
+      inputSignature: "normalisation-signature-1",
+      calculationVersion: "normalisation-v1",
+    },
+  })),
+}));
 
 const {
   beginTransactionWithCustomerContext,
@@ -135,6 +144,11 @@ describe("PTRS persisted metrics results", () => {
       },
       stageMaterialState: {
         revision: "7",
+      },
+      paymentNormalisation: {
+        id: "norm000001",
+        inputSignature: "normalisation-signature-1",
+        calculationVersion: "normalisation-v1",
       },
     };
     results = [];
@@ -309,7 +323,7 @@ describe("PTRS persisted metrics results", () => {
     await getMetricsWithExecution({
       customerId,
       ptrsId,
-      calculationVersion: "ptrs-payment-observation-metrics-v2",
+      calculationVersion: "ptrs-payment-observation-metrics-v3",
       fetchAggregates,
     });
 

@@ -104,7 +104,8 @@ async function importDatasetCsvStreamToImportRaw({
         data,
       }),
       persistBatch: async (batch) => {
-        const transaction = await beginTransactionWithCustomerContext(customerId);
+        const transaction =
+          await beginTransactionWithCustomerContext(customerId);
         try {
           await db.PtrsImportRaw.bulkCreate(batch, {
             validate: false,
@@ -139,7 +140,8 @@ async function importDatasetCsvStreamToImportRaw({
         where: { id: datasetId, customerId, ptrsId },
         transaction,
       });
-      if (!dataset) throw new Error("Dataset not found during CSV finalisation");
+      if (!dataset)
+        throw new Error("Dataset not found during CSV finalisation");
       const currentMeta = dataset.get("meta") || {};
       await dataset.update(
         {
@@ -188,7 +190,8 @@ async function importDatasetCsvStreamToImportRaw({
   } catch (error) {
     let cleanupTransaction = null;
     try {
-      cleanupTransaction = await beginTransactionWithCustomerContext(customerId);
+      cleanupTransaction =
+        await beginTransactionWithCustomerContext(customerId);
       await db.PtrsImportRaw.destroy({
         where: { customerId, ptrsId, datasetId },
         transaction: cleanupTransaction,
@@ -330,7 +333,10 @@ async function persistCsvStreamToTemporaryFile(stream) {
     `${Date.now()}-${crypto.randomUUID()}.csv`,
   );
   try {
-    await pipeline(stream, fs.createWriteStream(temporaryPath, { flags: "wx" }));
+    await pipeline(
+      stream,
+      fs.createWriteStream(temporaryPath, { flags: "wx" }),
+    );
     return temporaryPath;
   } catch (error) {
     await fs.promises.unlink(temporaryPath).catch(() => {});
@@ -608,16 +614,17 @@ async function addDataset({
           },
         );
       }
-
     }
 
-    const finalTransaction = await beginTransactionWithCustomerContext(customerId);
+    const finalTransaction =
+      await beginTransactionWithCustomerContext(customerId);
     try {
       const finalDataset = await db.PtrsDataset.findOne({
         where: { id: datasetId, customerId, ptrsId },
         transaction: finalTransaction,
       });
-      if (!finalDataset) throw new Error("Dataset not found after CSV ingestion");
+      if (!finalDataset)
+        throw new Error("Dataset not found after CSV ingestion");
       const plain = finalDataset.get({ plain: true });
       await finalTransaction.commit();
       return plain;
@@ -726,6 +733,7 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
 
   const t = await beginTransactionWithCustomerContext(customerId);
   let storageRef = null;
+  let deleteStorageFile = false;
 
   try {
     const row = await db.PtrsDataset.findOne({
@@ -762,6 +770,12 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
       transaction: t,
     });
     await row.destroy({ transaction: t });
+    deleteStorageFile =
+      !storageRef ||
+      (await db.PtrsDataset.count({
+        where: { storageRef },
+        transaction: t,
+      })) === 0;
     await t.commit();
   } catch (err) {
     try {
@@ -772,7 +786,7 @@ async function removeDataset({ customerId, ptrsId, datasetId }) {
     throw err;
   }
 
-  if (storageRef) {
+  if (storageRef && deleteStorageFile) {
     try {
       fs.unlinkSync(storageRef);
     } catch (e) {

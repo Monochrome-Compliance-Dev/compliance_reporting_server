@@ -27,7 +27,7 @@ describe("reapplyLatestResults", () => {
     });
   });
 
-  test("reapplies SBI evidence set-wise without hydrating Stage JSON", async () => {
+  test("reapplies SBI evidence set-wise without Stage history", async () => {
     const aggregateStats = {
       totalRows: 309280,
       excludedRows: 39445,
@@ -37,16 +37,14 @@ describe("reapplyLatestResults", () => {
       invalidMatchRows: 0,
       unknownOutcomeRows: 0,
       dataChangeRows: 250000,
-      historyCheckRows: 250000,
     };
     const noOpStats = {
       ...aggregateStats,
       dataChangeRows: 0,
-      historyCheckRows: 0,
     };
     db.sequelize.query
       .mockResolvedValueOnce([aggregateStats])
-      .mockResolvedValueOnce([{ affectedRows: 250000, historyRows: 250000 }])
+      .mockResolvedValueOnce([{ affectedRows: 250000, appliedRows: 250000 }])
       .mockResolvedValueOnce([noOpStats]);
 
     const first = await reapplyLatestResults({
@@ -72,12 +70,10 @@ describe("reapplyLatestResults", () => {
     expect(first.counts).toEqual({
       ...publicStats,
       affectedRows: 250000,
-      historyRows: 250000,
     });
     expect(second.counts).toEqual({
       ...publicStats,
       affectedRows: 0,
-      historyRows: 0,
     });
     expect(db.sequelize.query).toHaveBeenCalledTimes(3);
 
@@ -86,10 +82,14 @@ describe("reapplyLatestResults", () => {
     expect(updateSql).toContain('INSERT INTO "tbl_ptrs_sbi_row_change"');
     expect(updateSql).toContain("jsonb_build_object(");
     expect(updateSql).toContain('AS "affectedRows"');
-    expect(updateSql).toContain('AS "historyRows"');
+    expect(updateSql).toContain('AS "appliedRows"');
+    expect(updateSql).not.toContain("transformationHistory");
+    expect(updateSql).not.toContain('"meta" =');
     expect(updateSql).not.toContain('RETURNING stage_row."data"');
     expect(updateSql).not.toContain('RETURNING stage_row."meta"');
+    expect(updateSql).toContain('stage_row."payeeEntityAbn"');
     expect(updateSql).toContain("existing_changes AS MATERIALIZED");
+    expect(updateSql).toContain("stage_source AS MATERIALIZED");
     expect(updateSql).toContain("candidate_ids AS MATERIALIZED");
   });
 });

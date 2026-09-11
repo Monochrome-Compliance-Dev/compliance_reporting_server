@@ -5,6 +5,7 @@ const request = require("supertest");
 const {
   cleanupUploadedFile,
   uploadCsv,
+  uploadWorkbook,
 } = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 describe("PTRS CSV upload middleware", () => {
@@ -33,5 +34,34 @@ describe("PTRS CSV upload middleware", () => {
       .expect(200);
 
     expect(response.body).toEqual({ exists: true, hasBuffer: false, size: 8 });
+  });
+});
+
+describe("PTRS workbook upload middleware", () => {
+  test("accepts Excel workbook bytes using the same disk-backed upload boundary", async () => {
+    const app = express();
+    app.post(
+      "/upload",
+      uploadWorkbook.single("file"),
+      async (req, res, next) => {
+        try {
+          const exists = await fs.promises
+            .stat(req.file.path)
+            .then((stat) => stat.isFile());
+          res.json({ exists, fileName: req.file.originalname });
+        } catch (error) {
+          next(error);
+        } finally {
+          await cleanupUploadedFile(req.file);
+        }
+      },
+    );
+
+    const response = await request(app)
+      .post("/upload")
+      .attach("file", Buffer.from("workbook"), "input.xlsx")
+      .expect(200);
+
+    expect(response.body).toEqual({ exists: true, fileName: "input.xlsx" });
   });
 });

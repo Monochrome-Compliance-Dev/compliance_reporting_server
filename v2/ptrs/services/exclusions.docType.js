@@ -21,8 +21,6 @@ async function applyDocTypeExclusion({
   const reasonSql = `'DOC_TYPE'`;
   const commentSql = `
     CASE
-      WHEN ${docTypeExpr} = 'K1'
-        THEN 'Document type exclusion — K1 document type'
       WHEN ${docTypeExpr} IN ('Z', 'KZ', 'AB')
         AND ${clearingDocExpr} LIKE '5%'
         THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
@@ -77,13 +75,8 @@ async function applyDocTypeExclusion({
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
       AND s."semanticKind" = 'accounting_event'
-      AND (
-        ${docTypeExpr} = 'K1'
-        OR (
-          ${docTypeExpr} IN ('Z', 'KZ', 'AB')
-          AND ${clearingDocExpr} LIKE '5%'
-        )
-      )
+      AND ${docTypeExpr} IN ('Z', 'KZ', 'AB')
+      AND ${clearingDocExpr} LIKE '5%'
       AND NOT (
         COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('DOC_TYPE'::text)
         OR COALESCE(s."data"->>'exclude_reason', '') = 'DOC_TYPE'
@@ -123,13 +116,8 @@ async function previewDocTypeExclusion({
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
       AND s."semanticKind" = 'accounting_event'
-      AND (
-        COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR (
-          COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
-          AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
-        )
-      )
+      AND COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
+      AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
   `;
 
   const [countRows] = await sequelize.query(countSql, {
@@ -154,8 +142,6 @@ async function previewDocTypeExclusion({
       s."data"->>'payment_date' AS "payment_date",
       s."data"->>'payment_amount' AS "payment_amount",
       CASE
-        WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-          THEN 'Document type exclusion — K1 document type'
         WHEN COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
           AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
           THEN 'Document type exclusion — internal/adjustment document type with clearing document beginning 5'
@@ -175,13 +161,8 @@ async function previewDocTypeExclusion({
       AND s."ptrsId" = :ptrsId
       AND s."deletedAt" IS NULL
       AND s."semanticKind" = 'accounting_event'
-      AND (
-        COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') = 'K1'
-        OR (
-          COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
-          AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
-        )
-      )
+      AND COALESCE(s."data"->>'document_type', s."data"->>'Document Type', '') IN ('Z', 'KZ', 'AB')
+      AND COALESCE(s."data"->>'clearing_document', s."data"->>'Clearing Document', '') LIKE '5%'
     ORDER BY s."rowNo" ASC
     LIMIT :limit
   `;

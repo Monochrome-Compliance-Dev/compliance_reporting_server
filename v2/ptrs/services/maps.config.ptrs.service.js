@@ -252,18 +252,21 @@ async function listCompatibleMaps({ customerId, profileId = null }) {
       })
       .filter(Boolean)
       .sort((a, b) => {
+        const aTime = new Date(
+          a?.fieldMapUpdatedAt || a?.fieldMapCreatedAt || 0,
+        ).getTime();
+        const bTime = new Date(
+          b?.fieldMapUpdatedAt || b?.fieldMapCreatedAt || 0,
+        ).getTime();
+        if (aTime !== bTime) return bTime - aTime;
+
         const countDiff =
           Number(b?.mappedFieldsCount || 0) - Number(a?.mappedFieldsCount || 0);
         if (countDiff !== 0) return countDiff;
 
-        const aTime = new Date(
-          a?.fieldMapUpdatedAt || a?.updatedAt || a?.createdAt || 0,
-        ).getTime();
-        const bTime = new Date(
-          b?.fieldMapUpdatedAt || b?.updatedAt || b?.createdAt || 0,
-        ).getTime();
-
-        return bTime - aTime;
+        return String(b?.datasetId || "").localeCompare(
+          String(a?.datasetId || ""),
+        );
       });
 
     await t.commit();

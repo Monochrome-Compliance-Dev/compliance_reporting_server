@@ -57,6 +57,11 @@ function model(sequelize) {
       allowNull: false,
       defaultValue: 0,
     },
+    normalisationInputRevision: {
+      type: DataTypes.BIGINT,
+      allowNull: false,
+      defaultValue: 0,
+    },
     createdBy: {
       type: DataTypes.STRING(10),
       allowNull: true,

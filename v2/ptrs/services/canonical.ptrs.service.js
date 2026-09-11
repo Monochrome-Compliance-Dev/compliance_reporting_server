@@ -905,6 +905,10 @@ async function loadCanonicalRevisionRows({
   });
   return rows.map((row) => ({
     ...row.data,
+    ...buildStageColumnProjection(
+      { ...(row.data || {}), ...row },
+      db.PtrsCanonicalSourceRow,
+    ),
     row_no: row.sourceRowNo,
     _canonicalProvenance: {
       canonicalRevisionId: row.canonicalRevisionId,

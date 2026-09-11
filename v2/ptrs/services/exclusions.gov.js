@@ -14,7 +14,7 @@ async function applyGovExclusion({
 }) {
   const payeeAbnExpr = `NULLIF(regexp_replace(${jsonText("s", "payee_entity_abn")}, '\\D', '', 'g'), '')`;
   const govAbnExpr = `NULLIF(regexp_replace(COALESCE(g."abn",''), '\\D', '', 'g'), '')`;
-  const reasonSql = `'GOV_ENTITY'`;
+  const reasonSql = `'GOVERNMENT_ENTITY'`;
   const commentSql = `
     (
       'Government entity' ||
@@ -75,8 +75,8 @@ async function applyGovExclusion({
       AND ${govAbnExpr} IS NOT NULL
       AND ${payeeAbnExpr} = ${govAbnExpr}
       AND NOT (
-        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOV_ENTITY'::text)
-        OR COALESCE(s."data"->>'exclude_reason', '') = 'GOV_ENTITY'
+        COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOVERNMENT_ENTITY'::text)
+        OR COALESCE(s."data"->>'exclude_reason', '') = 'GOVERNMENT_ENTITY'
       )
   `;
 
@@ -101,8 +101,8 @@ async function previewGovExclusion({
       SUM(
         CASE
           WHEN (
-            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOV_ENTITY'::text)
-            OR COALESCE(s."data"->>'exclude_reason', '') = 'GOV_ENTITY'
+            COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOVERNMENT_ENTITY'::text)
+            OR COALESCE(s."data"->>'exclude_reason', '') = 'GOVERNMENT_ENTITY'
           )
           THEN 1 ELSE 0
         END
@@ -146,8 +146,8 @@ async function previewGovExclusion({
       )::text AS "exclude_comment",
       CASE
         WHEN (
-          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOV_ENTITY'::text)
-          OR COALESCE(s."data"->>'exclude_reason', '') = 'GOV_ENTITY'
+          COALESCE(s."data"->'exclude_reasons', '[]'::jsonb) @> jsonb_build_array('GOVERNMENT_ENTITY'::text)
+          OR COALESCE(s."data"->>'exclude_reason', '') = 'GOVERNMENT_ENTITY'
         )
         THEN true
         ELSE false

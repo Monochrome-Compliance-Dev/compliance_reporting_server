@@ -4,6 +4,29 @@ jest.mock("@/db/database", () => ({
     query: jest.fn(),
   },
 }));
+jest.mock("./payment-normalisation.ptrs.service", () => ({
+  buildPersistedPaymentNormalisationCte: jest.fn(
+    () => `payment_normalisation_result AS (
+      SELECT * FROM "tbl_ptrs_payment_normalisation_result"
+      WHERE "id" = :normalisationResultId
+    ),
+    payment_normalisation_source_rows AS (
+      SELECT * FROM "tbl_ptrs_payment_normalisation_row"
+    ),
+    payment_normalisation_payment_allocations AS (
+      SELECT * FROM "tbl_ptrs_payment_normalisation_allocation"
+    ),
+    payment_normalisation_exceptions AS (
+      SELECT * FROM "tbl_ptrs_payment_normalisation_exception"
+    )`,
+  ),
+  requireCurrentPaymentNormalisationResult: jest.fn(async () => ({
+    result: { id: "norm-1" },
+  })),
+  VEOLIA_PAYMENT_TIME_REFERENCE_POLICY: {
+    canonicalConcept: "invoiceReceiptDate",
+  },
+}));
 
 const db = require("@/db/database");
 const {
@@ -16,116 +39,61 @@ const {
 } = require("./payment-observations.ptrs.service");
 
 describe("PTRS derived payment observations", () => {
-  test("matches RE invoices to one ZP using the authoritative clearing key", () => {
+  beforeEach(() => db.sequelize.query.mockReset());
+
+  test("derives accounting observations from progressive payment allocations", () => {
     const sql = buildPaymentObservationsCte();
-
-    expect(sql).toContain("payment_observation_settlement_keys AS MATERIALIZED");
-    expect(sql).toContain("settlement.settlement_row_count = 1");
-    expect(sql).toContain(
-      "document_type = :paymentObservationSettlementType",
-    );
-    expect(sql).toContain("invoice.document_type = :paymentObservationInvoiceType");
-  });
-
-  test("derives one observation per RE while retaining the shared ZP trace", () => {
-    const sql = buildPaymentObservationsCte();
-
-    expect(sql).toContain(
-      "'payment-observation:' || invoice.\"id\" AS \"observationId\"",
+    expect(sql).toContain("payment_normalisation_payment_allocations");
+    expect(sql).toContain('"tbl_ptrs_payment_normalisation_allocation"');
+    expect(sql).not.toContain(
+      "payment_normalisation_payment_allocations_raw AS",
     );
     expect(sql).toContain(
-      "invoice.\"id\" AS \"sourceInvoiceStageRowId\"",
+      "'payment-observation:' || invoice.\"id\" || ':' || payment.\"id\"",
     );
+    expect(sql).toContain('allocation.allocated_amount AS "paymentAmount"');
     expect(sql).toContain(
-      "ARRAY[invoice.settlement_stage_row_id] AS \"settlementStageRowIds\"",
+      'allocation.settlement_payment_date::text AS "paymentDate"',
     );
+    expect(sql).toContain("'{partial_payment}'");
+    expect(sql).toContain("'PARTIAL_PAYMENT'");
+    expect(sql).not.toContain("s.*");
+    expect(sql).toContain('JOIN "tbl_ptrs_stage_row" invoice');
+    expect(sql).toContain('JOIN "tbl_ptrs_stage_row" payment');
     expect(sql).toContain(
-      "ARRAY[invoice.\"id\", invoice.settlement_stage_row_id]",
+      "allocation.normalisation_result_id = :normalisationResultId",
     );
-    expect(sql).not.toContain("DISTINCT ON (invoice");
-  });
-
-  test("exposes each eligible ZP settlement amount once per clearing group", () => {
-    const sql = buildPaymentObservationsCte();
-    const groupCte = sql.slice(
-      sql.indexOf("payment_observation_accounting_settlement_groups AS"),
+    expect(sql).toContain("allocation.normalisation_group_key");
+    expect(sql).toContain("payment.\"documentType\"");
+    expect(sql).toContain(
+      "'outstanding_obligation_after_clearing_settlement'",
     );
-
-    expect(sql).toContain('MAX("paymentAmount")');
-    expect(groupCte).toContain("SELECT DISTINCT");
-    expect(groupCte).toContain(
-      'observation.company_code AS "sourceCompanyCode"',
+    expect(sql).not.toContain(
+      'JOIN "tbl_ptrs_payment_normalisation_row" invoice_normalisation',
     );
-    expect(groupCte).toContain(
-      'observation.source_account_code AS "sourceAccountCode"',
+    expect(sql).not.toContain(
+      'JOIN payment_normalisation_source_rows invoice_source',
     );
-    expect(groupCte).toContain(
-      'observation.clearing_document AS "clearingDocument"',
-    );
-    expect(groupCte).toContain(
-      'observation.settlement_payment_amount AS "settlementPaymentAmount"',
-    );
-    expect(groupCte).toContain(
-      "FROM payment_observation_accounting_keys observation",
+    expect(sql).not.toContain(
+      'JOIN payment_normalisation_source_rows payment_source',
     );
   });
 
-  test("takes payment date from ZP and excludes the established four-field ET match", () => {
+  test("projects persisted Payment Time provenance without recalculating it", () => {
     const sql = buildPaymentObservationsCte();
-
-    expect(sql).toContain("to_jsonb(invoice.settlement_payment_date)");
-    expect(sql).toContain(
-      "earlytrade.description_reference = invoice.description_reference",
-    );
-    expect(sql).toContain("payment_observation_earlytrade_matches AS MATERIALIZED");
-    expect(sql).toContain("LEFT JOIN payment_observation_earlytrade_keys earlytrade");
-    expect(sql).toContain('AND earlytrade."id" IS NULL');
+    expect(sql).toContain("allocation.payment_time_days");
+    expect(sql).toContain("allocation.payment_time_reference_kind");
+    expect(sql).toContain("allocation.payment_time_reference_date");
+    expect(sql).toContain("allocation.payment_time_reference_policy");
+    expect(sql).toContain("allocation.payment_time_reference_reason");
+    expect(sql).toContain("'canonicalConcept'");
+    expect(sql).toContain("'canonicalSource'");
+    expect(sql).toContain("'canonicalSources'->'invoice_receipt_date'");
+    expect(sql).not.toContain('invoice."invoiceDueDate"');
   });
 
-  test("isolates identical accounting keys by explicit scope or dataset fallback", () => {
+  test("retains canonical, raw-row, adapter and worksheet dataset provenance", () => {
     const sql = buildPaymentObservationsCte();
-
-    expect(sql).toContain("NULLIF(BTRIM(s.\"sourceGroupScope\"), '')");
-    expect(sql).toContain("'dataset:' || s.\"datasetId\"");
-    expect(sql).toContain(
-      "settlement.source_group_key = invoice.source_group_key",
-    );
-  });
-
-  test("projects every surviving direct-payment Stage row one-to-one without SAP event fabrication", () => {
-    const sql = buildPaymentObservationsCte();
-    const directKeysCte = sql.slice(
-      sql.indexOf("payment_observation_direct_keys AS"),
-      sql.indexOf("payment_observation_accounting_observations AS"),
-    );
-    const directCte = sql.slice(
-      sql.indexOf("payment_observation_direct_observations AS"),
-      sql.indexOf("payment_observations AS"),
-    );
-
-    expect(directKeysCte).toContain(
-      "WHERE direct.\"semanticKind\" = 'direct_payment'",
-    );
-    expect(directKeysCte).toContain("AND NOT direct.excluded");
-    expect(directCte).toContain(
-      "'payment-observation:' || direct.\"id\" AS \"observationId\"",
-    );
-    expect(directCte).toContain(
-      "direct.\"id\" AS \"primarySourceStageRowId\"",
-    );
-    expect(directCte).toContain(
-      "NULL::varchar AS \"sourceInvoiceStageRowId\"",
-    );
-    expect(directCte).toContain(
-      "ARRAY[]::varchar[] AS \"settlementStageRowIds\"",
-    );
-    expect(directCte).not.toContain(":paymentObservationInvoiceType");
-    expect(directCte).not.toContain(":paymentObservationSettlementType");
-  });
-
-  test("retains complete canonical, raw-row, adapter, scope and joined-reference provenance", () => {
-    const sql = buildPaymentObservationsCte();
-
     for (const field of [
       "canonicalRevisionId",
       "canonicalSourceRowId",
@@ -136,185 +104,101 @@ describe("PTRS derived payment observations", () => {
       "adapterVersion",
       "semanticKind",
       "sourceGroupScope",
-      "joinedReferences",
     ]) {
       expect(sql).toContain(`'${field}'`);
     }
-    expect(sql).toContain("jsonb_build_array(\n          jsonb_build_object(");
-    expect(sql).toContain(
-      "'stageRowId', settlement_payload.\"id\"",
-    );
   });
 
-  test("keeps matching intermediates narrow and joins full payload only after eligibility", () => {
-    const sql = buildPaymentObservationsCte();
-    const sourceCte = sql.slice(
-      sql.indexOf("payment_observation_source_rows AS"),
-      sql.indexOf("payment_observation_settlement_keys AS"),
-    );
-
-    expect(sql).toContain("payment_observation_source_rows AS NOT MATERIALIZED");
-    expect(sourceCte).not.toContain('s."data", s."meta"');
-    expect(sourceCte).toContain('s."documentType"');
-    expect(sourceCte).toContain('s."sourceAccountCode"');
-    expect(sourceCte).toContain('s."clearingDocument"');
-    expect(sql.indexOf('JOIN "tbl_ptrs_stage_row" invoice_payload')).toBeGreaterThan(
-      sql.indexOf("payment_observation_accounting_keys AS"),
-    );
-    expect(sql).not.toContain("jsonb_agg");
-    expect(sql).not.toContain("ARRAY_AGG");
-    expect(sql).not.toContain("payment_observation_settlement_rows");
-    expect(sql).not.toContain("payment_observation_settlement_anchors");
-    expect(sql).not.toContain("OVER settlement_group");
-    expect(sql).not.toContain("OVER earlytrade_group");
-  });
-
-  test("builds all summary counts in one aggregate without eligibility joins", async () => {
-    const summaryCte = buildPaymentObservationSummaryCte();
-    expect(summaryCte).toContain("payment_observation_summary_counts AS");
-    expect(summaryCte).toContain("COUNT(*) FILTER");
-    expect(summaryCte).toContain("OVER settlement_group");
-    expect(summaryCte).toContain("OVER earlytrade_group");
-    expect(summaryCte).not.toContain(" JOIN ");
-    expect(summaryCte).not.toContain("SELECT DISTINCT");
-    expect(summaryCte).not.toContain("GROUP BY");
-    expect(summaryCte).not.toContain("UNION ALL");
-    expect(summaryCte).not.toContain("jsonb_build_object");
-    expect(summaryCte).not.toContain("jsonb_agg");
-    expect(summaryCte).not.toContain("ARRAY_AGG");
-    expect(summaryCte).not.toContain('s."paymentDate"::text');
-
-    const summary = {
-      sourceStageRows: 309280,
-      derivedPaymentObservations: 1063,
-    };
-    db.sequelize.query
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([summary]);
-    const transaction = { id: "tx-1" };
-    await expect(
-      getPaymentObservationSummary({
-        customerId: "customer-1",
-        ptrsId: "ptrs-1",
-        transaction,
-      }),
-    ).resolves.toBe(summary);
-    expect(db.sequelize.query.mock.calls[0]).toEqual([
-      `SET LOCAL work_mem = '${PAYMENT_OBSERVATION_WORK_MEM}'`,
-      { transaction },
-    ]);
-    const sql = db.sequelize.query.mock.calls[1][0];
-    expect(sql).toMatch(/WITH\s+payment_observation_summary_source AS/);
-    expect(sql).toContain("SELECT * FROM payment_observation_summary_counts");
-    expect(sql).not.toContain("(SELECT COUNT(*)");
-    expect(sql).not.toContain(
-      "payment_observation_accounting_observations",
-    );
-  });
-
-  test("uses the authoritative settlement and description-specific ET keys", () => {
-    const sql = buildPaymentObservationSummaryCte();
-
-    expect(sql).toContain(
-      "source_group_key, company_code, source_account_code,\n            clearing_document",
-    );
-    expect(sql).toContain(
-      "clearing_document, description_reference",
-    );
-    expect(sql).toContain("settlement_row_count = 1");
-    expect(sql).toContain("AND NOT has_matching_earlytrade");
-    expect(sql).toContain("AND has_matching_earlytrade");
-  });
-
-  test("unions accounting and direct observations into one format-neutral population", () => {
-    const sql = buildPaymentObservationsCte();
-    const combinedCte = sql.slice(
-      sql.indexOf("payment_observations AS"),
-      sql.indexOf("payment_observation_accounting_settlement_groups AS"),
-    );
-
-    expect(combinedCte).toContain(
-      "SELECT * FROM payment_observation_accounting_observations",
-    );
-    expect(combinedCte).toContain("UNION ALL");
-    expect(combinedCte).toContain(
-      "SELECT * FROM payment_observation_direct_observations",
-    );
-  });
-
-  test("uses one SAP settlement group and one actual amount per direct payment in the TCP denominator", () => {
+  test("keeps partial allocations in settlement value without double counting a ZP", () => {
     const sql = buildPaymentObservationsCte();
     const settlementCte = sql.slice(
       sql.indexOf("payment_observation_accounting_settlement_groups AS"),
     );
-
-    expect(settlementCte).toContain("SELECT DISTINCT");
     expect(settlementCte).toContain(
-      'observation.settlement_payment_amount AS "settlementPaymentAmount"',
-    );
-    expect(settlementCte).toContain("UNION ALL");
-    expect(settlementCte).toContain(
-      "'payment-observation:' || direct.\"id\" AS \"settlementIdentity\"",
+      "'payment:' || allocation.payment_stage_row_id",
     );
     expect(settlementCte).toContain(
-      'direct."paymentAmount" AS "settlementPaymentAmount"',
+      'SUM(allocation.allocated_amount)::numeric AS "settlementPaymentAmount"',
     );
-    expect(sql).toContain(
-      "'paymentAmountSemantic', 'actual_settlement_amount'",
+    expect(settlementCte).not.toContain(
+      "FROM payment_observation_accounting_observations",
     );
   });
 
-  test("executes as one tenant-scoped set-based query", async () => {
-    const rows = [{ observationId: "payment-observation:re-1" }];
-    db.sequelize.query.mockResolvedValueOnce([]).mockResolvedValueOnce(rows);
+  test("projects direct payments without fabricating accounting events", () => {
+    const sql = buildPaymentObservationsCte();
+    const direct = sql.slice(
+      sql.indexOf("payment_observation_direct_observations AS"),
+      sql.indexOf("payment_observations AS"),
+    );
+    expect(direct).toContain("'direct_payment'::text");
+    expect(direct).toContain('ARRAY[direct."id"] AS "sourceStageRowIds"');
+    expect(direct).toContain("'partialPayment', false");
+    expect(sql).toContain(
+      `persisted."normalisationRole" = 'DIRECT_PAYMENT'`,
+    );
+  });
 
-    const result = await listPaymentObservations({
+  test("summarises partial payments and normalisation exceptions", async () => {
+    const sql = buildPaymentObservationSummaryCte();
+    expect(sql).toContain('AS "partialPayments"');
+    expect(sql).toContain('AS "partialPaymentValue"');
+    expect(sql).toContain('AS "tcpPaymentValue"');
+    expect(sql).toContain('AS "paymentTimePopulationCount"');
+    expect(sql).toContain('AS "normalisationExceptions"');
+
+    const summary = {
+      sourceStageRows: 20,
+      derivedPaymentObservations: 4,
+      partialPayments: 1,
+      normalisationExceptions: 2,
+    };
+    db.sequelize.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([summary]);
+    await expect(
+      getPaymentObservationSummary({
+        customerId: "customer-1",
+        ptrsId: "ptrs-1",
+        transaction: { id: "tx-1" },
+      }),
+    ).resolves.toBe(summary);
+  });
+
+  test("executes observation and provenance reads as bounded tenant SQL", async () => {
+    const transaction = { id: "tx-2" };
+    db.sequelize.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ observationId: "observation-1" }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ observationId: "observation-1" }]);
+
+    await listPaymentObservations({
       customerId: "customer-1",
       ptrsId: "ptrs-1",
-      transaction: { id: "tx-1" },
+      transaction,
+    });
+    await listPaymentObservationLinks({
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+      transaction,
     });
 
-    expect(result).toBe(rows);
-    expect(db.sequelize.query).toHaveBeenCalledTimes(2);
     expect(db.sequelize.query.mock.calls[0]).toEqual([
       `SET LOCAL work_mem = '${PAYMENT_OBSERVATION_WORK_MEM}'`,
-      { transaction: { id: "tx-1" } },
+      { transaction },
     ]);
     expect(db.sequelize.query.mock.calls[1][1]).toMatchObject({
-      transaction: { id: "tx-1" },
+      transaction,
       replacements: {
         customerId: "customer-1",
         ptrsId: "ptrs-1",
-        paymentObservationInvoiceType: "RE",
-        paymentObservationSettlementType: "ZP",
-        paymentObservationEarlytradeType: "ET",
+        normalisationResultId: "norm-1",
       },
       type: "SELECT",
     });
-  });
-
-  test("lists narrow transformation-history links without materialising payload", async () => {
-    const links = [{ observationId: "payment-observation:re-1" }];
-    db.sequelize.query.mockResolvedValueOnce([]).mockResolvedValueOnce(links);
-
-    await expect(
-      listPaymentObservationLinks({
-        customerId: "customer-1",
-        ptrsId: "ptrs-1",
-        transaction: { id: "tx-2" },
-      }),
-    ).resolves.toBe(links);
-
-    const sql = db.sequelize.query.mock.calls[1][0];
-    const select = sql.slice(
-      sql.lastIndexOf(
-        "SELECT\n      'payment-observation:' || invoice.\"id\"",
-      ),
+    expect(db.sequelize.query.mock.calls[3][0]).toContain(
+      "FROM payment_observations",
     );
-    expect(select).toContain("FROM payment_observation_accounting_keys invoice");
-    expect(select).toContain("FROM payment_observation_direct_keys direct");
-    expect(select).not.toContain("sourceProvenance");
-    expect(select).not.toContain('invoice_payload."data"');
-    expect(select).not.toContain('direct_payload."meta"');
   });
 });

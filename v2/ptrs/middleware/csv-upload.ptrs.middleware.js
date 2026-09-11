@@ -39,6 +39,26 @@ function csvFileFilter(_request, file, callback) {
 
 const uploadCsv = multer({ storage, fileFilter: csvFileFilter });
 
+function workbookFileFilter(_request, file, callback) {
+  const fileName = String(file.originalname || "").toLowerCase();
+  const mimeType = String(file.mimetype || "").toLowerCase();
+  const isWorkbook =
+    fileName.endsWith(".xlsx") ||
+    fileName.endsWith(".xls") ||
+    mimeType.includes("spreadsheet") ||
+    mimeType.includes("excel");
+
+  if (!isWorkbook) {
+    const error = new Error("Excel workbook files only (.xlsx or .xls)");
+    error.statusCode = 400;
+    callback(error);
+    return;
+  }
+  callback(null, true);
+}
+
+const uploadWorkbook = multer({ storage, fileFilter: workbookFileFilter });
+
 async function cleanupUploadedFile(file) {
   if (!file?.path) return;
   try {
@@ -52,4 +72,5 @@ module.exports = {
   TEMP_UPLOAD_DIR,
   cleanupUploadedFile,
   uploadCsv,
+  uploadWorkbook,
 };

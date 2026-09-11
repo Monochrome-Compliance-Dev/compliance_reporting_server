@@ -2,12 +2,23 @@ jest.mock("@/db/database", () => ({
   sequelize: { query: jest.fn() },
 }));
 jest.mock("./payment-observations.ptrs.service", () => ({
-  buildPaymentObservationsCte: jest.fn(() => "payment_observations AS (SELECT 1)"),
+  buildPaymentObservationsCte: jest.fn(
+    () => "payment_observations AS (SELECT 1)",
+  ),
   getPaymentObservationReplacements: jest.fn(({ customerId, ptrsId }) => ({
     customerId,
     ptrsId,
   })),
   setPaymentObservationWorkMem: jest.fn().mockResolvedValue(undefined),
+}));
+jest.mock("./payment-normalisation.ptrs.service", () => ({
+  requireCurrentPaymentNormalisationResult: jest.fn(async () => ({
+    result: {
+      id: "norm-1",
+      inputSignature: "normalisation-signature",
+      calculationVersion: "normalisation-v1",
+    },
+  })),
 }));
 
 const db = require("@/db/database");
@@ -45,6 +56,7 @@ describe("PTRS payment-term metrics", () => {
     });
     const sql = db.sequelize.query.mock.calls[0][0];
 
+    expect(sql).not.toMatch(/base AS \(\s*SELECT\s+data,\s+meta,/);
     expect(sql).toMatch(/sb AS \([^]*WHERE is_small_business IS TRUE[^]*\)/);
     expect(sql).toMatch(/sb_term_frequencies AS \([^]*FROM sb[^]*\)/);
     expect(sql).toMatch(/sb_entity_term_frequencies AS \([^]*FROM sb[^]*\)/);
@@ -185,6 +197,10 @@ describe("PTRS small-business trade-credit payment value", () => {
       sql.indexOf("non_excluded AS"),
     );
 
+    expect(sql).toContain(
+      'COUNT(*)::int FROM payment_normalisation_source_rows) AS "stageRowCount"',
+    );
+    expect(sql).not.toContain("payment_observation_source_rows");
     expect(baseCte).toContain("FROM payment_observations");
     expect(baseCte).toContain("is_small_business");
     expect(baseCte).toContain("payment_time_days");
@@ -220,6 +236,31 @@ describe("PTRS small-business trade-credit payment value", () => {
     });
     expect(sql).toContain("FROM payment_observation_settlement_groups");
     expect(sql).toContain('SUM(ABS("settlementPaymentAmount"))');
+  });
+
+  test("retains partial payment value but removes partials from Payment Time", async () => {
+    db.sequelize.query.mockResolvedValue([
+      [{ sbTermFrequencies: [], sbEntityTermFrequencies: [] }],
+    ]);
+
+    await fetchPaymentObservationMetricsAggs({
+      t: { id: "transaction" },
+      customerId: "customer01",
+      ptrsId: "ptrs000001",
+    });
+    const sql = db.sequelize.query.mock.calls[0][0];
+    expect(sql).toContain(
+      "COALESCE((data->>'partial_payment')::boolean, false) AS partial_payment",
+    );
+    expect(sql).toMatch(
+      /sb_payment_time AS \([^]*FROM sb[^]*WHERE NOT partial_payment/,
+    );
+    expect(sql).toContain(
+      "SUM(ABS(payment_amount_num)),0)::numeric FROM population WHERE is_small_business IS TRUE",
+    );
+    expect(sql).toContain(
+      "COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL",
+    );
   });
 
   test.each([

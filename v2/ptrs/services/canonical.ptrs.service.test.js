@@ -272,6 +272,7 @@ jest.mock("@/v2/ptrs/services/ptrs.service", () => ({
 const {
   buildCanonicalInputSnapshot,
   getReachableDatasetIds,
+  loadCanonicalRevisionRows,
   materializeCanonicalRevision,
   resolveCanonicalAdapter,
   resolveCurrentCanonicalRevisions,
@@ -373,6 +374,59 @@ describe("PTRS canonical revisions", () => {
         joinedReferences: { "reference-a": [1] },
       },
     });
+  });
+
+  test("loads the governed canonical column projection for Stage consumers", async () => {
+    const { buildStageColumnProjection } = require(
+      "./stage.payment-time.ptrs.service",
+    );
+    buildStageColumnProjection
+      .mockReturnValueOnce({ sourceAccountCode: null })
+      .mockReturnValueOnce({ sourceAccountCode: "SUP-1" });
+    mockDb.PtrsCanonicalSourceRow.findAll.mockResolvedValueOnce(
+      [
+        { id: "canonical-row-1", sourceRawRowId: "raw-1", sourceRowNo: 1 },
+        {
+          id: "canonical-row-2",
+          sourceRawRowId: "raw-2",
+          sourceRowNo: 2,
+          sourceAccountCode: "SUP-1",
+          data: { Account: "SUP-1" },
+        },
+      ].map((row) => ({
+        canonicalRevisionId: "revision-1",
+        datasetId: "dataset-a",
+        adapterType: "sap_accounting_event",
+        adapterVersion: "1",
+        sourceGroupScope: null,
+        semanticKind: "accounting_event",
+        data: {},
+        provenance: {},
+        ...row,
+      })),
+    );
+
+    const rows = await loadCanonicalRevisionRows({
+      customerId: "customer-1",
+      ptrsId: "ptrs-1",
+      revisionId: "revision-1",
+      transaction: {},
+    });
+
+    expect(buildStageColumnProjection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sourceAccountCode: "SUP-1" }),
+      mockDb.PtrsCanonicalSourceRow,
+    );
+    expect(rows[0]).toHaveProperty("sourceAccountCode", null);
+    expect(rows[1]).toMatchObject({
+      Account: "SUP-1",
+      sourceAccountCode: "SUP-1",
+      _canonicalProvenance: {
+        canonicalRevisionId: "revision-1",
+        canonicalSourceRowId: "canonical-row-2",
+      },
+    });
+    expect(rows[1]).not.toHaveProperty("source_account_code");
   });
 
   test("reuses identical inputs and creates a new revision after a mapping change", async () => {

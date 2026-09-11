@@ -5,6 +5,7 @@ const {
 const {
   buildPaymentObservationsCte,
   getPaymentObservationReplacements,
+  resolveNormalisationResultId,
   setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
 
@@ -12,6 +13,7 @@ module.exports = {
   validate,
   getValidate,
   buildProcessValidateSummarySql,
+  buildValidateSummarySql,
   getProcessValidateSummary,
   getValidateSummary,
   setStageRowExclusion,
@@ -93,9 +95,16 @@ async function computeValidate({ customerId, ptrsId, userId, mode }) {
       throw e;
     }
 
+    const normalisationResultId = await resolveNormalisationResultId({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
+
     const result = await queryBoundedValidation({
       customerId,
       ptrsId,
+      normalisationResultId,
       mode,
       transaction: t,
     });
@@ -123,67 +132,29 @@ function buildProcessValidateSummarySql() {
     WITH ${buildPaymentObservationsCte()},
     validation_source AS MATERIALIZED (
       SELECT
-        'payment-observation:' || invoice."id" AS "observationId",
-        invoice."id" AS "primarySourceStageRowId",
-        invoice."id" AS "sourceInvoiceStageRowId",
-        ARRAY[invoice."id", invoice.settlement_stage_row_id]
-          AS "sourceStageRowIds",
-        invoice."rowNo",
-        invoice_payload."data"->>'payee_entity_abn' AS payee_abn_raw,
-        invoice_payload."data"->>'payer_entity_abn' AS payer_abn_raw,
-        invoice.settlement_payment_date::text AS payment_date_raw,
-        invoice_payload."data"->>'payment_time_reference_date'
+        observation."observationId",
+        observation."primarySourceStageRowId",
+        observation."sourceInvoiceStageRowId",
+        observation."sourceStageRowIds",
+        observation."rowNo",
+        observation."data"->>'payee_entity_abn' AS payee_abn_raw,
+        observation."data"->>'payer_entity_abn' AS payer_abn_raw,
+        observation."data"->>'payment_date' AS payment_date_raw,
+        observation."data"->>'payment_time_reference_date'
           AS reference_date_raw,
-        invoice_payload."data"->>'payment_time_reference_kind'
+        observation."data"->>'payment_time_reference_kind'
           AS reference_kind_raw,
-        invoice_payload."data"->>'invoice_issue_date' AS invoice_date_raw,
-        invoice_payload."data"->>'payment_amount' AS payment_amount_raw,
-        invoice_payload."data"->>'payment_term_days' AS payment_term_days_raw,
-        invoice_payload."data"->>'payment_time_days' AS payment_time_days_raw,
-        invoice_payload."data"->>'vlookup' AS vlookup_raw,
-        invoice_payload."data"->>'company_code' AS company_code_raw,
-        invoice_payload."data"->>'invoice_reference_number'
+        observation."data"->>'invoice_issue_date' AS invoice_date_raw,
+        observation."data"->>'payment_amount' AS payment_amount_raw,
+        observation."data"->>'payment_term_days' AS payment_term_days_raw,
+        observation."data"->>'payment_time_days' AS payment_time_days_raw,
+        observation."data"->>'vlookup' AS vlookup_raw,
+        observation."data"->>'company_code' AS company_code_raw,
+        observation."data"->>'invoice_reference_number'
           AS invoice_reference_number_raw,
-        invoice_payload."data"->'is_small_business'
+        observation."data"->'is_small_business'
           AS is_small_business_value
-      FROM payment_observation_accounting_keys invoice
-      JOIN "tbl_ptrs_stage_row" invoice_payload
-        ON invoice_payload."id" = invoice."id"
-       AND invoice_payload."customerId" = :customerId
-       AND invoice_payload."ptrsId" = :ptrsId
-       AND invoice_payload."deletedAt" IS NULL
-
-      UNION ALL
-
-      SELECT
-        'payment-observation:' || direct."id" AS "observationId",
-        direct."id" AS "primarySourceStageRowId",
-        NULL::varchar AS "sourceInvoiceStageRowId",
-        ARRAY[direct."id"] AS "sourceStageRowIds",
-        direct."rowNo",
-        direct_payload."data"->>'payee_entity_abn' AS payee_abn_raw,
-        direct_payload."data"->>'payer_entity_abn' AS payer_abn_raw,
-        direct_payload."data"->>'payment_date' AS payment_date_raw,
-        direct_payload."data"->>'payment_time_reference_date'
-          AS reference_date_raw,
-        direct_payload."data"->>'payment_time_reference_kind'
-          AS reference_kind_raw,
-        direct_payload."data"->>'invoice_issue_date' AS invoice_date_raw,
-        direct_payload."data"->>'payment_amount' AS payment_amount_raw,
-        direct_payload."data"->>'payment_term_days' AS payment_term_days_raw,
-        direct_payload."data"->>'payment_time_days' AS payment_time_days_raw,
-        direct_payload."data"->>'vlookup' AS vlookup_raw,
-        direct_payload."data"->>'company_code' AS company_code_raw,
-        direct_payload."data"->>'invoice_reference_number'
-          AS invoice_reference_number_raw,
-        direct_payload."data"->'is_small_business'
-          AS is_small_business_value
-      FROM payment_observation_direct_keys direct
-      JOIN "tbl_ptrs_stage_row" direct_payload
-        ON direct_payload."id" = direct."id"
-       AND direct_payload."customerId" = :customerId
-       AND direct_payload."ptrsId" = :ptrsId
-       AND direct_payload."deletedAt" IS NULL
+      FROM payment_observations observation
     ),
     classified AS (
       SELECT
@@ -271,6 +242,33 @@ function buildProcessValidateSummarySql() {
         ) AS duplicate_of_row_no
       FROM classified
     ),
+    pipeline_counts AS MATERIALIZED (
+      SELECT
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows)
+          AS "sourceStageRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows
+          WHERE "semanticKind" = 'accounting_event')
+          AS "accountingStageRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows
+          WHERE excluded) AS "excludedStageRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_obligations)
+          AS "invoiceObligationRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_payments)
+          AS "zpPaymentRows",
+        (SELECT COUNT(*)::int
+          FROM payment_normalisation_adjusted_obligations
+          WHERE NOT excluded AND adjusted_obligation_amount > 0.005)
+          AS "viableObligationRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_payments
+          WHERE NOT excluded) AS "viablePaymentRows",
+        (SELECT COUNT(*)::int
+          FROM payment_normalisation_payment_allocations)
+          AS "paymentAllocationRows",
+        (SELECT COUNT(*)::int FROM payment_observations)
+          AS "paymentObservationRows",
+        (SELECT COUNT(*)::int FROM payment_normalisation_exceptions)
+          AS "normalisationExceptionRows"
+    ),
     validation_counts AS (
       SELECT
         COUNT(*)::int AS "totalRows",
@@ -346,7 +344,7 @@ function buildProcessValidateSummarySql() {
         )::int AS invalid_time_days
       FROM numbered
     ),
-    issue_rows AS MATERIALIZED (
+    observation_issue_rows AS MATERIALIZED (
       SELECT
         numbered."observationId",
         numbered."rowNo",
@@ -494,6 +492,84 @@ function buildProcessValidateSummarySql() {
         WHERE issues.matches
       ) issue
     ),
+    pipeline_issue_rows AS MATERIALIZED (
+      SELECT
+        NULL::text AS "observationId",
+        NULL::int AS "rowNo",
+        issue.priority,
+        issue.severity,
+        jsonb_build_object(
+          'code', issue.code,
+          'message', issue.message,
+          'sourceStageRows', counts."sourceStageRows",
+          'accountingStageRows', counts."accountingStageRows",
+          'invoiceObligationRows', counts."invoiceObligationRows",
+          'zpPaymentRows', counts."zpPaymentRows",
+          'viableObligationRows', counts."viableObligationRows",
+          'viablePaymentRows', counts."viablePaymentRows",
+          'paymentAllocationRows', counts."paymentAllocationRows",
+          'paymentObservationRows', counts."paymentObservationRows"
+        ) AS issue
+      FROM pipeline_counts counts
+      CROSS JOIN LATERAL (
+        SELECT *
+        FROM (VALUES
+          (1, 'blocker', 'ZP_PAYMENT_ROWS_MISSING',
+            counts."accountingStageRows" > 0
+              AND counts."invoiceObligationRows" > 0
+              AND counts."zpPaymentRows" = 0,
+            'The transaction extract contains invoice obligations but no recognised ZP or KZ settlement rows required for payment observation generation'),
+          (2, 'blocker', 'PAYMENT_OBSERVATIONS_EMPTY',
+            counts."viableObligationRows" > 0
+              AND counts."viablePaymentRows" > 0
+              AND counts."paymentObservationRows" = 0,
+            'Viable invoice obligations and settlement payment rows produced no payment observations')
+        ) AS issues(priority, severity, code, matches, message)
+        WHERE issues.matches
+      ) issue
+    ),
+    normalisation_issue_rows AS MATERIALIZED (
+      SELECT
+        NULL::text AS "observationId",
+        source."rowNo",
+        200 AS priority,
+        CASE WHEN source.excluded THEN 'warning' ELSE 'blocker' END
+          AS severity,
+        jsonb_build_object(
+          'stageRowId', source."id",
+          'rowNo', source."rowNo",
+          'code', exception.reason_code,
+          'message', CASE exception.reason_code
+            WHEN 'UNRECOGNISED_DOCUMENT_TYPE'
+              THEN 'Unexpected SAP document type was not recognised by payment normalisation'
+            WHEN 'UNMATCHED_ADJUSTMENT'
+              THEN 'Financial adjustment could not be allocated to an invoice obligation'
+            WHEN 'UNMATCHED_PAYMENT'
+              THEN 'Settlement payment value could not be allocated to an invoice obligation'
+            WHEN 'UNMATCHED_OBLIGATION_OFFSET'
+              THEN 'Opposite-direction invoice value could not be allocated within its clearing group'
+            WHEN 'UNMATCHED_KG_REVERSAL'
+              THEN 'Vendor credit memo reversal exceeded the supported credit value in its clearing group'
+            WHEN 'MAPPING_EXCEPTION'
+              THEN 'Mapped source values were insufficient to produce a valid payment observation'
+            ELSE 'Payment normalisation exception'
+          END,
+          'documentType', source.document_type,
+          'amount', exception.amount,
+          'excluded', source.excluded
+        ) AS issue
+      FROM payment_normalisation_exceptions exception
+      JOIN payment_normalisation_source_rows source
+        ON source."id" = exception.source_stage_row_id
+      WHERE NOT source.excluded
+    ),
+    issue_rows AS MATERIALIZED (
+      SELECT * FROM observation_issue_rows
+      UNION ALL
+      SELECT * FROM pipeline_issue_rows
+      UNION ALL
+      SELECT * FROM normalisation_issue_rows
+    ),
     ranked_issues AS (
       SELECT
         issue_rows.*,
@@ -525,8 +601,9 @@ function buildProcessValidateSummarySql() {
         ) AS warnings
       FROM ranked_issues
     )
-    SELECT validation_counts.*, issue_summary.*
+    SELECT validation_counts.*, pipeline_counts.*, issue_summary.*
     FROM validation_counts
+    CROSS JOIN pipeline_counts
     CROSS JOIN issue_summary
   `;
 }
@@ -545,6 +622,7 @@ function parseIssueArray(value) {
 async function queryBoundedValidation({
   customerId,
   ptrsId,
+  normalisationResultId,
   mode,
   transaction,
 }) {
@@ -554,7 +632,11 @@ async function queryBoundedValidation({
   const rows = await db.sequelize.query(buildProcessValidateSummarySql(), {
     transaction,
     replacements: {
-      ...getPaymentObservationReplacements({ customerId, ptrsId }),
+      ...getPaymentObservationReplacements({
+        customerId,
+        ptrsId,
+        normalisationResultId,
+      }),
       numericPattern,
       sampleLimit: 200,
     },
@@ -574,8 +656,17 @@ async function queryBoundedValidation({
     mode,
     counts: {
       totalRows: Number(counts.totalRows) || 0,
-      paymentObservationRows: Number(counts.totalRows) || 0,
-      excludedRows: 0,
+      sourceStageRows: Number(counts.sourceStageRows) || 0,
+      accountingStageRows: Number(counts.accountingStageRows) || 0,
+      excludedRows: Number(counts.excludedStageRows) || 0,
+      invoiceObligationRows: Number(counts.invoiceObligationRows) || 0,
+      zpPaymentRows: Number(counts.zpPaymentRows) || 0,
+      viableObligationRows: Number(counts.viableObligationRows) || 0,
+      viablePaymentRows: Number(counts.viablePaymentRows) || 0,
+      paymentAllocationRows: Number(counts.paymentAllocationRows) || 0,
+      paymentObservationRows: Number(counts.paymentObservationRows) || 0,
+      normalisationExceptionRows:
+        Number(counts.normalisationExceptionRows) || 0,
       blockers: blockerCount,
       warnings: warningCount,
       missingPayeeAbnCount: Number(counts.missingPayeeAbnCount) || 0,
@@ -601,16 +692,27 @@ async function queryBoundedValidation({
   };
 }
 
-async function getProcessValidateSummary({ customerId, ptrsId }) {
+async function getProcessValidateSummary({
+  customerId,
+  ptrsId,
+  normalisationResultId = null,
+}) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    normalisationResultId = await resolveNormalisationResultId({
+      customerId,
+      ptrsId,
+      normalisationResultId,
+      transaction: t,
+    });
     const result = await queryBoundedValidation({
       customerId,
       ptrsId,
+      normalisationResultId,
       mode: "read",
       transaction: t,
     });
@@ -623,6 +725,126 @@ async function getProcessValidateSummary({ customerId, ptrsId }) {
 }
 
 // Aggregated Validate summary endpoint for PTRS v2
+function buildValidateSummarySql() {
+  return `
+    WITH ${buildPaymentObservationsCte()},
+    validate_summary_observations AS MATERIALIZED (
+      SELECT *
+      FROM payment_observations
+      WHERE NOT (
+        COALESCE((data->>'exclude_from_metrics')::boolean, false)
+        OR COALESCE((meta->'rules'->>'exclude')::boolean, false)
+      )
+    ),
+    validate_summary_counts AS (
+      SELECT
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows)
+          AS "stageRowCount",
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows
+          WHERE excluded) AS "excludedRowCount",
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows
+          WHERE NOT excluded) AS "includedRowCount",
+        COUNT(*)::int AS "paymentObservationCount",
+        COUNT(*)::int AS "tradeCreditIncludedCount",
+        0::int AS "tradeCreditExcludedCount",
+        COUNT(*) FILTER (
+          WHERE COALESCE((data->>'is_small_business')::boolean, NULL) = true
+        )::int AS "sbTrueCount",
+        COUNT(*) FILTER (
+          WHERE COALESCE((data->>'is_small_business')::boolean, NULL) = false
+        )::int AS "sbFalseCount",
+        COUNT(*) FILTER (
+          WHERE (data->>'is_small_business') IS NULL
+        )::int AS "sbUnknownCount"
+      FROM validate_summary_observations
+    ),
+    validate_summary_reference_kinds AS (
+      SELECT
+        COALESCE(NULLIF(data->>'payment_time_reference_kind', ''), 'missing')
+          AS kind,
+        COUNT(*)::int AS count
+      FROM validate_summary_observations
+      GROUP BY 1
+    ),
+    validate_summary_payment_terms AS (
+      SELECT
+        COALESCE(NULLIF(data->>'payment_term', ''), '(blank)')
+          AS payment_term_raw,
+        NULLIF(data->>'payment_term_days', '')::int AS payment_term_days,
+        CASE
+          WHEN NULLIF(data->>'payment_term', '') IS NULL THEN 'missing'
+          WHEN NULLIF(data->>'payment_term_days', '') IS NULL THEN 'unmapped'
+          WHEN NULLIF(data->>'payment_term_source', '') IS NOT NULL
+            THEN data->>'payment_term_source'
+          ELSE 'unknown'
+        END AS payment_term_source,
+        COUNT(*)::int AS count
+      FROM validate_summary_observations
+      GROUP BY 1, 2, 3
+    ),
+    validate_summary_unmapped_terms AS (
+      SELECT data->>'payment_term' AS raw, COUNT(*)::int AS count
+      FROM validate_summary_observations
+      WHERE NULLIF(data->>'payment_term', '') IS NOT NULL
+        AND NULLIF(data->>'payment_term_days', '') IS NULL
+      GROUP BY 1
+    ),
+    validate_summary_missing AS (
+      SELECT
+        COUNT(*) FILTER (WHERE NULLIF(data->>'payment_date', '') IS NULL)::int
+          AS missing_payment_date,
+        COUNT(*) FILTER (WHERE NULLIF(
+          data->>'payment_time_reference_date', '') IS NULL)::int
+          AS missing_reference_date,
+        COUNT(*) FILTER (
+          WHERE NULLIF(data->>'payment_date', '') IS NULL
+            AND NULLIF(data->>'payment_time_reference_date', '') IS NULL
+        )::int AS missing_both,
+        COUNT(*) FILTER (WHERE NULLIF(data->>'payment_term_days', '') IS NULL)::int
+          AS missing_payment_term_days,
+        COUNT(*) FILTER (WHERE NULLIF(data->>'is_small_business', '') IS NULL)::int
+          AS missing_is_small_business,
+        COUNT(*) FILTER (WHERE NULLIF(data->>'payment_time_days', '') IS NULL)::int
+          AS missing_payment_time_days,
+        COUNT(*) FILTER (WHERE NULLIF(data->>'payment_amount', '') IS NULL)::int
+          AS missing_payment_amount,
+        COUNT(*) FILTER (WHERE NULLIF(
+          data->>'payment_time_reference_date', '') IS NULL)::int
+          AS missing_payment_time_reference_date
+      FROM validate_summary_observations
+    )
+    SELECT counts.*, missing.*,
+      (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+          'kind', kind, 'count', count) ORDER BY kind), '[]'::jsonb)
+        FROM validate_summary_reference_kinds) AS "referenceKinds",
+      (SELECT COALESCE(jsonb_agg(to_jsonb(term_row)
+          ORDER BY term_row.count DESC, term_row.payment_term_raw ASC),
+          '[]'::jsonb)
+        FROM validate_summary_payment_terms term_row) AS "paymentTerms",
+      (SELECT COALESCE(jsonb_agg(to_jsonb(unmapped_row)
+          ORDER BY unmapped_row.count DESC, unmapped_row.raw ASC),
+          '[]'::jsonb)
+        FROM validate_summary_unmapped_terms unmapped_row) AS "unmappedTerms",
+      (SELECT COALESCE(jsonb_agg(to_jsonb(example_row)
+          ORDER BY example_row."rowNo" ASC), '[]'::jsonb)
+        FROM (
+          SELECT "rowNo",
+            data->>'invoice_reference_number' AS invoice_reference_number,
+            data->>'payment_date' AS payment_date,
+            data->>'payment_time_reference_date'
+              AS payment_time_reference_date,
+            data->>'payment_time_reference_kind'
+              AS payment_time_reference_kind,
+            (data->>'payment_time_days')::int AS payment_time_days
+          FROM validate_summary_observations
+          ORDER BY "rowNo" ASC
+          LIMIT 5
+        ) example_row) AS "paymentTimeExamples"
+    FROM validate_summary_counts counts
+    CROSS JOIN validate_summary_missing missing
+  `;
+}
+
 async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -630,49 +852,24 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
   const t = await beginTransactionWithCustomerContext(customerId);
 
   try {
+    const normalisationResultId = await resolveNormalisationResultId({
+      customerId,
+      ptrsId,
+      transaction: t,
+    });
     await setPaymentObservationWorkMem({ transaction: t });
-    const paymentObservationCte = buildPaymentObservationsCte();
     const replacements = getPaymentObservationReplacements({
       customerId,
       ptrsId,
+      normalisationResultId,
     });
 
-    // Exclusion logic: canonical exclude flag OR rule meta flag
-    const excludedExpr = `(
-      COALESCE((data->>'exclude_from_metrics')::boolean, false) = true
-      OR COALESCE((meta->'rules'->>'exclude')::boolean, false) = true
-    )`;
-
-    // Payment identity is established by the derived relation, not by raw
-    // Stage classification flags.
-    const tradeCreditIncludedExpr = `(NOT ${excludedExpr})`;
-    const tradeCreditExcludedExpr = "false";
-
-    const countsResult = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        (SELECT COUNT(*)::int FROM payment_observation_source_rows) AS "stageRowCount",
-        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE excluded) AS "excludedRowCount",
-        (SELECT COUNT(*)::int FROM payment_observation_source_rows WHERE NOT excluded) AS "includedRowCount",
-        COUNT(*)::int AS "paymentObservationCount",
-
-        SUM(CASE WHEN ${tradeCreditIncludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditIncludedCount",
-        SUM(CASE WHEN ${tradeCreditExcludedExpr} THEN 1 ELSE 0 END)::int AS "tradeCreditExcludedCount",
-
-        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = true THEN 1 ELSE 0 END)::int AS "sbTrueCount",
-        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND COALESCE((data->>'is_small_business')::boolean, NULL) = false THEN 1 ELSE 0 END)::int AS "sbFalseCount",
-        SUM(CASE WHEN ${tradeCreditIncludedExpr} AND (data->>'is_small_business') IS NULL THEN 1 ELSE 0 END)::int AS "sbUnknownCount"
-      FROM payment_observations
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
-
-    const countsRow = Array.isArray(countsResult) ? countsResult[0] : null;
+    const summaryRows = await db.sequelize.query(buildValidateSummarySql(), {
+      transaction: t,
+      replacements,
+      type: db.sequelize.QueryTypes.SELECT,
+    });
+    const countsRow = Array.isArray(summaryRows) ? summaryRows[0] : null;
 
     const stageRowCount = Number(countsRow?.stageRowCount) || 0;
     const excludedRowCount = Number(countsRow?.excludedRowCount) || 0;
@@ -687,27 +884,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
     const sbFalseCount = Number(countsRow?.sbFalseCount) || 0;
     const sbUnknownCount = Number(countsRow?.sbUnknownCount) || 0;
 
-    // Payment time breakdown by reference kind
-    const byKindRows = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        CASE
-          WHEN (data->>'payment_time_reference_kind') IS NULL OR (data->>'payment_time_reference_kind') = '' THEN 'missing'
-          ELSE (data->>'payment_time_reference_kind')
-        END AS kind,
-        COUNT(*)::int AS count
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-      GROUP BY 1
-      ORDER BY 1
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
+    const byKindRows = parseIssueArray(countsRow?.referenceKinds);
 
     const kindsWanted = [
       "invoice_issue",
@@ -727,26 +904,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       ([kind, count]) => ({ kind, count }),
     );
 
-    const missingTimeRows = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date,
-        SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_reference_date,
-        SUM(CASE WHEN ((data->>'payment_date') IS NULL OR (data->>'payment_date') = '') AND ((data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '') THEN 1 ELSE 0 END)::int AS missing_both
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
-
-    const missingTimeRow = Array.isArray(missingTimeRows)
-      ? missingTimeRows[0]
-      : null;
+    const missingTimeRow = countsRow;
 
     const missingPaymentDate =
       Number(missingTimeRow?.missing_payment_date) || 0;
@@ -754,76 +912,11 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       Number(missingTimeRow?.missing_reference_date) || 0;
     const missingBoth = Number(missingTimeRow?.missing_both) || 0;
 
-    const paymentTimeExamples = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        data->>'invoice_reference_number' AS invoice_reference_number,
-        data->>'payment_date' AS payment_date,
-        data->>'payment_time_reference_date' AS payment_time_reference_date,
-        data->>'payment_time_reference_kind' AS payment_time_reference_kind,
-        (data->>'payment_time_days')::int AS payment_time_days
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-      ORDER BY "rowNo" ASC
-      LIMIT 5
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
-
-    // Payment terms dedupe table
-    const paymentTermsRows = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        CASE
-          WHEN (data->>'payment_term') IS NULL OR (data->>'payment_term') = '' THEN '(blank)'
-          ELSE (data->>'payment_term')
-        END AS payment_term_raw,
-        NULLIF((data->>'payment_term_days'), '')::int AS payment_term_days,
-        CASE
-          WHEN (data->>'payment_term') IS NULL OR (data->>'payment_term') = '' THEN 'missing'
-          WHEN (data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '' THEN 'unmapped'
-          WHEN (data->>'payment_term_source') IS NOT NULL AND (data->>'payment_term_source') <> '' THEN (data->>'payment_term_source')
-          ELSE 'unknown'
-        END AS payment_term_source,
-        COUNT(*)::int AS count
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-      GROUP BY 1,2,3
-      ORDER BY 4 DESC, 1 ASC
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
-
-    const unmappedRawRows = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        (data->>'payment_term') AS raw,
-        COUNT(*)::int AS count
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-        AND (data->>'payment_term') IS NOT NULL
-        AND (data->>'payment_term') <> ''
-        AND ((data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '')
-      GROUP BY 1
-      ORDER BY 2 DESC, 1 ASC
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
+    const paymentTimeExamples = parseIssueArray(
+      countsRow?.paymentTimeExamples,
+    ).map(({ rowNo: _rowNo, ...example }) => example);
+    const paymentTermsRows = parseIssueArray(countsRow?.paymentTerms);
+    const unmappedRawRows = parseIssueArray(countsRow?.unmappedTerms);
 
     const unmappedRawValues = (unmappedRawRows || [])
       .map((r) => String(r.raw))
@@ -834,30 +927,7 @@ async function getValidateSummary({ customerId, ptrsId, profileId = null }) {
       0,
     );
 
-    // Canonical missing counts within the trade credit included population
-    const missingCanonRows = await db.sequelize.query(
-      `
-      WITH ${paymentObservationCte}
-      SELECT
-        SUM(CASE WHEN (data->>'payment_term_days') IS NULL OR (data->>'payment_term_days') = '' THEN 1 ELSE 0 END)::int AS missing_payment_term_days,
-        SUM(CASE WHEN (data->>'is_small_business') IS NULL OR (data->>'is_small_business') = '' THEN 1 ELSE 0 END)::int AS missing_is_small_business,
-        SUM(CASE WHEN (data->>'payment_time_days') IS NULL OR (data->>'payment_time_days') = '' THEN 1 ELSE 0 END)::int AS missing_payment_time_days,
-        SUM(CASE WHEN (data->>'payment_amount') IS NULL OR (data->>'payment_amount') = '' THEN 1 ELSE 0 END)::int AS missing_payment_amount,
-        SUM(CASE WHEN (data->>'payment_time_reference_date') IS NULL OR (data->>'payment_time_reference_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_time_reference_date,
-        SUM(CASE WHEN (data->>'payment_date') IS NULL OR (data->>'payment_date') = '' THEN 1 ELSE 0 END)::int AS missing_payment_date
-      FROM payment_observations
-      WHERE ${tradeCreditIncludedExpr}
-      `,
-      {
-        transaction: t,
-        replacements,
-        type: db.sequelize.QueryTypes.SELECT,
-      },
-    );
-
-    const missingCanonRow = Array.isArray(missingCanonRows)
-      ? missingCanonRows[0]
-      : null;
+    const missingCanonRow = countsRow;
 
     const missingByField = [];
     const pushMissing = (field, count) => {

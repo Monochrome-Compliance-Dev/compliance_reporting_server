@@ -68,9 +68,13 @@ const LOCK_GOV_ABN_SQL = `
   SELECT pg_advisory_xact_lock(hashtext(:abn))
 `;
 
-// Expiry makes a cached classification eligible for refresh; it does not
-// invalidate the ABN or entity. Existing rows are renewed on the ABN key.
-const ABR_NEGATIVE_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+function getAbrCacheTtlMs(environment = process.env) {
+  const configuredDays = Number(environment.PTRS_ABR_CACHE_TTL_DAYS || 365);
+  if (!Number.isInteger(configuredDays) || configuredDays < 1) {
+    throw new Error("PTRS_ABR_CACHE_TTL_DAYS must be a positive whole number");
+  }
+  return configuredDays * 24 * 60 * 60 * 1000;
+}
 
 async function mapWithConcurrency(items, concurrency, worker) {
   const results = new Array(items.length);
@@ -171,6 +175,8 @@ async function persistNegativeAbrResults({ abrCacheModel, candidates }) {
       "classification",
       "checkedAt",
       "expiresAt",
+      "lookupStatus",
+      "lookupError",
       "updatedAt",
     ],
   });
@@ -238,9 +244,28 @@ async function enrichGovReferenceFromStageRows({
         candidateCount: unknownAbns.length,
       },
     );
+    const checkedAt = new Date();
+    const expiresAt = new Date(checkedAt.getTime() + getAbrCacheTtlMs());
+    const unconfirmed = unknownAbns
+      .map(normalizeAbnDigits)
+      .filter(isValidAbn)
+      .map((abn) => ({
+        abn,
+        classification: "ABN_NOT_CONFIRMED",
+        checkedAt,
+        expiresAt,
+        lookupStatus: "CONFIGURATION_UNAVAILABLE",
+        lookupError: "ABR_GUID missing",
+      }));
+    const cached = await persistNegativeAbrResults({
+      abrCacheModel,
+      candidates: unconfirmed,
+    });
     return {
       ...stats,
       skipped: "ABR_GUID missing",
+      unresolvedCount: unconfirmed.length,
+      negativeResultsCached: cached,
     };
   }
 
@@ -274,9 +299,13 @@ async function enrichGovReferenceFromStageRows({
               error: result.exception,
             },
           );
-          return { ...result, error: result.exception };
+          return {
+            requestAbn: normalizedAbn,
+            ...result,
+            error: result.exception,
+          };
         }
-        return result;
+        return { requestAbn: normalizedAbn, ...result };
       } catch (error) {
         stats.lookupFailures += 1;
         logger.logEvent(
@@ -302,11 +331,22 @@ async function enrichGovReferenceFromStageRows({
   const inserts = [];
   const negativeCacheRows = [];
   const checkedAt = new Date();
-  const expiresAt = new Date(checkedAt.getTime() + ABR_NEGATIVE_CACHE_TTL_MS);
+  const expiresAt = new Date(checkedAt.getTime() + getAbrCacheTtlMs());
   for (const result of lookupResults) {
     if (result?.invalidCandidate) continue;
     if (!result?.found || !result?.abn) {
       if (!result?.error) stats.unresolvedCount += 1;
+      const requestAbn = normalizeAbnDigits(result?.requestAbn);
+      if (isValidAbn(requestAbn)) {
+        negativeCacheRows.push({
+          abn: requestAbn,
+          classification: "ABN_NOT_CONFIRMED",
+          checkedAt,
+          expiresAt,
+          lookupStatus: result?.error ? "LOOKUP_FAILED" : "NOT_FOUND",
+          lookupError: result?.error || null,
+        });
+      }
       continue;
     }
 
@@ -317,6 +357,8 @@ async function enrichGovReferenceFromStageRows({
         classification: "NON_GOVERNMENT",
         checkedAt,
         expiresAt,
+        lookupStatus: "CONFIRMED",
+        lookupError: null,
       });
       continue;
     }
@@ -333,6 +375,8 @@ async function enrichGovReferenceFromStageRows({
         classification: "INACTIVE_GOVERNMENT",
         checkedAt,
         expiresAt,
+        lookupStatus: "CONFIRMED_INACTIVE",
+        lookupError: null,
       });
       continue;
     }
@@ -382,6 +426,7 @@ async function enrichGovReferenceFromStageRows({
 module.exports = {
   enrichGovReferenceFromStageRows,
   findUnknownGovCandidateAbns,
+  getAbrCacheTtlMs,
   persistNegativeAbrResults,
   persistNewGovernmentReferences,
 };

@@ -15,7 +15,6 @@ const PAYMENT_CLOCK_FIELDS = Object.freeze([
   "invoice_receipt_date",
   "notice_for_payment_issue_date",
   "supply_date",
-  "invoice_due_date",
 ]);
 
 const ADAPTER_CONTRACTS = Object.freeze({
@@ -34,8 +33,12 @@ const ADAPTER_CONTRACTS = Object.freeze({
       "clearing_document",
     ]),
     requiredAnyGroups: Object.freeze([
-      Object.freeze({ id: "payment_clock_start", fields: PAYMENT_CLOCK_FIELDS }),
+      Object.freeze({
+        id: "payment_clock_start",
+        fields: PAYMENT_CLOCK_FIELDS,
+      }),
     ]),
+    optionalFields: Object.freeze(["supplier_has_no_abn"]),
     validateRows: false,
   }),
   xero_accounting_event: Object.freeze({
@@ -47,8 +50,12 @@ const ADAPTER_CONTRACTS = Object.freeze({
     sourceGroupSemantics: "scoped_accounting_ledger",
     requiredFields: COMMON_PAYMENT_FIELDS,
     requiredAnyGroups: Object.freeze([
-      Object.freeze({ id: "payment_clock_start", fields: PAYMENT_CLOCK_FIELDS }),
+      Object.freeze({
+        id: "payment_clock_start",
+        fields: PAYMENT_CLOCK_FIELDS,
+      }),
     ]),
+    optionalFields: Object.freeze(["supplier_has_no_abn"]),
     validateRows: false,
   }),
   direct_payment: Object.freeze({
@@ -60,7 +67,10 @@ const ADAPTER_CONTRACTS = Object.freeze({
     sourceGroupSemantics: "provenance_only_no_event_reconstruction",
     requiredFields: COMMON_PAYMENT_FIELDS,
     requiredAnyGroups: Object.freeze([
-      Object.freeze({ id: "payment_clock_start", fields: PAYMENT_CLOCK_FIELDS }),
+      Object.freeze({
+        id: "payment_clock_start",
+        fields: PAYMENT_CLOCK_FIELDS,
+      }),
     ]),
     optionalFields: Object.freeze([
       "payer_entity_acn_arbn",
@@ -81,6 +91,7 @@ const ADAPTER_CONTRACTS = Object.freeze({
       "document_type",
       "document_currency",
       "source_account_code",
+      "supplier_has_no_abn",
       "clearing_document",
       "invoice_created_date",
       "entry_date",
@@ -154,9 +165,11 @@ function isSupportedDate(value) {
     year = Number(match[3]);
   }
   const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year &&
+  return (
+    date.getUTCFullYear() === year &&
     date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day;
+    date.getUTCDate() === day
+  );
 }
 
 function isNumericPaymentAmount(value) {

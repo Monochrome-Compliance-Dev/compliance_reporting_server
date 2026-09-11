@@ -3,6 +3,7 @@ const router = express.Router();
 
 const {
   uploadCsv,
+  uploadWorkbook,
 } = require("@/v2/ptrs/middleware/csv-upload.ptrs.middleware");
 
 const authorise = require("@/middleware/authorise");
@@ -18,20 +19,26 @@ router.post(
   "/:id/datasets",
   requirePtrs,
   uploadCsv.single("file"),
-  ptrsController.addDataset
+  ptrsController.addDataset,
+);
+router.post(
+  "/:id/workbooks",
+  requirePtrs,
+  uploadWorkbook.single("file"),
+  ptrsController.addWorkbook,
 );
 router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
 router.delete(
   "/:id/datasets/:datasetId",
   requirePtrs,
-  ptrsController.removeDataset
+  ptrsController.removeDataset,
 );
 
 // Dataset sample (used for per-dataset header examples in FE)
 router.get(
   "/datasets/:datasetId/sample",
   requirePtrs,
-  ptrsController.getDatasetSample
+  ptrsController.getDatasetSample,
 );
 
 module.exports = router;

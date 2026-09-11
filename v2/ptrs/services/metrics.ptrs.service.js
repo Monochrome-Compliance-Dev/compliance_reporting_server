@@ -8,16 +8,20 @@ const {
   getPaymentObservationReplacements,
   setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
+const {
+  requireCurrentPaymentNormalisationResult,
+} = require("./payment-normalisation.ptrs.service");
 
 // Bump whenever the analytical calculation or quality interpretation changes.
 // This is deliberately explicit; source-code hashing would be unstable and opaque.
-const PTRS_METRICS_CALCULATION_VERSION = "ptrs-payment-observation-metrics-v1";
+const PTRS_METRICS_CALCULATION_VERSION = "ptrs-payment-observation-metrics-v2";
 const MATERIAL_STATE_CHANGED = "PTRS_METRICS_MATERIAL_STATE_CHANGED";
 const MAX_MATERIAL_STATE_ATTEMPTS = 2;
 
 module.exports = {
   PTRS_METRICS_CALCULATION_VERSION,
   buildMetricsInputSignature,
+  buildPaymentObservationMetricsSql,
   calculatePaymentTermMetricsFromFrequencies,
   calculateSmallBusinessTradeCreditPaymentsPct,
   computeReportPreview,
@@ -55,10 +59,23 @@ function buildMetricsInputSignature({
     stageMaterialState: materialState?.stageMaterialState || {
       revision: "0",
     },
+    paymentNormalisation: materialState?.paymentNormalisation
+      ? {
+          id: materialState.paymentNormalisation.id,
+          inputSignature: materialState.paymentNormalisation.inputSignature,
+          calculationVersion:
+            materialState.paymentNormalisation.calculationVersion,
+        }
+      : null,
   });
 }
 
-async function readMetricsMaterialState({ transaction, customerId, ptrsId }) {
+async function readMetricsMaterialState({
+  transaction,
+  customerId,
+  ptrsId,
+  paymentNormalisation = null,
+}) {
   const rows = await db.sequelize.query(
     `
       SELECT
@@ -128,6 +145,7 @@ async function readMetricsMaterialState({ transaction, customerId, ptrsId }) {
     stageMaterialState: state.stageMaterialState || {
       revision: "0",
     },
+    paymentNormalisation,
   };
 }
 
@@ -152,17 +170,11 @@ async function acquireMetricsSignatureLock({ transaction, inputSignature }) {
 // SQL aggregate helpers for metrics
 // -------------------------
 
-async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
-  // NOTE: This query intentionally does not return raw rows.
-  // It computes only what the dashboard/metrics preview needs.
-  await setPaymentObservationWorkMem({ transaction: t });
-
-  const sql = `
+function buildPaymentObservationMetricsSql() {
+  return `
     WITH ${buildPaymentObservationsCte()},
     base AS (
       SELECT
-        data,
-        meta,
         CASE
           WHEN NULLIF(
             regexp_replace(COALESCE(data->>'payer_entity_abn', ''), '\\D', '', 'g'),
@@ -188,6 +200,7 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
         -- Exclusion flags
         COALESCE((data->>'exclude_from_metrics')::boolean, false) AS exclude_from_metrics,
         COALESCE((meta->'rules'->>'exclude')::boolean, false) AS rules_exclude,
+        COALESCE((data->>'partial_payment')::boolean, false) AS partial_payment,
 
         CASE
           WHEN lower(data->>'is_small_business') IN ('true','false') THEN (data->>'is_small_business')::boolean
@@ -236,11 +249,19 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
       WHERE is_small_business IS TRUE
     ),
 
+    sb_payment_time AS (
+      -- Partial allocations remain in the trade-credit value population but
+      -- only the final settlement represents the regulator payment-time event.
+      SELECT *
+      FROM sb
+      WHERE NOT partial_payment
+    ),
+
     sb_term_frequencies AS (
       SELECT
         payment_term_days_int AS term,
         COUNT(*)::int AS frequency
-      FROM sb
+      FROM sb_payment_time
       WHERE payment_term_days_num IS NOT NULL
       GROUP BY payment_term_days_int
     ),
@@ -250,7 +271,7 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
         payer_entity_key,
         payment_term_days_int AS term,
         COUNT(*)::int AS frequency
-      FROM sb
+      FROM sb_payment_time
       WHERE payer_entity_key IS NOT NULL
         AND payment_term_days_num IS NOT NULL
       GROUP BY payer_entity_key, payment_term_days_int
@@ -258,7 +279,7 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
 
     SELECT
       -- Gating counts
-      (SELECT COUNT(*)::int FROM payment_observation_source_rows) AS "stageRowCount",
+      (SELECT COUNT(*)::int FROM payment_normalisation_source_rows) AS "stageRowCount",
       (SELECT COUNT(*)::int FROM non_excluded) AS "paymentObservationCount",
 
       -- Population totals
@@ -269,6 +290,7 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
 
       -- SB totals
       (SELECT COUNT(*)::int FROM population WHERE is_small_business IS TRUE) AS "sbCount",
+      (SELECT COUNT(*)::int FROM sb_payment_time) AS "sbPaymentTimeCount",
       (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM population WHERE is_small_business IS TRUE AND payment_amount_num IS NOT NULL) AS "sbValue",
       (SELECT COUNT(*)::int FROM population WHERE is_small_business IS NULL) AS "missingSbFlagCount",
 
@@ -276,27 +298,27 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
       (SELECT COUNT(*)::int FROM population WHERE payment_term_days_num IS NULL) AS "missingTermDaysCount",
 
       -- Missing payment time (SB only)
-      (SELECT COUNT(*)::int FROM population WHERE is_small_business IS TRUE AND payment_time_days_num IS NULL) AS "missingDatesCount",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NULL) AS "missingDatesCount",
 
       -- SB payment time bands (counts)
-      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Count",
-      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Count",
-      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Count",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Count",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Count",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Count",
 
       -- SB payment time bands (values)
-      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Value",
-      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Value",
-      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Value",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb_payment_time WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int <= 30) AS "sbBand0to30Value",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb_payment_time WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 30 AND payment_time_days_int <= 60) AS "sbBand31to60Value",
+      (SELECT COALESCE(SUM(ABS(payment_amount_num)),0)::numeric FROM sb_payment_time WHERE payment_amount_num IS NOT NULL AND payment_time_days_num IS NOT NULL AND payment_time_days_int > 60) AS "sbBandOver60Value",
 
       -- SB within terms
-      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL) AS "sbWithinTermsKnownCount",
-      (SELECT COUNT(*)::int FROM sb WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL AND payment_time_days_int <= payment_term_days_int) AS "sbWithinTermsYesCount",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL) AS "sbWithinTermsKnownCount",
+      (SELECT COUNT(*)::int FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL AND payment_term_days_num IS NOT NULL AND payment_time_days_int <= payment_term_days_int) AS "sbWithinTermsYesCount",
 
       -- SB payment time distribution stats
-      (SELECT AVG(payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "avgDays",
-      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "medianDays",
-      (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
-      (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
+      (SELECT AVG(payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "avgDays",
+      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "medianDays",
+      (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
+      (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
 
       -- Payment-term frequency aggregates. Node selects the deterministic
       -- overall and entity-level modes from these small, set-based results.
@@ -319,9 +341,41 @@ async function fetchPaymentObservationMetricsAggs({ t, customerId, ptrsId }) {
         '[]'::jsonb
       ) FROM sb_entity_term_frequencies) AS "sbEntityTermFrequencies";
   `;
+}
+
+async function fetchPaymentObservationMetricsAggs({
+  t,
+  customerId,
+  ptrsId,
+  normalisationResultId = null,
+}) {
+  // NOTE: This query intentionally does not return raw rows.
+  // It computes only what the dashboard/metrics preview needs.
+  await setPaymentObservationWorkMem({ transaction: t });
+
+  const sql = buildPaymentObservationMetricsSql();
+
+  const current = await requireCurrentPaymentNormalisationResult({
+    customerId,
+    ptrsId,
+    transaction: t,
+  });
+  if (normalisationResultId && normalisationResultId !== current.result.id) {
+    const error = new Error(
+      "The requested payment normalisation result is not current",
+    );
+    error.code = "PTRS_NORMALISATION_RESULT_STALE";
+    error.statusCode = 409;
+    throw error;
+  }
+  normalisationResultId = current.result.id;
 
   const [rows] = await db.sequelize.query(sql, {
-    replacements: getPaymentObservationReplacements({ customerId, ptrsId }),
+    replacements: getPaymentObservationReplacements({
+      customerId,
+      ptrsId,
+      normalisationResultId,
+    }),
     transaction: t,
   });
 
@@ -587,6 +641,7 @@ async function calculateOrReuseMetrics({
   mode,
   calculationVersion,
   fetchAggregates,
+  normalisationResultId = null,
 }) {
   const transaction = await beginTransactionWithCustomerContext(customerId);
   let inputSignature = null;
@@ -602,10 +657,33 @@ async function calculateOrReuseMetrics({
       throw error;
     }
 
+    const currentNormalisation = await requireCurrentPaymentNormalisationResult({
+      customerId,
+      ptrsId,
+      transaction,
+    });
+    if (
+      normalisationResultId &&
+      normalisationResultId !== currentNormalisation.result.id
+    ) {
+      const error = new Error(
+        "The requested payment normalisation result is not current",
+      );
+      error.code = "PTRS_NORMALISATION_RESULT_STALE";
+      error.statusCode = 409;
+      throw error;
+    }
+    normalisationResultId = currentNormalisation.result.id;
+    const paymentNormalisation = {
+      id: currentNormalisation.result.id,
+      inputSignature: currentNormalisation.result.inputSignature,
+      calculationVersion: currentNormalisation.result.calculationVersion,
+    };
     provenance = await readMetricsMaterialState({
       transaction,
       customerId,
       ptrsId,
+      paymentNormalisation,
     });
     inputSignature = buildMetricsInputSignature({
       materialState: provenance,
@@ -617,6 +695,7 @@ async function calculateOrReuseMetrics({
       transaction,
       customerId,
       ptrsId,
+      paymentNormalisation,
     });
     const lockedSignature = buildMetricsInputSignature({
       materialState: lockedProvenance,
@@ -694,11 +773,13 @@ async function calculateOrReuseMetrics({
       t: transaction,
       customerId,
       ptrsId,
+      normalisationResultId,
     });
     const finalProvenance = await readMetricsMaterialState({
       transaction,
       customerId,
       ptrsId,
+      paymentNormalisation,
     });
     const finalSignature = buildMetricsInputSignature({
       materialState: finalProvenance,
@@ -757,6 +838,7 @@ async function getMetricsWithExecution({
   mode = "read",
   calculationVersion = PTRS_METRICS_CALCULATION_VERSION,
   fetchAggregates = fetchPaymentObservationMetricsAggs,
+  normalisationResultId = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
@@ -770,6 +852,7 @@ async function getMetricsWithExecution({
         mode,
         calculationVersion,
         fetchAggregates,
+        normalisationResultId,
       });
     } catch (error) {
       if (
@@ -894,6 +977,7 @@ function composeReportPreview({ ptrs, aggs, mode }) {
   const missingAmountCount = aggs?.missingAmountCount || 0;
 
   const sbCount = aggs?.sbCount || 0;
+  const sbPaymentTimeCount = aggs?.sbPaymentTimeCount || 0;
   const sbValue = Number(aggs?.sbValue || 0);
   const missingSbFlagCount = aggs?.missingSbFlagCount || 0;
 
@@ -975,18 +1059,18 @@ function composeReportPreview({ ptrs, aggs, mode }) {
       : null;
 
   const payments0to30Pct =
-    !canonicalQuality.blocked && sbCount > 0
-      ? (sbBand0to30Count / sbCount) * 100
+    !canonicalQuality.blocked && sbPaymentTimeCount > 0
+      ? (sbBand0to30Count / sbPaymentTimeCount) * 100
       : null;
 
   const payments31to60Pct =
-    !canonicalQuality.blocked && sbCount > 0
-      ? (sbBand31to60Count / sbCount) * 100
+    !canonicalQuality.blocked && sbPaymentTimeCount > 0
+      ? (sbBand31to60Count / sbPaymentTimeCount) * 100
       : null;
 
   const paymentsOver60Pct =
-    !canonicalQuality.blocked && sbCount > 0
-      ? (sbBandOver60Count / sbCount) * 100
+    !canonicalQuality.blocked && sbPaymentTimeCount > 0
+      ? (sbBandOver60Count / sbPaymentTimeCount) * 100
       : null;
 
   const sbTradeCreditPaymentsPct = calculateSmallBusinessTradeCreditPaymentsPct(
@@ -1086,6 +1170,7 @@ function composeReportPreview({ ptrs, aggs, mode }) {
     paymentObservationCount,
     basedOnRowCount: totalCount,
     sbRowCount: sbCount,
+    sbPaymentTimeRowCount: sbPaymentTimeCount,
     missingInputs: makeMissingInputs(declarations),
     canonical: canonicalQuality,
     notes: [],

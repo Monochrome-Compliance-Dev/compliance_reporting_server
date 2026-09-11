@@ -6,10 +6,6 @@ const {
   buildRuleWhereSql,
   buildConcatSegmentsSql,
 } = require("./rules.sql.shared");
-const {
-  appendTransformationHistorySql,
-} = require("./stage.transformation-history");
-
 async function applyRowRulesSql({
   customerId,
   ptrsId,
@@ -163,35 +159,11 @@ async function applyRowRulesSql({
           true
         )
       `;
-      const ruleLabel = String(rule?.label || ruleKey).replace(/'/g, "''");
-      const configuredComment = String(act?.comment || act?.note || "").trim();
-      const commentSql = configuredComment
-        ? `'${configuredComment.replace(/'/g, "''")}'`
-        : `'Rule ${ruleLabel} applied ${op} to ${targetField}'`;
-      const metaSql = appendTransformationHistorySql(
-        appliedMetaSql,
-        `jsonb_build_object(
-          'key', 'row-rule:${escapedActionKey}',
-          'kind', 'row_rule',
-          'comment', ${commentSql},
-          'sourceStageRowIds', jsonb_build_array("id"),
-          'targetStageRowIds', jsonb_build_array("id"),
-          'details', jsonb_build_object(
-            'ruleId', '${escapedRuleKey}',
-            'actionIndex', ${actionIndex},
-            'operation', '${op.replace(/'/g, "''")}',
-            'field', '${targetField.replace(/'/g, "''")}',
-            'beforeValue', data->>'${targetField.replace(/'/g, "''")}',
-            'afterValue', (${dataSql})->>'${targetField.replace(/'/g, "''")}'
-          )
-        )`,
-      );
-
       const sql = `
   UPDATE "tbl_ptrs_stage_row"
   SET
     "data" = ${dataSql},
-    "meta" = ${metaSql},
+    "meta" = ${appliedMetaSql},
     "updatedAt" = now()
   WHERE "customerId" = :customerId
     AND "ptrsId" = :ptrsId

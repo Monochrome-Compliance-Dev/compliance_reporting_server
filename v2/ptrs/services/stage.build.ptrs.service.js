@@ -4,10 +4,6 @@ function elapsedMs(startedAt) {
   return Number(process.hrtime.bigint() - startedAt) / 1e6;
 }
 
-const {
-  appendTransformationHistory,
-} = require("./stage.transformation-history");
-
 function parseRowRules(mapRow) {
   const raw = mapRow?.rowRules ?? mapRow?.extras?.rowRules ?? null;
   if (typeof raw !== "string") return Array.isArray(raw) ? raw : [];
@@ -78,6 +74,7 @@ async function transformStageRows({
   termMap,
   applyPaymentTermDaysFromMap,
   computePaymentTimeRegulator,
+  semanticKind = "accounting_event",
 }) {
   const timings = {
     rulesMs: 0,
@@ -95,14 +92,6 @@ async function transformStageRows({
   let paymentTermChangeStats = null;
   let paymentTermStats = null;
   if (profileId) {
-    const termsBefore = new Map(
-      stagedRows.map((row) => [
-        row,
-        row?.contract_po_payment_terms_effective ??
-          row?.invoice_payment_terms_effective ??
-          null,
-      ]),
-    );
     phaseStarted = process.hrtime.bigint();
     const changeMap = await loadEffectiveTermChangesForRows({
       customerId,
@@ -123,30 +112,6 @@ async function transformStageRows({
     stagedRows = changeResult.rows || stagedRows;
     paymentTermChangeStats = changeResult.stats || null;
 
-    for (const row of stagedRows) {
-      if (row?.contract_po_payment_terms_effective_source !== "TERM_CHANGES") {
-        continue;
-      }
-      const effectiveTerm = row.contract_po_payment_terms_effective;
-      const changedAt = row.contract_po_payment_terms_effective_changed_at;
-      const previousTerm = termsBefore.get(row) ?? null;
-      row._transformationMeta = appendTransformationHistory(
-        row._transformationMeta,
-        {
-          key: `payment-term-change:${changedAt || "unknown"}:${effectiveTerm}`,
-          kind: "payment_term_override",
-          comment: `Payment term overridden from ${previousTerm || "not supplied"} to ${effectiveTerm} by supplier term change effective on ${changedAt || "an unspecified date"}`,
-          sourceStageRowIds: [],
-          targetStageRowIds: [],
-          details: {
-            previousTerm,
-            effectiveTerm,
-            effectiveDate: changedAt || null,
-            source: "TERM_CHANGES",
-          },
-        },
-      );
-    }
     timings.paymentTermChangeApplyMs = elapsedMs(phaseStarted);
 
     phaseStarted = process.hrtime.bigint();
@@ -161,6 +126,12 @@ async function transformStageRows({
   phaseStarted = process.hrtime.bigint();
   for (const row of stagedRows) {
     if (!row || typeof row !== "object") continue;
+    if (semanticKind === "accounting_event") {
+      row.payment_time_days = null;
+      row.payment_time_reference_date = null;
+      row.payment_time_reference_kind = null;
+      continue;
+    }
     const result = computePaymentTimeRegulator(row);
     if (result?.days == null) {
       if (row.payment_time_days == null) {
@@ -179,21 +150,6 @@ async function transformStageRows({
     row.payment_time_days = result.days;
     row.payment_time_reference_date = result.referenceDate || null;
     row.payment_time_reference_kind = result.referenceKind || null;
-    row._transformationMeta = appendTransformationHistory(
-      row._transformationMeta,
-      {
-        key: `payment-time:${result.referenceKind || "unknown"}:${result.referenceDate || "unknown"}:${result.days}`,
-        kind: "payment_time",
-        comment: `Payment-time reference chosen from ${String(result.referenceKind || "configured date").replaceAll("_", " ")} (${result.referenceDate || "date unavailable"}); derived payment time ${result.days} day(s)`,
-        sourceStageRowIds: [],
-        targetStageRowIds: [],
-        details: {
-          referenceKind: result.referenceKind || null,
-          referenceDate: result.referenceDate || null,
-          paymentTimeDays: result.days,
-        },
-      },
-    );
     paymentTimeDerived += 1;
   }
   timings.paymentTimeMs = elapsedMs(phaseStarted);
@@ -423,7 +379,8 @@ async function stagePtrs({
     );
     stageTimings.setupMs = elapsedMs(phaseStarted);
 
-    const transform = async (rows, transactionDatasetId) => {
+    const transform = async (rows, transactionDataset) => {
+      const transactionDatasetId = transactionDataset.id;
       const joinContext = {
         customerId,
         ptrsId,
@@ -445,6 +402,10 @@ async function stagePtrs({
         termMap,
         applyPaymentTermDaysFromMap,
         computePaymentTimeRegulator,
+        semanticKind:
+          transactionDataset.adapterType === "direct_payment"
+            ? "direct_payment"
+            : "accounting_event",
       });
       accumulateStats(result.stats);
       return result.rows;
@@ -469,7 +430,7 @@ async function stagePtrs({
         stageTimings.canonicalReadMs += elapsedMs(phaseStarted);
         rowsIn += rows.length;
         phaseStarted = process.hrtime.bigint();
-        const transformed = await transform(rows, selection.dataset.id);
+        const transformed = await transform(rows, selection.dataset);
         stageTimings.transformMs += elapsedMs(phaseStarted);
         stagedRows.push(...transformed);
       }
@@ -500,7 +461,7 @@ async function stagePtrs({
           if (!rows.length) break;
           rowsIn += rows.length;
           phaseStarted = process.hrtime.bigint();
-          const batch = await transform(rows, selection.dataset.id);
+          const batch = await transform(rows, selection.dataset);
           stageTimings.transformMs += elapsedMs(phaseStarted);
           phaseStarted = process.hrtime.bigint();
           const persistenceRows = batch.map((row) => {

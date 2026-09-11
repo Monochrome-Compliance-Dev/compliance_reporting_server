@@ -15,6 +15,7 @@ jest.mock("@/helpers/logger", () => ({
 }));
 jest.mock("./exclusions.ptrs.service", () => ({
   applyExclusionsAndPersist: jest.fn(),
+  getExclusionsSummary: jest.fn(),
 }));
 jest.mock("./rules.ptrs.service", () => ({
   applyRulesAndPersist: jest.fn(),
@@ -31,8 +32,9 @@ jest.mock("./metrics.ptrs.service", () => ({
 jest.mock("./payment-observations.ptrs.service", () => ({
   getPaymentObservationSummary: jest.fn(),
 }));
-jest.mock("./stage.history.ptrs.service", () => ({
-  recordStageTransformationHistory: jest.fn(),
+jest.mock("./payment-normalisation.ptrs.service", () => ({
+  PAYMENT_NORMALISATION_VERSION: "normalisation-v1",
+  persistPaymentNormalisationEvidence: jest.fn(),
 }));
 jest.mock("./process-lock.ptrs.service", () => ({
   acquireProcessExecutionLock: jest.fn(),
@@ -58,8 +60,8 @@ const {
   getPaymentObservationSummary,
 } = require("./payment-observations.ptrs.service");
 const {
-  recordStageTransformationHistory,
-} = require("./stage.history.ptrs.service");
+  persistPaymentNormalisationEvidence,
+} = require("./payment-normalisation.ptrs.service");
 const { acquireProcessExecutionLock } = require("./process-lock.ptrs.service");
 const { processPtrs } = require("./process.ptrs.service");
 const {
@@ -101,35 +103,73 @@ describe("processPtrs", () => {
       .mockResolvedValueOnce([{ tempFiles: "11", tempBytes: "200" }])
       .mockResolvedValueOnce([{ tempFiles: "11", tempBytes: "200" }])
       .mockResolvedValueOnce([{ tempFiles: "12", tempBytes: "300" }])
-      .mockResolvedValueOnce([{ tempFiles: "12", tempBytes: "300" }])
-      .mockResolvedValueOnce([{ tempFiles: "14", tempBytes: "600" }])
       .mockResolvedValueOnce([{ tempFiles: "14", tempBytes: "600" }])
       .mockResolvedValueOnce([{ tempFiles: "17", tempBytes: "1000" }])
       .mockResolvedValueOnce([{ tempFiles: "17", tempBytes: "1000" }])
-      .mockResolvedValueOnce([{ tempFiles: "21", tempBytes: "1500" }]);
+      .mockResolvedValueOnce([{ tempFiles: "21", tempBytes: "1500" }])
+      .mockResolvedValueOnce([{ tempFiles: "21", tempBytes: "1500" }])
+      .mockResolvedValueOnce([{ tempFiles: "26", tempBytes: "2100" }]);
     getPaymentObservationSummary.mockResolvedValue({
       sourceStageRows: 1786,
       excludedStageRows: 200,
       survivingStageRows: 1586,
       derivedPaymentObservations: 1063,
       sbiPositiveObservations: 370,
+      sbiPositivePaymentValue: "37000",
+      sbiUnclassifiedObservations: 5,
+      tcpPaymentValue: "100000",
+      partialPayments: 25,
+      partialPaymentValue: "2500",
+      sbiNonPartialObservations: 345,
+      paymentTimePopulationCount: 340,
+      paymentTimePopulationValue: "34000",
       earlytradeMatches: 13,
     });
     exclusionsService.applyExclusionsAndPersist.mockResolvedValue({
       persisted: 10,
     });
+    exclusionsService.getExclusionsSummary.mockResolvedValue({
+      totalExcludedRows: 10,
+      byReason: { EMPLOYEE_PAYMENT: 10 },
+      byReasonValue: { EMPLOYEE_PAYMENT: 1000 },
+    });
     rulesService.applyRulesAndPersist.mockResolvedValue({ persisted: 26 });
+    persistPaymentNormalisationEvidence.mockResolvedValue({
+      persisted: 20,
+      summary: {
+        startingStageCount: 1786,
+        startingAbsoluteValue: "250000",
+        invoiceObligationCount: 1100,
+        originalObligationValue: "125000",
+        adjustedObligationValue: "120000",
+        paymentEventCount: 1063,
+        paymentEventValue: "100000",
+        paymentAllocationCount: 1063,
+        creditValue: "3000",
+        creditAllocatedValue: "3000",
+        refundValue: "1000",
+        refundAllocatedValue: "1000",
+        earlyTradeDiscountValue: "1000",
+        earlyTradeDiscountAllocatedValue: "1000",
+        adjustmentReversalOffsetValue: "200",
+        unmatchedAdjustmentValue: "0",
+        unmatchedAdjustmentExceptionCount: 0,
+        exceptionCount: 0,
+      },
+    });
     sbiService.reapplyLatestResults.mockResolvedValue({
       status: "APPLIED",
       sbiUploadId: "existing-upload",
     });
-    recordStageTransformationHistory.mockResolvedValue({ rowsUpdated: 100 });
     validateService.getProcessValidateSummary.mockResolvedValue({
       status: "PASS",
       counts: { blockers: 0, warnings: 0 },
     });
     metricsService.getMetricsWithExecution.mockResolvedValue({
-      preview: { status: "READY" },
+      preview: {
+        status: "READY",
+        computed: { averagePaymentTimeDays: 17.5 },
+      },
       execution: {
         source: "calculated",
         inputSignature: "metrics-signature",
@@ -148,9 +188,11 @@ describe("processPtrs", () => {
     });
 
     const calls = [
-      exclusionsService.applyExclusionsAndPersist,
       rulesService.applyRulesAndPersist,
-      recordStageTransformationHistory,
+      persistPaymentNormalisationEvidence,
+      exclusionsService.applyExclusionsAndPersist,
+      exclusionsService.getExclusionsSummary,
+      getPaymentObservationSummary,
       validateService.getProcessValidateSummary,
       metricsService.getMetricsWithExecution,
     ].map((mock) => mock.mock.invocationCallOrder[0]);
@@ -188,13 +230,9 @@ describe("processPtrs", () => {
     expect(db.PtrsStageRow.findOne.mock.invocationCallOrder[0]).toBeLessThan(
       exclusionsService.applyExclusionsAndPersist.mock.invocationCallOrder[0],
     );
-    expect(
-      getPaymentObservationSummary.mock.invocationCallOrder[0],
-    ).toBeGreaterThan(
-      recordStageTransformationHistory.mock.invocationCallOrder[0],
-    );
     expect(sbiService.reapplyLatestResults).not.toHaveBeenCalled();
     expect(result.steps).not.toHaveProperty("sbi");
+    expect(result.steps).not.toHaveProperty("transformationHistory");
     expect(result.steps.metrics).toEqual({
       status: "READY",
       generated: true,
@@ -203,21 +241,44 @@ describe("processPtrs", () => {
       calculationVersion: "metrics-v1",
       metricsResultId: "metrics001",
     });
+    expect(result.steps.reconciliation).toEqual(
+      expect.objectContaining({
+        startingStage: { count: 1786, absoluteValue: "250000" },
+        exclusionsByReason: {
+          counts: { EMPLOYEE_PAYMENT: 10 },
+          values: { EMPLOYEE_PAYMENT: 1000 },
+        },
+        netZeroAdjustmentReversals: { offsetValue: "200" },
+        tcp: { count: 1063, paymentValue: "100000" },
+        sbtcp: { count: 370, paymentValue: "37000" },
+        partialsRemovedFromPaymentTime: {
+          count: 25,
+          paymentValue: "2500",
+        },
+        paymentTimePopulation: {
+          nonPartialCount: 345,
+          calculatedCount: 340,
+          calculatedValue: "34000",
+        },
+        finalReportMeasures: { averagePaymentTimeDays: 17.5 },
+      }),
+    );
     expect(result.steps.timings).toEqual({
       stageGateMs: expect.any(Number),
+      paymentNormalisationMs: expect.any(Number),
       exclusionsMs: expect.any(Number),
+      exclusionSummaryMs: expect.any(Number),
       rulesMs: expect.any(Number),
-      transformationHistoryMs: expect.any(Number),
       paymentObservationsMs: expect.any(Number),
       validationMs: expect.any(Number),
       metricsMs: expect.any(Number),
     });
     expect(result.steps.databaseTempDeltas).toEqual({
       stageGate: { tempFilesDelta: 1, tempBytesDelta: 100 },
-      transformationHistory: { tempFilesDelta: 1, tempBytesDelta: 100 },
-      paymentObservations: { tempFilesDelta: 2, tempBytesDelta: 300 },
-      validation: { tempFilesDelta: 3, tempBytesDelta: 400 },
-      metrics: { tempFilesDelta: 4, tempBytesDelta: 500 },
+      paymentNormalisation: { tempFilesDelta: 1, tempBytesDelta: 100 },
+      paymentObservations: { tempFilesDelta: 3, tempBytesDelta: 400 },
+      validation: { tempFilesDelta: 4, tempBytesDelta: 500 },
+      metrics: { tempFilesDelta: 5, tempBytesDelta: 600 },
     });
     expect(result.counts).toEqual(
       expect.objectContaining({
@@ -264,7 +325,6 @@ describe("processPtrs", () => {
 
     expect(sbiService.reapplyLatestResults).not.toHaveBeenCalled();
     expect(result.steps).not.toHaveProperty("sbi");
-    expect(recordStageTransformationHistory).toHaveBeenCalledTimes(1);
     expect(validateService.getProcessValidateSummary).toHaveBeenCalledTimes(1);
     expect(metricsService.getMetricsWithExecution).toHaveBeenCalledTimes(1);
   });
@@ -283,7 +343,7 @@ describe("processPtrs", () => {
         tempFilesDelta: null,
         tempBytesDelta: null,
       },
-      transformationHistory: {
+      paymentNormalisation: {
         tempFilesDelta: null,
         tempBytesDelta: null,
       },
@@ -294,7 +354,6 @@ describe("processPtrs", () => {
       validation: { tempFilesDelta: null, tempBytesDelta: null },
       metrics: { tempFilesDelta: null, tempBytesDelta: null },
     });
-    expect(recordStageTransformationHistory).toHaveBeenCalledTimes(1);
     expect(getPaymentObservationSummary).toHaveBeenCalledTimes(1);
     expect(validateService.getProcessValidateSummary).toHaveBeenCalledTimes(1);
     expect(metricsService.getMetricsWithExecution).toHaveBeenCalledTimes(1);

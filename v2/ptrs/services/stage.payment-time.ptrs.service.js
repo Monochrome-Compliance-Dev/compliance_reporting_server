@@ -244,10 +244,10 @@ function parseISODateOnly(value) {
   const datePart = au
     ? `${au[3]}-${String(au[2]).padStart(2, "0")}-${String(au[1]).padStart(2, "0")}`
     : s.includes("T")
-    ? s.split("T")[0]
-    : s.includes(" ")
-      ? s.split(" ")[0]
-      : s;
+      ? s.split("T")[0]
+      : s.includes(" ")
+        ? s.split(" ")[0]
+        : s;
   const m = /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : null;
   if (!m) return null;
 
@@ -319,14 +319,6 @@ function computePaymentTimeRegulator(row) {
   const supplyRaw = getFirstRowValue(row, ["supply_date", "supplyDate"]);
   const supply = parseISODateOnly(supplyRaw);
 
-  const dueRaw = getFirstRowValue(row, [
-    "invoice_due_date",
-    "invoiceDueDate",
-    "due_date",
-    "dueDate",
-  ]);
-  const due = parseISODateOnly(dueRaw);
-
   const rctiRaw = getFirstRowValue(row, ["rcti", "RCTI"]);
   const rcti = isRctiYes(rctiRaw);
 
@@ -339,41 +331,37 @@ function computePaymentTimeRegulator(row) {
     }
     calc = diffDaysUTC(payment, issue);
     ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
-  } else if (!issue && !notice) {
-    if (supply) {
-      calc = diffDaysUTC(payment, supply);
-      ref = { referenceDate: supply.iso, referenceKind: "supply" };
-    } else if (due) {
-      calc = diffDaysUTC(payment, due);
-      ref = { referenceDate: due.iso, referenceKind: "invoice_due" };
-    } else {
-      return { days: null, referenceDate: null, referenceKind: null };
-    }
-  } else if (!issue) {
-    if (!notice) {
-      return { days: null, referenceDate: null, referenceKind: null };
-    }
-    calc = diffDaysUTC(payment, notice);
-    ref = { referenceDate: notice.iso, referenceKind: "notice_for_payment" };
-  } else {
+  } else if (issue && receipt) {
     const dIssue = diffDaysUTC(payment, issue);
-    const dReceipt = receipt ? diffDaysUTC(payment, receipt) : null;
+    const dReceipt = diffDaysUTC(payment, receipt);
 
+    if (dIssue == null || !Number.isFinite(dIssue)) {
+      return { days: null, referenceDate: null, referenceKind: null };
+    }
     if (dReceipt == null || !Number.isFinite(dReceipt)) {
+      return { days: null, referenceDate: null, referenceKind: null };
+    }
+    if (dIssue <= dReceipt) {
       calc = dIssue;
       ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
     } else {
-      if (dIssue == null || !Number.isFinite(dIssue)) {
-        calc = dReceipt;
-        ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
-      } else if (dIssue <= dReceipt) {
-        calc = dIssue;
-        ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
-      } else {
-        calc = dReceipt;
-        ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
-      }
+      calc = dReceipt;
+      ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
     }
+  } else if (issue) {
+    calc = diffDaysUTC(payment, issue);
+    ref = { referenceDate: issue.iso, referenceKind: "invoice_issue" };
+  } else if (receipt) {
+    calc = diffDaysUTC(payment, receipt);
+    ref = { referenceDate: receipt.iso, referenceKind: "invoice_receipt" };
+  } else if (notice) {
+    calc = diffDaysUTC(payment, notice);
+    ref = { referenceDate: notice.iso, referenceKind: "notice_for_payment" };
+  } else if (supply) {
+    calc = diffDaysUTC(payment, supply);
+    ref = { referenceDate: supply.iso, referenceKind: "supply" };
+  } else {
+    return { days: null, referenceDate: null, referenceKind: null };
   }
 
   if (calc == null || !Number.isFinite(calc)) {

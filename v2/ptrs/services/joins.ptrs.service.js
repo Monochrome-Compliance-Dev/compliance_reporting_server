@@ -431,41 +431,53 @@ async function listCompatibleJoins({ customerId, ptrsId, transaction = null }) {
       return chosen?.fileName || null;
     };
 
-    const items = eligible.map((row) => {
-      const sourceDatasets = byPtrsId.get(String(row.ptrsId || "")) || [];
+    const items = eligible
+      .map((row) => {
+        const sourceDatasets = byPtrsId.get(String(row.ptrsId || "")) || [];
 
-      return {
-        id: row.ptrsId,
-        ptrsId: row.ptrsId,
-        fileName: pickDisplayFileName(row.ptrsId),
-        joinsCount: Array.isArray(row?.joins?.conditions)
-          ? row.joins.conditions.length
-          : 0,
-        customFieldsCount: Array.isArray(row?.customFields)
-          ? row.customFields.length
-          : 0,
-        profileId: row?.profileId || null,
-        updatedAt: row?.updatedAt || null,
-        createdAt: row?.createdAt || null,
-        datasets: sourceDatasets.map((dataset) => ({
-          id: dataset.id,
-          role: dataset.role,
-          purpose: dataset.purpose,
-          referenceKind: dataset.referenceKind || null,
-          sourceFormat: dataset.sourceFormat,
-          adapterType: dataset.adapterType || null,
-          fileName: dataset.fileName,
-          rowCount:
-            dataset?.meta?.rowsCount ??
-            dataset?.meta?.rowCount ??
-            dataset?.meta?.rows ??
-            0,
-          headers: Array.isArray(dataset?.meta?.headers)
-            ? dataset.meta.headers
-            : [],
-        })),
-      };
-    });
+        return {
+          id: row.ptrsId,
+          ptrsId: row.ptrsId,
+          fileName: pickDisplayFileName(row.ptrsId),
+          joinsCount: Array.isArray(row?.joins?.conditions)
+            ? row.joins.conditions.length
+            : 0,
+          customFieldsCount: Array.isArray(row?.customFields)
+            ? row.customFields.length
+            : 0,
+          profileId: row?.profileId || null,
+          updatedAt: row?.updatedAt || null,
+          createdAt: row?.createdAt || null,
+          datasets: sourceDatasets.map((dataset) => ({
+            id: dataset.id,
+            role: dataset.role,
+            purpose: dataset.purpose,
+            referenceKind: dataset.referenceKind || null,
+            sourceFormat: dataset.sourceFormat,
+            adapterType: dataset.adapterType || null,
+            fileName: dataset.fileName,
+            rowCount:
+              dataset?.meta?.rowsCount ??
+              dataset?.meta?.rowCount ??
+              dataset?.meta?.rows ??
+              0,
+            headers: Array.isArray(dataset?.meta?.headers)
+              ? dataset.meta.headers
+              : [],
+          })),
+        };
+      })
+      .sort((a, b) => {
+        const aUpdatedAt = new Date(a?.updatedAt || 0).getTime();
+        const bUpdatedAt = new Date(b?.updatedAt || 0).getTime();
+        if (aUpdatedAt !== bUpdatedAt) return bUpdatedAt - aUpdatedAt;
+
+        const aCreatedAt = new Date(a?.createdAt || 0).getTime();
+        const bCreatedAt = new Date(b?.createdAt || 0).getTime();
+        if (aCreatedAt !== bCreatedAt) return bCreatedAt - aCreatedAt;
+
+        return String(b?.ptrsId || "").localeCompare(String(a?.ptrsId || ""));
+      });
 
     if (!isExternalTx && !t.finished) {
       await t.commit();

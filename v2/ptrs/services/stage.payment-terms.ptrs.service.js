@@ -107,7 +107,7 @@ function getCanonicalFieldForTransactionHeader(
   });
 
   if (fieldMapMatch?.canonicalField) {
-    return normaliseHeaderToRowField(fieldMapMatch.canonicalField);
+    return String(fieldMapMatch.canonicalField).trim() || null;
   }
 
   const mappings = mapRow && mapRow.mappings ? mapRow.mappings : null;

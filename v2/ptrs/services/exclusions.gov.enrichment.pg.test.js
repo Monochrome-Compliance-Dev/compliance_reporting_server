@@ -63,13 +63,23 @@ suite("isolated PostgreSQL ABR cache renewal", () => {
       },
       { tableName: "tbl_ptrs_stage_row", timestamps: false },
     );
-    // Use the existing migration, including the actual UNIQUE and CHECK constraints.
+    // Use the existing migrations, including actual UNIQUE and CHECK constraints.
     await sequelize.query(
       readFileSync(
         path.join(
           __dirname,
           "../../..",
           "db/migrations/20260829_ptrs_abr_lookup_cache.sql",
+        ),
+        "utf8",
+      ),
+    );
+    await sequelize.query(
+      readFileSync(
+        path.join(
+          __dirname,
+          "../../..",
+          "db/migrations/20260907_ptrs_abr_lookup_review_state.sql",
         ),
         "utf8",
       ),
@@ -206,7 +216,7 @@ suite("isolated PostgreSQL ABR cache renewal", () => {
     },
   );
 
-  test.each(["NON_GOVERNMENT", "INACTIVE_GOVERNMENT"])(
+  test.each(["NON_GOVERNMENT", "INACTIVE_GOVERNMENT", "ABN_NOT_CONFIRMED"])(
     "reuses unexpired %s without ABR lookup or cache writes",
     async (classification) => {
       const before = await seedCache({ expired: false, classification });

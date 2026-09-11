@@ -60,7 +60,7 @@ function makeContext() {
         datasetId: TRANSACTION_DATASET_ID,
         sourceRole: "transaction",
         sourceColumn: "Account",
-        canonicalField: "source_account_code",
+        canonicalField: "sourceAccountCode",
       },
     ],
   };
@@ -138,7 +138,7 @@ describe("PTRS effective-term join resolution", () => {
 
     expect(extractTermChangesJoinSpec(mapRow, makeContext())).toEqual([
       {
-        transactionField: "source_account_code",
+        transactionField: "sourceAccountCode",
         changeColumn: "supplier",
       },
     ]);
@@ -159,7 +159,7 @@ describe("PTRS effective-term join resolution", () => {
   test("does not apply a future change retrospectively", () => {
     const rows = [
       {
-        source_account_code: "SUP-1",
+        sourceAccountCode: "SUP-1",
         invoice_issue_date: "2026-03-04",
         invoice_payment_terms_effective: "0027",
       },
@@ -182,7 +182,7 @@ describe("PTRS effective-term join resolution", () => {
   ])("applies a change effective %s (%s)", (invoiceIssueDate) => {
     const rows = [
       {
-        source_account_code: "SUP-1",
+        sourceAccountCode: "SUP-1",
         invoice_issue_date: invoiceIssueDate,
         invoice_payment_terms_effective: "0027",
       },
@@ -225,8 +225,8 @@ describe("PTRS effective-term join resolution", () => {
       },
     ]);
     const rows = [
-      { source_account_code: "SUP-1", invoice_issue_date: "2026-02-01" },
-      { source_account_code: "SUP-1", invoice_issue_date: "2026-04-01" },
+      { sourceAccountCode: "SUP-1", invoice_issue_date: "2026-02-01" },
+      { sourceAccountCode: "SUP-1", invoice_issue_date: "2026-04-01" },
     ];
 
     const changeMap = await loadEffectiveTermChangesForRows({
@@ -259,7 +259,7 @@ describe("PTRS effective-term join resolution", () => {
   test("preserves the invoice term when there is no applicable historical change", () => {
     const rows = [
       {
-        source_account_code: "SUP-1",
+        sourceAccountCode: "SUP-1",
         invoice_issue_date: "2025-12-01",
         invoice_payment_terms_effective: "0027",
       },
@@ -276,15 +276,15 @@ describe("PTRS effective-term join resolution", () => {
     expect(rows[0].contract_po_payment_terms_effective_source).toBeUndefined();
   });
 
-  test("records history only for the effective change selected for that invoice", async () => {
+  test("retains selected effective change evidence without Stage history", async () => {
     const rows = [
       {
-        source_account_code: "SUP-1",
+        sourceAccountCode: "SUP-1",
         invoice_issue_date: "2026-03-04",
         invoice_payment_terms_effective: "0027",
       },
       {
-        source_account_code: "SUP-1",
+        sourceAccountCode: "SUP-1",
         invoice_issue_date: "2026-03-25",
         invoice_payment_terms_effective: "0027",
       },
@@ -316,20 +316,12 @@ describe("PTRS effective-term join resolution", () => {
     });
 
     expect(result.rows[0]._transformationMeta).toBeUndefined();
-    expect(
-      result.rows[1]._transformationMeta.transformationHistory,
-    ).toEqual([
-      expect.objectContaining({
-        key: "payment-term-change:2026-03-06:NT60",
-        kind: "payment_term_override",
-        details: {
-          previousTerm: "0027",
-          effectiveTerm: "NT60",
-          effectiveDate: "2026-03-06",
-          source: "TERM_CHANGES",
-        },
-      }),
-    ]);
+    expect(result.rows[1]._transformationMeta).toBeUndefined();
+    expect(result.rows[1]).toMatchObject({
+      contract_po_payment_terms_effective: "NT60",
+      contract_po_payment_terms_effective_changed_at: "2026-03-06",
+      contract_po_payment_terms_effective_source: "TERM_CHANGES",
+    });
   });
 
   test("resolves main and support headers when the saved edge is reversed", () => {
@@ -354,7 +346,7 @@ describe("PTRS effective-term join resolution", () => {
 
     expect(extractTermChangesJoinSpec(mapRow, makeContext())).toEqual([
       {
-        transactionField: "source_account_code",
+        transactionField: "sourceAccountCode",
         changeColumn: "supplier",
       },
     ]);
@@ -386,7 +378,7 @@ describe("PTRS effective-term join resolution", () => {
         profileId: "profile-1",
         rows: [
           {
-            source_account_code: "supplier-1",
+            sourceAccountCode: "supplier-1",
             invoice_issue_date: "2026-01-01",
           },
         ],
@@ -396,6 +388,26 @@ describe("PTRS effective-term join resolution", () => {
       }),
     ).rejects.toThrow(
       "Effective-dated payment term changes require an explicit resolvable join spec",
+    );
+  });
+
+  test("throws clearly when the governed join field is absent from the row shape", async () => {
+    await expect(
+      loadEffectiveTermChangesForRows({
+        customerId: "customer-1",
+        profileId: "profile-1",
+        rows: [
+          {
+            Account: "SUP-1",
+            invoice_issue_date: "2026-01-01",
+          },
+        ],
+        mapRow: makeTermChangeMapRow(),
+        joinContext: makeContext(),
+        transaction: {},
+      }),
+    ).rejects.toThrow(
+      "Term changes join requires staged fields missing from row shape: sourceAccountCode",
     );
   });
 });

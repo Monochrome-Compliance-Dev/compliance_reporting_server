@@ -8,11 +8,12 @@ const rulesService = require("./rules.ptrs.service");
 const validateService = require("./validate.ptrs.service");
 const metricsService = require("./metrics.ptrs.service");
 const {
+  PAYMENT_NORMALISATION_VERSION,
+  persistPaymentNormalisationEvidence,
+} = require("./payment-normalisation.ptrs.service");
+const {
   getPaymentObservationSummary,
 } = require("./payment-observations.ptrs.service");
-const {
-  recordStageTransformationHistory,
-} = require("./stage.history.ptrs.service");
 const { acquireProcessExecutionLock } = require("./process-lock.ptrs.service");
 const {
   buildStableInputHash,
@@ -103,12 +104,17 @@ async function measureProcessPhase({
   }
 }
 
-async function readObservationSummary({ customerId, ptrsId }) {
+async function readObservationSummary({
+  customerId,
+  ptrsId,
+  normalisationResultId,
+}) {
   const transaction = await beginTransactionWithCustomerContext(customerId);
   try {
     const summary = await getPaymentObservationSummary({
       customerId,
       ptrsId,
+      normalisationResultId,
       transaction,
     });
     await transaction.commit();
@@ -204,6 +210,7 @@ async function processPtrs({
         profileId,
         stageExecutionRunId: latestStageRun?.id || null,
         stageInputHash: latestStageRun?.inputHash || null,
+        paymentNormalisationVersion: PAYMENT_NORMALISATION_VERSION,
       }),
       status: "running",
       startedAt: new Date(startedAt),
@@ -225,6 +232,31 @@ async function processPtrs({
       throw error;
     }
 
+    const rules = await measureProcessPhase({
+      name: "rules",
+      timings,
+      run: () =>
+        rulesService.applyRulesAndPersist({
+          customerId,
+          ptrsId,
+          profileId,
+          limit: null,
+          includeCrossRowRules: false,
+        }),
+    });
+    const normalisation = await measureProcessPhase({
+      name: "paymentNormalisation",
+      timings,
+      databaseTempDeltas,
+      tempCounterDiagnostics,
+      run: () =>
+        persistPaymentNormalisationEvidence({
+          customerId,
+          ptrsId,
+          profileId,
+          userId,
+        }),
+    });
     const exclusions = await measureProcessPhase({
       name: "exclusions",
       timings,
@@ -236,30 +268,27 @@ async function processPtrs({
           category: "all",
         }),
     });
-    const rules = await measureProcessPhase({
-      name: "rules",
+    const exclusionSummary = await measureProcessPhase({
+      name: "exclusionSummary",
       timings,
       run: () =>
-        rulesService.applyRulesAndPersist({
+        exclusionsService.getExclusionsSummary({
           customerId,
           ptrsId,
           profileId,
-          limit: null,
         }),
-    });
-    const history = await measureProcessPhase({
-      name: "transformationHistory",
-      timings,
-      databaseTempDeltas,
-      tempCounterDiagnostics,
-      run: () => recordStageTransformationHistory({ customerId, ptrsId }),
     });
     const counts = await measureProcessPhase({
       name: "paymentObservations",
       timings,
       databaseTempDeltas,
       tempCounterDiagnostics,
-      run: () => readObservationSummary({ customerId, ptrsId }),
+      run: () =>
+        readObservationSummary({
+          customerId,
+          ptrsId,
+          normalisationResultId: normalisation.normalisationResultId,
+        }),
     });
     const validation = await measureProcessPhase({
       name: "validation",
@@ -267,7 +296,11 @@ async function processPtrs({
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
-        validateService.getProcessValidateSummary({ customerId, ptrsId }),
+        validateService.getProcessValidateSummary({
+          customerId,
+          ptrsId,
+          normalisationResultId: normalisation.normalisationResultId,
+        }),
     });
     const metricsResult = await measureProcessPhase({
       name: "metrics",
@@ -275,9 +308,80 @@ async function processPtrs({
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
-        metricsService.getMetricsWithExecution({ customerId, ptrsId, userId }),
+        metricsService.getMetricsWithExecution({
+          customerId,
+          ptrsId,
+          userId,
+          normalisationResultId: normalisation.normalisationResultId,
+        }),
     });
     const metrics = metricsResult.preview;
+    const normalisationSummary = normalisation?.summary || {};
+    const reconciliation = {
+      startingStage: {
+        count: normalisationSummary.startingStageCount ?? 0,
+        absoluteValue: normalisationSummary.startingAbsoluteValue ?? 0,
+      },
+      exclusionsByReason: {
+        counts: exclusionSummary?.byReason || {},
+        values: exclusionSummary?.byReasonValue || {},
+      },
+      credits: {
+        sourceValue: normalisationSummary.creditValue ?? 0,
+        allocatedValue: normalisationSummary.creditAllocatedValue ?? 0,
+      },
+      refunds: {
+        sourceValue: normalisationSummary.refundValue ?? 0,
+        allocatedValue: normalisationSummary.refundAllocatedValue ?? 0,
+      },
+      earlyTradeDiscounts: {
+        sourceValue: normalisationSummary.earlyTradeDiscountValue ?? 0,
+        allocatedValue:
+          normalisationSummary.earlyTradeDiscountAllocatedValue ?? 0,
+      },
+      netZeroAdjustmentReversals: {
+        offsetValue: normalisationSummary.adjustmentReversalOffsetValue ?? 0,
+      },
+      unmatchedAdjustments: {
+        value: normalisationSummary.unmatchedAdjustmentValue ?? 0,
+        exceptionCount:
+          normalisationSummary.unmatchedAdjustmentExceptionCount ?? 0,
+        totalNormalisationExceptionCount:
+          normalisationSummary.exceptionCount ?? 0,
+      },
+      normalisedObligations: {
+        count: normalisationSummary.invoiceObligationCount ?? 0,
+        originalValue: normalisationSummary.originalObligationValue ?? 0,
+        adjustedValue: normalisationSummary.adjustedObligationValue ?? 0,
+      },
+      zpPayments: {
+        eventCount: normalisationSummary.paymentEventCount ?? 0,
+        eventValue: normalisationSummary.paymentEventValue ?? 0,
+        allocationCount: normalisationSummary.paymentAllocationCount ?? 0,
+      },
+      tcp: {
+        count: counts.derivedPaymentObservations ?? 0,
+        paymentValue: counts.tcpPaymentValue ?? 0,
+      },
+      sbiClassifications: {
+        positiveCount: counts.sbiPositiveObservations ?? 0,
+        unclassifiedCount: counts.sbiUnclassifiedObservations ?? 0,
+      },
+      sbtcp: {
+        count: counts.sbiPositiveObservations ?? 0,
+        paymentValue: counts.sbiPositivePaymentValue ?? 0,
+      },
+      partialsRemovedFromPaymentTime: {
+        count: counts.partialPayments ?? 0,
+        paymentValue: counts.partialPaymentValue ?? 0,
+      },
+      paymentTimePopulation: {
+        nonPartialCount: counts.sbiNonPartialObservations ?? 0,
+        calculatedCount: counts.paymentTimePopulationCount ?? 0,
+        calculatedValue: counts.paymentTimePopulationValue ?? 0,
+      },
+      finalReportMeasures: metrics?.computed || {},
+    };
 
     const result = {
       ptrsId,
@@ -303,12 +407,14 @@ async function processPtrs({
         exclusions: {
           persisted: exclusions?.persisted ?? 0,
           stats: exclusions?.stats || null,
+          summary: exclusionSummary,
         },
         rules: {
           persisted: rules?.persisted ?? 0,
           stats: rules?.stats || null,
         },
-        transformationHistory: history,
+        paymentNormalisation: normalisation,
+        reconciliation,
         paymentObservations: { derived: counts.derivedPaymentObservations },
         validation: {
           status: validation?.status || null,
