@@ -16,6 +16,11 @@ const {
 } = require("./payment-observations.ptrs.service");
 const { acquireProcessExecutionLock } = require("./process-lock.ptrs.service");
 const {
+  finishExecutionTiming,
+  measureExecutionPhase,
+  startExecutionTiming,
+} = require("./execution-timing.ptrs.service");
+const {
   buildStableInputHash,
   createExecutionRun,
   getLatestExecutionRun,
@@ -23,10 +28,6 @@ const {
 } = require("./ptrs.service");
 
 const activeRuns = new Set();
-
-function elapsedMs(startedAt) {
-  return Number(process.hrtime.bigint() - startedAt) / 1e6;
-}
 
 async function readDatabaseTempCounters({ phase, boundary, diagnosticsState }) {
   if (!diagnosticsState.available) return null;
@@ -46,7 +47,11 @@ async function readDatabaseTempCounters({ phase, boundary, diagnosticsState }) {
     if (!Number.isSafeInteger(tempFiles) || !Number.isSafeInteger(tempBytes)) {
       throw new Error("pg_stat_database returned invalid temp counters");
     }
-    return { tempFiles, tempBytes };
+    return {
+      capturedAt: new Date().toISOString(),
+      tempFiles,
+      tempBytes,
+    };
   } catch (error) {
     diagnosticsState.available = false;
     if (!diagnosticsState.warningLogged) {
@@ -64,11 +69,18 @@ async function readDatabaseTempCounters({ phase, boundary, diagnosticsState }) {
 
 function tempCounterDelta(before, after) {
   if (!before || !after) {
-    return { tempFilesDelta: null, tempBytesDelta: null };
+    return {
+      tempFilesDelta: null,
+      tempBytesDelta: null,
+      before: before || null,
+      after: after || null,
+    };
   }
   return {
     tempFilesDelta: after.tempFiles - before.tempFiles,
     tempBytesDelta: after.tempBytes - before.tempBytes,
+    before,
+    after,
   };
 }
 
@@ -76,6 +88,7 @@ async function measureProcessPhase({
   name,
   run,
   timings,
+  phaseTimings,
   databaseTempDeltas = null,
   tempCounterDiagnostics = null,
 }) {
@@ -86,11 +99,13 @@ async function measureProcessPhase({
         diagnosticsState: tempCounterDiagnostics,
       })
     : null;
-  const startedAt = process.hrtime.bigint();
+  const timing = startExecutionTiming();
   try {
     return await run();
   } finally {
-    timings[`${name}Ms`] = elapsedMs(startedAt);
+    const completedTiming = finishExecutionTiming(timing);
+    timings[`${name}Ms`] = completedTiming.elapsedMs;
+    phaseTimings[name] = completedTiming;
     if (databaseTempDeltas) {
       const after = before
         ? await readDatabaseTempCounters({
@@ -109,18 +124,25 @@ async function readObservationSummary({
   ptrsId,
   normalisationResultId,
 }) {
-  const transaction = await beginTransactionWithCustomerContext(customerId);
+  const timings = {};
+  const measure = (name, run) => measureExecutionPhase({ timings, name, run });
+  let transaction;
   try {
-    const summary = await getPaymentObservationSummary({
-      customerId,
-      ptrsId,
-      normalisationResultId,
-      transaction,
-    });
-    await transaction.commit();
-    return summary;
+    transaction = await measure("transactionAcquire", () =>
+      beginTransactionWithCustomerContext(customerId),
+    );
+    const summary = await measure("summaryQuery", () =>
+      getPaymentObservationSummary({
+        customerId,
+        ptrsId,
+        normalisationResultId,
+        transaction,
+      }),
+    );
+    await measure("commit", () => transaction.commit());
+    return { summary, timings };
   } catch (error) {
-    if (!transaction.finished) await transaction.rollback();
+    if (transaction && !transaction.finished) await transaction.rollback();
     throw error;
   }
 }
@@ -164,6 +186,7 @@ async function processPtrs({
 
   const startedAt = Date.now();
   const timings = {};
+  const phaseTimings = {};
   const databaseTempDeltas = {};
   const tempCounterDiagnostics = { available: true, warningLogged: false };
   let executionRun = null;
@@ -220,6 +243,7 @@ async function processPtrs({
     const stageHasRows = await measureProcessPhase({
       name: "stageGate",
       timings,
+      phaseTimings,
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () => hasActiveStageRows({ customerId, ptrsId }),
@@ -235,6 +259,7 @@ async function processPtrs({
     const rules = await measureProcessPhase({
       name: "rules",
       timings,
+      phaseTimings,
       run: () =>
         rulesService.applyRulesAndPersist({
           customerId,
@@ -247,6 +272,7 @@ async function processPtrs({
     const normalisation = await measureProcessPhase({
       name: "paymentNormalisation",
       timings,
+      phaseTimings,
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
@@ -260,6 +286,7 @@ async function processPtrs({
     const exclusions = await measureProcessPhase({
       name: "exclusions",
       timings,
+      phaseTimings,
       run: () =>
         exclusionsService.applyExclusionsAndPersist({
           customerId,
@@ -271,6 +298,7 @@ async function processPtrs({
     const exclusionSummary = await measureProcessPhase({
       name: "exclusionSummary",
       timings,
+      phaseTimings,
       run: () =>
         exclusionsService.getExclusionsSummary({
           customerId,
@@ -278,9 +306,10 @@ async function processPtrs({
           profileId,
         }),
     });
-    const counts = await measureProcessPhase({
+    const paymentObservations = await measureProcessPhase({
       name: "paymentObservations",
       timings,
+      phaseTimings,
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
@@ -290,9 +319,11 @@ async function processPtrs({
           normalisationResultId: normalisation.normalisationResultId,
         }),
     });
+    const counts = paymentObservations.summary;
     const validation = await measureProcessPhase({
       name: "validation",
       timings,
+      phaseTimings,
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
@@ -305,6 +336,7 @@ async function processPtrs({
     const metricsResult = await measureProcessPhase({
       name: "metrics",
       timings,
+      phaseTimings,
       databaseTempDeltas,
       tempCounterDiagnostics,
       run: () =>
@@ -403,6 +435,7 @@ async function processPtrs({
       },
       steps: {
         timings,
+        phaseTimings,
         databaseTempDeltas,
         exclusions: {
           persisted: exclusions?.persisted ?? 0,
@@ -415,13 +448,17 @@ async function processPtrs({
         },
         paymentNormalisation: normalisation,
         reconciliation,
-        paymentObservations: { derived: counts.derivedPaymentObservations },
+        paymentObservations: {
+          derived: counts.derivedPaymentObservations,
+          timings: paymentObservations.timings,
+        },
         validation: {
           status: validation?.status || null,
           blockers:
             validation?.counts?.blockers ?? validation?.blockers?.length ?? 0,
           warnings:
             validation?.counts?.warnings ?? validation?.warnings?.length ?? 0,
+          timings: validation?.timings || null,
         },
         metrics: {
           status: metrics?.status || "ready",
@@ -430,6 +467,7 @@ async function processPtrs({
           inputSignature: metricsResult.execution.inputSignature,
           calculationVersion: metricsResult.execution.calculationVersion,
           metricsResultId: metricsResult.execution.metricsResultId,
+          timings: metricsResult.execution.timings || null,
         },
       },
     };

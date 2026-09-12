@@ -263,6 +263,24 @@ describe("PTRS small-business trade-credit payment value", () => {
     );
   });
 
+  test("uses observed payment times for the 80th and 95th percentiles", async () => {
+    db.sequelize.query.mockResolvedValue([
+      [{ sbTermFrequencies: [], sbEntityTermFrequencies: [] }],
+    ]);
+
+    await fetchPaymentObservationMetricsAggs({
+      t: { id: "transaction" },
+      customerId: "customer01",
+      ptrsId: "ptrs000001",
+    });
+    const sql = db.sequelize.query.mock.calls[0][0];
+
+    expect(sql).toContain("percentile_disc(0.8)");
+    expect(sql).toContain("percentile_disc(0.95)");
+    expect(sql).not.toContain("percentile_cont(0.8)");
+    expect(sql).not.toContain("percentile_cont(0.95)");
+  });
+
   test.each([
     ["one ZP / one RE", 100, 100, 100],
     ["one ZP / multiple RE", 150, 100, 150],

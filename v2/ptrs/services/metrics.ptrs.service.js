@@ -11,10 +11,11 @@ const {
 const {
   requireCurrentPaymentNormalisationResult,
 } = require("./payment-normalisation.ptrs.service");
+const { measureExecutionPhase } = require("./execution-timing.ptrs.service");
 
 // Bump whenever the analytical calculation or quality interpretation changes.
 // This is deliberately explicit; source-code hashing would be unstable and opaque.
-const PTRS_METRICS_CALCULATION_VERSION = "ptrs-payment-observation-metrics-v2";
+const PTRS_METRICS_CALCULATION_VERSION = "ptrs-payment-observation-metrics-v3";
 const MATERIAL_STATE_CHANGED = "PTRS_METRICS_MATERIAL_STATE_CHANGED";
 const MAX_MATERIAL_STATE_ATTEMPTS = 2;
 
@@ -317,8 +318,8 @@ function buildPaymentObservationMetricsSql() {
       -- SB payment time distribution stats
       (SELECT AVG(payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "avgDays",
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "medianDays",
-      (SELECT percentile_cont(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
-      (SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
+      (SELECT percentile_disc(0.8) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p80Days",
+      (SELECT percentile_disc(0.95) WITHIN GROUP (ORDER BY payment_time_days_int)::numeric FROM sb_payment_time WHERE payment_time_days_num IS NOT NULL) AS "p95Days",
 
       -- Payment-term frequency aggregates. Node selects the deterministic
       -- overall and entity-level modes from these small, set-based results.
@@ -643,25 +644,36 @@ async function calculateOrReuseMetrics({
   fetchAggregates,
   normalisationResultId = null,
 }) {
-  const transaction = await beginTransactionWithCustomerContext(customerId);
+  const timings = {};
+  const measure = (name, run) => measureExecutionPhase({ timings, name, run });
+  let transaction;
   let inputSignature = null;
   let provenance = null;
   try {
-    const ptrs = await db.Ptrs.findOne({
-      where: { id: ptrsId, customerId },
-      transaction,
-    });
+    transaction = await measure("transactionAcquire", () =>
+      beginTransactionWithCustomerContext(customerId),
+    );
+    const ptrs = await measure("reportLookup", () =>
+      db.Ptrs.findOne({
+        where: { id: ptrsId, customerId },
+        transaction,
+      }),
+    );
     if (!ptrs) {
       const error = new Error("Ptrs not found");
       error.statusCode = 404;
       throw error;
     }
 
-    const currentNormalisation = await requireCurrentPaymentNormalisationResult({
-      customerId,
-      ptrsId,
-      transaction,
-    });
+    const currentNormalisation = await measure(
+      "normalisationResultLookup",
+      () =>
+        requireCurrentPaymentNormalisationResult({
+          customerId,
+          ptrsId,
+          transaction,
+        }),
+    );
     if (
       normalisationResultId &&
       normalisationResultId !== currentNormalisation.result.id
@@ -679,24 +691,30 @@ async function calculateOrReuseMetrics({
       inputSignature: currentNormalisation.result.inputSignature,
       calculationVersion: currentNormalisation.result.calculationVersion,
     };
-    provenance = await readMetricsMaterialState({
-      transaction,
-      customerId,
-      ptrsId,
-      paymentNormalisation,
-    });
+    provenance = await measure("materialStateRead", () =>
+      readMetricsMaterialState({
+        transaction,
+        customerId,
+        ptrsId,
+        paymentNormalisation,
+      }),
+    );
     inputSignature = buildMetricsInputSignature({
       materialState: provenance,
       calculationVersion,
     });
-    await acquireMetricsSignatureLock({ transaction, inputSignature });
+    await measure("signatureLockWait", () =>
+      acquireMetricsSignatureLock({ transaction, inputSignature }),
+    );
 
-    const lockedProvenance = await readMetricsMaterialState({
-      transaction,
-      customerId,
-      ptrsId,
-      paymentNormalisation,
-    });
+    const lockedProvenance = await measure("lockedMaterialStateRead", () =>
+      readMetricsMaterialState({
+        transaction,
+        customerId,
+        ptrsId,
+        paymentNormalisation,
+      }),
+    );
     const lockedSignature = buildMetricsInputSignature({
       materialState: lockedProvenance,
       calculationVersion,
@@ -710,19 +728,21 @@ async function calculateOrReuseMetrics({
     }
     provenance = lockedProvenance;
 
-    const persisted = await findCurrentMetricsResult({
-      transaction,
-      customerId,
-      ptrsId,
-      inputSignature,
-    });
+    const persisted = await measure("persistedResultLookup", () =>
+      findCurrentMetricsResult({
+        transaction,
+        customerId,
+        ptrsId,
+        inputSignature,
+      }),
+    );
     if (persisted) {
       const preview = composeReportPreview({
         ptrs,
         aggs: persisted.aggregateResult,
         mode,
       });
-      await transaction.commit();
+      await measure("commit", () => transaction.commit());
       return {
         preview,
         execution: {
@@ -730,57 +750,68 @@ async function calculateOrReuseMetrics({
           inputSignature,
           calculationVersion,
           metricsResultId: persisted.id,
+          timings,
         },
       };
     }
 
-    let resultRow = await db.PtrsMetricsResult.findOne({
-      where: { customerId, ptrsId, inputSignature },
-      transaction,
-    });
+    let resultRow = await measure("resultLookup", () =>
+      db.PtrsMetricsResult.findOne({
+        where: { customerId, ptrsId, inputSignature },
+        transaction,
+      }),
+    );
     if (resultRow) {
-      await resultRow.update(
-        {
-          status: "calculating",
-          aggregateResult: null,
-          provenance,
-          errorMessage: null,
-          startedAt: new Date(),
-          completedAt: null,
-        },
-        { transaction },
+      await measure("resultReset", () =>
+        resultRow.update(
+          {
+            status: "calculating",
+            aggregateResult: null,
+            provenance,
+            errorMessage: null,
+            startedAt: new Date(),
+            completedAt: null,
+          },
+          { transaction },
+        ),
       );
     } else {
-      resultRow = await db.PtrsMetricsResult.create(
-        {
-          customerId,
-          ptrsId,
-          inputSignature,
-          calculationVersion,
-          status: "calculating",
-          aggregateResult: null,
-          provenance,
-          errorMessage: null,
-          createdBy: userId || null,
-          startedAt: new Date(),
-          completedAt: null,
-        },
-        { transaction },
+      resultRow = await measure("resultCreate", () =>
+        db.PtrsMetricsResult.create(
+          {
+            customerId,
+            ptrsId,
+            inputSignature,
+            calculationVersion,
+            status: "calculating",
+            aggregateResult: null,
+            provenance,
+            errorMessage: null,
+            createdBy: userId || null,
+            startedAt: new Date(),
+            completedAt: null,
+          },
+          { transaction },
+        ),
       );
     }
 
-    const aggregateResult = await fetchAggregates({
-      t: transaction,
-      customerId,
-      ptrsId,
-      normalisationResultId,
-    });
-    const finalProvenance = await readMetricsMaterialState({
-      transaction,
-      customerId,
-      ptrsId,
-      paymentNormalisation,
-    });
+    const aggregateResult = await measure("aggregateQuery", () =>
+      fetchAggregates({
+        t: transaction,
+        customerId,
+        ptrsId,
+        normalisationResultId,
+      }),
+    );
+    const finalProvenance = await measure("finalMaterialStateRead", () =>
+      readMetricsMaterialState({
+        transaction,
+        customerId,
+        ptrsId,
+        paymentNormalisation,
+      }),
+    );
     const finalSignature = buildMetricsInputSignature({
       materialState: finalProvenance,
       calculationVersion,
@@ -793,18 +824,20 @@ async function calculateOrReuseMetrics({
       throw error;
     }
 
-    await resultRow.update(
-      {
-        status: "succeeded",
-        aggregateResult,
-        provenance: finalProvenance,
-        errorMessage: null,
-        completedAt: new Date(),
-      },
-      { transaction },
+    await measure("resultPersist", () =>
+      resultRow.update(
+        {
+          status: "succeeded",
+          aggregateResult,
+          provenance: finalProvenance,
+          errorMessage: null,
+          completedAt: new Date(),
+        },
+        { transaction },
+      ),
     );
     const preview = composeReportPreview({ ptrs, aggs: aggregateResult, mode });
-    await transaction.commit();
+    await measure("commit", () => transaction.commit());
     return {
       preview,
       execution: {
@@ -812,10 +845,11 @@ async function calculateOrReuseMetrics({
         inputSignature,
         calculationVersion,
         metricsResultId: resultRow.id,
+        timings,
       },
     };
   } catch (error) {
-    if (!transaction.finished) await transaction.rollback();
+    if (transaction && !transaction.finished) await transaction.rollback();
     if (error.code !== MATERIAL_STATE_CHANGED && inputSignature && provenance) {
       await recordMetricsCalculationFailure({
         customerId,
@@ -994,6 +1028,10 @@ function composeReportPreview({ ptrs, aggs, mode }) {
 
   const sbWithinTermsKnownCount = aggs?.sbWithinTermsKnownCount || 0;
   const sbWithinTermsYesCount = aggs?.sbWithinTermsYesCount || 0;
+  const sbWithinTermsUnknownCount = Math.max(
+    sbPaymentTimeCount - sbWithinTermsKnownCount,
+    0,
+  );
 
   const avgDays = aggs?.avgDays == null ? null : Number(aggs.avgDays);
   const medianDays = aggs?.medianDays == null ? null : Number(aggs.medianDays);
@@ -1054,8 +1092,8 @@ function composeReportPreview({ ptrs, aggs, mode }) {
   }
 
   const sbWithinTermsPct =
-    !canonicalQuality.blocked && sbWithinTermsKnownCount > 0
-      ? (sbWithinTermsYesCount / sbWithinTermsKnownCount) * 100
+    !canonicalQuality.blocked && sbPaymentTimeCount > 0
+      ? (sbWithinTermsYesCount / sbPaymentTimeCount) * 100
       : null;
 
   const payments0to30Pct =
@@ -1140,11 +1178,15 @@ function composeReportPreview({ ptrs, aggs, mode }) {
     commonPaymentTermMinimum: termMinFinal,
     commonPaymentTermMaximum: termMaxFinal,
 
-    forecastPaymentTerm: commonTermMode,
-    forecastMinimumPaymentTerm: termMinFinal,
-    forecastMaximumPaymentTerm: termMaxFinal,
+    // Expected next-period terms require an entity-supplied forecast. Current
+    // observed terms are not evidence of that expectation.
+    forecastPaymentTerm: null,
+    forecastMinimumPaymentTerm: null,
+    forecastMaximumPaymentTerm: null,
 
-    receivableTermsComparedToCommonPaymentTerm: "Unknown",
+    // This comparison requires receivable-term evidence or an approved policy
+    // assessment, neither of which is present in the payment observations.
+    receivableTermsComparedToCommonPaymentTerm: null,
 
     percentageOfSbInvoicesPaidWithinPaymentTerm: round2(sbWithinTermsPct),
 
@@ -1179,12 +1221,19 @@ function composeReportPreview({ ptrs, aggs, mode }) {
       missingSbFlagCount,
       missingDatesCount,
       missingAmountCount,
+      sbWithinTermsUnknownCount,
     },
   };
 
   if (missingTermDaysCount > 0) {
     quality.notes.push(
       "Some rows are missing payment term days; within-terms and term metrics may be incomplete.",
+    );
+  }
+
+  if (sbWithinTermsUnknownCount > 0) {
+    quality.notes.push(
+      "Some full-settlement small-business payments lack payment-term or payment-time information; they remain in the within-terms denominator and cannot contribute to its numerator.",
     );
   }
 
@@ -1199,6 +1248,13 @@ function composeReportPreview({ ptrs, aggs, mode }) {
       "Peppol-enabled small business procurement is not currently captured in the dataset (metric returned as null).",
     );
   }
+
+  quality.notes.push(
+    "Expected next-period payment terms require an entity-supplied forecast and are returned as null until that evidence is captured.",
+  );
+  quality.notes.push(
+    "Receivable-term comparison requires entity receivable-term or policy evidence and is returned as null until that evidence is captured.",
+  );
 
   if (canonicalQuality.blocked) {
     quality.notes.push(

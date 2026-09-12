@@ -3,6 +3,11 @@ const {
   beginTransactionWithCustomerContext,
 } = require("@/helpers/setCustomerIdRLS");
 const { buildStableInputHash } = require("./ptrs.service");
+const {
+  finishExecutionTiming,
+  measureExecutionPhase,
+  startExecutionTiming,
+} = require("./execution-timing.ptrs.service");
 
 const DOCUMENT_TYPES = Object.freeze({
   INVOICE: "RE",
@@ -11,39 +16,16 @@ const DOCUMENT_TYPES = Object.freeze({
   PAYMENT: "ZP",
   CLEARING_PAYMENT: "KZ",
   EARLY_TRADE_DISCOUNT: "ET",
-});
-
-const ADJUSTMENT_REASONS = Object.freeze({
-  CREDIT: Object.freeze({
-    full: "CREDIT_FULL_OFFSET",
-    partial: "CREDIT_PARTIAL_OFFSET",
-  }),
-  REFUND: Object.freeze({
-    full: "REFUND_FULL_OFFSET",
-    partial: "REFUND_PARTIAL_OFFSET",
-  }),
-  ET: Object.freeze({
-    full: "ET_FULL_OFFSET",
-    partial: "ET_PARTIAL_OFFSET",
-  }),
-  KG: Object.freeze({
-    full: "KG_FULL_OFFSET",
-    partial: "KG_PARTIAL_OFFSET",
-  }),
+  ACCOUNTING_ADJUSTMENT: "AB",
+  INTERNAL_TRANSFER: "SI",
+  PAYABLE_BALANCE: "SA",
+  CUSTOMER_CLEARING: "DZ",
+  REVERSAL: "ZR",
+  SPECIAL_REVERSAL: "$F",
 });
 
 const NORMALISATION_EPSILON = 0.005;
-const BALANCED_CLEARING_RECONCILIATION =
-  "BALANCED_CLEARING_RECONCILIATION";
-const CLEARING_RECONCILIABLE_EXCEPTION_CODES = Object.freeze([
-  "AMBIGUOUS_ADJUSTMENT_COMBINATION",
-  "UNMATCHED_ADJUSTMENT",
-  "UNMATCHED_KG_REVERSAL",
-  "UNMATCHED_OBLIGATION_OFFSET",
-  "UNMATCHED_PAYMENT",
-  "UNRECOGNISED_DOCUMENT_TYPE",
-]);
-const PAYMENT_NORMALISATION_VERSION = "veolia-payment-normalisation-v6";
+const PAYMENT_NORMALISATION_VERSION = "veolia-payment-normalisation-v8";
 const NORMALISATION_RESULT_MISSING = "PTRS_NORMALISATION_RESULT_MISSING";
 const VEOLIA_PAYMENT_TIME_REFERENCE_POLICY = Object.freeze({
   id: "veolia_ariba_invoice_receipt_v1",
@@ -234,7 +216,10 @@ function buildPersistedPaymentNormalisationCte() {
     ),
     payment_normalisation_adjustments AS MATERIALIZED (
       SELECT * FROM payment_normalisation_source_rows
-      WHERE normalisation_role IN ('CREDIT', 'REFUND', 'ET', 'KG')
+      WHERE normalisation_role IN (
+        'ET', 'KG', 'AB', 'SI', 'OBLIGATION_OFFSET',
+        'SETTLEMENT_REVERSAL'
+      )
     ),
     payment_normalisation_adjusted_obligations AS MATERIALIZED (
       SELECT * FROM payment_normalisation_obligations
@@ -400,42 +385,200 @@ function clearingDocumentPrefix(row) {
   ).slice(0, 1);
 }
 
-function classifyDocument(row, groupDocumentTypes = null) {
-  const documentType = normaliseText(
-    firstValue(row, ["documentType", "document_type"]),
-  ).toUpperCase();
-  const clearingDocument = normaliseText(
-    firstValue(row, ["clearingDocument", "clearing_document"]),
+function approximatelyZero(value) {
+  return Math.abs(Number(value) || 0) <= NORMALISATION_EPSILON;
+}
+
+function sumRows(rows, selector = (row) => row.signedAmount) {
+  return rows.reduce((total, row) => total + Number(selector(row) || 0), 0);
+}
+
+function hasBothDirections(rows) {
+  return (
+    rows.some((row) => row.signedAmount > NORMALISATION_EPSILON) &&
+    rows.some((row) => row.signedAmount < -NORMALISATION_EPSILON)
   );
-  const clearingPrefix = clearingDocumentPrefix(row);
+}
+
+function isExactOppositePair(rows) {
+  return (
+    rows.length === 2 &&
+    hasBothDirections(rows) &&
+    approximatelyZero(sumRows(rows))
+  );
+}
+
+function classifyClearingEvent(groupRows) {
+  const rows = Array.isArray(groupRows) ? groupRows : [];
+  const prefixes = new Set(
+    rows.map((row) => row.clearingPrefix).filter(Boolean),
+  );
+  const prefix = prefixes.size === 1 ? Array.from(prefixes)[0] : null;
+  const documentTypes = new Set(rows.map((row) => row.sourceDocumentType));
+  const signedBalance = sumRows(rows);
+  const reconciled = approximatelyZero(signedBalance);
+  const exactPair = isExactOppositePair(rows);
+  const allDocumentType = (documentType) =>
+    rows.length > 0 &&
+    rows.every((row) => row.sourceDocumentType === documentType);
+  const result = (kind, pattern) => ({
+    kind,
+    pattern,
+    family: prefix ? `${prefix}*` : "UNKNOWN",
+    signedBalance,
+    reconciled,
+    documentTypes,
+  });
+
+  if (!prefix || prefixes.size !== 1) {
+    return result("UNKNOWN", "UNSUPPORTED_CLEARING_EVENT");
+  }
+
+  if (
+    prefix === "2" &&
+    rows.every((row) => row.clearingDocument.startsWith("200")) &&
+    documentTypes.has("AB") &&
+    reconciled &&
+    approximatelyZero(
+      sumRows(rows.filter((row) => row.sourceDocumentType === "AB")) +
+        sumRows(rows.filter((row) => row.sourceDocumentType !== "AB")),
+    )
+  ) {
+    return result("NON_PAYMENT", "SUPPORTED_200_AB_REVERSAL_ADJUSTMENT");
+  }
+
+  if (
+    prefix === "3" &&
+    rows.every((row) => row.clearingDocument.startsWith("300")) &&
+    documentTypes.has("DZ") &&
+    reconciled &&
+    approximatelyZero(
+      sumRows(rows.filter((row) => row.sourceDocumentType === "DZ")) +
+        sumRows(rows.filter((row) => row.sourceDocumentType !== "DZ")),
+    )
+  ) {
+    return result("NON_PAYMENT", "SUPPORTED_300_DZ_CUSTOMER_CLEARING");
+  }
+
+  if (
+    exactPair &&
+    ["ZP", "KG", "KR", "ET"].some((documentType) =>
+      allDocumentType(documentType),
+    )
+  ) {
+    return result(
+      "NON_PAYMENT",
+      `EXACT_${rows[0].sourceDocumentType}_REVERSAL_PAIR`,
+    );
+  }
+
+  if (
+    exactPair &&
+    allDocumentType("ZR") &&
+    rows.some((row) => /REVERSE\s+D\.DEBIT/i.test(row.descriptionReference))
+  ) {
+    return result("NON_PAYMENT", "SUPPORTED_ZR_DIRECT_DEBIT_REVERSAL");
+  }
+
+  if (
+    prefix === "1" &&
+    allDocumentType("SA") &&
+    reconciled &&
+    hasBothDirections(rows)
+  ) {
+    return result("NON_PAYMENT", "SUPPORTED_1_SA_BALANCE_TRANSFER");
+  }
+
+  if (prefix === "9" && exactPair && allDocumentType("$F")) {
+    return result("NON_PAYMENT", "SUPPORTED_9_DOLLAR_F_REVERSAL_PAIR");
+  }
+
+  const obligationTypes = new Set(["RE", "KR", "SA"]);
+  const hasPayableObligation = rows.some(
+    (row) =>
+      obligationTypes.has(row.sourceDocumentType) &&
+      row.signedAmount < -NORMALISATION_EPSILON,
+  );
+  const allowedSettlementTypes = new Set([
+    "RE",
+    "KR",
+    "SA",
+    "ZP",
+    "KZ",
+    "ET",
+    "KG",
+    "AB",
+    "SI",
+  ]);
+  const hasOnlySupportedTypes = rows.every((row) =>
+    allowedSettlementTypes.has(row.sourceDocumentType),
+  );
+  if (
+    prefix === "5" &&
+    rows.some(
+      (row) =>
+        row.sourceDocumentType === "ZP" &&
+        row.signedAmount > NORMALISATION_EPSILON,
+    ) &&
+    hasPayableObligation &&
+    hasOnlySupportedTypes
+  ) {
+    return result("SETTLEMENT", "SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT");
+  }
+  if (
+    prefix === "4" &&
+    rows.some(
+      (row) =>
+        row.sourceDocumentType === "KZ" &&
+        row.signedAmount > NORMALISATION_EPSILON,
+    ) &&
+    hasPayableObligation &&
+    hasOnlySupportedTypes
+  ) {
+    return result("SETTLEMENT", "SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT");
+  }
+
+  if (
+    prefix === "5" &&
+    reconciled &&
+    documentTypes.has("AB") &&
+    documentTypes.has("ZP") &&
+    rows.every((row) => ["AB", "ZP"].includes(row.sourceDocumentType))
+  ) {
+    return result("NON_PAYMENT", "SUPPORTED_AB_ZP_NO_OBLIGATION");
+  }
+
+  return result("UNKNOWN", "UNSUPPORTED_CLEARING_EVENT");
+}
+
+function classifyDocument(row, clearingEvent = null) {
   if (firstValue(row, ["semanticKind", "semantic_kind"]) === "direct_payment") {
     return "DIRECT_PAYMENT";
   }
-  if (documentType === DOCUMENT_TYPES.INVOICE) return "INVOICE";
-  if (documentType === DOCUMENT_TYPES.PAYMENT) return "PAYMENT";
-  if (documentType === DOCUMENT_TYPES.EARLY_TRADE_DISCOUNT) return "ET";
-  if (
-    documentType === DOCUMENT_TYPES.INVOICE_KR &&
-    ["4", "5"].includes(clearingPrefix)
-  ) {
-    return "INVOICE";
+  if (!clearingEvent || clearingEvent.kind === "UNKNOWN") return "UNRECOGNISED";
+  if (clearingEvent.kind === "NON_PAYMENT") return "NON_PAYMENT";
+
+  const documentType =
+    row.sourceDocumentType ||
+    normaliseText(
+      firstValue(row, ["documentType", "document_type"]),
+    ).toUpperCase();
+  const signed = Number(
+    row.signedAmount ??
+      signedAmount(
+        firstValue(row, ["paymentAmount", "payment_amount", "amount"]),
+      ),
+  );
+  if (["RE", "KR", "SA"].includes(documentType)) {
+    return signed < -NORMALISATION_EPSILON ? "INVOICE" : "OBLIGATION_OFFSET";
   }
   if (
-    documentType === DOCUMENT_TYPES.VENDOR_CREDIT_MEMO &&
-    clearingPrefix === "5"
+    (clearingEvent.family === "5*" && documentType === "ZP") ||
+    (clearingEvent.family === "4*" && documentType === "KZ")
   ) {
-    return "KG";
+    return signed > NORMALISATION_EPSILON ? "PAYMENT" : "SETTLEMENT_REVERSAL";
   }
-  if (
-    documentType === DOCUMENT_TYPES.CLEARING_PAYMENT &&
-    clearingPrefix === "4" &&
-    (groupDocumentTypes?.has(DOCUMENT_TYPES.INVOICE) ||
-      groupDocumentTypes?.has(DOCUMENT_TYPES.INVOICE_KR))
-  ) {
-    return "PAYMENT";
-  }
-  if (clearingDocument.startsWith("200")) return "CREDIT";
-  if (clearingDocument.startsWith("300")) return "REFUND";
+  if (["ET", "KG", "AB", "SI"].includes(documentType)) return documentType;
   return "UNRECOGNISED";
 }
 
@@ -522,11 +665,14 @@ function paymentTimeResult({
   );
 }
 
-function normalisePaymentRows(inputRows) {
+function normalisePaymentRows(inputRows, options = {}) {
   const rows = (Array.isArray(inputRows) ? inputRows : []).map((row) => ({
     ...row,
     id: normaliseText(row?.id || row?.stageRowId),
     groupKey: sourceGroupKey(row),
+    clearingDocument: normaliseText(
+      firstValue(row, ["clearingDocument", "clearing_document"]),
+    ),
     clearingPrefix: clearingDocumentPrefix(row),
     sourceDocumentType: normaliseText(
       firstValue(row, ["documentType", "document_type"]),
@@ -537,6 +683,17 @@ function normalisePaymentRows(inputRows) {
     amount: normaliseAmount(
       firstValue(row, ["paymentAmount", "payment_amount", "amount"]),
     ),
+    economicReference: normaliseText(
+      firstValue(row, [
+        "economicReference",
+        "economic_reference",
+        "descriptionReference",
+        "description_reference",
+        "description",
+        "reference",
+        "Reference",
+      ]) || row?.data?.Reference,
+    ).toLowerCase(),
     descriptionReference: normaliseText(
       firstValue(row, [
         "descriptionReference",
@@ -546,535 +703,490 @@ function normalisePaymentRows(inputRows) {
     ),
   }));
 
-  const documentTypesByGroup = new Map();
-  const clearingContextByGroup = new Map();
-  for (const row of rows) {
-    if (!row.groupKey) continue;
-    const documentTypes = documentTypesByGroup.get(row.groupKey) || new Set();
-    documentTypes.add(row.sourceDocumentType);
-    documentTypesByGroup.set(row.groupKey, documentTypes);
-    const context = clearingContextByGroup.get(row.groupKey) || {
-      clearingPrefix: row.clearingPrefix,
-      signedBalance: 0,
-    };
-    context.signedBalance += row.signedAmount;
-    clearingContextByGroup.set(row.groupKey, context);
-  }
-  for (const row of rows) {
-    row.role = classifyDocument(
-      row,
-      row.groupKey ? documentTypesByGroup.get(row.groupKey) : null,
-    );
-    row.usesSignedObligationDirection =
-      row.role === "INVOICE" &&
-      row.clearingPrefix === "4" &&
-      [DOCUMENT_TYPES.INVOICE, DOCUMENT_TYPES.INVOICE_KR].includes(
-        row.sourceDocumentType,
-      );
-  }
+  const obligations = [];
+  const adjustments = [];
+  const payments = [];
+  const nonPaymentRows = [];
+  const observations = [];
+  const exceptions = [];
+  const clearingReconciliations = [];
+  const rowsByGroup = new Map();
 
-  const obligations = rows
-    .filter((row) => row.role === "INVOICE")
-    .map((row) => ({
-      ...row,
-      originalAmount: row.amount,
-      adjustedAmount:
-        row.usesSignedObligationDirection &&
-        row.signedAmount > NORMALISATION_EPSILON
-          ? 0
-          : row.amount,
-      outstandingAmount:
-        row.usesSignedObligationDirection &&
-        row.signedAmount > NORMALISATION_EPSILON
-          ? 0
-          : row.amount,
-      directionalOffsetAllocatedAmount: 0,
-      directionalOffsetUnmatchedAmount: 0,
-      directionalOffsetAllocations: [],
-      adjustmentAllocations: [],
-      paymentAllocations: [],
-    }));
-  const adjustments = rows
-    .filter((row) => ADJUSTMENT_REASONS[row.role])
-    .map((row) => ({
-      ...row,
-      effectiveAmount: row.amount,
-      allocatedAmount: 0,
-      reversalOffsetAmount: 0,
-      unmatchedAmount: row.amount,
-      allocations: [],
-    }));
-  const payments = rows
-    .filter((row) => row.role === "PAYMENT")
-    .map((row) => ({
-      ...row,
-      allocatedAmount: 0,
-      unmatchedAmount: row.amount,
-      allocations: [],
-    }));
-  const exceptions = rows
-    .filter((row) => row.role === "UNRECOGNISED")
-    .map((row) => ({
-      code: "UNRECOGNISED_DOCUMENT_TYPE",
-      sourceStageRowId: row.id,
-      documentType: normaliseText(
-        firstValue(row, ["documentType", "document_type"]),
-      ),
-      amount: row.amount,
-    }));
-  exceptions.push(
-    ...rows
-      .filter((row) => row.role !== "UNRECOGNISED" && !row.groupKey)
-      .map((row) => ({
-        code: "MAPPING_EXCEPTION",
-        sourceStageRowId: row.id,
-        field: "normalisation_group_key",
-        amount: row.amount,
-      })),
-  );
-
-  const kgAdjustmentsByGroup = new Map();
-  for (const adjustment of adjustments) {
-    if (adjustment.role !== "KG" || !adjustment.groupKey) continue;
-    const list = kgAdjustmentsByGroup.get(adjustment.groupKey) || [];
-    list.push(adjustment);
-    kgAdjustmentsByGroup.set(adjustment.groupKey, list);
-  }
-  for (const [groupKey, kgAdjustments] of kgAdjustmentsByGroup.entries()) {
-    kgAdjustments.sort((left, right) =>
-      compareRows(left, right, ["paymentDate", "payment_date"]),
-    );
-    const netCreditAmount = kgAdjustments.reduce(
-      (total, adjustment) => total + adjustment.signedAmount,
-      0,
-    );
-    let remainingNetCredit = Math.max(0, netCreditAmount);
-    for (const adjustment of kgAdjustments) {
-      adjustment.effectiveAmount =
-        adjustment.signedAmount > NORMALISATION_EPSILON
-          ? Math.min(adjustment.amount, remainingNetCredit)
-          : 0;
-      adjustment.reversalOffsetAmount =
-        adjustment.signedAmount > NORMALISATION_EPSILON
-          ? Math.max(0, adjustment.amount - adjustment.effectiveAmount)
-          : 0;
-      if (adjustment.reversalOffsetAmount > NORMALISATION_EPSILON) {
-        adjustment.reconciliationCode = "KG_REVERSAL_OFFSET";
-      }
-      adjustment.unmatchedAmount = adjustment.effectiveAmount;
-      remainingNetCredit -= adjustment.effectiveAmount;
+  for (const sourceRow of rows) {
+    if (
+      firstValue(sourceRow, ["semanticKind", "semantic_kind"]) ===
+      "direct_payment"
+    ) {
+      sourceRow.role = "DIRECT_PAYMENT";
+      continue;
     }
-    if (netCreditAmount < -NORMALISATION_EPSILON) {
-      const source = kgAdjustments.find(
-        (adjustment) => adjustment.signedAmount < -NORMALISATION_EPSILON,
-      );
+    if (!sourceRow.groupKey) {
+      sourceRow.role = "UNRECOGNISED";
       exceptions.push({
-        code: "UNMATCHED_KG_REVERSAL",
-        sourceStageRowId: source?.id || null,
-        adjustmentKind: "KG",
-        unmatchedAmount: Math.abs(netCreditAmount),
-        groupKey,
+        code: "MAPPING_EXCEPTION",
+        sourceStageRowId: sourceRow.id,
+        field: "normalisation_group_key",
+        amount: sourceRow.amount,
       });
+      continue;
     }
+    const group = rowsByGroup.get(sourceRow.groupKey) || [];
+    group.push(sourceRow);
+    rowsByGroup.set(sourceRow.groupKey, group);
   }
 
-  const obligationsByGroup = new Map();
-  for (const obligation of obligations) {
-    if (!obligation.groupKey) continue;
-    const list = obligationsByGroup.get(obligation.groupKey) || [];
-    list.push(obligation);
-    obligationsByGroup.set(obligation.groupKey, list);
-  }
-  for (const list of obligationsByGroup.values()) {
-    list.sort((left, right) =>
-      compareRows(left, right, ["invoiceIssueDate", "invoice_issue_date"]),
-    );
-  }
-
-  for (const obligationsInGroup of obligationsByGroup.values()) {
-    const positiveObligations = obligationsInGroup.filter(
-      (obligation) =>
-        !obligation.usesSignedObligationDirection ||
-        obligation.signedAmount < -NORMALISATION_EPSILON,
-    );
-    const directionalOffsets = obligationsInGroup.filter(
-      (obligation) =>
-        obligation.usesSignedObligationDirection &&
-        obligation.signedAmount > NORMALISATION_EPSILON,
-    );
-    for (const offset of directionalOffsets) {
-      let remaining = offset.amount;
-      for (const obligation of positiveObligations) {
-        if (remaining <= NORMALISATION_EPSILON) break;
-        if (obligation.adjustedAmount <= NORMALISATION_EPSILON) continue;
-        const before = obligation.adjustedAmount;
-        const allocated = Math.min(before, remaining);
-        const after = Math.max(0, before - allocated);
-        const allocation = {
-          offsetStageRowId: offset.id,
-          invoiceStageRowId: obligation.id,
-          amount: allocated,
-          obligationBefore: before,
-          obligationAfter: after,
-        };
-        obligation.adjustedAmount = after;
-        obligation.outstandingAmount = after;
-        obligation.directionalOffsetAllocatedAmount += allocated;
-        obligation.directionalOffsetAllocations.push(allocation);
-        offset.directionalOffsetAllocatedAmount += allocated;
-        offset.directionalOffsetAllocations.push(allocation);
-        remaining -= allocated;
-      }
-      offset.directionalOffsetUnmatchedAmount = Math.max(0, remaining);
-      if (offset.directionalOffsetUnmatchedAmount > NORMALISATION_EPSILON) {
-        exceptions.push({
-          code: "UNMATCHED_OBLIGATION_OFFSET",
-          sourceStageRowId: offset.id,
-          originalAmount: offset.amount,
-          allocatedAmount: offset.directionalOffsetAllocatedAmount,
-          unmatchedAmount: offset.directionalOffsetUnmatchedAmount,
-        });
-      }
-    }
-  }
-
-  const adjustmentKindsByGroup = new Map();
-  for (const adjustment of adjustments) {
-    const kinds = adjustmentKindsByGroup.get(adjustment.groupKey) || new Set();
-    kinds.add(adjustment.role === "ET" ? "ET" : "FINANCIAL");
-    adjustmentKindsByGroup.set(adjustment.groupKey, kinds);
-  }
-  const ambiguousAdjustmentGroups = new Set(
-    Array.from(adjustmentKindsByGroup.entries())
-      .filter(([, kinds]) => kinds.size > 1)
-      .map(([groupKey]) => groupKey),
-  );
-  const financialAdjustmentsByGroup = new Map();
-  for (const adjustment of adjustments) {
-    if (!adjustment.groupKey || adjustment.role === "ET") continue;
-    const list = financialAdjustmentsByGroup.get(adjustment.groupKey) || [];
-    list.push(adjustment);
-    financialAdjustmentsByGroup.set(adjustment.groupKey, list);
-  }
-  const netZeroAdjustmentReversalGroups = new Set(
-    Array.from(financialAdjustmentsByGroup.entries())
-      .filter(([groupKey, group]) => {
-        const signedTotal = group.reduce(
-          (total, adjustment) => total + adjustment.signedAmount,
-          0,
-        );
-        return (
-          (obligationsByGroup.get(groupKey) || []).length === 0 &&
-          group.some(
-            (adjustment) => adjustment.signedAmount > NORMALISATION_EPSILON,
-          ) &&
-          group.some(
-            (adjustment) => adjustment.signedAmount < -NORMALISATION_EPSILON,
-          ) &&
-          Math.abs(signedTotal) <= NORMALISATION_EPSILON
-        );
-      })
-      .map(([groupKey]) => groupKey),
-  );
-
-  adjustments.sort((left, right) =>
+  const rowOrder = (left, right) =>
     compareRows(left, right, [
       "paymentDate",
       "payment_date",
       "invoiceIssueDate",
       "invoice_issue_date",
-    ]),
-  );
-  for (const adjustment of adjustments) {
-    if (netZeroAdjustmentReversalGroups.has(adjustment.groupKey)) {
-      adjustment.reversalOffsetAmount = adjustment.amount;
-      adjustment.unmatchedAmount = 0;
-      adjustment.reconciliationCode = "NET_ZERO_ADJUSTMENT_REVERSAL";
+    ]);
+
+  for (const [groupKey, groupRows] of rowsByGroup.entries()) {
+    groupRows.sort(rowOrder);
+    const event = classifyClearingEvent(groupRows);
+    for (const sourceRow of groupRows) {
+      sourceRow.clearingEventKind = event.kind;
+      sourceRow.clearingPattern = event.pattern;
+      sourceRow.role = classifyDocument(sourceRow, event);
+    }
+
+    const buildSourceEvidence = () =>
+      groupRows.map((sourceRow) => ({
+        stageRowId: sourceRow.id,
+        rowNo: sourceRow.rowNo ?? sourceRow.row_no ?? null,
+        documentType: sourceRow.sourceDocumentType,
+        normalisationRole: sourceRow.role,
+        signedAmount: sourceRow.signedAmount,
+      }));
+    const buildGroupEvidence = (allocationResolved, semanticEffects = {}) => ({
+      normalisationGroupKey: groupKey,
+      clearingFamily: event.family,
+      clearingPattern: event.pattern,
+      reconciled: event.reconciled,
+      allocationResolved,
+      signedClearingGroupTotal: event.signedBalance,
+      sourceAbsoluteAmount: sumRows(groupRows, (row) => row.amount),
+      participatingDocumentTypes: Array.from(event.documentTypes).sort(),
+      semanticEffects,
+    });
+
+    if (event.kind === "NON_PAYMENT") {
+      for (const sourceRow of groupRows) {
+        sourceRow.reversalOffsetAmount = sourceRow.amount;
+        sourceRow.reconciliationCode = event.pattern;
+        nonPaymentRows.push(sourceRow);
+      }
+      clearingReconciliations.push(buildGroupEvidence(true));
       continue;
     }
-    let remaining = adjustment.effectiveAmount;
-    const candidates = ambiguousAdjustmentGroups.has(adjustment.groupKey)
-      ? []
-      : (obligationsByGroup.get(adjustment.groupKey) || []).filter(
-          (obligation) =>
-            adjustment.role !== "ET" ||
-            (adjustment.descriptionReference &&
-              obligation.descriptionReference ===
-                adjustment.descriptionReference),
-        );
-    for (const obligation of candidates) {
-      if (remaining <= NORMALISATION_EPSILON) break;
-      if (obligation.adjustedAmount <= NORMALISATION_EPSILON) continue;
-      const before = obligation.adjustedAmount;
-      const allocated = Math.min(before, remaining);
-      const after = Math.max(0, before - allocated);
-      const reason =
-        after <= NORMALISATION_EPSILON
-          ? ADJUSTMENT_REASONS[adjustment.role].full
-          : ADJUSTMENT_REASONS[adjustment.role].partial;
-      const allocation = {
-        adjustmentStageRowId: adjustment.id,
-        invoiceStageRowId: obligation.id,
-        adjustmentKind: adjustment.role,
-        reasonCode: reason,
-        amount: allocated,
-        obligationBefore: before,
-        obligationAfter: after,
-      };
-      obligation.adjustedAmount = after;
-      obligation.outstandingAmount = after;
-      obligation.adjustmentAllocations.push(allocation);
-      adjustment.allocations.push(allocation);
-      adjustment.allocatedAmount += allocated;
-      remaining -= allocated;
-    }
-    adjustment.unmatchedAmount = Math.max(0, remaining);
-    if (adjustment.unmatchedAmount > NORMALISATION_EPSILON) {
-      exceptions.push({
-        code: ambiguousAdjustmentGroups.has(adjustment.groupKey)
-          ? "AMBIGUOUS_ADJUSTMENT_COMBINATION"
-          : "UNMATCHED_ADJUSTMENT",
-        sourceStageRowId: adjustment.id,
-        adjustmentKind: adjustment.role,
-        originalAmount: adjustment.amount,
-        effectiveAmount: adjustment.effectiveAmount,
-        allocatedAmount: adjustment.allocatedAmount,
-        unmatchedAmount: adjustment.unmatchedAmount,
-        invoiceStageRowIds: adjustment.allocations.map(
-          (allocation) => allocation.invoiceStageRowId,
-        ),
-      });
-    }
-  }
 
-  payments.sort((left, right) =>
-    compareRows(left, right, ["paymentDate", "payment_date"]),
-  );
-  const observations = [];
-  for (const payment of payments) {
-    let remaining = payment.amount;
-    const candidates = obligationsByGroup.get(payment.groupKey) || [];
-    for (const obligation of candidates) {
-      if (remaining <= NORMALISATION_EPSILON) break;
-      if (obligation.outstandingAmount <= NORMALISATION_EPSILON) continue;
-      const before = obligation.outstandingAmount;
-      const allocated = Math.min(before, remaining);
-      const after = Math.max(0, before - allocated);
-      const partial = after > NORMALISATION_EPSILON;
-      const paymentDate = normaliseText(
-        firstValue(payment, ["paymentDate", "payment_date"]),
-      );
-      const invoiceIssueDate = normaliseText(
-        firstValue(obligation, ["invoiceIssueDate", "invoice_issue_date"]),
-      );
-      const invoiceReceiptDate = normaliseText(
-        firstValue(obligation, ["invoiceReceiptDate", "invoice_receipt_date"]),
-      );
-      const paymentTime = paymentTimeResult({
-        paymentDate,
-        invoiceIssueDate,
-        invoiceReceiptDate,
-        rcti: firstValue(obligation, ["rcti", "RCTI"]),
-      });
-      const allocation = {
-        invoiceStageRowId: obligation.id,
-        paymentStageRowId: payment.id,
-        amount: allocated,
-        obligationBefore: before,
-        obligationAfter: after,
-        partialPayment: partial,
-        finalSettlement: !partial,
-      };
-      obligation.outstandingAmount = after;
-      obligation.paymentAllocations.push(allocation);
-      payment.allocations.push(allocation);
-      payment.allocatedAmount += allocated;
-      remaining -= allocated;
-      const observation = {
-        ...allocation,
-        reasonCode: partial ? "PARTIAL_PAYMENT" : null,
-        paymentDate,
-        invoiceIssueDate,
-        invoiceReceiptDate,
-        paymentTimeDays: paymentTime.days,
-        paymentTimeReferenceDate: paymentTime.referenceDate,
-        paymentTimeReferenceKind: paymentTime.referenceKind,
-        paymentTimeReferencePolicy: paymentTime.referencePolicy || null,
-        paymentTimeReferenceReason: paymentTime.referenceReason || null,
-        originalObligationAmount: obligation.originalAmount,
-        adjustedObligationAmount: obligation.adjustedAmount,
-        classificationBasis:
-          payment.sourceDocumentType === DOCUMENT_TYPES.CLEARING_PAYMENT
-            ? "outstanding_obligation_after_clearing_settlement"
-            : "outstanding_obligation_after_zp",
-        contractualInstalmentIndicatorAvailable: false,
-      };
-      if (paymentTime.days == null) {
-        observation.exceptionCode = "MAPPING_EXCEPTION";
-      }
-      observations.push(observation);
-    }
-    payment.unmatchedAmount = Math.max(0, remaining);
-    const clearingContext = clearingContextByGroup.get(payment.groupKey);
-    if (
-      payment.unmatchedAmount > NORMALISATION_EPSILON &&
-      clearingContext?.clearingPrefix === "5" &&
-      Math.abs(clearingContext.signedBalance) <= NORMALISATION_EPSILON
-    ) {
-      payment.clearingBalanceOffsetAmount = payment.unmatchedAmount;
-      payment.clearingGroupSignedBalance = clearingContext.signedBalance;
-      payment.unmatchedAmount = 0;
-    }
-    if (payment.unmatchedAmount > NORMALISATION_EPSILON) {
+    if (event.kind === "UNKNOWN") {
       exceptions.push({
-        code: "UNMATCHED_PAYMENT",
-        sourceStageRowId: payment.id,
-        originalAmount: payment.amount,
-        allocatedAmount: payment.allocatedAmount,
-        unmatchedAmount: payment.unmatchedAmount,
+        code: "UNSUPPORTED_CLEARING_EVENT",
+        sourceStageRowId: groupRows[0]?.id || null,
+        groupKey,
+        clearingFamily: event.family,
+        clearingPattern: event.pattern,
+        amount: Math.abs(event.signedBalance),
+        signedSourceAmounts: buildSourceEvidence(),
+      });
+      clearingReconciliations.push(buildGroupEvidence(false));
+      continue;
+    }
+
+    const neutralisedIds = new Set();
+    const neutraliseRows = (rowsToNeutralise, reconciliationCode) => {
+      for (const neutralisedRow of rowsToNeutralise) {
+        neutralisedIds.add(neutralisedRow.id);
+        neutralisedRow.role = "NEUTRALISED";
+        neutralisedRow.reversalOffsetAmount = neutralisedRow.amount;
+        neutralisedRow.reconciliationCode = reconciliationCode;
+        nonPaymentRows.push(neutralisedRow);
+      }
+    };
+    const negativeAbRows = groupRows.filter(
+      (sourceRow) =>
+        sourceRow.sourceDocumentType === "AB" &&
+        sourceRow.signedAmount < -NORMALISATION_EPSILON,
+    );
+    const positiveInvoiceOffsetRows = groupRows.filter(
+      (sourceRow) =>
+        ["RE", "KR"].includes(sourceRow.sourceDocumentType) &&
+        sourceRow.signedAmount > NORMALISATION_EPSILON,
+    );
+    if (
+      negativeAbRows.length > 0 &&
+      positiveInvoiceOffsetRows.length > 0 &&
+      approximatelyZero(
+        sumRows(negativeAbRows) + sumRows(positiveInvoiceOffsetRows),
+      )
+    ) {
+      neutraliseRows(
+        [...negativeAbRows, ...positiveInvoiceOffsetRows],
+        "AGGREGATE_AB_OBLIGATION_OFFSET_NEUTRALISATION",
+      );
+    }
+    const pairRows = (leftPredicate, rightPredicate, compatible) => {
+      const leftRows = groupRows.filter(
+        (sourceRow) =>
+          !neutralisedIds.has(sourceRow.id) && leftPredicate(sourceRow),
+      );
+      const rightRows = groupRows.filter(
+        (sourceRow) =>
+          !neutralisedIds.has(sourceRow.id) && rightPredicate(sourceRow),
+      );
+      const candidates = leftRows.flatMap((left) =>
+        rightRows
+          .filter((right) => compatible(left, right))
+          .map((right) => ({ left, right })),
+      );
+      for (const candidate of candidates) {
+        if (
+          neutralisedIds.has(candidate.left.id) ||
+          neutralisedIds.has(candidate.right.id)
+        ) {
+          continue;
+        }
+        const leftMatches = candidates.filter(
+          (item) => item.left.id === candidate.left.id,
+        );
+        const rightMatches = candidates.filter(
+          (item) => item.right.id === candidate.right.id,
+        );
+        if (leftMatches.length !== 1 || rightMatches.length !== 1) continue;
+        neutraliseRows(
+          [candidate.left, candidate.right],
+          "DETERMINISTIC_SIGNED_NEUTRALISATION",
+        );
+      }
+    };
+    const sameAmountOppositeSign = (left, right) =>
+      approximatelyZero(left.signedAmount + right.signedAmount);
+    pairRows(
+      (sourceRow) =>
+        sourceRow.sourceDocumentType === "AB" &&
+        sourceRow.signedAmount < -NORMALISATION_EPSILON,
+      (sourceRow) =>
+        ["RE", "KR"].includes(sourceRow.sourceDocumentType) &&
+        sourceRow.signedAmount > NORMALISATION_EPSILON,
+      sameAmountOppositeSign,
+    );
+    for (const documentType of ["ET", "KG", "KR"]) {
+      pairRows(
+        (sourceRow) =>
+          sourceRow.sourceDocumentType === documentType &&
+          sourceRow.signedAmount < -NORMALISATION_EPSILON,
+        (sourceRow) =>
+          sourceRow.sourceDocumentType === documentType &&
+          sourceRow.signedAmount > NORMALISATION_EPSILON,
+        (left, right) =>
+          sameAmountOppositeSign(left, right) &&
+          left.economicReference === right.economicReference,
+      );
+    }
+
+    const groupObligations = groupRows
+      .filter(
+        (sourceRow) =>
+          sourceRow.role === "INVOICE" && !neutralisedIds.has(sourceRow.id),
+      )
+      .map((sourceRow) => ({
+        ...sourceRow,
+        originalAmount: sourceRow.amount,
+        adjustedAmount: sourceRow.amount,
+        outstandingAmount: sourceRow.amount,
+        adjustmentAllocations: [],
+        paymentAllocations: [],
+      }));
+    const groupPayments = groupRows
+      .filter(
+        (sourceRow) =>
+          sourceRow.role === "PAYMENT" && !neutralisedIds.has(sourceRow.id),
+      )
+      .map((sourceRow) => ({
+        ...sourceRow,
+        allocatedAmount: 0,
+        unmatchedAmount: sourceRow.amount,
+        allocations: [],
+      }));
+    const groupAdjustments = groupRows
+      .filter(
+        (sourceRow) =>
+          [
+            "ET",
+            "KG",
+            "AB",
+            "SI",
+            "OBLIGATION_OFFSET",
+            "SETTLEMENT_REVERSAL",
+          ].includes(sourceRow.role) && !neutralisedIds.has(sourceRow.id),
+      )
+      .map((sourceRow) => ({
+        ...sourceRow,
+        effectiveAmount:
+          sourceRow.signedAmount > NORMALISATION_EPSILON ? sourceRow.amount : 0,
+        allocatedAmount: 0,
+        reversalOffsetAmount: 0,
+        unmatchedAmount: sourceRow.amount,
+        allocations: [],
+      }));
+    obligations.push(...groupObligations);
+    payments.push(...groupPayments);
+    adjustments.push(...groupAdjustments);
+
+    const remainingByObligation = new Map(
+      groupObligations.map((obligation) => [
+        obligation.id,
+        obligation.adjustedAmount,
+      ]),
+    );
+    const adjustmentPlan = [];
+    const unresolvedAdjustments = [];
+    for (const adjustment of groupAdjustments.sort(rowOrder)) {
+      if (
+        adjustment.role === "SETTLEMENT_REVERSAL" ||
+        adjustment.signedAmount <= NORMALISATION_EPSILON
+      ) {
+        unresolvedAdjustments.push(adjustment);
+        continue;
+      }
+      const referenceMatches = adjustment.economicReference
+        ? groupObligations.filter(
+            (obligation) =>
+              obligation.economicReference === adjustment.economicReference,
+          )
+        : [];
+      const candidates =
+        adjustment.role === "ET"
+          ? referenceMatches
+          : adjustment.economicReference
+            ? referenceMatches
+            : groupObligations.length === 1
+              ? groupObligations
+              : [];
+      if (candidates.length === 0) {
+        unresolvedAdjustments.push(adjustment);
+        continue;
+      }
+      let remaining = adjustment.amount;
+      const plannedForAdjustment = [];
+      for (const obligation of candidates.sort((left, right) =>
+        compareRows(left, right, ["invoiceIssueDate", "invoice_issue_date"]),
+      )) {
+        if (remaining <= NORMALISATION_EPSILON) break;
+        const before = remainingByObligation.get(obligation.id) || 0;
+        if (before <= NORMALISATION_EPSILON) continue;
+        const allocated = Math.min(before, remaining);
+        const after = Math.max(0, before - allocated);
+        remainingByObligation.set(obligation.id, after);
+        plannedForAdjustment.push({
+          adjustment,
+          obligation,
+          amount: allocated,
+          before,
+          after,
+        });
+        remaining -= allocated;
+      }
+      if (remaining > NORMALISATION_EPSILON) {
+        for (const planned of plannedForAdjustment) {
+          remainingByObligation.set(planned.obligation.id, planned.before);
+        }
+        unresolvedAdjustments.push(adjustment);
+        continue;
+      }
+      adjustmentPlan.push(...plannedForAdjustment);
+    }
+
+    let allocationResolved = unresolvedAdjustments.length === 0;
+    if (!allocationResolved) {
+      const totalAdjustmentValue = sumRows(groupAdjustments);
+      const unresolvedAmount = approximatelyZero(totalAdjustmentValue)
+        ? sumRows(unresolvedAdjustments, (adjustment) => adjustment.amount)
+        : Math.abs(totalAdjustmentValue);
+      exceptions.push({
+        code: "UNRESOLVED_ADJUSTMENT_ALLOCATION",
+        sourceStageRowId:
+          unresolvedAdjustments[0]?.id || groupRows[0]?.id || null,
+        groupKey,
+        clearingFamily: event.family,
+        clearingPattern: event.pattern,
+        affectedObligationStageRowIds: groupObligations.map((row) => row.id),
+        adjustmentStageRowIds: groupAdjustments.map((row) => row.id),
+        settlementStageRowIds: groupPayments.map((row) => row.id),
+        signedSourceAmounts: buildSourceEvidence(),
+        totalObligationValue: sumRows(
+          groupObligations,
+          (row) => row.originalAmount,
+        ),
+        totalAdjustmentValue,
+        totalSettlementValue: sumRows(groupPayments, (row) => row.signedAmount),
+        unresolvedAmount,
+        amount: unresolvedAmount,
+        reason:
+          "Source evidence does not deterministically attribute every adjustment to one invoice obligation.",
+      });
+    } else {
+      for (const planned of adjustmentPlan) {
+        const reasonFamily =
+          planned.adjustment.role === "OBLIGATION_OFFSET"
+            ? "AB"
+            : planned.adjustment.role;
+        const reason =
+          planned.after <= NORMALISATION_EPSILON
+            ? reasonFamily + "_FULL_OFFSET"
+            : reasonFamily + "_PARTIAL_OFFSET";
+        const allocation = {
+          adjustmentStageRowId: planned.adjustment.id,
+          invoiceStageRowId: planned.obligation.id,
+          adjustmentKind: planned.adjustment.role,
+          reasonCode: reason,
+          amount: planned.amount,
+          obligationBefore: planned.before,
+          obligationAfter: planned.after,
+        };
+        planned.obligation.adjustedAmount = planned.after;
+        planned.obligation.outstandingAmount = planned.after;
+        planned.obligation.adjustmentAllocations.push(allocation);
+        planned.adjustment.allocations.push(allocation);
+        planned.adjustment.allocatedAmount += planned.amount;
+        planned.adjustment.unmatchedAmount = Math.max(
+          0,
+          planned.adjustment.amount - planned.adjustment.allocatedAmount,
+        );
+      }
+    }
+
+    const blockedByFaultInjection =
+      options.preventAllocationForGroupKeys?.includes(groupKey) ||
+      options.shouldPreventAllocation?.({
+        groupKey,
+        event,
+        rows: groupRows,
+      }) === true;
+    if (blockedByFaultInjection) {
+      allocationResolved = false;
+      exceptions.push({
+        code: "SEMANTIC_ALLOCATION_FAILED",
+        sourceStageRowId:
+          groupPayments[0]?.id || groupObligations[0]?.id || null,
+        groupKey,
+        amount: sumRows(groupPayments, (payment) => payment.amount),
       });
     }
+
+    if (allocationResolved) {
+      groupPayments.sort(rowOrder);
+      groupObligations.sort((left, right) =>
+        compareRows(left, right, ["invoiceIssueDate", "invoice_issue_date"]),
+      );
+      for (const payment of groupPayments) {
+        let remaining = payment.amount;
+        for (const obligation of groupObligations) {
+          if (remaining <= NORMALISATION_EPSILON) break;
+          if (obligation.outstandingAmount <= NORMALISATION_EPSILON) continue;
+          const before = obligation.outstandingAmount;
+          const allocated = Math.min(before, remaining);
+          const after = Math.max(0, before - allocated);
+          const paymentDate = normaliseText(
+            firstValue(payment, ["paymentDate", "payment_date"]),
+          );
+          const invoiceIssueDate = normaliseText(
+            firstValue(obligation, ["invoiceIssueDate", "invoice_issue_date"]),
+          );
+          const invoiceReceiptDate = normaliseText(
+            firstValue(obligation, [
+              "invoiceReceiptDate",
+              "invoice_receipt_date",
+            ]),
+          );
+          const paymentTime = paymentTimeResult({
+            paymentDate,
+            invoiceIssueDate,
+            invoiceReceiptDate,
+            rcti: firstValue(obligation, ["rcti", "RCTI"]),
+          });
+          const allocation = {
+            invoiceStageRowId: obligation.id,
+            paymentStageRowId: payment.id,
+            amount: allocated,
+            obligationBefore: before,
+            obligationAfter: after,
+            partialPayment: after > NORMALISATION_EPSILON,
+            finalSettlement: after <= NORMALISATION_EPSILON,
+          };
+          obligation.outstandingAmount = after;
+          obligation.paymentAllocations.push(allocation);
+          payment.allocations.push(allocation);
+          payment.allocatedAmount += allocated;
+          remaining -= allocated;
+          const observation = {
+            ...allocation,
+            reasonCode: allocation.partialPayment ? "PARTIAL_PAYMENT" : null,
+            paymentDate,
+            invoiceIssueDate,
+            invoiceReceiptDate,
+            paymentTimeDays: paymentTime.days,
+            paymentTimeReferenceDate: paymentTime.referenceDate,
+            paymentTimeReferenceKind: paymentTime.referenceKind,
+            paymentTimeReferencePolicy: paymentTime.referencePolicy || null,
+            paymentTimeReferenceReason: paymentTime.referenceReason || null,
+            originalObligationAmount: obligation.originalAmount,
+            adjustedObligationAmount: obligation.adjustedAmount,
+            classificationBasis:
+              payment.sourceDocumentType === DOCUMENT_TYPES.CLEARING_PAYMENT
+                ? "outstanding_obligation_after_clearing_settlement"
+                : "outstanding_obligation_after_zp",
+            contractualInstalmentIndicatorAvailable: false,
+          };
+          if (paymentTime.days == null) {
+            observation.exceptionCode = "MAPPING_EXCEPTION";
+          }
+          observations.push(observation);
+        }
+        payment.unmatchedAmount = Math.max(0, remaining);
+        if (payment.unmatchedAmount > NORMALISATION_EPSILON) {
+          allocationResolved = false;
+          exceptions.push({
+            code: "UNMATCHED_PAYMENT",
+            sourceStageRowId: payment.id,
+            originalAmount: payment.amount,
+            allocatedAmount: payment.allocatedAmount,
+            unmatchedAmount: payment.unmatchedAmount,
+            amount: payment.unmatchedAmount,
+          });
+        }
+      }
+    }
+
+    clearingReconciliations.push(
+      buildGroupEvidence(allocationResolved, {
+        adjustmentAllocatedAmount: sumRows(
+          groupAdjustments,
+          (row) => row.allocatedAmount,
+        ),
+        adjustmentReversalOffsetAmount: sumRows(
+          groupRows,
+          (row) => row.reversalOffsetAmount || 0,
+        ),
+        paymentAllocatedAmount: sumRows(
+          groupPayments,
+          (row) => row.allocatedAmount,
+        ),
+      }),
+    );
   }
 
   const sum = (values) => values.reduce((total, value) => total + value, 0);
-  const sourceRowsById = new Map(rows.map((row) => [row.id, row]));
-  const sourceRowsByGroup = new Map();
-  for (const row of rows) {
-    if (!row.groupKey) continue;
-    const sourceRows = sourceRowsByGroup.get(row.groupKey) || [];
-    sourceRows.push(row);
-    sourceRowsByGroup.set(row.groupKey, sourceRows);
-  }
-  const reconciliableCodes = new Set(CLEARING_RECONCILIABLE_EXCEPTION_CODES);
-  const reconciliableExceptionsByGroup = new Map();
-  for (const exception of exceptions) {
-    if (!reconciliableCodes.has(exception.code)) continue;
-    const source = sourceRowsById.get(exception.sourceStageRowId);
-    if (!source?.groupKey) continue;
-    const groupExceptions =
-      reconciliableExceptionsByGroup.get(source.groupKey) || [];
-    groupExceptions.push(exception);
-    reconciliableExceptionsByGroup.set(source.groupKey, groupExceptions);
-  }
-
-  const clearingReconciliations = [];
-  const balancedReconciledGroups = new Set();
-  for (const [groupKey, groupExceptions] of
-    reconciliableExceptionsByGroup.entries()) {
-    const sourceRows = sourceRowsByGroup.get(groupKey) || [];
-    const clearingContext = clearingContextByGroup.get(groupKey);
-    const signedClearingGroupTotal = clearingContext?.signedBalance || 0;
-    const acceptedAsBalancedClearing =
-      Math.abs(signedClearingGroupTotal) <= NORMALISATION_EPSILON;
-    const adjustmentsInGroup = adjustments.filter(
-      (adjustment) => adjustment.groupKey === groupKey,
-    );
-    const obligationsInGroup = obligations.filter(
-      (obligation) => obligation.groupKey === groupKey,
-    );
-    const paymentsInGroup = payments.filter(
-      (payment) => payment.groupKey === groupKey,
-    );
-    const residualExceptionAmountBeforeReconciliation = sum(
-      groupExceptions.map((exception) =>
-        Number(exception.unmatchedAmount ?? exception.amount ?? 0),
-      ),
-    );
-    const reconciliation = {
-      normalisationGroupKey: groupKey,
-      reconciliationCode: acceptedAsBalancedClearing
-        ? BALANCED_CLEARING_RECONCILIATION
-        : null,
-      acceptedAsBalancedClearing,
-      signedClearingGroupTotal,
-      remainingSignedResidualBeforeFinalReconciliation:
-        signedClearingGroupTotal,
-      finalUnexplainedSignedResidual: acceptedAsBalancedClearing
-        ? 0
-        : signedClearingGroupTotal,
-      residualExceptionAmountBeforeReconciliation,
-      residualExceptionCodesBeforeReconciliation: Array.from(
-        new Set(groupExceptions.map((exception) => exception.code)),
-      ).sort(),
-      participatingDocumentTypes: Array.from(
-        new Set(sourceRows.map((row) => row.sourceDocumentType)),
-      ).sort(),
-      sourceRows: sourceRows.map((row) => ({
-        stageRowId: row.id,
-        rowNo: row.rowNo ?? row.row_no ?? null,
-        documentType: row.sourceDocumentType,
-        normalisationRole: row.role,
-        signedAmount: row.signedAmount,
-      })),
-      semanticEffects: {
-        directionalObligationOffsetAmount: sum(
-          obligationsInGroup.map(
-            (obligation) => obligation.directionalOffsetAllocatedAmount,
-          ),
-        ),
-        adjustmentAllocatedAmount: sum(
-          adjustmentsInGroup.map((adjustment) => adjustment.allocatedAmount),
-        ),
-        adjustmentReversalOffsetAmount: sum(
-          adjustmentsInGroup.map(
-            (adjustment) => adjustment.reversalOffsetAmount,
-          ),
-        ),
-        paymentAllocatedAmount: sum(
-          paymentsInGroup.map((payment) => payment.allocatedAmount),
-        ),
-        paymentClearingBalanceOffsetAmount: sum(
-          paymentsInGroup.map(
-            (payment) => payment.clearingBalanceOffsetAmount || 0,
-          ),
-        ),
-      },
-    };
-    clearingReconciliations.push(reconciliation);
-    if (!acceptedAsBalancedClearing) continue;
-    balancedReconciledGroups.add(groupKey);
-    for (const obligation of obligationsInGroup) {
-      if (
-        obligation.directionalOffsetUnmatchedAmount > NORMALISATION_EPSILON
-      ) {
-        obligation.directionalOffsetUnmatchedAmountBeforeClearingReconciliation =
-          obligation.directionalOffsetUnmatchedAmount;
-        obligation.clearingReconciliationOffsetAmount =
-          obligation.directionalOffsetUnmatchedAmount;
-        obligation.directionalOffsetUnmatchedAmount = 0;
-      }
-    }
-    for (const adjustment of adjustmentsInGroup) {
-      if (adjustment.unmatchedAmount > NORMALISATION_EPSILON) {
-        adjustment.unmatchedAmountBeforeClearingReconciliation =
-          adjustment.unmatchedAmount;
-        adjustment.clearingReconciliationOffsetAmount =
-          adjustment.unmatchedAmount;
-        adjustment.unmatchedAmount = 0;
-        adjustment.reconciliationCode = BALANCED_CLEARING_RECONCILIATION;
-      }
-    }
-    for (const payment of paymentsInGroup) {
-      if (payment.unmatchedAmount > NORMALISATION_EPSILON) {
-        payment.unmatchedAmountBeforeClearingReconciliation =
-          payment.unmatchedAmount;
-        payment.clearingReconciliationOffsetAmount = payment.unmatchedAmount;
-        payment.unmatchedAmount = 0;
-      }
-    }
-  }
-  const finalExceptions = exceptions.filter((exception) => {
-    if (!reconciliableCodes.has(exception.code)) return true;
-    const source = sourceRowsById.get(exception.sourceStageRowId);
-    return !source?.groupKey || !balancedReconciledGroups.has(source.groupKey);
-  });
-
   return {
     obligations,
     adjustments,
     payments,
+    nonPaymentRows,
     observations,
-    exceptions: finalExceptions,
+    exceptions,
     clearingReconciliations,
     reconciliation: {
       startingRowCount: rows.length,
@@ -1085,24 +1197,12 @@ function normalisePaymentRows(inputRows) {
       adjustedObligationValue: sum(
         obligations.map((row) => row.adjustedAmount),
       ),
-      directionalObligationOffsetValue: sum(
-        obligations
-          .filter(
-            (row) =>
-              row.usesSignedObligationDirection &&
-              row.signedAmount > NORMALISATION_EPSILON,
-          )
-          .map((row) => row.directionalOffsetAllocatedAmount),
-      ),
-      unmatchedDirectionalObligationOffsetValue: sum(
-        obligations.map((row) => row.directionalOffsetUnmatchedAmount),
-      ),
       adjustmentValue: sum(adjustments.map((row) => row.amount)),
       adjustmentAllocatedValue: sum(
         adjustments.map((row) => row.allocatedAmount),
       ),
       adjustmentReversalOffsetValue: sum(
-        adjustments.map((row) => row.reversalOffsetAmount),
+        rows.map((row) => row.reversalOffsetAmount || 0),
       ),
       unmatchedAdjustmentValue: sum(
         adjustments.map((row) => row.unmatchedAmount),
@@ -1110,15 +1210,15 @@ function normalisePaymentRows(inputRows) {
       paymentValue: sum(payments.map((row) => row.amount)),
       paymentAllocatedValue: sum(payments.map((row) => row.allocatedAmount)),
       unmatchedPaymentValue: sum(payments.map((row) => row.unmatchedAmount)),
-      balancedClearingPaymentOffsetValue: sum(
-        payments.map((row) => row.clearingBalanceOffsetAmount || 0),
-      ),
-      balancedClearingReconciliationCount: clearingReconciliations.filter(
-        (row) => row.acceptedAsBalancedClearing,
+      accountingReconciledGroupCount: clearingReconciliations.filter(
+        (row) => row.reconciled,
+      ).length,
+      allocationResolvedGroupCount: clearingReconciliations.filter(
+        (row) => row.allocationResolved,
       ).length,
       unexplainedClearingResidualValue: sum(
         clearingReconciliations.map((row) =>
-          Math.abs(row.finalUnexplainedSignedResidual),
+          row.reconciled ? 0 : Math.abs(row.signedClearingGroupTotal),
         ),
       ),
       paymentObservationCount: observations.length,
@@ -1126,456 +1226,514 @@ function normalisePaymentRows(inputRows) {
         .length,
       finalPaymentCount: observations.filter((row) => row.finalSettlement)
         .length,
-      exceptionCount: finalExceptions.length,
+      exceptionCount: exceptions.length,
       contractualInstalmentIndicatorAvailable: false,
     },
   };
 }
-
 function buildPaymentNormalisationCte() {
   return `
     payment_normalisation_classified_source_rows AS MATERIALIZED (
       SELECT
-        s."id",
-        s."datasetId",
-        s."semanticKind",
-        s."sourceGroupScope",
-        s."rowNo",
-        s."sourceAccountCode",
-        s."description",
-        s."documentType",
-        s."clearingDocument",
-        s."paymentAmount",
-        s."paymentDate",
-        s."invoiceIssueDate",
-        s."invoiceReceiptDate",
+        s."id", s."semanticKind", s."rowNo", s."paymentDate",
+        s."invoiceIssueDate", s."invoiceReceiptDate",
         UPPER(BTRIM(COALESCE(s."documentType", ''))) AS document_type,
         NULLIF(BTRIM(s."data"->>'company_code'), '') AS company_code,
         NULLIF(BTRIM(s."sourceAccountCode"), '') AS source_account_code,
         NULLIF(BTRIM(s."clearingDocument"), '') AS clearing_document,
+        LOWER(NULLIF(BTRIM(s."description"), ''))
+          AS economic_reference,
         NULLIF(BTRIM(s."description"), '') AS description_reference,
         CASE
           WHEN NULLIF(BTRIM(s."data"->>'company_code'), '') IS NULL
             OR NULLIF(BTRIM(s."sourceAccountCode"), '') IS NULL
             OR NULLIF(BTRIM(s."clearingDocument"), '') IS NULL
             THEN NULL
-          ELSE COALESCE(
-            NULLIF(BTRIM(s."sourceGroupScope"), ''),
-            'dataset:' || s."datasetId"
-          ) || '|' || BTRIM(s."data"->>'company_code')
-            || '|' || BTRIM(s."sourceAccountCode")
-            || '|' || BTRIM(s."clearingDocument")
+          ELSE LOWER(
+            COALESCE(
+              NULLIF(BTRIM(s."sourceGroupScope"), ''),
+              'dataset:' || s."datasetId"
+            ) || '|' || BTRIM(s."data"->>'company_code')
+              || '|' || BTRIM(s."sourceAccountCode")
+              || '|' || BTRIM(s."clearingDocument")
+          )
         END AS normalisation_group_key,
         COALESCE(s."paymentAmount", 0)::numeric AS signed_amount,
-        ABS(COALESCE(s."paymentAmount", 0))::numeric AS normalisation_amount,
-        COALESCE((s."data"->>'exclude_from_metrics')::boolean, false)
-          OR COALESCE((s."meta"->'rules'->>'exclude')::boolean, false) AS excluded
+        ABS(COALESCE(s."paymentAmount", 0))::numeric
+          AS normalisation_amount
       FROM "tbl_ptrs_stage_row" s
       WHERE s."customerId" = :customerId
         AND s."ptrsId" = :ptrsId
         AND s."deletedAt" IS NULL
     ),
-    payment_normalisation_clearing_group_context AS MATERIALIZED (
-      SELECT normalisation_group_key,
-        BOOL_OR(document_type IN ('RE', 'KR'))
-          AS has_recognised_obligation,
-        BOOL_AND(clearing_document LIKE '5%') AS is_prefix_5,
-        SUM(signed_amount)::numeric AS signed_balance
+    payment_normalisation_group_facts AS MATERIALIZED (
+      SELECT
+        normalisation_group_key,
+        MIN(clearing_document) AS clearing_document,
+        LEFT(MIN(clearing_document), 1) AS clearing_family,
+        SUM(signed_amount)::numeric AS signed_balance,
+        SUM(normalisation_amount)::numeric AS source_absolute_amount,
+        ABS(SUM(signed_amount)) <= 0.005 AS reconciled,
+        COUNT(*)::int AS row_count,
+        ARRAY_AGG(DISTINCT document_type ORDER BY document_type)
+          AS document_types,
+        BOOL_OR(signed_amount > 0.005) AS has_positive,
+        BOOL_OR(signed_amount < -0.005) AS has_negative,
+        BOOL_OR(document_type = 'AB') AS has_ab,
+        BOOL_OR(document_type = 'DZ') AS has_dz,
+        BOOL_OR(document_type = 'ZP' AND signed_amount > 0.005)
+          AS has_positive_zp,
+        BOOL_OR(document_type = 'KZ' AND signed_amount > 0.005)
+          AS has_positive_kz,
+        BOOL_OR(
+          document_type IN ('RE', 'KR', 'SA')
+          AND signed_amount < -0.005
+        ) AS has_payable_obligation,
+        BOOL_AND(document_type = 'SA') AS all_sa,
+        BOOL_AND(document_type = '$F') AS all_dollar_f,
+        BOOL_AND(document_type IN (
+          'RE', 'KR', 'SA', 'ZP', 'KZ', 'ET', 'KG', 'AB', 'SI'
+        )) AS all_supported_settlement_types,
+        BOOL_AND(document_type IN ('AB', 'ZP')) AS all_ab_zp,
+        BOOL_OR(
+          document_type = 'ZR'
+          AND description_reference ~* 'REVERSE[[:space:]]+D[.]DEBIT'
+        ) AS has_supported_zr_description
       FROM payment_normalisation_classified_source_rows
       WHERE normalisation_group_key IS NOT NULL
+        AND "semanticKind" = 'accounting_event'
       GROUP BY normalisation_group_key
     ),
+    payment_normalisation_clearing_events AS MATERIALIZED (
+      SELECT facts.*,
+        CASE
+          WHEN clearing_document LIKE '200%'
+            AND has_ab AND reconciled
+            THEN 'SUPPORTED_200_AB_REVERSAL_ADJUSTMENT'
+          WHEN clearing_document LIKE '300%'
+            AND has_dz AND reconciled
+            THEN 'SUPPORTED_300_DZ_CUSTOMER_CLEARING'
+          WHEN row_count = 2
+            AND has_positive AND has_negative AND reconciled
+            AND CARDINALITY(document_types) = 1
+            AND document_types[1] IN ('ZP', 'KG', 'KR', 'ET')
+            THEN 'EXACT_' || document_types[1] || '_REVERSAL_PAIR'
+          WHEN row_count = 2
+            AND has_positive AND has_negative AND reconciled
+            AND document_types = ARRAY['ZR']::text[]
+            AND has_supported_zr_description
+            THEN 'SUPPORTED_ZR_DIRECT_DEBIT_REVERSAL'
+          WHEN clearing_family = '1'
+            AND all_sa AND has_positive AND has_negative AND reconciled
+            THEN 'SUPPORTED_1_SA_BALANCE_TRANSFER'
+          WHEN clearing_family = '9'
+            AND row_count = 2 AND all_dollar_f
+            AND has_positive AND has_negative AND reconciled
+            THEN 'SUPPORTED_9_DOLLAR_F_REVERSAL_PAIR'
+          WHEN clearing_family = '5'
+            AND all_ab_zp AND has_ab AND has_positive_zp
+            AND NOT has_payable_obligation AND reconciled
+            THEN 'SUPPORTED_AB_ZP_NO_OBLIGATION'
+          WHEN clearing_family = '5'
+            AND has_positive_zp AND has_payable_obligation
+            AND all_supported_settlement_types
+            THEN 'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT'
+          WHEN clearing_family = '4'
+            AND has_positive_kz AND has_payable_obligation
+            AND all_supported_settlement_types
+            THEN 'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+          ELSE 'UNSUPPORTED_CLEARING_EVENT'
+        END AS clearing_pattern
+      FROM payment_normalisation_group_facts facts
+    ),
+    payment_normalisation_neutralisation_candidates AS (
+      SELECT
+        negative."id" AS negative_stage_row_id,
+        positive."id" AS positive_stage_row_id,
+        COUNT(*) OVER (PARTITION BY negative."id") AS negative_match_count,
+        COUNT(*) OVER (PARTITION BY positive."id") AS positive_match_count
+      FROM payment_normalisation_classified_source_rows negative
+      JOIN payment_normalisation_clearing_events event
+        ON event.normalisation_group_key = negative.normalisation_group_key
+      JOIN payment_normalisation_classified_source_rows positive
+        ON positive.normalisation_group_key =
+          negative.normalisation_group_key
+       AND positive.signed_amount > 0.005
+       AND ABS(negative.signed_amount + positive.signed_amount) <= 0.005
+       AND (
+         (
+           negative.document_type = 'AB'
+           AND positive.document_type IN ('RE', 'KR')
+         )
+         OR (
+           negative.document_type IN ('ET', 'KG', 'KR')
+           AND positive.document_type = negative.document_type
+           AND COALESCE(positive.economic_reference, '') =
+             COALESCE(negative.economic_reference, '')
+         )
+       )
+      WHERE event.clearing_pattern IN (
+          'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+          'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+        )
+        AND negative.signed_amount < -0.005
+    ),
+    payment_normalisation_aggregate_ab_offset_groups AS MATERIALIZED (
+      SELECT source.normalisation_group_key
+      FROM payment_normalisation_classified_source_rows source
+      JOIN payment_normalisation_clearing_events event
+        ON event.normalisation_group_key = source.normalisation_group_key
+      WHERE event.clearing_pattern IN (
+          'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+          'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+        )
+        AND (
+          (document_type = 'AB' AND signed_amount < -0.005)
+          OR (
+            document_type IN ('RE', 'KR') AND signed_amount > 0.005
+          )
+        )
+      GROUP BY source.normalisation_group_key
+      HAVING BOOL_OR(document_type = 'AB' AND signed_amount < -0.005)
+        AND BOOL_OR(
+          document_type IN ('RE', 'KR') AND signed_amount > 0.005
+        )
+        AND ABS(SUM(signed_amount)) <= 0.005
+    ),
+    payment_normalisation_neutralised_rows AS MATERIALIZED (
+      SELECT negative_stage_row_id AS stage_row_id
+      FROM payment_normalisation_neutralisation_candidates
+      WHERE negative_match_count = 1 AND positive_match_count = 1
+      UNION
+      SELECT positive_stage_row_id
+      FROM payment_normalisation_neutralisation_candidates
+      WHERE negative_match_count = 1 AND positive_match_count = 1
+      UNION
+      SELECT source."id"
+      FROM payment_normalisation_classified_source_rows source
+      JOIN payment_normalisation_aggregate_ab_offset_groups aggregate_offset
+        ON aggregate_offset.normalisation_group_key =
+          source.normalisation_group_key
+      WHERE (
+          source.document_type = 'AB' AND source.signed_amount < -0.005
+        ) OR (
+          source.document_type IN ('RE', 'KR')
+          AND source.signed_amount > 0.005
+        )
+    ),
     payment_normalisation_source_rows AS MATERIALIZED (
-      SELECT source.*,
+      SELECT source.*, event.clearing_family, event.clearing_pattern,
+        event.signed_balance AS clearing_group_signed_balance,
+        event.reconciled,
         CASE
           WHEN source."semanticKind" = 'direct_payment' THEN 'DIRECT_PAYMENT'
-          WHEN source.document_type = 'RE' THEN 'INVOICE'
-          WHEN source.document_type = 'ZP' THEN 'PAYMENT'
-          WHEN source.document_type = 'ET' THEN 'ET'
-          WHEN source.document_type = 'KR'
-            AND (source.clearing_document LIKE '4%'
-              OR source.clearing_document LIKE '5%')
-            THEN 'INVOICE'
-          WHEN source.document_type = 'KG'
-            AND source.clearing_document LIKE '5%'
-            THEN 'KG'
-          WHEN source.document_type = 'KZ'
-            AND source.clearing_document LIKE '4%'
-            AND context.has_recognised_obligation
-            THEN 'PAYMENT'
-          WHEN source.clearing_document LIKE '200%' THEN 'CREDIT'
-          WHEN source.clearing_document LIKE '300%' THEN 'REFUND'
+          WHEN source.normalisation_group_key IS NULL THEN 'UNKNOWN'
+          WHEN event.clearing_pattern = 'UNSUPPORTED_CLEARING_EVENT'
+            THEN 'UNKNOWN'
+          WHEN event.clearing_pattern IN (
+            'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+            'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+          ) THEN 'SETTLEMENT'
+          ELSE 'NON_PAYMENT'
+        END AS clearing_event_kind,
+        CASE
+          WHEN neutralised.stage_row_id IS NOT NULL THEN 'NEUTRALISED'
+          WHEN source."semanticKind" = 'direct_payment' THEN 'DIRECT_PAYMENT'
+          WHEN source.normalisation_group_key IS NULL THEN 'UNRECOGNISED'
+          WHEN event.clearing_pattern = 'UNSUPPORTED_CLEARING_EVENT'
+            THEN 'UNRECOGNISED'
+          WHEN event.clearing_pattern NOT IN (
+            'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+            'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+          ) THEN 'NON_PAYMENT'
+          WHEN source.document_type IN ('RE', 'KR', 'SA')
+            AND source.signed_amount < -0.005 THEN 'INVOICE'
+          WHEN event.clearing_family = '5'
+            AND source.document_type = 'ZP'
+            AND source.signed_amount > 0.005 THEN 'PAYMENT'
+          WHEN event.clearing_family = '4'
+            AND source.document_type = 'KZ'
+            AND source.signed_amount > 0.005 THEN 'PAYMENT'
+          WHEN source.document_type IN ('RE', 'KR', 'SA')
+            AND source.signed_amount >= -0.005 THEN 'OBLIGATION_OFFSET'
+          WHEN (
+            event.clearing_family = '5' AND source.document_type = 'ZP'
+          ) OR (
+            event.clearing_family = '4' AND source.document_type = 'KZ'
+          ) THEN 'SETTLEMENT_REVERSAL'
+          WHEN source.document_type IN ('ET', 'KG', 'AB', 'SI')
+            THEN source.document_type
           ELSE 'UNRECOGNISED'
         END AS normalisation_role
       FROM payment_normalisation_classified_source_rows source
-      LEFT JOIN payment_normalisation_clearing_group_context context
-        ON context.normalisation_group_key = source.normalisation_group_key
+      LEFT JOIN payment_normalisation_clearing_events event
+        ON event.normalisation_group_key = source.normalisation_group_key
+      LEFT JOIN payment_normalisation_neutralised_rows neutralised
+        ON neutralised.stage_row_id = source."id"
     ),
     payment_normalisation_obligations AS MATERIALIZED (
-      SELECT
-        source.*,
+      SELECT source.*,
         ROW_NUMBER() OVER (
           PARTITION BY normalisation_group_key
           ORDER BY "invoiceIssueDate" NULLS LAST, "rowNo", "id"
-        ) AS obligation_sequence
+        ) AS obligation_sequence,
+        normalisation_amount AS original_obligation_amount
       FROM payment_normalisation_source_rows source
       WHERE normalisation_role = 'INVOICE'
     ),
-    payment_normalisation_positive_obligation_ranges AS MATERIALIZED (
-      SELECT obligation.*,
-        COALESCE(SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key
-          ORDER BY obligation_sequence, "id"
-          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS obligation_start,
-        SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key
-          ORDER BY obligation_sequence, "id"
-          ROWS UNBOUNDED PRECEDING
-        ) AS obligation_end
-      FROM payment_normalisation_obligations obligation
-      WHERE clearing_document LIKE '4%'
-        AND document_type IN ('RE', 'KR')
-        AND signed_amount < -0.005
-    ),
-    payment_normalisation_directional_offset_ranges AS MATERIALIZED (
-      SELECT obligation.*,
-        COALESCE(SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key
-          ORDER BY obligation_sequence, "id"
-          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS offset_start,
-        SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key
-          ORDER BY obligation_sequence, "id"
-          ROWS UNBOUNDED PRECEDING
-        ) AS offset_end
-      FROM payment_normalisation_obligations obligation
-      WHERE clearing_document LIKE '4%'
-        AND document_type IN ('RE', 'KR')
-        AND signed_amount > 0.005
-    ),
-    payment_normalisation_directional_offset_allocations AS MATERIALIZED (
-      SELECT
-        directional_offset."id" AS offset_stage_row_id,
-        obligation."id" AS invoice_stage_row_id,
-        GREATEST(0, LEAST(obligation.obligation_end, directional_offset.offset_end)
-          - GREATEST(obligation.obligation_start, directional_offset.offset_start))::numeric
-          AS allocated_amount
-      FROM payment_normalisation_directional_offset_ranges directional_offset
-      JOIN payment_normalisation_positive_obligation_ranges obligation
-        ON obligation.normalisation_group_key =
-            directional_offset.normalisation_group_key
-       AND obligation.obligation_end > directional_offset.offset_start
-       AND obligation.obligation_start < directional_offset.offset_end
-    ),
-    payment_normalisation_directional_offset_totals AS MATERIALIZED (
-      SELECT invoice_stage_row_id,
-        SUM(allocated_amount)::numeric AS allocated_amount
-      FROM payment_normalisation_directional_offset_allocations
-      WHERE allocated_amount > 0.005
-      GROUP BY invoice_stage_row_id
-    ),
-    payment_normalisation_directional_offset_source_totals AS MATERIALIZED (
-      SELECT directional_offset."id" AS offset_stage_row_id,
-        directional_offset.normalisation_amount AS original_amount,
-        COALESCE(SUM(allocation.allocated_amount), 0)::numeric
-          AS allocated_amount,
-        GREATEST(0, directional_offset.normalisation_amount
-          - COALESCE(SUM(allocation.allocated_amount), 0))::numeric
-          AS unmatched_amount
-      FROM payment_normalisation_directional_offset_ranges directional_offset
-      LEFT JOIN payment_normalisation_directional_offset_allocations allocation
-        ON allocation.offset_stage_row_id = directional_offset."id"
-       AND allocation.allocated_amount > 0.005
-      GROUP BY directional_offset."id",
-        directional_offset.normalisation_amount
-    ),
-    payment_normalisation_directionally_adjusted_obligations AS MATERIALIZED (
-      SELECT obligation.*,
-        obligation.normalisation_amount AS original_obligation_amount,
-        CASE
-          WHEN obligation.clearing_document LIKE '4%'
-            AND obligation.document_type IN ('RE', 'KR')
-            AND obligation.signed_amount > 0.005
-            THEN 0
-          ELSE GREATEST(0, obligation.normalisation_amount
-            - COALESCE(directional_offset.allocated_amount, 0))
-        END::numeric AS obligation_amount_after_direction,
-        COALESCE(directional_offset.allocated_amount, 0)::numeric
-          AS directional_offset_allocated_amount
-      FROM payment_normalisation_obligations obligation
-      LEFT JOIN payment_normalisation_directional_offset_totals
-          directional_offset
-        ON directional_offset.invoice_stage_row_id = obligation."id"
-    ),
-    payment_normalisation_kg_group_totals AS MATERIALIZED (
-      SELECT normalisation_group_key,
-        SUM(signed_amount)::numeric AS signed_amount,
-        GREATEST(0, SUM(signed_amount))::numeric AS effective_credit_amount
-      FROM payment_normalisation_source_rows
-      WHERE normalisation_role = 'KG'
-        AND normalisation_group_key IS NOT NULL
+    payment_normalisation_obligation_counts AS MATERIALIZED (
+      SELECT normalisation_group_key, COUNT(*)::int AS obligation_count
+      FROM payment_normalisation_obligations
       GROUP BY normalisation_group_key
-    ),
-    payment_normalisation_unmatched_kg_reversals AS MATERIALIZED (
-      SELECT MIN(source."id") AS source_stage_row_id,
-        'UNMATCHED_KG_REVERSAL'::text AS reason_code,
-        ABS(group_total.signed_amount)::numeric AS amount
-      FROM payment_normalisation_kg_group_totals group_total
-      JOIN payment_normalisation_source_rows source
-        ON source.normalisation_group_key = group_total.normalisation_group_key
-       AND source.normalisation_role = 'KG'
-       AND source.signed_amount < -0.005
-      WHERE group_total.signed_amount < -0.005
-      GROUP BY group_total.normalisation_group_key, group_total.signed_amount
-    ),
-    payment_normalisation_kg_positive_ranges AS MATERIALIZED (
-      SELECT source."id",
-        source.normalisation_group_key,
-        COALESCE(SUM(source.normalisation_amount) OVER (
-          PARTITION BY source.normalisation_group_key
-          ORDER BY source."paymentDate" NULLS LAST, source."rowNo", source."id"
-          ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS credit_start,
-        SUM(source.normalisation_amount) OVER (
-          PARTITION BY source.normalisation_group_key
-          ORDER BY source."paymentDate" NULLS LAST, source."rowNo", source."id"
-          ROWS UNBOUNDED PRECEDING
-        ) AS credit_end
-      FROM payment_normalisation_source_rows source
-      WHERE source.normalisation_role = 'KG'
-        AND source.signed_amount > 0.005
-    ),
-    payment_normalisation_adjustment_sources AS MATERIALIZED (
-      SELECT source.*,
-        CASE
-          WHEN source.normalisation_role = 'KG' THEN GREATEST(
-            0,
-            LEAST(kg_range.credit_end, kg_group.effective_credit_amount)
-              - kg_range.credit_start
-          )
-          ELSE source.normalisation_amount
-        END::numeric AS allocation_amount,
-        CASE
-          WHEN source.normalisation_role = 'KG'
-            AND source.signed_amount > 0.005
-            THEN GREATEST(0, source.normalisation_amount - GREATEST(
-              0,
-              LEAST(kg_range.credit_end, kg_group.effective_credit_amount)
-                - kg_range.credit_start
-            ))
-          ELSE 0
-        END::numeric AS kg_reversal_offset_amount
-      FROM payment_normalisation_source_rows source
-      LEFT JOIN payment_normalisation_kg_group_totals kg_group
-        ON kg_group.normalisation_group_key = source.normalisation_group_key
-      LEFT JOIN payment_normalisation_kg_positive_ranges kg_range
-        ON kg_range."id" = source."id"
     ),
     payment_normalisation_adjustments AS MATERIALIZED (
-      SELECT
-        source.*,
-        CASE
-          WHEN normalisation_role = 'ET'
-            THEN normalisation_group_key || '|et:' || COALESCE(description_reference, '(missing-reference)')
-          ELSE normalisation_group_key || '|financial-adjustment'
-        END AS allocation_group_key,
+      SELECT source.*,
         ROW_NUMBER() OVER (
-          PARTITION BY normalisation_group_key,
-            CASE WHEN normalisation_role = 'ET' THEN COALESCE(description_reference, '(missing-reference)') ELSE '(financial)' END
-          ORDER BY "paymentDate" NULLS LAST, "invoiceIssueDate" NULLS LAST, "rowNo", "id"
+          PARTITION BY normalisation_group_key
+          ORDER BY "paymentDate" NULLS LAST,
+            "invoiceIssueDate" NULLS LAST, "rowNo", "id"
         ) AS adjustment_sequence
-      FROM payment_normalisation_adjustment_sources source
-      WHERE normalisation_role IN ('CREDIT', 'REFUND', 'ET', 'KG')
+      FROM payment_normalisation_source_rows source
+      WHERE normalisation_role IN (
+        'ET', 'KG', 'AB', 'SI', 'OBLIGATION_OFFSET',
+        'SETTLEMENT_REVERSAL'
+      )
     ),
-    payment_normalisation_net_zero_adjustment_reversal_groups AS MATERIALIZED (
-      SELECT normalisation_group_key
-      FROM payment_normalisation_adjustments
-      WHERE normalisation_group_key IS NOT NULL
-      GROUP BY normalisation_group_key
-      HAVING BOOL_AND(normalisation_role IN ('CREDIT', 'REFUND'))
-        AND BOOL_OR("paymentAmount" > 0.005)
-        AND BOOL_OR("paymentAmount" < -0.005)
-        AND ABS(SUM(COALESCE("paymentAmount", 0))) <= 0.005
-        AND NOT EXISTS (
-          SELECT 1
-          FROM payment_normalisation_obligations obligation
-          WHERE obligation.normalisation_group_key =
-            payment_normalisation_adjustments.normalisation_group_key
+    payment_normalisation_adjustment_target_sets AS MATERIALIZED (
+      SELECT adjustment.*,
+        CASE
+          WHEN adjustment.economic_reference IS NOT NULL
+            THEN adjustment.normalisation_group_key || '|reference:'
+              || adjustment.economic_reference
+          ELSE adjustment.normalisation_group_key || '|single-obligation'
+        END AS allocation_group_key
+      FROM payment_normalisation_adjustments adjustment
+      JOIN payment_normalisation_obligation_counts counts
+        ON counts.normalisation_group_key =
+          adjustment.normalisation_group_key
+      WHERE adjustment.signed_amount > 0.005
+        AND adjustment.normalisation_role <> 'SETTLEMENT_REVERSAL'
+        AND (
+          (
+            adjustment.economic_reference IS NOT NULL AND EXISTS (
+              SELECT 1
+              FROM payment_normalisation_obligations obligation
+              WHERE obligation.normalisation_group_key =
+                adjustment.normalisation_group_key
+                AND obligation.economic_reference =
+                  adjustment.economic_reference
+            )
+          )
+          OR (
+            adjustment.normalisation_role <> 'ET'
+            AND adjustment.economic_reference IS NULL
+            AND counts.obligation_count = 1
+          )
         )
     ),
-    payment_normalisation_ambiguous_adjustment_groups AS MATERIALIZED (
-      SELECT normalisation_group_key
-      FROM payment_normalisation_adjustments
-      GROUP BY normalisation_group_key
-      HAVING BOOL_OR(normalisation_role = 'ET')
-         AND BOOL_OR(normalisation_role IN ('CREDIT', 'REFUND', 'KG'))
-    ),
-    payment_normalisation_adjustment_ranges AS MATERIALIZED (
-      SELECT
-        adjustment.*,
-        SUM(allocation_amount) OVER (
+    payment_normalisation_adjustment_ranges AS (
+      SELECT target."id" AS adjustment_stage_row_id,
+        target.normalisation_group_key,
+        target.economic_reference,
+        target.allocation_group_key,
+        target.adjustment_sequence,
+        target.normalisation_amount,
+        COALESCE(SUM(normalisation_amount) OVER (
           PARTITION BY allocation_group_key
           ORDER BY adjustment_sequence, "id"
           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ) AS adjustment_start,
-        SUM(allocation_amount) OVER (
+        ), 0)::numeric AS adjustment_start,
+        SUM(normalisation_amount) OVER (
           PARTITION BY allocation_group_key
           ORDER BY adjustment_sequence, "id"
           ROWS UNBOUNDED PRECEDING
-        ) AS adjustment_end
-      FROM payment_normalisation_adjustments adjustment
-      WHERE NOT EXISTS (
-        SELECT 1 FROM payment_normalisation_ambiguous_adjustment_groups ambiguous
-        WHERE ambiguous.normalisation_group_key = adjustment.normalisation_group_key
-      )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM payment_normalisation_net_zero_adjustment_reversal_groups reversal
-          WHERE reversal.normalisation_group_key = adjustment.normalisation_group_key
-        )
-        AND allocation_amount > 0.005
+        )::numeric AS adjustment_end
+      FROM payment_normalisation_adjustment_target_sets target
     ),
     payment_normalisation_obligation_adjustment_ranges AS (
-      SELECT
-        adjustment.allocation_group_key,
+      SELECT target.allocation_group_key,
         obligation."id" AS invoice_stage_row_id,
-        obligation.obligation_sequence,
-        obligation.obligation_amount_after_direction
-          AS adjustment_base_obligation_amount,
-        COALESCE(SUM(obligation.obligation_amount_after_direction) OVER (
-          PARTITION BY adjustment.allocation_group_key
+        obligation.normalisation_amount AS adjustment_base_obligation_amount,
+        COALESCE(SUM(obligation.normalisation_amount) OVER (
+          PARTITION BY target.allocation_group_key
           ORDER BY obligation.obligation_sequence, obligation."id"
           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS obligation_start,
-        SUM(obligation.obligation_amount_after_direction) OVER (
-          PARTITION BY adjustment.allocation_group_key
+        ), 0)::numeric AS obligation_start,
+        SUM(obligation.normalisation_amount) OVER (
+          PARTITION BY target.allocation_group_key
           ORDER BY obligation.obligation_sequence, obligation."id"
           ROWS UNBOUNDED PRECEDING
-        ) AS obligation_end
-      FROM payment_normalisation_directionally_adjusted_obligations obligation
+        )::numeric AS obligation_end
+      FROM payment_normalisation_obligations obligation
       JOIN (
-        SELECT allocation_group_key, normalisation_group_key,
-          CASE WHEN BOOL_OR(normalisation_role = 'ET')
-            THEN 'ET' ELSE 'FINANCIAL' END AS normalisation_role,
-          MAX(description_reference) FILTER (WHERE normalisation_role = 'ET')
-            AS description_reference
-        FROM payment_normalisation_adjustment_ranges
-        GROUP BY allocation_group_key, normalisation_group_key
-      ) adjustment
-        ON adjustment.normalisation_group_key = obligation.normalisation_group_key
-       AND (adjustment.normalisation_role <> 'ET'
-            OR adjustment.description_reference = obligation.description_reference)
+        SELECT DISTINCT allocation_group_key, normalisation_group_key,
+          economic_reference
+        FROM payment_normalisation_adjustment_target_sets
+      ) target
+        ON target.normalisation_group_key =
+          obligation.normalisation_group_key
+       AND (
+         target.economic_reference IS NULL
+         OR target.economic_reference = obligation.economic_reference
+       )
     ),
     payment_normalisation_adjustment_allocations_raw AS (
       SELECT
-        adjustment."id" AS adjustment_stage_row_id,
+        adjustment.adjustment_stage_row_id,
         obligation.invoice_stage_row_id,
-        adjustment.normalisation_role AS adjustment_kind,
         adjustment.adjustment_sequence,
         GREATEST(
           0,
           LEAST(obligation.obligation_end, adjustment.adjustment_end)
-            - GREATEST(obligation.obligation_start, COALESCE(adjustment.adjustment_start, 0))
+            - GREATEST(
+              obligation.obligation_start,
+              adjustment.adjustment_start
+            )
         )::numeric AS allocated_amount,
         obligation.adjustment_base_obligation_amount
       FROM payment_normalisation_adjustment_ranges adjustment
       JOIN payment_normalisation_obligation_adjustment_ranges obligation
         ON obligation.allocation_group_key = adjustment.allocation_group_key
-       AND obligation.obligation_end > COALESCE(adjustment.adjustment_start, 0)
+       AND obligation.obligation_end > adjustment.adjustment_start
        AND obligation.obligation_start < adjustment.adjustment_end
     ),
-    payment_normalisation_adjustment_allocations AS MATERIALIZED (
-      SELECT
-        allocation.*,
+    payment_normalisation_adjustment_allocations_pre AS MATERIALIZED (
+      SELECT allocation.*,
+        source.normalisation_role AS adjustment_kind,
         allocation.adjustment_base_obligation_amount
           - COALESCE(SUM(allocation.allocated_amount) OVER (
+            PARTITION BY allocation.invoice_stage_row_id
+            ORDER BY allocation.adjustment_sequence,
+              allocation.adjustment_stage_row_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+          ), 0)::numeric AS obligation_before,
+        GREATEST(
+          0,
+          allocation.adjustment_base_obligation_amount
+            - SUM(allocation.allocated_amount) OVER (
               PARTITION BY allocation.invoice_stage_row_id
-              ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id
-              ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-            ), 0) AS obligation_before,
-        GREATEST(0, allocation.adjustment_base_obligation_amount
-          - SUM(allocation.allocated_amount) OVER (
-              PARTITION BY allocation.invoice_stage_row_id
-              ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id
+              ORDER BY allocation.adjustment_sequence,
+                allocation.adjustment_stage_row_id
               ROWS UNBOUNDED PRECEDING
-            )) AS obligation_after,
-        CASE allocation.adjustment_kind
-          WHEN 'CREDIT' THEN CASE WHEN allocation.adjustment_base_obligation_amount
-            - SUM(allocation.allocated_amount) OVER (PARTITION BY allocation.invoice_stage_row_id ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id ROWS UNBOUNDED PRECEDING) <= 0.005
-            THEN 'CREDIT_FULL_OFFSET' ELSE 'CREDIT_PARTIAL_OFFSET' END
-          WHEN 'REFUND' THEN CASE WHEN allocation.adjustment_base_obligation_amount
-            - SUM(allocation.allocated_amount) OVER (PARTITION BY allocation.invoice_stage_row_id ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id ROWS UNBOUNDED PRECEDING) <= 0.005
-            THEN 'REFUND_FULL_OFFSET' ELSE 'REFUND_PARTIAL_OFFSET' END
-          WHEN 'KG' THEN CASE WHEN allocation.adjustment_base_obligation_amount
-            - SUM(allocation.allocated_amount) OVER (PARTITION BY allocation.invoice_stage_row_id ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id ROWS UNBOUNDED PRECEDING) <= 0.005
-            THEN 'KG_FULL_OFFSET' ELSE 'KG_PARTIAL_OFFSET' END
-          ELSE CASE WHEN allocation.adjustment_base_obligation_amount
-            - SUM(allocation.allocated_amount) OVER (PARTITION BY allocation.invoice_stage_row_id ORDER BY allocation.adjustment_sequence, allocation.adjustment_stage_row_id ROWS UNBOUNDED PRECEDING) <= 0.005
-            THEN 'ET_FULL_OFFSET' ELSE 'ET_PARTIAL_OFFSET' END
-        END AS reason_code
+            )
+        )::numeric AS obligation_after
       FROM payment_normalisation_adjustment_allocations_raw allocation
+      JOIN payment_normalisation_adjustments source
+        ON source."id" = allocation.adjustment_stage_row_id
       WHERE allocation.allocated_amount > 0.005
     ),
-    payment_normalisation_adjustment_totals AS (
-      SELECT invoice_stage_row_id, SUM(allocated_amount)::numeric AS allocated_amount
-      FROM payment_normalisation_adjustment_allocations
-      GROUP BY invoice_stage_row_id
+    payment_normalisation_adjustment_source_totals_pre AS MATERIALIZED (
+      SELECT adjustment."id" AS adjustment_stage_row_id,
+        adjustment.normalisation_group_key,
+        adjustment.signed_amount,
+        adjustment.normalisation_amount AS original_amount,
+        COALESCE(SUM(allocation.allocated_amount), 0)::numeric
+          AS allocated_amount,
+        GREATEST(
+          0,
+          adjustment.normalisation_amount
+            - COALESCE(SUM(allocation.allocated_amount), 0)
+        )::numeric AS unmatched_amount
+      FROM payment_normalisation_adjustments adjustment
+      LEFT JOIN payment_normalisation_adjustment_allocations_pre allocation
+        ON allocation.adjustment_stage_row_id = adjustment."id"
+      GROUP BY adjustment."id", adjustment.normalisation_group_key,
+        adjustment.signed_amount, adjustment.normalisation_amount
+    ),
+    payment_normalisation_unresolved_adjustment_groups AS MATERIALIZED (
+      SELECT
+        adjustment.normalisation_group_key,
+        MIN(adjustment.adjustment_stage_row_id) AS source_stage_row_id,
+        CASE
+          WHEN ABS(SUM(adjustment.signed_amount)) <= 0.005
+            THEN SUM(adjustment.original_amount)
+          ELSE ABS(SUM(adjustment.signed_amount))
+        END::numeric AS unresolved_amount,
+        SUM(adjustment.signed_amount)::numeric AS total_adjustment_value
+      FROM payment_normalisation_adjustment_source_totals_pre adjustment
+      GROUP BY adjustment.normalisation_group_key
+      HAVING BOOL_OR(adjustment.unmatched_amount > 0.005)
+    ),
+    payment_normalisation_adjustment_allocations AS MATERIALIZED (
+      SELECT allocation.*,
+        CASE
+          WHEN allocation.adjustment_kind = 'OBLIGATION_OFFSET'
+            THEN CASE WHEN allocation.obligation_after <= 0.005
+              THEN 'AB_FULL_OFFSET' ELSE 'AB_PARTIAL_OFFSET' END
+          ELSE CASE WHEN allocation.obligation_after <= 0.005
+            THEN allocation.adjustment_kind || '_FULL_OFFSET'
+            ELSE allocation.adjustment_kind || '_PARTIAL_OFFSET' END
+        END AS reason_code
+      FROM payment_normalisation_adjustment_allocations_pre allocation
+      JOIN payment_normalisation_adjustments adjustment
+        ON adjustment."id" = allocation.adjustment_stage_row_id
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          adjustment.normalisation_group_key
+      WHERE unresolved.normalisation_group_key IS NULL
+        AND allocation.allocated_amount > 0.005
     ),
     payment_normalisation_adjustment_source_totals AS MATERIALIZED (
       SELECT adjustment."id" AS adjustment_stage_row_id,
         adjustment.normalisation_amount AS original_amount,
-        COALESCE(SUM(allocation.allocated_amount), 0)::numeric AS allocated_amount,
+        COALESCE(SUM(allocation.allocated_amount), 0)::numeric
+          AS allocated_amount,
         CASE
-          WHEN reversal.normalisation_group_key IS NOT NULL
+          WHEN unresolved.normalisation_group_key IS NOT NULL
             THEN adjustment.normalisation_amount
-          WHEN adjustment.normalisation_role = 'KG'
-            THEN adjustment.kg_reversal_offset_amount
-          ELSE 0
-        END::numeric
-          AS reversal_offset_amount,
-        GREATEST(0,
-          CASE WHEN adjustment.normalisation_role = 'KG'
-            THEN adjustment.allocation_amount
-            ELSE adjustment.normalisation_amount
-          END
-          - COALESCE(SUM(allocation.allocated_amount), 0)
-          - CASE WHEN reversal.normalisation_group_key IS NOT NULL
-              THEN adjustment.normalisation_amount ELSE 0 END)::numeric
-          AS unmatched_amount
+          ELSE GREATEST(
+            0,
+            adjustment.normalisation_amount
+              - COALESCE(SUM(allocation.allocated_amount), 0)
+          )
+        END::numeric AS unmatched_amount,
+        0::numeric AS reversal_offset_amount
       FROM payment_normalisation_adjustments adjustment
       LEFT JOIN payment_normalisation_adjustment_allocations allocation
         ON allocation.adjustment_stage_row_id = adjustment."id"
-      LEFT JOIN payment_normalisation_net_zero_adjustment_reversal_groups reversal
-        ON reversal.normalisation_group_key = adjustment.normalisation_group_key
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          adjustment.normalisation_group_key
       GROUP BY adjustment."id", adjustment.normalisation_amount,
-        adjustment.normalisation_role, adjustment.allocation_amount,
-        adjustment.kg_reversal_offset_amount,
-        reversal.normalisation_group_key
+        unresolved.normalisation_group_key
+    ),
+    payment_normalisation_adjustment_totals AS (
+      SELECT invoice_stage_row_id,
+        SUM(allocated_amount)::numeric AS allocated_amount
+      FROM payment_normalisation_adjustment_allocations
+      GROUP BY invoice_stage_row_id
     ),
     payment_normalisation_adjusted_obligations AS MATERIALIZED (
       SELECT obligation.*,
-        GREATEST(0, obligation.obligation_amount_after_direction
-          - COALESCE(adjustment.allocated_amount, 0))::numeric
-          AS adjusted_obligation_amount,
-        COALESCE(adjustment.allocated_amount, 0)::numeric AS adjustment_allocated_amount
-      FROM payment_normalisation_directionally_adjusted_obligations obligation
+        GREATEST(
+          0,
+          obligation.normalisation_amount
+            - COALESCE(adjustment.allocated_amount, 0)
+        )::numeric AS adjusted_obligation_amount,
+        COALESCE(adjustment.allocated_amount, 0)::numeric
+          AS adjustment_allocated_amount
+      FROM payment_normalisation_obligations obligation
       LEFT JOIN payment_normalisation_adjustment_totals adjustment
         ON adjustment.invoice_stage_row_id = obligation."id"
     ),
     payment_normalisation_obligation_payment_ranges AS (
       SELECT obligation.*,
         COALESCE(SUM(adjusted_obligation_amount) OVER (
-          PARTITION BY normalisation_group_key ORDER BY obligation_sequence, "id"
+          PARTITION BY obligation.normalisation_group_key
+          ORDER BY obligation.obligation_sequence, obligation."id"
           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS obligation_start,
+        ), 0)::numeric AS obligation_start,
         SUM(adjusted_obligation_amount) OVER (
-          PARTITION BY normalisation_group_key ORDER BY obligation_sequence, "id"
+          PARTITION BY obligation.normalisation_group_key
+          ORDER BY obligation.obligation_sequence, obligation."id"
           ROWS UNBOUNDED PRECEDING
-        ) AS obligation_end
+        )::numeric AS obligation_end
       FROM payment_normalisation_adjusted_obligations obligation
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          obligation.normalisation_group_key
       WHERE adjusted_obligation_amount > 0.005
+        AND unresolved.normalisation_group_key IS NULL
     ),
     payment_normalisation_payments AS MATERIALIZED (
       SELECT source.*,
@@ -1589,22 +1747,31 @@ function buildPaymentNormalisationCte() {
     payment_normalisation_payment_ranges AS (
       SELECT payment.*,
         COALESCE(SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key ORDER BY payment_sequence, "id"
+          PARTITION BY payment.normalisation_group_key
+          ORDER BY payment.payment_sequence, payment."id"
           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-        ), 0) AS payment_start,
+        ), 0)::numeric AS payment_start,
         SUM(normalisation_amount) OVER (
-          PARTITION BY normalisation_group_key ORDER BY payment_sequence, "id"
+          PARTITION BY payment.normalisation_group_key
+          ORDER BY payment.payment_sequence, payment."id"
           ROWS UNBOUNDED PRECEDING
-        ) AS payment_end
+        )::numeric AS payment_end
       FROM payment_normalisation_payments payment
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          payment.normalisation_group_key
+      WHERE unresolved.normalisation_group_key IS NULL
     ),
     payment_normalisation_payment_allocations_raw AS (
       SELECT
         obligation."id" AS invoice_stage_row_id,
         payment."id" AS payment_stage_row_id,
         payment.payment_sequence,
-        GREATEST(0, LEAST(obligation.obligation_end, payment.payment_end)
-          - GREATEST(obligation.obligation_start, payment.payment_start))::numeric AS allocated_amount,
+        GREATEST(
+          0,
+          LEAST(obligation.obligation_end, payment.payment_end)
+            - GREATEST(obligation.obligation_start, payment.payment_start)
+        )::numeric AS allocated_amount,
         obligation.adjusted_obligation_amount,
         obligation.original_obligation_amount,
         obligation.adjustment_allocated_amount,
@@ -1612,7 +1779,8 @@ function buildPaymentNormalisationCte() {
         payment.normalisation_amount AS source_payment_amount
       FROM payment_normalisation_obligation_payment_ranges obligation
       JOIN payment_normalisation_payment_ranges payment
-        ON payment.normalisation_group_key = obligation.normalisation_group_key
+        ON payment.normalisation_group_key =
+          obligation.normalisation_group_key
        AND obligation.obligation_end > payment.payment_start
        AND obligation.obligation_start < payment.payment_end
     ),
@@ -1620,131 +1788,49 @@ function buildPaymentNormalisationCte() {
       SELECT allocation.*,
         allocation.adjusted_obligation_amount
           - COALESCE(SUM(allocation.allocated_amount) OVER (
+            PARTITION BY allocation.invoice_stage_row_id
+            ORDER BY allocation.payment_sequence,
+              allocation.payment_stage_row_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+          ), 0)::numeric AS obligation_before_payment,
+        GREATEST(
+          0,
+          allocation.adjusted_obligation_amount
+            - SUM(allocation.allocated_amount) OVER (
               PARTITION BY allocation.invoice_stage_row_id
-              ORDER BY allocation.payment_sequence, allocation.payment_stage_row_id
-              ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-            ), 0) AS obligation_before_payment,
-        GREATEST(0, allocation.adjusted_obligation_amount
-          - SUM(allocation.allocated_amount) OVER (
-              PARTITION BY allocation.invoice_stage_row_id
-              ORDER BY allocation.payment_sequence, allocation.payment_stage_row_id
+              ORDER BY allocation.payment_sequence,
+                allocation.payment_stage_row_id
               ROWS UNBOUNDED PRECEDING
-            )) AS obligation_after_payment
+            )
+        )::numeric AS obligation_after_payment
       FROM payment_normalisation_payment_allocations_raw allocation
       WHERE allocation.allocated_amount > 0.005
     ),
-    payment_normalisation_payment_source_totals_raw AS MATERIALIZED (
+    payment_normalisation_payment_source_totals AS MATERIALIZED (
       SELECT payment."id" AS payment_stage_row_id,
+        payment.normalisation_group_key,
         payment.normalisation_amount AS original_amount,
-        COALESCE(SUM(allocation.allocated_amount), 0)::numeric AS allocated_amount,
-        GREATEST(0, payment.normalisation_amount
-          - COALESCE(SUM(allocation.allocated_amount), 0))::numeric
-          AS unmatched_amount_before_clearing_balance,
-        context.is_prefix_5,
-        context.signed_balance AS clearing_group_signed_balance
+        COALESCE(SUM(allocation.allocated_amount), 0)::numeric
+          AS allocated_amount,
+        GREATEST(
+          0,
+          payment.normalisation_amount
+            - COALESCE(SUM(allocation.allocated_amount), 0)
+        )::numeric AS unmatched_amount
       FROM payment_normalisation_payments payment
       LEFT JOIN payment_normalisation_payment_allocations allocation
         ON allocation.payment_stage_row_id = payment."id"
-      LEFT JOIN payment_normalisation_clearing_group_context context
-        ON context.normalisation_group_key = payment.normalisation_group_key
-      GROUP BY payment."id", payment.normalisation_amount,
-        context.is_prefix_5, context.signed_balance
+      GROUP BY payment."id", payment.normalisation_group_key,
+        payment.normalisation_amount
     ),
-    payment_normalisation_payment_source_totals AS MATERIALIZED (
-      SELECT totals.*,
-        CASE
-          WHEN totals.is_prefix_5
-            AND ABS(totals.clearing_group_signed_balance) <= 0.005
-            THEN totals.unmatched_amount_before_clearing_balance
-          ELSE 0
-        END::numeric AS clearing_balance_offset_amount,
-        CASE
-          WHEN totals.is_prefix_5
-            AND ABS(totals.clearing_group_signed_balance) <= 0.005
-            THEN 0
-          ELSE totals.unmatched_amount_before_clearing_balance
-        END::numeric AS unmatched_amount
-      FROM payment_normalisation_payment_source_totals_raw totals
-    ),
-    payment_normalisation_unrecognised AS MATERIALIZED (
-      SELECT source."id" AS source_stage_row_id,
-        'UNRECOGNISED_DOCUMENT_TYPE'::text AS reason_code,
-        source.document_type,
-        source.normalisation_amount AS amount
-      FROM payment_normalisation_source_rows source
-      WHERE source.normalisation_role = 'UNRECOGNISED'
-    ),
-    payment_normalisation_exceptions_before_clearing_reconciliation AS MATERIALIZED (
-      SELECT "id" AS source_stage_row_id,
-        'MAPPING_EXCEPTION'::text AS reason_code,
-        normalisation_amount AS amount
-      FROM payment_normalisation_source_rows
-      WHERE "semanticKind" = 'accounting_event'
-        AND normalisation_role <> 'UNRECOGNISED'
-        AND normalisation_group_key IS NULL
-      UNION ALL
-      SELECT adjustment_stage_row_id AS source_stage_row_id,
-        CASE WHEN ambiguous.normalisation_group_key IS NOT NULL
-          THEN 'AMBIGUOUS_ADJUSTMENT_COMBINATION'
-          ELSE 'UNMATCHED_ADJUSTMENT' END::text AS reason_code,
-        totals.unmatched_amount AS amount
-      FROM payment_normalisation_adjustment_source_totals totals
-      JOIN payment_normalisation_adjustments adjustment
-        ON adjustment."id" = totals.adjustment_stage_row_id
-      LEFT JOIN payment_normalisation_ambiguous_adjustment_groups ambiguous
-        ON ambiguous.normalisation_group_key = adjustment.normalisation_group_key
-      WHERE totals.unmatched_amount > 0.005
-      UNION ALL
-      SELECT source_stage_row_id, reason_code, amount
-      FROM payment_normalisation_unmatched_kg_reversals
-      UNION ALL
-      SELECT offset_stage_row_id, 'UNMATCHED_OBLIGATION_OFFSET', unmatched_amount
-      FROM payment_normalisation_directional_offset_source_totals
-      WHERE unmatched_amount > 0.005
-      UNION ALL
-      SELECT payment_stage_row_id, 'UNMATCHED_PAYMENT', unmatched_amount
+    payment_normalisation_unmatched_payment_groups AS MATERIALIZED (
+      SELECT normalisation_group_key
       FROM payment_normalisation_payment_source_totals
       WHERE unmatched_amount > 0.005
-      UNION ALL
-      SELECT allocation.invoice_stage_row_id, 'MAPPING_EXCEPTION',
-        allocation.allocated_amount
-      FROM payment_normalisation_payment_allocations allocation
-      JOIN payment_normalisation_source_rows invoice
-        ON invoice."id" = allocation.invoice_stage_row_id
-      WHERE (invoice."invoiceIssueDate" IS NULL
-          AND invoice."invoiceReceiptDate" IS NULL)
-        OR allocation.settlement_payment_date IS NULL
-      UNION ALL
-      SELECT source_stage_row_id, reason_code, amount
-      FROM payment_normalisation_unrecognised
+      GROUP BY normalisation_group_key
     ),
-    payment_normalisation_reconcilable_exception_groups AS MATERIALIZED (
+    payment_normalisation_unresolved_group_source_evidence AS MATERIALIZED (
       SELECT source.normalisation_group_key,
-        COUNT(*)::int AS residual_exception_count,
-        COALESCE(SUM(exception.amount), 0)::numeric
-          AS residual_exception_amount_before_reconciliation,
-        ARRAY_AGG(DISTINCT exception.reason_code ORDER BY exception.reason_code)
-          AS residual_exception_codes_before_reconciliation
-      FROM payment_normalisation_exceptions_before_clearing_reconciliation
-        exception
-      JOIN payment_normalisation_source_rows source
-        ON source."id" = exception.source_stage_row_id
-      WHERE source.normalisation_group_key IS NOT NULL
-        AND exception.reason_code IN (
-          'AMBIGUOUS_ADJUSTMENT_COMBINATION',
-          'UNMATCHED_ADJUSTMENT',
-          'UNMATCHED_KG_REVERSAL',
-          'UNMATCHED_OBLIGATION_OFFSET',
-          'UNMATCHED_PAYMENT',
-          'UNRECOGNISED_DOCUMENT_TYPE'
-        )
-      GROUP BY source.normalisation_group_key
-    ),
-    payment_normalisation_clearing_group_evidence AS MATERIALIZED (
-      SELECT source.normalisation_group_key,
-        SUM(source.normalisation_amount)::numeric AS source_absolute_amount,
-        ARRAY_AGG(DISTINCT source.document_type ORDER BY source.document_type)
-          AS participating_document_types,
         JSONB_AGG(
           JSONB_BUILD_OBJECT(
             'stageRowId', source."id",
@@ -1753,102 +1839,142 @@ function buildPaymentNormalisationCte() {
             'normalisationRole', source.normalisation_role,
             'signedAmount', source.signed_amount
           ) ORDER BY source."rowNo", source."id"
-        ) AS source_rows
+        ) AS source_rows,
+        JSONB_AGG(source."id" ORDER BY source."id")
+          FILTER (WHERE source.normalisation_role = 'INVOICE')
+          AS obligation_stage_row_ids,
+        JSONB_AGG(source."id" ORDER BY source."id")
+          FILTER (WHERE source.normalisation_role IN (
+            'ET', 'KG', 'AB', 'SI', 'OBLIGATION_OFFSET',
+            'SETTLEMENT_REVERSAL'
+          )) AS adjustment_stage_row_ids,
+        JSONB_AGG(source."id" ORDER BY source."id")
+          FILTER (WHERE source.normalisation_role = 'PAYMENT')
+          AS settlement_stage_row_ids,
+        COALESCE(SUM(source.normalisation_amount)
+          FILTER (WHERE source.normalisation_role = 'INVOICE'), 0)::numeric
+          AS total_obligation_value,
+        COALESCE(SUM(source.signed_amount)
+          FILTER (WHERE source.normalisation_role = 'PAYMENT'), 0)::numeric
+          AS total_settlement_value
       FROM payment_normalisation_source_rows source
-      JOIN payment_normalisation_reconcilable_exception_groups exception_group
-        ON exception_group.normalisation_group_key =
+      JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
           source.normalisation_group_key
       GROUP BY source.normalisation_group_key
     ),
+    payment_normalisation_unresolved_adjustment_evidence AS MATERIALIZED (
+      SELECT unresolved.normalisation_group_key,
+        JSONB_BUILD_OBJECT(
+          'normalisationGroupKey', unresolved.normalisation_group_key,
+          'clearingFamily', event.clearing_family || '*',
+          'clearingPattern', event.clearing_pattern,
+          'affectedObligationStageRowIds', COALESCE(
+            evidence.obligation_stage_row_ids, '[]'::jsonb
+          ),
+          'adjustmentStageRowIds', COALESCE(
+            evidence.adjustment_stage_row_ids, '[]'::jsonb
+          ),
+          'settlementStageRowIds', COALESCE(
+            evidence.settlement_stage_row_ids, '[]'::jsonb
+          ),
+          'signedSourceAmounts', evidence.source_rows,
+          'totalObligationValue', evidence.total_obligation_value,
+          'totalAdjustmentValue', unresolved.total_adjustment_value,
+          'totalSettlementValue', evidence.total_settlement_value,
+          'unresolvedAmount', unresolved.unresolved_amount,
+          'reason',
+            'Source evidence does not deterministically attribute every adjustment to one invoice obligation.'
+        ) AS evidence
+      FROM payment_normalisation_unresolved_adjustment_groups unresolved
+      JOIN payment_normalisation_clearing_events event
+        ON event.normalisation_group_key =
+          unresolved.normalisation_group_key
+      JOIN payment_normalisation_unresolved_group_source_evidence evidence
+        ON evidence.normalisation_group_key =
+          unresolved.normalisation_group_key
+    ),
     payment_normalisation_clearing_reconciliations AS MATERIALIZED (
-      SELECT exception_group.normalisation_group_key,
-        CASE WHEN ABS(context.signed_balance) <= 0.005
-          THEN 'BALANCED_CLEARING_RECONCILIATION'::text ELSE NULL END
-          AS reconciliation_code,
-        ABS(context.signed_balance) <= 0.005
-          AS accepted_as_balanced_clearing,
-        context.signed_balance AS signed_clearing_group_total,
-        context.signed_balance
-          AS remaining_signed_residual_before_final_reconciliation,
-        CASE WHEN ABS(context.signed_balance) <= 0.005
-          THEN 0 ELSE context.signed_balance END::numeric
+      SELECT event.normalisation_group_key,
+        event.clearing_family || '*' AS clearing_family,
+        event.clearing_pattern,
+        event.reconciled,
+        CASE
+          WHEN event.clearing_pattern = 'UNSUPPORTED_CLEARING_EVENT'
+            THEN false
+          WHEN event.clearing_pattern NOT IN (
+            'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+            'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+          ) THEN true
+          WHEN unresolved.normalisation_group_key IS NOT NULL THEN false
+          WHEN unmatched_payment.normalisation_group_key IS NOT NULL
+            THEN false
+          ELSE true
+        END AS allocation_resolved,
+        event.signed_balance AS signed_clearing_group_total,
+        CASE WHEN event.reconciled
+          THEN 0 ELSE event.signed_balance END::numeric
           AS final_unexplained_signed_residual,
-        group_evidence.source_absolute_amount,
-        exception_group.residual_exception_count,
-        exception_group.residual_exception_amount_before_reconciliation,
-        exception_group.residual_exception_codes_before_reconciliation,
-        group_evidence.participating_document_types,
-        group_evidence.source_rows,
-        COALESCE((
-          SELECT SUM(totals.allocated_amount)
-          FROM payment_normalisation_directional_offset_source_totals totals
-          JOIN payment_normalisation_source_rows source
-            ON source."id" = totals.offset_stage_row_id
-          WHERE source.normalisation_group_key =
-            exception_group.normalisation_group_key
-        ), 0)::numeric AS directional_obligation_offset_amount,
-        COALESCE((
-          SELECT SUM(totals.allocated_amount)
-          FROM payment_normalisation_adjustment_source_totals totals
-          JOIN payment_normalisation_adjustments adjustment
-            ON adjustment."id" = totals.adjustment_stage_row_id
-          WHERE adjustment.normalisation_group_key =
-            exception_group.normalisation_group_key
-        ), 0)::numeric AS adjustment_allocated_amount,
-        COALESCE((
-          SELECT SUM(totals.reversal_offset_amount)
-          FROM payment_normalisation_adjustment_source_totals totals
-          JOIN payment_normalisation_adjustments adjustment
-            ON adjustment."id" = totals.adjustment_stage_row_id
-          WHERE adjustment.normalisation_group_key =
-            exception_group.normalisation_group_key
-        ), 0)::numeric AS adjustment_reversal_offset_amount,
-        COALESCE((
-          SELECT SUM(totals.allocated_amount)
-          FROM payment_normalisation_payment_source_totals totals
-          JOIN payment_normalisation_payments payment
-            ON payment."id" = totals.payment_stage_row_id
-          WHERE payment.normalisation_group_key =
-            exception_group.normalisation_group_key
-        ), 0)::numeric AS payment_allocated_amount,
-        COALESCE((
-          SELECT SUM(totals.clearing_balance_offset_amount)
-          FROM payment_normalisation_payment_source_totals totals
-          JOIN payment_normalisation_payments payment
-            ON payment."id" = totals.payment_stage_row_id
-          WHERE payment.normalisation_group_key =
-            exception_group.normalisation_group_key
-        ), 0)::numeric AS payment_clearing_balance_offset_amount
-      FROM payment_normalisation_reconcilable_exception_groups exception_group
-      JOIN payment_normalisation_clearing_group_context context
-        ON context.normalisation_group_key =
-          exception_group.normalisation_group_key
-      JOIN payment_normalisation_clearing_group_evidence group_evidence
-        ON group_evidence.normalisation_group_key =
-          exception_group.normalisation_group_key
+        event.source_absolute_amount,
+        event.document_types AS participating_document_types,
+        unresolved_evidence.evidence AS unresolved_adjustment_evidence
+      FROM payment_normalisation_clearing_events event
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          event.normalisation_group_key
+      LEFT JOIN payment_normalisation_unmatched_payment_groups
+          unmatched_payment
+        ON unmatched_payment.normalisation_group_key =
+          event.normalisation_group_key
+      LEFT JOIN payment_normalisation_unresolved_adjustment_evidence
+          unresolved_evidence
+        ON unresolved_evidence.normalisation_group_key =
+          event.normalisation_group_key
     ),
     payment_normalisation_exceptions AS MATERIALIZED (
-      SELECT exception.source_stage_row_id,
-        exception.reason_code,
-        exception.amount
-      FROM payment_normalisation_exceptions_before_clearing_reconciliation
-        exception
+      SELECT source."id" AS source_stage_row_id,
+        'MAPPING_EXCEPTION'::text AS reason_code,
+        source.normalisation_amount AS amount
+      FROM payment_normalisation_source_rows source
+      WHERE source."semanticKind" = 'accounting_event'
+        AND source.normalisation_group_key IS NULL
+      UNION ALL
+      SELECT MIN(source."id") AS source_stage_row_id,
+        'UNSUPPORTED_CLEARING_EVENT'::text AS reason_code,
+        ABS(event.signed_balance)::numeric AS amount
+      FROM payment_normalisation_clearing_events event
       JOIN payment_normalisation_source_rows source
-        ON source."id" = exception.source_stage_row_id
-      LEFT JOIN payment_normalisation_clearing_reconciliations reconciliation
-        ON reconciliation.normalisation_group_key =
-          source.normalisation_group_key
-      WHERE NOT (
-        COALESCE(reconciliation.accepted_as_balanced_clearing, false)
-        AND exception.reason_code IN (
-          'AMBIGUOUS_ADJUSTMENT_COMBINATION',
-          'UNMATCHED_ADJUSTMENT',
-          'UNMATCHED_KG_REVERSAL',
-          'UNMATCHED_OBLIGATION_OFFSET',
-          'UNMATCHED_PAYMENT',
-          'UNRECOGNISED_DOCUMENT_TYPE'
+        ON source.normalisation_group_key =
+          event.normalisation_group_key
+      WHERE event.clearing_pattern = 'UNSUPPORTED_CLEARING_EVENT'
+      GROUP BY event.normalisation_group_key, event.signed_balance
+      UNION ALL
+      SELECT unresolved.source_stage_row_id,
+        'UNRESOLVED_ADJUSTMENT_ALLOCATION'::text AS reason_code,
+        unresolved.unresolved_amount AS amount
+      FROM payment_normalisation_unresolved_adjustment_groups unresolved
+      UNION ALL
+      SELECT payment.payment_stage_row_id,
+        'UNMATCHED_PAYMENT'::text AS reason_code,
+        payment.unmatched_amount AS amount
+      FROM payment_normalisation_payment_source_totals payment
+      LEFT JOIN payment_normalisation_unresolved_adjustment_groups unresolved
+        ON unresolved.normalisation_group_key =
+          payment.normalisation_group_key
+      WHERE payment.unmatched_amount > 0.005
+        AND unresolved.normalisation_group_key IS NULL
+      UNION ALL
+      SELECT allocation.invoice_stage_row_id,
+        'MAPPING_EXCEPTION'::text AS reason_code,
+        allocation.allocated_amount AS amount
+      FROM payment_normalisation_payment_allocations allocation
+      JOIN payment_normalisation_source_rows invoice
+        ON invoice."id" = allocation.invoice_stage_row_id
+      WHERE (
+          invoice."invoiceIssueDate" IS NULL
+          AND invoice."invoiceReceiptDate" IS NULL
         )
-      )
+        OR allocation.settlement_payment_date IS NULL
     )
   `;
 }
@@ -1864,281 +1990,147 @@ function buildPersistPaymentNormalisationSql() {
   return `
       WITH ${buildPaymentNormalisationCte()},
       invoice_adjustment_evidence AS MATERIALIZED (
-        SELECT
-          allocation.invoice_stage_row_id,
-          jsonb_agg(DISTINCT allocation.reason_code) AS reason_codes
+        SELECT allocation.invoice_stage_row_id,
+          JSONB_AGG(DISTINCT allocation.reason_code) AS reason_codes
         FROM payment_normalisation_adjustment_allocations allocation
         GROUP BY allocation.invoice_stage_row_id
       ),
       invoice_payment_evidence AS MATERIALIZED (
-        SELECT
-          allocation.invoice_stage_row_id,
+        SELECT allocation.invoice_stage_row_id,
           SUM(allocation.allocated_amount)::numeric AS allocated_amount,
-          jsonb_agg(
+          JSONB_AGG(
             allocation.payment_stage_row_id
             ORDER BY allocation.payment_sequence
           ) AS payment_stage_row_ids
         FROM payment_normalisation_payment_allocations allocation
         GROUP BY allocation.invoice_stage_row_id
       ),
-      invoice_evidence AS (
-        SELECT obligation."id" AS stage_row_id,
-          jsonb_build_object(
-            'role', 'INVOICE_OBLIGATION',
-            'originalObligationAmount', obligation.normalisation_amount,
-            'signedObligationAmount', obligation.signed_amount,
-            'directionalOffsetAllocatedAmount', COALESCE(
-              NULLIF(obligation.directional_offset_allocated_amount, 0),
-              directional_offset.allocated_amount,
-              0
-            ),
-            'directionalOffsetUnmatchedAmount', COALESCE(
-              directional_offset.unmatched_amount,
-              0
-            ),
-            'adjustmentAllocatedAmount', obligation.adjustment_allocated_amount,
-            'adjustedObligationAmount', obligation.adjusted_obligation_amount,
-            'paymentAllocatedAmount', COALESCE(payment.allocated_amount, 0),
-            'outstandingAmount', GREATEST(0, obligation.adjusted_obligation_amount - COALESCE(payment.allocated_amount, 0)),
-            'exceptionCode', CASE
-              WHEN directional_offset.unmatched_amount > 0.005
-                THEN 'UNMATCHED_OBLIGATION_OFFSET'
-              WHEN COALESCE(payment.allocated_amount, 0) > 0.005
-                AND obligation."invoiceIssueDate" IS NULL
-                AND obligation."invoiceReceiptDate" IS NULL
-                THEN 'MAPPING_EXCEPTION'
-              ELSE NULL
-            END,
-            'adjustmentReasonCodes', COALESCE(
-              adjustment.reason_codes,
-              '[]'::jsonb
-            ),
-            'paymentStageRowIds', COALESCE(
-              payment.payment_stage_row_ids,
-              '[]'::jsonb
-            )
-          ) AS evidence
-        FROM payment_normalisation_adjusted_obligations obligation
-        LEFT JOIN invoice_adjustment_evidence adjustment
-          ON adjustment.invoice_stage_row_id = obligation."id"
-        LEFT JOIN invoice_payment_evidence payment
-          ON payment.invoice_stage_row_id = obligation."id"
-        LEFT JOIN payment_normalisation_directional_offset_source_totals
-            directional_offset
-          ON directional_offset.offset_stage_row_id = obligation."id"
+      payment_source_evidence AS MATERIALIZED (
+        SELECT allocation.payment_stage_row_id,
+          JSONB_AGG(
+            allocation.invoice_stage_row_id
+            ORDER BY allocation.invoice_stage_row_id
+          ) AS invoice_stage_row_ids,
+          BOOL_OR(allocation.obligation_after_payment > 0.005)
+            AS partial_payment,
+          BOOL_OR(allocation.obligation_after_payment <= 0.005)
+            AS final_settlement
+        FROM payment_normalisation_payment_allocations allocation
+        GROUP BY allocation.payment_stage_row_id
       ),
-      adjustment_evidence AS (
-        SELECT adjustment."id" AS stage_row_id,
-          jsonb_build_object(
-            'role', adjustment.normalisation_role || '_ADJUSTMENT',
-            'originalAmount', totals.original_amount,
-            'signedAmount', adjustment.signed_amount,
-            'effectiveAdjustmentAmount', adjustment.allocation_amount,
-            'allocatedAmount', totals.allocated_amount,
-            'reversalOffsetAmount', totals.reversal_offset_amount,
-            'unmatchedAmount', totals.unmatched_amount,
-            'reconciliationCode', CASE
-              WHEN adjustment.normalisation_role = 'KG'
-                AND totals.reversal_offset_amount > 0.005
-                THEN 'KG_REVERSAL_OFFSET'
-              WHEN totals.reversal_offset_amount > 0.005
-                THEN 'NET_ZERO_ADJUSTMENT_REVERSAL'
-              ELSE NULL
-            END,
-            'reasonCodes', COALESCE(jsonb_agg(DISTINCT allocation.reason_code)
-              FILTER (WHERE allocation.reason_code IS NOT NULL), '[]'::jsonb),
-            'invoiceStageRowIds', COALESCE(jsonb_agg(allocation.invoice_stage_row_id ORDER BY allocation.invoice_stage_row_id)
-              FILTER (WHERE allocation.invoice_stage_row_id IS NOT NULL), '[]'::jsonb),
-            'exceptionCode', CASE
-              WHEN EXISTS (
-                SELECT 1
-                FROM payment_normalisation_unmatched_kg_reversals kg_reversal
-                WHERE kg_reversal.source_stage_row_id = adjustment."id"
-              ) THEN 'UNMATCHED_KG_REVERSAL'
-              WHEN totals.unmatched_amount <= 0.005 THEN NULL
-              WHEN EXISTS (
-                SELECT 1
-                FROM payment_normalisation_ambiguous_adjustment_groups ambiguous
-                WHERE ambiguous.normalisation_group_key = adjustment.normalisation_group_key
-              ) THEN 'AMBIGUOUS_ADJUSTMENT_COMBINATION'
-              ELSE 'UNMATCHED_ADJUSTMENT'
-            END
-          ) AS evidence
-        FROM payment_normalisation_adjustments adjustment
-        JOIN payment_normalisation_adjustment_source_totals totals
-          ON totals.adjustment_stage_row_id = adjustment."id"
-        LEFT JOIN payment_normalisation_adjustment_allocations allocation
-          ON allocation.adjustment_stage_row_id = adjustment."id"
-        GROUP BY adjustment."id", adjustment.normalisation_role,
-          adjustment.normalisation_group_key, adjustment.signed_amount,
-          adjustment.allocation_amount,
-          totals.original_amount, totals.allocated_amount,
-          totals.reversal_offset_amount, totals.unmatched_amount
+      exception_codes AS MATERIALIZED (
+        SELECT source_stage_row_id, MIN(reason_code) AS exception_code
+        FROM payment_normalisation_exceptions
+        GROUP BY source_stage_row_id
       ),
-      payment_evidence AS (
-        SELECT payment."id" AS stage_row_id,
-          jsonb_build_object(
-            'role', 'PAYMENT',
-            'originalAmount', totals.original_amount,
-            'allocatedAmount', totals.allocated_amount,
-            'unmatchedAmount', totals.unmatched_amount,
-            'unmatchedAmountBeforeClearingBalance', totals.unmatched_amount_before_clearing_balance,
-            'clearingBalanceOffsetAmount', totals.clearing_balance_offset_amount,
-            'clearingGroupSignedBalance', totals.clearing_group_signed_balance,
-            'partialPayment', COALESCE(BOOL_OR(allocation.obligation_after_payment > 0.005), false),
-            'finalSettlement', COALESCE(BOOL_OR(allocation.obligation_after_payment <= 0.005), false),
+      evidence AS (
+        SELECT source."id" AS stage_row_id,
+          JSONB_BUILD_OBJECT(
+            'role', source.normalisation_role,
+            'signedAmount', source.signed_amount,
+            'originalAmount', source.normalisation_amount,
+            'originalObligationAmount',
+              obligation.original_obligation_amount,
+            'adjustedObligationAmount',
+              obligation.adjusted_obligation_amount,
+            'adjustmentAllocatedAmount',
+              obligation.adjustment_allocated_amount,
+            'paymentAllocatedAmount', COALESCE(
+              invoice_payment.allocated_amount,
+              payment_totals.allocated_amount
+            ),
+            'outstandingAmount', CASE
+              WHEN obligation."id" IS NULL THEN NULL
+              ELSE GREATEST(
+                0,
+                obligation.adjusted_obligation_amount
+                  - COALESCE(invoice_payment.allocated_amount, 0)
+              )
+            END,
+            'unmatchedAmount', COALESCE(
+              adjustment_totals.unmatched_amount,
+              payment_totals.unmatched_amount
+            ),
+            'reversalOffsetAmount', CASE
+              WHEN source.normalisation_role IN (
+                'NON_PAYMENT', 'NEUTRALISED'
+              ) THEN source.normalisation_amount
+              ELSE COALESCE(adjustment_totals.reversal_offset_amount, 0)
+            END,
+            'exceptionCode', exception_codes.exception_code,
+            'adjustmentReasonCodes',
+              COALESCE(adjustment_evidence.reason_codes, '[]'::jsonb),
+            'paymentStageRowIds',
+              COALESCE(invoice_payment.payment_stage_row_ids, '[]'::jsonb),
+            'invoiceStageRowIds', CASE
+              WHEN source.normalisation_role <> 'PAYMENT' THEN '[]'::jsonb
+              ELSE COALESCE(
+                payment_evidence.invoice_stage_row_ids,
+                '[]'::jsonb
+              )
+            END,
+            'partialPayment', CASE
+              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
+              ELSE COALESCE(payment_evidence.partial_payment, false)
+            END,
+            'finalSettlement', CASE
+              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
+              ELSE COALESCE(payment_evidence.final_settlement, false)
+            END,
             'classificationBasis', CASE
-              WHEN payment.document_type = 'KZ'
+              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
+              WHEN source.document_type = 'KZ'
                 THEN 'outstanding_obligation_after_clearing_settlement'
               ELSE 'outstanding_obligation_after_zp'
             END,
             'contractualInstalmentIndicatorAvailable', false,
-            'invoiceStageRowIds', COALESCE(jsonb_agg(allocation.invoice_stage_row_id ORDER BY allocation.invoice_stage_row_id)
-              FILTER (WHERE allocation.invoice_stage_row_id IS NOT NULL), '[]'::jsonb),
-            'exceptionCode', CASE WHEN totals.unmatched_amount > 0.005 THEN 'UNMATCHED_PAYMENT' ELSE NULL END
-          ) AS evidence
-        FROM payment_normalisation_payments payment
-        JOIN payment_normalisation_payment_source_totals totals
-          ON totals.payment_stage_row_id = payment."id"
-        LEFT JOIN payment_normalisation_payment_allocations allocation
-          ON allocation.payment_stage_row_id = payment."id"
-        GROUP BY payment."id", payment.document_type, totals.original_amount,
-          totals.allocated_amount, totals.unmatched_amount,
-          totals.unmatched_amount_before_clearing_balance,
-          totals.clearing_balance_offset_amount,
-          totals.clearing_group_signed_balance
-      ),
-      exception_evidence AS (
-        SELECT unrecognised.source_stage_row_id AS stage_row_id,
-          jsonb_build_object(
-            'role', CASE
-              WHEN reconciliation.accepted_as_balanced_clearing
-                THEN 'RECONCILED_CLEARING_EVIDENCE'
-              ELSE 'EXCEPTION'
-            END,
-            'exceptionCode', CASE
-              WHEN reconciliation.accepted_as_balanced_clearing THEN NULL
-              ELSE unrecognised.reason_code
-            END,
-            'documentType', unrecognised.document_type,
-            'amount', unrecognised.amount
-          ) AS evidence
-        FROM payment_normalisation_unrecognised unrecognised
-        JOIN payment_normalisation_source_rows source
-          ON source."id" = unrecognised.source_stage_row_id
-        LEFT JOIN payment_normalisation_clearing_reconciliations reconciliation
-          ON reconciliation.normalisation_group_key =
-            source.normalisation_group_key
-      ),
-      evidence_base AS (
-        SELECT * FROM invoice_evidence
-        UNION ALL SELECT * FROM adjustment_evidence
-        UNION ALL SELECT * FROM payment_evidence
-        UNION ALL SELECT * FROM exception_evidence
-      ),
-      evidence AS (
-        SELECT evidence_base.stage_row_id,
-          CASE
-            WHEN reconciliation.accepted_as_balanced_clearing THEN
-              CASE
-                WHEN evidence_base.evidence ? 'unmatchedAmount' THEN
-                  evidence_base.evidence || jsonb_build_object(
-                    'unmatchedAmountBeforeClearingReconciliation',
-                      COALESCE((evidence_base.evidence->>'unmatchedAmount')::numeric, 0),
-                    'unmatchedAmount', 0,
-                    'clearingReconciliationOffsetAmount',
-                      COALESCE((evidence_base.evidence->>'unmatchedAmount')::numeric, 0),
-                    'exceptionCode', CASE
-                      WHEN evidence_base.evidence->>'exceptionCode' IN (
-                        'AMBIGUOUS_ADJUSTMENT_COMBINATION',
-                        'UNMATCHED_ADJUSTMENT',
-                        'UNMATCHED_KG_REVERSAL',
-                        'UNMATCHED_OBLIGATION_OFFSET',
-                        'UNMATCHED_PAYMENT',
-                        'UNRECOGNISED_DOCUMENT_TYPE'
-                      ) THEN NULL
-                      ELSE evidence_base.evidence->>'exceptionCode'
-                    END
-                  )
-                ELSE evidence_base.evidence || jsonb_build_object(
-                  'exceptionCode', CASE
-                    WHEN evidence_base.evidence->>'exceptionCode' IN (
-                      'AMBIGUOUS_ADJUSTMENT_COMBINATION',
-                      'UNMATCHED_ADJUSTMENT',
-                      'UNMATCHED_KG_REVERSAL',
-                      'UNMATCHED_OBLIGATION_OFFSET',
-                      'UNMATCHED_PAYMENT',
-                      'UNRECOGNISED_DOCUMENT_TYPE'
-                    ) THEN NULL
-                    ELSE evidence_base.evidence->>'exceptionCode'
-                  END
-                )
-              END
-            ELSE evidence_base.evidence
-          END || CASE
-            WHEN reconciliation.accepted_as_balanced_clearing
-              AND evidence_base.evidence ? 'directionalOffsetUnmatchedAmount'
-              THEN jsonb_build_object(
-                'directionalOffsetUnmatchedAmountBeforeClearingReconciliation',
-                  COALESCE((evidence_base.evidence->>'directionalOffsetUnmatchedAmount')::numeric, 0),
-                'directionalOffsetUnmatchedAmount', 0,
-                'clearingReconciliationOffsetAmount',
-                  COALESCE((evidence_base.evidence->>'directionalOffsetUnmatchedAmount')::numeric, 0)
-              )
-            ELSE '{}'::jsonb
-          END || CASE
-            WHEN reconciliation.normalisation_group_key IS NULL THEN '{}'::jsonb
-            ELSE jsonb_build_object(
-              'clearingReconciliation', jsonb_build_object(
-                'reconciliationCode', reconciliation.reconciliation_code,
-                'acceptedAsBalancedClearing',
-                  reconciliation.accepted_as_balanced_clearing,
+            'clearingEvent', CASE
+              WHEN reconciliation.normalisation_group_key IS NULL THEN NULL
+              ELSE JSONB_BUILD_OBJECT(
+                'clearingFamily', reconciliation.clearing_family,
+                'clearingPattern', reconciliation.clearing_pattern,
+                'reconciled', reconciliation.reconciled,
+                'allocationResolved', reconciliation.allocation_resolved,
                 'signedClearingGroupTotal',
                   reconciliation.signed_clearing_group_total,
-                'remainingSignedResidualBeforeFinalReconciliation',
-                  reconciliation.remaining_signed_residual_before_final_reconciliation,
                 'finalUnexplainedSignedResidual',
                   reconciliation.final_unexplained_signed_residual,
-                'sourceAbsoluteAmount', reconciliation.source_absolute_amount,
-                'residualExceptionCountBeforeReconciliation',
-                  reconciliation.residual_exception_count,
-                'residualExceptionAmountBeforeReconciliation',
-                  reconciliation.residual_exception_amount_before_reconciliation,
-                'residualExceptionCodesBeforeReconciliation',
-                  reconciliation.residual_exception_codes_before_reconciliation,
+                'sourceAbsoluteAmount',
+                  reconciliation.source_absolute_amount,
                 'participatingDocumentTypes',
-                  reconciliation.participating_document_types,
-                'sourceRows', reconciliation.source_rows,
-                'semanticEffects', jsonb_build_object(
-                  'directionalObligationOffsetAmount',
-                    reconciliation.directional_obligation_offset_amount,
-                  'adjustmentAllocatedAmount',
-                    reconciliation.adjustment_allocated_amount,
-                  'adjustmentReversalOffsetAmount',
-                    reconciliation.adjustment_reversal_offset_amount,
-                  'paymentAllocatedAmount',
-                    reconciliation.payment_allocated_amount,
-                  'paymentClearingBalanceOffsetAmount',
-                    reconciliation.payment_clearing_balance_offset_amount
-                )
+                  reconciliation.participating_document_types
               )
-            )
-          END || jsonb_build_object(
+            END,
+            'unresolvedAdjustmentAllocation', CASE
+              WHEN exception_codes.exception_code =
+                'UNRESOLVED_ADJUSTMENT_ALLOCATION'
+                THEN reconciliation.unresolved_adjustment_evidence
+              ELSE NULL
+            END,
             'normalisationResultId', :normalisationResultId,
             'inputSignature', :inputSignature,
             'calculationVersion', :calculationVersion
           ) AS evidence
-        FROM evidence_base
-        JOIN payment_normalisation_source_rows source
-          ON source."id" = evidence_base.stage_row_id
-        LEFT JOIN payment_normalisation_clearing_reconciliations reconciliation
+        FROM payment_normalisation_source_rows source
+        LEFT JOIN payment_normalisation_adjusted_obligations obligation
+          ON obligation."id" = source."id"
+        LEFT JOIN invoice_adjustment_evidence adjustment_evidence
+          ON adjustment_evidence.invoice_stage_row_id = source."id"
+        LEFT JOIN invoice_payment_evidence invoice_payment
+          ON invoice_payment.invoice_stage_row_id = source."id"
+        LEFT JOIN payment_source_evidence payment_evidence
+          ON payment_evidence.payment_stage_row_id = source."id"
+        LEFT JOIN payment_normalisation_adjustment_source_totals
+            adjustment_totals
+          ON adjustment_totals.adjustment_stage_row_id = source."id"
+        LEFT JOIN payment_normalisation_payment_source_totals payment_totals
+          ON payment_totals.payment_stage_row_id = source."id"
+        LEFT JOIN exception_codes
+          ON exception_codes.source_stage_row_id = source."id"
+        LEFT JOIN payment_normalisation_clearing_reconciliations
+            reconciliation
           ON reconciliation.normalisation_group_key =
             source.normalisation_group_key
-      ),
-      exception_codes AS (
-        SELECT source_stage_row_id, MIN(reason_code) AS exception_code
-        FROM payment_normalisation_exceptions
-        GROUP BY source_stage_row_id
       ),
       normalisation_rows_inserted AS (
         INSERT INTO "tbl_ptrs_payment_normalisation_row" (
@@ -2160,43 +2152,38 @@ function buildPersistPaymentNormalisationSql() {
           obligation.original_obligation_amount,
           obligation.adjusted_obligation_amount,
           obligation.adjustment_allocated_amount,
-          payment_evidence.allocated_amount,
+          invoice_payment.allocated_amount,
           CASE WHEN obligation."id" IS NOT NULL THEN
-            GREATEST(0, obligation.adjusted_obligation_amount
-              - COALESCE(payment_evidence.allocated_amount, 0))
+            GREATEST(
+              0,
+              obligation.adjusted_obligation_amount
+                - COALESCE(invoice_payment.allocated_amount, 0)
+            )
             ELSE NULL END,
+          COALESCE(
+            adjustment_totals.unmatched_amount,
+            payment_totals.unmatched_amount
+          ),
           CASE
-            WHEN reconciliation.accepted_as_balanced_clearing THEN 0
-            ELSE CASE
-              WHEN directional_offset_totals.offset_stage_row_id IS NOT NULL
-                THEN directional_offset_totals.unmatched_amount
-              WHEN adjustment_totals.adjustment_stage_row_id IS NOT NULL
-                THEN adjustment_totals.unmatched_amount
-              WHEN payment_totals.payment_stage_row_id IS NOT NULL
-                THEN payment_totals.unmatched_amount
-              ELSE NULL
-            END
+            WHEN source.normalisation_role IN (
+              'NON_PAYMENT', 'NEUTRALISED'
+            ) THEN source.normalisation_amount
+            ELSE adjustment_totals.reversal_offset_amount
           END,
-          adjustment_totals.reversal_offset_amount,
           exception_codes.exception_code,
           now()
         FROM payment_normalisation_source_rows source
         LEFT JOIN payment_normalisation_adjusted_obligations obligation
           ON obligation."id" = source."id"
-        LEFT JOIN invoice_payment_evidence payment_evidence
-          ON payment_evidence.invoice_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_adjustment_source_totals adjustment_totals
+        LEFT JOIN invoice_payment_evidence invoice_payment
+          ON invoice_payment.invoice_stage_row_id = source."id"
+        LEFT JOIN payment_normalisation_adjustment_source_totals
+            adjustment_totals
           ON adjustment_totals.adjustment_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_directional_offset_source_totals
-            directional_offset_totals
-          ON directional_offset_totals.offset_stage_row_id = source."id"
         LEFT JOIN payment_normalisation_payment_source_totals payment_totals
           ON payment_totals.payment_stage_row_id = source."id"
         LEFT JOIN exception_codes
           ON exception_codes.source_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_clearing_reconciliations reconciliation
-          ON reconciliation.normalisation_group_key =
-            source.normalisation_group_key
         RETURNING 1
       ),
       persisted_allocation_source AS MATERIALIZED (
@@ -2211,9 +2198,12 @@ function buildPersistPaymentNormalisationSql() {
           ${referencePolicySql} AS payment_time_reference_policy,
           ${referenceReasonSql} AS payment_time_reference_reason,
           CASE WHEN allocation.settlement_payment_date IS NULL
-              OR (invoice."invoiceIssueDate" IS NULL
-                AND invoice."invoiceReceiptDate" IS NULL)
-            THEN 'MAPPING_EXCEPTION' ELSE NULL END AS mapping_exception_code
+              OR (
+                invoice."invoiceIssueDate" IS NULL
+                AND invoice."invoiceReceiptDate" IS NULL
+              )
+            THEN 'MAPPING_EXCEPTION' ELSE NULL
+          END AS mapping_exception_code
         FROM payment_normalisation_payment_allocations allocation
         JOIN payment_normalisation_source_rows invoice_source
           ON invoice_source."id" = allocation.invoice_stage_row_id
@@ -2268,22 +2258,32 @@ function buildPersistPaymentNormalisationSql() {
         RETURNING 1
       ),
       updated AS (
-      UPDATE "tbl_ptrs_stage_row" stage_row
-      SET "meta" = jsonb_set(COALESCE(stage_row."meta", '{}'::jsonb),
-            '{paymentNormalisation}', evidence.evidence, true),
-          "data" = CASE
-            WHEN evidence.evidence->>'role' = 'PAYMENT' THEN
-              jsonb_set(COALESCE(stage_row."data", '{}'::jsonb), '{partial_payment}',
-                to_jsonb(COALESCE((evidence.evidence->>'partialPayment')::boolean, false)), true)
-            ELSE COALESCE(stage_row."data", '{}'::jsonb)
-          END,
-          "updatedAt" = now()
-      FROM evidence
-      WHERE stage_row."id" = evidence.stage_row_id
-        AND stage_row."customerId" = :customerId
-        AND stage_row."ptrsId" = :ptrsId
-        AND stage_row."deletedAt" IS NULL
-      RETURNING stage_row."id"
+        UPDATE "tbl_ptrs_stage_row" stage_row
+        SET "meta" = JSONB_SET(
+              COALESCE(stage_row."meta", '{}'::jsonb),
+              '{paymentNormalisation}',
+              evidence.evidence,
+              true
+            ),
+            "data" = CASE
+              WHEN evidence.evidence->>'role' = 'PAYMENT' THEN JSONB_SET(
+                COALESCE(stage_row."data", '{}'::jsonb),
+                '{partial_payment}',
+                TO_JSONB(COALESCE(
+                  (evidence.evidence->>'partialPayment')::boolean,
+                  false
+                )),
+                true
+              )
+              ELSE COALESCE(stage_row."data", '{}'::jsonb)
+            END,
+            "updatedAt" = now()
+        FROM evidence
+        WHERE stage_row."id" = evidence.stage_row_id
+          AND stage_row."customerId" = :customerId
+          AND stage_row."ptrsId" = :ptrsId
+          AND stage_row."deletedAt" IS NULL
+        RETURNING stage_row."id"
       )
       SELECT
         (SELECT COUNT(*)::int FROM updated) AS "persisted",
@@ -2293,64 +2293,96 @@ function buildPersistPaymentNormalisationSql() {
           AS "persistedAllocationCount",
         (SELECT COUNT(*)::int FROM normalisation_exceptions_inserted)
           AS "persistedExceptionCount",
-        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows) AS "startingStageCount",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_source_rows) AS "startingAbsoluteValue",
-        (SELECT COUNT(*)::int FROM payment_normalisation_obligations) AS "invoiceObligationCount",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_obligations) AS "originalObligationValue",
-        (SELECT COALESCE(SUM(adjusted_obligation_amount), 0)::numeric FROM payment_normalisation_adjusted_obligations) AS "adjustedObligationValue",
-        (SELECT COALESCE(SUM(allocated_amount), 0)::numeric
-         FROM payment_normalisation_directional_offset_source_totals)
-          AS "directionalObligationOffsetValue",
-        (SELECT COALESCE(SUM(unmatched_amount), 0)::numeric
-         FROM payment_normalisation_directional_offset_source_totals)
-          AS "unmatchedDirectionalObligationOffsetValue",
-        (SELECT COUNT(*)::int FROM payment_normalisation_payments) AS "paymentEventCount",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_payments) AS "paymentEventValue",
-        (SELECT COUNT(*)::int FROM payment_normalisation_payment_allocations) AS "paymentAllocationCount",
-        (SELECT COUNT(*)::int FROM payment_normalisation_payment_allocations WHERE obligation_after_payment > 0.005) AS "partialPaymentCount",
-        (SELECT COUNT(*)::int FROM payment_normalisation_payment_allocations WHERE obligation_after_payment <= 0.005) AS "finalSettlementCount",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_adjustments WHERE normalisation_role = 'CREDIT') AS "creditValue",
-        (SELECT COALESCE(SUM(allocated_amount), 0)::numeric FROM payment_normalisation_adjustment_allocations WHERE adjustment_kind = 'CREDIT') AS "creditAllocatedValue",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_adjustments WHERE normalisation_role = 'REFUND') AS "refundValue",
-        (SELECT COALESCE(SUM(allocated_amount), 0)::numeric FROM payment_normalisation_adjustment_allocations WHERE adjustment_kind = 'REFUND') AS "refundAllocatedValue",
-        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric FROM payment_normalisation_adjustments WHERE normalisation_role = 'ET') AS "earlyTradeDiscountValue",
-        (SELECT COALESCE(SUM(allocated_amount), 0)::numeric FROM payment_normalisation_adjustment_allocations WHERE adjustment_kind = 'ET') AS "earlyTradeDiscountAllocatedValue",
-        (SELECT COUNT(*)::int FROM payment_normalisation_adjustment_allocations WHERE adjustment_kind = 'ET') AS "earlyTradeMatchCount",
+        (SELECT COUNT(*)::int FROM payment_normalisation_source_rows)
+          AS "startingStageCount",
+        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric
+         FROM payment_normalisation_source_rows)
+          AS "startingAbsoluteValue",
+        (SELECT COUNT(*)::int FROM payment_normalisation_obligations)
+          AS "invoiceObligationCount",
+        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric
+         FROM payment_normalisation_obligations)
+          AS "originalObligationValue",
+        (SELECT COALESCE(SUM(adjusted_obligation_amount), 0)::numeric
+         FROM payment_normalisation_adjusted_obligations)
+          AS "adjustedObligationValue",
+        0::numeric AS "directionalObligationOffsetValue",
+        0::numeric AS "unmatchedDirectionalObligationOffsetValue",
+        (SELECT COUNT(*)::int FROM payment_normalisation_payments)
+          AS "paymentEventCount",
+        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric
+         FROM payment_normalisation_payments)
+          AS "paymentEventValue",
+        (SELECT COUNT(*)::int
+         FROM payment_normalisation_payment_allocations)
+          AS "paymentAllocationCount",
+        (SELECT COUNT(*)::int
+         FROM payment_normalisation_payment_allocations
+         WHERE obligation_after_payment > 0.005)
+          AS "partialPaymentCount",
+        (SELECT COUNT(*)::int
+         FROM payment_normalisation_payment_allocations
+         WHERE obligation_after_payment <= 0.005)
+          AS "finalSettlementCount",
+        0::numeric AS "creditValue",
+        0::numeric AS "creditAllocatedValue",
+        0::numeric AS "refundValue",
+        0::numeric AS "refundAllocatedValue",
         (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric
          FROM payment_normalisation_adjustments
-         WHERE normalisation_role = 'KG') AS "vendorCreditMemoValue",
+         WHERE normalisation_role = 'ET')
+          AS "earlyTradeDiscountValue",
         (SELECT COALESCE(SUM(allocated_amount), 0)::numeric
          FROM payment_normalisation_adjustment_allocations
-         WHERE adjustment_kind = 'KG') AS "vendorCreditMemoAllocatedValue",
-        (SELECT COALESCE(SUM(clearing_balance_offset_amount), 0)::numeric
-         FROM payment_normalisation_payment_source_totals)
-          AS "balancedClearingPaymentOffsetValue",
+         WHERE adjustment_kind = 'ET')
+          AS "earlyTradeDiscountAllocatedValue",
+        (SELECT COUNT(*)::int
+         FROM payment_normalisation_adjustment_allocations
+         WHERE adjustment_kind = 'ET')
+          AS "earlyTradeMatchCount",
+        (SELECT COALESCE(SUM(normalisation_amount), 0)::numeric
+         FROM payment_normalisation_adjustments
+         WHERE normalisation_role = 'KG')
+          AS "vendorCreditMemoValue",
+        (SELECT COALESCE(SUM(allocated_amount), 0)::numeric
+         FROM payment_normalisation_adjustment_allocations
+         WHERE adjustment_kind = 'KG')
+          AS "vendorCreditMemoAllocatedValue",
         (SELECT COUNT(*)::int
          FROM payment_normalisation_clearing_reconciliations
-         WHERE accepted_as_balanced_clearing)
-          AS "balancedClearingReconciliationCount",
-        (SELECT COALESCE(SUM(ABS(final_unexplained_signed_residual)), 0)::numeric
+         WHERE reconciled)
+          AS "accountingReconciledGroupCount",
+        (SELECT COUNT(*)::int
+         FROM payment_normalisation_clearing_reconciliations
+         WHERE allocation_resolved)
+          AS "allocationResolvedGroupCount",
+        (SELECT COALESCE(
+           SUM(ABS(final_unexplained_signed_residual)),
+           0
+         )::numeric
          FROM payment_normalisation_clearing_reconciliations)
           AS "unexplainedClearingResidualValue",
-        (SELECT COALESCE(SUM(reversal_offset_amount), 0)::numeric
-         FROM payment_normalisation_adjustment_source_totals)
+        (SELECT COALESCE(SUM(
+           CASE
+             WHEN normalisation_role IN ('NON_PAYMENT', 'NEUTRALISED')
+               THEN normalisation_amount
+             ELSE 0
+           END
+         ), 0)::numeric
+         FROM payment_normalisation_source_rows)
           AS "adjustmentReversalOffsetValue",
         (SELECT COALESCE(SUM(amount), 0)::numeric
          FROM payment_normalisation_exceptions
-         WHERE reason_code IN (
-           'UNMATCHED_ADJUSTMENT',
-           'AMBIGUOUS_ADJUSTMENT_COMBINATION'
-         )) AS "unmatchedAdjustmentValue",
+         WHERE reason_code = 'UNRESOLVED_ADJUSTMENT_ALLOCATION')
+          AS "unmatchedAdjustmentValue",
         (SELECT COUNT(*)::int
          FROM payment_normalisation_exceptions
-         WHERE reason_code IN (
-           'UNMATCHED_ADJUSTMENT',
-           'AMBIGUOUS_ADJUSTMENT_COMBINATION'
-         )) AS "unmatchedAdjustmentExceptionCount",
-        (SELECT COUNT(*)::int FROM payment_normalisation_exceptions) AS "exceptionCount"
+         WHERE reason_code = 'UNRESOLVED_ADJUSTMENT_ALLOCATION')
+          AS "unmatchedAdjustmentExceptionCount",
+        (SELECT COUNT(*)::int FROM payment_normalisation_exceptions)
+          AS "exceptionCount"
   `;
 }
-
 async function recordPaymentNormalisationFailure({
   customerId,
   ptrsId,
@@ -2390,7 +2422,8 @@ async function recordPaymentNormalisationFailure({
         completedAt: new Date(),
       };
       if (existing) await existing.update(values, { transaction });
-      else await db.PtrsPaymentNormalisationResult.create(values, { transaction });
+      else
+        await db.PtrsPaymentNormalisationResult.create(values, { transaction });
     }
     await transaction.commit();
   } catch (failureError) {
@@ -2407,25 +2440,37 @@ async function persistPaymentNormalisationEvidence({
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
-  const operationStartedAt = process.hrtime.bigint();
-  const transaction = await beginTransactionWithCustomerContext(customerId);
+  const operationTiming = startExecutionTiming();
+  const phaseTimings = {};
+  const measure = (name, run) =>
+    measureExecutionPhase({ timings: phaseTimings, name, run });
+  let transaction;
   let inputState;
   try {
+    transaction = await measure("transactionAcquire", () =>
+      beginTransactionWithCustomerContext(customerId),
+    );
     const lookupStartedAt = process.hrtime.bigint();
-    inputState = await readPaymentNormalisationInputState({
-      customerId,
-      ptrsId,
-      profileId,
-      transaction,
-    });
+    inputState = await measure("initialInputStateRead", () =>
+      readPaymentNormalisationInputState({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction,
+      }),
+    );
     const identity = `${customerId}:${ptrsId}`;
-    await acquirePaymentNormalisationLock({ transaction, identity });
-    const lockedInputState = await readPaymentNormalisationInputState({
-      customerId,
-      ptrsId,
-      profileId,
-      transaction,
-    });
+    await measure("advisoryLockWait", () =>
+      acquirePaymentNormalisationLock({ transaction, identity }),
+    );
+    const lockedInputState = await measure("lockedInputStateRead", () =>
+      readPaymentNormalisationInputState({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction,
+      }),
+    );
     if (lockedInputState.inputSignature !== inputState.inputSignature) {
       const error = new Error(
         "PTRS payment-normalisation inputs changed while calculation was starting",
@@ -2435,18 +2480,21 @@ async function persistPaymentNormalisationEvidence({
       throw error;
     }
     inputState = lockedInputState;
-    let result = await db.PtrsPaymentNormalisationResult.findOne({
-      where: {
-        customerId,
-        ptrsId,
-        inputSignature: inputState.inputSignature,
-        calculationVersion,
-      },
-      transaction,
-    });
+    let result = await measure("resultLookup", () =>
+      db.PtrsPaymentNormalisationResult.findOne({
+        where: {
+          customerId,
+          ptrsId,
+          inputSignature: inputState.inputSignature,
+          calculationVersion,
+        },
+        transaction,
+      }),
+    );
     const lookupMs = Number(process.hrtime.bigint() - lookupStartedAt) / 1e6;
     if (result?.status === "succeeded") {
-      await transaction.commit();
+      await measure("commit", () => transaction.commit());
+      const totalTiming = finishExecutionTiming(operationTiming);
       return {
         source: "persisted",
         normalisationResultId: result.id,
@@ -2455,9 +2503,12 @@ async function persistPaymentNormalisationEvidence({
         persisted: 0,
         summary: result.summary || {},
         timings: {
+          startedAt: totalTiming.startedAt,
+          finishedAt: totalTiming.finishedAt,
           lookupMs,
           calculationAndPersistenceMs: 0,
-          totalMs: Number(process.hrtime.bigint() - operationStartedAt) / 1e6,
+          totalMs: totalTiming.elapsedMs,
+          phases: phaseTimings,
         },
         limitations: {
           contractualInstalmentIndicatorAvailable: false,
@@ -2465,67 +2516,81 @@ async function persistPaymentNormalisationEvidence({
       };
     }
     if (result) {
-      await db.PtrsPaymentNormalisationRow.destroy({
-        where: { normalisationResultId: result.id },
-        transaction,
-      });
-      await db.PtrsPaymentNormalisationAllocation.destroy({
-        where: { normalisationResultId: result.id },
-        transaction,
-      });
-      await db.PtrsPaymentNormalisationException.destroy({
-        where: { normalisationResultId: result.id },
-        transaction,
-      });
-      await result.update(
-        {
-          status: "calculating",
-          summary: null,
-          errorMessage: null,
-          createdBy: userId || result.createdBy || null,
-          startedAt: new Date(),
-          completedAt: null,
-        },
-        { transaction },
+      await measure("cleanupNormalisationRows", () =>
+        db.PtrsPaymentNormalisationRow.destroy({
+          where: { normalisationResultId: result.id },
+          transaction,
+        }),
+      );
+      await measure("cleanupAllocations", () =>
+        db.PtrsPaymentNormalisationAllocation.destroy({
+          where: { normalisationResultId: result.id },
+          transaction,
+        }),
+      );
+      await measure("cleanupExceptions", () =>
+        db.PtrsPaymentNormalisationException.destroy({
+          where: { normalisationResultId: result.id },
+          transaction,
+        }),
+      );
+      await measure("resultReset", () =>
+        result.update(
+          {
+            status: "calculating",
+            summary: null,
+            errorMessage: null,
+            createdBy: userId || result.createdBy || null,
+            startedAt: new Date(),
+            completedAt: null,
+          },
+          { transaction },
+        ),
       );
     } else {
-      result = await db.PtrsPaymentNormalisationResult.create(
-        {
-          customerId,
-          ptrsId,
-          profileId: inputState.profileId,
-          stageExecutionRunId: inputState.stageExecutionRunId,
-          stageInputHash: inputState.stageInputHash,
-          normalisationInputRevision: inputState.normalisationInputRevision,
-          inputSignature: inputState.inputSignature,
-          calculationVersion,
-          status: "calculating",
-          createdBy: userId || null,
-        },
-        { transaction },
+      result = await measure("resultCreate", () =>
+        db.PtrsPaymentNormalisationResult.create(
+          {
+            customerId,
+            ptrsId,
+            profileId: inputState.profileId,
+            stageExecutionRunId: inputState.stageExecutionRunId,
+            stageInputHash: inputState.stageInputHash,
+            normalisationInputRevision: inputState.normalisationInputRevision,
+            inputSignature: inputState.inputSignature,
+            calculationVersion,
+            status: "calculating",
+            createdBy: userId || null,
+          },
+          { transaction },
+        ),
       );
     }
     const calculationStartedAt = process.hrtime.bigint();
     const sql = buildPersistPaymentNormalisationSql();
-    const resultRows = await db.sequelize.query(sql, {
-      transaction,
-      replacements: {
-        customerId,
-        ptrsId,
-        normalisationResultId: result.id,
-        inputSignature: inputState.inputSignature,
-        calculationVersion,
-      },
-      type: db.sequelize.QueryTypes.SELECT,
-    });
+    const resultRows = await measure("materialisationStatement", () =>
+      db.sequelize.query(sql, {
+        transaction,
+        replacements: {
+          customerId,
+          ptrsId,
+          normalisationResultId: result.id,
+          inputSignature: inputState.inputSignature,
+          calculationVersion,
+        },
+        type: db.sequelize.QueryTypes.SELECT,
+      }),
+    );
     const materialised = resultRows?.[0] || {};
     const { persisted, ...summary } = materialised;
-    const finalInputState = await readPaymentNormalisationInputState({
-      customerId,
-      ptrsId,
-      profileId,
-      transaction,
-    });
+    const finalInputState = await measure("finalInputStateRead", () =>
+      readPaymentNormalisationInputState({
+        customerId,
+        ptrsId,
+        profileId,
+        transaction,
+      }),
+    );
     if (finalInputState.inputSignature !== inputState.inputSignature) {
       const error = new Error(
         "PTRS payment-normalisation inputs changed during calculation",
@@ -2534,16 +2599,19 @@ async function persistPaymentNormalisationEvidence({
       error.statusCode = 409;
       throw error;
     }
-    await result.update(
-      {
-        status: "succeeded",
-        summary,
-        errorMessage: null,
-        completedAt: new Date(),
-      },
-      { transaction },
+    await measure("resultSummaryUpdate", () =>
+      result.update(
+        {
+          status: "succeeded",
+          summary,
+          errorMessage: null,
+          completedAt: new Date(),
+        },
+        { transaction },
+      ),
     );
-    await transaction.commit();
+    await measure("commit", () => transaction.commit());
+    const totalTiming = finishExecutionTiming(operationTiming);
     return {
       source: "calculated",
       normalisationResultId: result.id,
@@ -2552,17 +2620,20 @@ async function persistPaymentNormalisationEvidence({
       persisted: Number(persisted || 0),
       summary,
       timings: {
+        startedAt: totalTiming.startedAt,
+        finishedAt: totalTiming.finishedAt,
         lookupMs,
         calculationAndPersistenceMs:
           Number(process.hrtime.bigint() - calculationStartedAt) / 1e6,
-        totalMs: Number(process.hrtime.bigint() - operationStartedAt) / 1e6,
+        totalMs: totalTiming.elapsedMs,
+        phases: phaseTimings,
       },
       limitations: {
         contractualInstalmentIndicatorAvailable: false,
       },
     };
   } catch (error) {
-    if (!transaction.finished) await transaction.rollback();
+    if (transaction && !transaction.finished) await transaction.rollback();
     await recordPaymentNormalisationFailure({
       customerId,
       ptrsId,
@@ -2576,7 +2647,6 @@ async function persistPaymentNormalisationEvidence({
 }
 
 module.exports = {
-  ADJUSTMENT_REASONS,
   DOCUMENT_TYPES,
   PAYMENT_NORMALISATION_VERSION,
   VEOLIA_PAYMENT_TIME_REFERENCE_POLICY,
@@ -2584,6 +2654,7 @@ module.exports = {
   buildPersistedPaymentNormalisationCte,
   buildPersistPaymentNormalisationSql,
   buildPaymentNormalisationInputSignature,
+  classifyClearingEvent,
   classifyDocument,
   normalisePaymentRows,
   persistPaymentNormalisationEvidence,

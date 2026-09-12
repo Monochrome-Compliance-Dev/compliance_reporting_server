@@ -87,6 +87,7 @@ describe("PTRS persisted metrics results", () => {
     tcpSettlementValue: "1000",
     missingAmountCount: 0,
     sbCount: 100,
+    sbPaymentTimeCount: 100,
     sbValue: "400",
     missingSbFlagCount: 0,
     missingTermDaysCount: 0,
@@ -227,6 +228,19 @@ describe("PTRS persisted metrics results", () => {
       }),
     );
     expect(result.execution.source).toBe("calculated");
+    expect(result.execution.timings).toEqual(
+      expect.objectContaining({
+        transactionAcquire: expect.objectContaining({
+          elapsedMs: expect.any(Number),
+        }),
+        aggregateQuery: expect.objectContaining({
+          startedAt: expect.any(String),
+          finishedAt: expect.any(String),
+          elapsedMs: expect.any(Number),
+        }),
+        commit: expect.objectContaining({ elapsedMs: expect.any(Number) }),
+      }),
+    );
     expect(result.preview).toEqual(
       expect.objectContaining({
         header: expect.objectContaining({ reportId: ptrsId }),
@@ -237,12 +251,38 @@ describe("PTRS persisted metrics results", () => {
           averagePaymentTimeDays: 30,
           percentageOfSbInvoicesPaidWithinPaymentTerm: 75,
           percentageOfSmallBusinessTradeCreditPayments: 40,
+          forecastPaymentTerm: null,
+          forecastMinimumPaymentTerm: null,
+          forecastMaximumPaymentTerm: null,
+          receivableTermsComparedToCommonPaymentTerm: null,
         }),
         quality: expect.objectContaining({
           basedOnRowCount: 145190,
           sbRowCount: 100,
         }),
       }),
+    );
+  });
+
+  test("keeps incomplete SBTCP payments in the within-terms denominator", async () => {
+    const fetchAggregates = jest.fn().mockResolvedValue({
+      ...aggregateResult,
+      sbPaymentTimeCount: 100,
+      sbWithinTermsKnownCount: 80,
+      sbWithinTermsYesCount: 60,
+    });
+
+    const result = await getMetricsWithExecution({
+      customerId,
+      ptrsId,
+      fetchAggregates,
+    });
+
+    expect(
+      result.preview.computed.percentageOfSbInvoicesPaidWithinPaymentTerm,
+    ).toBe(60);
+    expect(result.preview.quality.dataSignals.sbWithinTermsUnknownCount).toBe(
+      20,
     );
   });
 
@@ -258,6 +298,14 @@ describe("PTRS persisted metrics results", () => {
     expect(fetchAggregates).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(1);
     expect(second.execution.source).toBe("persisted");
+    expect(second.execution.timings).toEqual(
+      expect.objectContaining({
+        persistedResultLookup: expect.objectContaining({
+          elapsedMs: expect.any(Number),
+        }),
+        commit: expect.objectContaining({ elapsedMs: expect.any(Number) }),
+      }),
+    );
     expect(second.preview.computed.averagePaymentTimeDays).toBe(30);
   });
 
@@ -323,7 +371,7 @@ describe("PTRS persisted metrics results", () => {
     await getMetricsWithExecution({
       customerId,
       ptrsId,
-      calculationVersion: "ptrs-payment-observation-metrics-v3",
+      calculationVersion: "ptrs-payment-observation-metrics-next",
       fetchAggregates,
     });
 

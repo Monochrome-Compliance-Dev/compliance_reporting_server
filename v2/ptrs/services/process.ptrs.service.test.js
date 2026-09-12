@@ -164,6 +164,7 @@ describe("processPtrs", () => {
     validateService.getProcessValidateSummary.mockResolvedValue({
       status: "PASS",
       counts: { blockers: 0, warnings: 0 },
+      timings: { validationQuery: { elapsedMs: 12 } },
     });
     metricsService.getMetricsWithExecution.mockResolvedValue({
       preview: {
@@ -175,6 +176,7 @@ describe("processPtrs", () => {
         inputSignature: "metrics-signature",
         calculationVersion: "metrics-v1",
         metricsResultId: "metrics001",
+        timings: { aggregateQuery: { elapsedMs: 34 } },
       },
     });
   });
@@ -240,6 +242,7 @@ describe("processPtrs", () => {
       inputSignature: "metrics-signature",
       calculationVersion: "metrics-v1",
       metricsResultId: "metrics001",
+      timings: { aggregateQuery: { elapsedMs: 34 } },
     });
     expect(result.steps.reconciliation).toEqual(
       expect.objectContaining({
@@ -273,12 +276,65 @@ describe("processPtrs", () => {
       validationMs: expect.any(Number),
       metricsMs: expect.any(Number),
     });
+    expect(result.steps.phaseTimings).toEqual(
+      expect.objectContaining(
+        Object.fromEntries(
+          [
+            "stageGate",
+            "rules",
+            "paymentNormalisation",
+            "exclusions",
+            "exclusionSummary",
+            "paymentObservations",
+            "validation",
+            "metrics",
+          ].map((name) => [
+            name,
+            {
+              startedAt: expect.any(String),
+              finishedAt: expect.any(String),
+              elapsedMs: expect.any(Number),
+            },
+          ]),
+        ),
+      ),
+    );
+    expect(result.steps.validation.timings).toEqual({
+      validationQuery: { elapsedMs: 12 },
+    });
     expect(result.steps.databaseTempDeltas).toEqual({
-      stageGate: { tempFilesDelta: 1, tempBytesDelta: 100 },
-      paymentNormalisation: { tempFilesDelta: 1, tempBytesDelta: 100 },
-      paymentObservations: { tempFilesDelta: 3, tempBytesDelta: 400 },
-      validation: { tempFilesDelta: 4, tempBytesDelta: 500 },
-      metrics: { tempFilesDelta: 5, tempBytesDelta: 600 },
+      stageGate: expect.objectContaining({
+        tempFilesDelta: 1,
+        tempBytesDelta: 100,
+      }),
+      paymentNormalisation: expect.objectContaining({
+        tempFilesDelta: 1,
+        tempBytesDelta: 100,
+      }),
+      paymentObservations: expect.objectContaining({
+        tempFilesDelta: 3,
+        tempBytesDelta: 400,
+      }),
+      validation: expect.objectContaining({
+        tempFilesDelta: 4,
+        tempBytesDelta: 500,
+      }),
+      metrics: expect.objectContaining({
+        tempFilesDelta: 5,
+        tempBytesDelta: 600,
+      }),
+    });
+    expect(result.steps.databaseTempDeltas.paymentObservations).toMatchObject({
+      before: {
+        capturedAt: expect.any(String),
+        tempFiles: 14,
+        tempBytes: 600,
+      },
+      after: {
+        capturedAt: expect.any(String),
+        tempFiles: 17,
+        tempBytes: 1000,
+      },
     });
     expect(result.counts).toEqual(
       expect.objectContaining({
@@ -307,6 +363,7 @@ describe("processPtrs", () => {
         rowsOut: 1063,
         stats: expect.objectContaining({
           timings: result.steps.timings,
+          phaseTimings: result.steps.phaseTimings,
           databaseTempDeltas: result.steps.databaseTempDeltas,
         }),
       }),
@@ -342,17 +399,33 @@ describe("processPtrs", () => {
       stageGate: {
         tempFilesDelta: null,
         tempBytesDelta: null,
+        before: null,
+        after: null,
       },
       paymentNormalisation: {
         tempFilesDelta: null,
         tempBytesDelta: null,
+        before: null,
+        after: null,
       },
       paymentObservations: {
         tempFilesDelta: null,
         tempBytesDelta: null,
+        before: null,
+        after: null,
       },
-      validation: { tempFilesDelta: null, tempBytesDelta: null },
-      metrics: { tempFilesDelta: null, tempBytesDelta: null },
+      validation: {
+        tempFilesDelta: null,
+        tempBytesDelta: null,
+        before: null,
+        after: null,
+      },
+      metrics: {
+        tempFilesDelta: null,
+        tempBytesDelta: null,
+        before: null,
+        after: null,
+      },
     });
     expect(getPaymentObservationSummary).toHaveBeenCalledTimes(1);
     expect(validateService.getProcessValidateSummary).toHaveBeenCalledTimes(1);

@@ -8,6 +8,7 @@ const {
   resolveNormalisationResultId,
   setPaymentObservationWorkMem,
 } = require("./payment-observations.ptrs.service");
+const { measureExecutionPhase } = require("./execution-timing.ptrs.service");
 
 module.exports = {
   validate,
@@ -700,26 +701,35 @@ async function getProcessValidateSummary({
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
 
-  const t = await beginTransactionWithCustomerContext(customerId);
+  const timings = {};
+  const measure = (name, run) => measureExecutionPhase({ timings, name, run });
+  let t;
 
   try {
-    normalisationResultId = await resolveNormalisationResultId({
-      customerId,
-      ptrsId,
-      normalisationResultId,
-      transaction: t,
-    });
-    const result = await queryBoundedValidation({
-      customerId,
-      ptrsId,
-      normalisationResultId,
-      mode: "read",
-      transaction: t,
-    });
-    await t.commit();
-    return result;
+    t = await measure("transactionAcquire", () =>
+      beginTransactionWithCustomerContext(customerId),
+    );
+    normalisationResultId = await measure("normalisationResultLookup", () =>
+      resolveNormalisationResultId({
+        customerId,
+        ptrsId,
+        normalisationResultId,
+        transaction: t,
+      }),
+    );
+    const result = await measure("validationQuery", () =>
+      queryBoundedValidation({
+        customerId,
+        ptrsId,
+        normalisationResultId,
+        mode: "read",
+        transaction: t,
+      }),
+    );
+    await measure("commit", () => t.commit());
+    return { ...result, timings };
   } catch (err) {
-    if (!t.finished) await t.rollback();
+    if (t && !t.finished) await t.rollback();
     throw err;
   }
 }

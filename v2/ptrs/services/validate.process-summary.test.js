@@ -108,6 +108,22 @@ describe("bounded PTRS process validation", () => {
       }),
     );
     expect(setPaymentObservationWorkMem).toHaveBeenCalledTimes(1);
+    expect(result.timings).toEqual(
+      expect.objectContaining({
+        transactionAcquire: expect.objectContaining({
+          startedAt: expect.any(String),
+          finishedAt: expect.any(String),
+          elapsedMs: expect.any(Number),
+        }),
+        normalisationResultLookup: expect.objectContaining({
+          elapsedMs: expect.any(Number),
+        }),
+        validationQuery: expect.objectContaining({
+          elapsedMs: expect.any(Number),
+        }),
+        commit: expect.objectContaining({ elapsedMs: expect.any(Number) }),
+      }),
+    );
     expect(result.blockers).toHaveLength(200);
     const [sql] = db.sequelize.query.mock.calls[0];
     expect(sql).toContain("validation_counts AS");
@@ -189,9 +205,7 @@ describe("bounded PTRS process validation", () => {
       viablePaymentRows: 10,
       paymentObservationRows: 0,
     });
-    expect(result.blockers).toEqual([
-      { code: "PAYMENT_OBSERVATIONS_EMPTY" },
-    ]);
+    expect(result.blockers).toEqual([{ code: "PAYMENT_OBSERVATIONS_EMPTY" }]);
   });
 
   test("surfaces active normalisation exceptions but omits excluded sources", async () => {
