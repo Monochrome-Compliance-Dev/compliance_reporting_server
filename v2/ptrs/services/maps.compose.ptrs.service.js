@@ -21,6 +21,13 @@ const {
 const {
   applyCanonicalInvoiceDatePolicy,
 } = require("@/v2/ptrs/services/canonical.date-policy.ptrs.service");
+const {
+  CANONICAL_DATE_FIELDS,
+  normaliseCanonicalDate,
+} = require("@/v2/ptrs/services/canonical.date-normalisation.ptrs.service");
+const {
+  normaliseCanonicalNumber,
+} = require("@/v2/ptrs/services/canonical.scalar-normalisation.ptrs.service");
 
 function orderJoinsForTransactionDataset(joins, transactionDatasetId) {
   const list = Array.isArray(joins) ? joins.slice() : [];
@@ -161,6 +168,8 @@ function applyCanonicalProjectionForCompose({
   out,
   srcRow,
   fieldMapRows,
+  adapterType,
+  dateFormat,
   resolveCanonicalValue,
   applyTransform,
   setCanonicalSourceMeta,
@@ -183,11 +192,27 @@ function applyCanonicalProjectionForCompose({
       outRow: nextOut,
     });
 
-    const transformed = applyTransform({
-      value: rawValue,
-      transformType: fm.transformType,
-      transformConfig: fm.transformConfig,
-    });
+    const isDirectPaymentDate =
+      adapterType === "direct_payment" &&
+      CANONICAL_DATE_FIELDS.includes(canonicalKey);
+    const dateResult = isDirectPaymentDate
+      ? normaliseCanonicalDate(rawValue, dateFormat)
+      : null;
+    const isDirectPaymentAmount =
+      adapterType === "direct_payment" && canonicalKey === "payment_amount";
+    const numericResult = isDirectPaymentAmount
+      ? normaliseCanonicalNumber(rawValue)
+      : null;
+    const scalarResult = dateResult || numericResult;
+    const transformed = scalarResult
+      ? scalarResult.error
+        ? rawValue
+        : scalarResult.value
+      : applyTransform({
+          value: rawValue,
+          transformType: fm.transformType,
+          transformConfig: fm.transformConfig,
+        });
 
     const hasCanonicalValue =
       transformed != null && String(transformed).trim() !== "";
@@ -202,6 +227,24 @@ function applyCanonicalProjectionForCompose({
         sourceDatasetId: fm.datasetId || null,
         sourceColumn: fm.sourceColumn || null,
         transformType: fm.transformType || null,
+        normalisation: scalarResult
+          ? isDirectPaymentDate
+            ? {
+                type: "date",
+                dateFormat,
+                originalValue: rawValue,
+                canonicalValue: dateResult.error ? null : dateResult.value,
+                error: dateResult.error,
+              }
+            : {
+                type: "numeric",
+                originalValue: rawValue,
+                canonicalValue: numericResult.error
+                  ? null
+                  : numericResult.value,
+                error: numericResult.error,
+              }
+          : null,
       });
 
       Object.assign(nextOut, withMeta);
@@ -243,6 +286,7 @@ async function composeSingleMappedRow({
   loggedJoinProbeRef,
   transactionDatasetId,
   adapterType,
+  dateFormat,
   getJoinLhsValue,
   mergeRoleRowNamespaced,
   joinIndexKey,
@@ -477,6 +521,8 @@ async function composeSingleMappedRow({
       applyTransform,
       setCanonicalSourceMeta,
       counters,
+      adapterType,
+      dateFormat,
     });
   }
   out = applyCanonicalInvoiceDatePolicy({ row: out, adapterType });
@@ -676,6 +722,7 @@ async function prepareMappedRowsContext({
     sourceDatasetId,
     sourceColumn,
     transformType = null,
+    normalisation = null,
   }) => {
     if (!outRow || !canonicalField || !sourceRole || !sourceColumn) {
       return outRow;
@@ -696,6 +743,7 @@ async function prepareMappedRowsContext({
       sourceDatasetId: sourceDatasetId ? String(sourceDatasetId) : null,
       sourceColumn: String(sourceColumn),
       transformType: transformType ? String(transformType) : null,
+      ...(normalisation ? { normalisation } : {}),
     };
 
     meta.canonicalSources = canonicalSources;
@@ -999,6 +1047,7 @@ async function prepareMappedRowsContext({
         loggedJoinProbeRef,
         transactionDatasetId: datasetId,
         adapterType: transactionDataset.adapterType,
+        dateFormat: transactionDataset.dateFormat || null,
         getJoinLhsValue,
         mergeRoleRowNamespaced,
         joinIndexKey,

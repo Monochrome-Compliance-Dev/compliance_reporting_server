@@ -68,6 +68,10 @@ function model(sequelize) {
         fields: ["datasetId"],
       },
       {
+        name: "tbl_ptrs_canonical_source_row_source_raw_row_id_idx",
+        fields: ["sourceRawRowId"],
+      },
+      {
         name: "ptrs_canon_src_revision_idx",
         fields: ["canonicalRevisionId"],
       },

@@ -109,6 +109,16 @@ describe("PTRS derived payment observations", () => {
     }
   });
 
+  test("carries Stage-derived payment-term days without reparsing raw terms", () => {
+    const sql = buildPaymentObservationsCte();
+
+    expect(sql).toContain("COALESCE(invoice.\"data\", '{}'::jsonb)");
+    expect(sql).toContain("COALESCE(direct.\"data\", '{}'::jsonb)");
+    expect(sql).not.toMatch(
+      /invoice_payment_terms|payment_term_raw|paymentTermRaw/i,
+    );
+  });
+
   test("keeps partial allocations in settlement value without double counting a ZP", () => {
     const sql = buildPaymentObservationsCte();
     const settlementCte = sql.slice(

@@ -18,6 +18,9 @@ const {
 const {
   validateDatasetClassification,
 } = require("@/v2/ptrs/services/datasets.ptrs.service");
+const {
+  normaliseDatasetDateFormat,
+} = require("@/v2/ptrs/services/canonical.date-normalisation.ptrs.service");
 
 module.exports = {
   pickFromRowLoose,
@@ -25,6 +28,7 @@ module.exports = {
   listDatasets,
   removeDataset,
   getDatasetSample,
+  updateDatasetSettings,
   importPaymentTermChangesFromDataset,
   listPaymentTermChanges,
   emitCsvUploadStatus,
@@ -255,6 +259,7 @@ async function importCsvStream({
   sourceType = null,
   adapterType = null,
   adapterVersion = null,
+  dateFormat = null,
   sourceGroupScope = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
@@ -277,6 +282,7 @@ async function importCsvStream({
       sourceFormat: "csv",
       adapterType,
       adapterVersion,
+      dateFormat,
       sourceGroupScope,
       sourceType: sourceType || "csv",
       sourceName: originalName,
@@ -390,6 +396,7 @@ async function addDataset({
   sourceFormat = "csv",
   adapterType = null,
   adapterVersion = null,
+  dateFormat = null,
   referenceKind = null,
   sourceGroupScope = null,
   sourceType = null,
@@ -411,6 +418,14 @@ async function addDataset({
     referenceKind,
     sourceGroupScope,
   });
+  const normalisedDateFormat = dateFormat
+    ? normaliseDatasetDateFormat(dateFormat)
+    : null;
+  if (dateFormat && !normalisedDateFormat) {
+    const error = new Error("dateFormat must be ISO, MDY or DMY");
+    error.statusCode = 400;
+    throw error;
+  }
   if (classification.sourceFormat !== "csv") {
     const error = new Error("Dataset file uploads currently support CSV only");
     error.statusCode = 400;
@@ -442,6 +457,10 @@ async function addDataset({
       customerId,
       ptrsId,
       ...classification,
+      dateFormat:
+        classification.adapterType === "direct_payment"
+          ? normalisedDateFormat
+          : null,
       sourceType: sourceType || "csv",
       sourceName: sourceName || displayFileName,
       fileName: displayFileName,
@@ -709,10 +728,26 @@ async function listDatasets({ customerId, ptrsId }) {
       raw: true,
       transaction: t,
     });
+    const reportingEntities =
+      await db.PtrsDatasetReportingEntitySnapshot.findAll({
+        where: { customerId, ptrsId },
+        raw: true,
+        transaction: t,
+      });
+    const reportingEntityByDatasetId = new Map(
+      reportingEntities.map((snapshot) => [
+        String(snapshot.datasetId),
+        snapshot,
+      ]),
+    );
 
     await t.commit();
 
-    return rows;
+    return rows.map((dataset) => ({
+      ...dataset,
+      reportingEntity:
+        reportingEntityByDatasetId.get(String(dataset.id)) || null,
+    }));
   } catch (err) {
     if (!t.finished) {
       try {
@@ -722,6 +757,98 @@ async function listDatasets({ customerId, ptrsId }) {
       }
     }
     throw err;
+  }
+}
+
+async function updateDatasetSettings({
+  customerId,
+  ptrsId,
+  datasetId,
+  dateFormat,
+  reportingEntityName,
+  reportingEntityAbn,
+  reportingEntityAcn = null,
+  reportingEntityArbn = null,
+  userId = null,
+}) {
+  if (!customerId) throw new Error("customerId is required");
+  if (!ptrsId) throw new Error("ptrsId is required");
+  if (!datasetId) throw new Error("datasetId is required");
+  const normalisedDateFormat = normaliseDatasetDateFormat(dateFormat);
+  const entityName = String(reportingEntityName || "").trim();
+  const abn = String(reportingEntityAbn || "").trim();
+  if (!normalisedDateFormat) {
+    const error = new Error("dateFormat must be ISO, MDY or DMY");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!entityName || !abn) {
+    const error = new Error(
+      "Dataset reporting entity name and supplied ABN are required",
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const transaction = await beginTransactionWithCustomerContext(customerId);
+  try {
+    const dataset = await db.PtrsDataset.findOne({
+      where: { id: datasetId, customerId, ptrsId },
+      transaction,
+    });
+    if (!dataset) {
+      const error = new Error("Dataset not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    if (
+      dataset.get("purpose") !== "transaction" ||
+      dataset.get("adapterType") !== "direct_payment"
+    ) {
+      const error = new Error(
+        "Dataset reporting-entity settings apply only to direct-payment transaction datasets",
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const existing = await db.PtrsDatasetReportingEntitySnapshot.findOne({
+      where: { customerId, ptrsId, datasetId },
+      transaction,
+    });
+    const snapshotValues = {
+      entityName,
+      abn,
+      acn: String(reportingEntityAcn || "").replace(/\D/g, "") || null,
+      arbn: String(reportingEntityArbn || "").replace(/\D/g, "") || null,
+      source: "manual",
+      updatedBy: userId || null,
+    };
+    const snapshot = existing
+      ? await existing.update(snapshotValues, { transaction })
+      : await db.PtrsDatasetReportingEntitySnapshot.create(
+          {
+            customerId,
+            ptrsId,
+            datasetId,
+            ...snapshotValues,
+            createdBy: userId || null,
+          },
+          { transaction },
+        );
+    await dataset.update(
+      { dateFormat: normalisedDateFormat, updatedBy: userId || null },
+      { transaction },
+    );
+    const plainDataset = dataset.get({ plain: true });
+    const plainSnapshot = snapshot.get
+      ? snapshot.get({ plain: true })
+      : snapshot;
+    await transaction.commit();
+    return { ...plainDataset, reportingEntity: plainSnapshot };
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    throw error;
   }
 }
 

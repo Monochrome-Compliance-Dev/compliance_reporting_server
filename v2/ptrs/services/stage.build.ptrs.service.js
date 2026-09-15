@@ -72,7 +72,7 @@ async function transformStageRows({
   loadEffectiveTermChangesForRows,
   applyEffectiveTermChangesToRows,
   termMap,
-  applyPaymentTermDaysFromMap,
+  applyPaymentTermDays,
   computePaymentTimeRegulator,
   semanticKind = "accounting_event",
 }) {
@@ -115,7 +115,7 @@ async function transformStageRows({
     timings.paymentTermChangeApplyMs = elapsedMs(phaseStarted);
 
     phaseStarted = process.hrtime.bigint();
-    const termResult = applyPaymentTermDaysFromMap(stagedRows, termMap);
+    const termResult = applyPaymentTermDays(stagedRows, termMap);
     stagedRows = termResult.rows || stagedRows;
     paymentTermStats = termResult.stats || null;
     timings.paymentTermMapMs = elapsedMs(phaseStarted);
@@ -194,7 +194,7 @@ async function stagePtrs({
   loadEffectiveTermChangesForRows,
   applyEffectiveTermChangesToRows,
   loadPaymentTermMap,
-  applyPaymentTermDaysFromMap,
+  applyPaymentTermDays,
   computePaymentTimeRegulator,
   collectCanonicalContractFields,
   PTRS_CANONICAL_CONTRACT,
@@ -400,7 +400,7 @@ async function stagePtrs({
         loadEffectiveTermChangesForRows,
         applyEffectiveTermChangesToRows,
         termMap,
-        applyPaymentTermDaysFromMap,
+        applyPaymentTermDays,
         computePaymentTimeRegulator,
         semanticKind:
           transactionDataset.adapterType === "direct_payment"

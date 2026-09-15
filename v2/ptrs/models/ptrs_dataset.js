@@ -50,6 +50,13 @@ function model(sequelize) {
       allowNull: true,
     },
 
+    // Governs slash-date interpretation during direct-payment canonicalisation.
+    dateFormat: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      validate: { isIn: [["ISO", "MDY", "DMY"]] },
+    },
+
     referenceKind: {
       type: DataTypes.STRING(50),
       allowNull: true,

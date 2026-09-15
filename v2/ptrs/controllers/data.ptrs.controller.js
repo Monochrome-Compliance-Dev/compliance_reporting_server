@@ -14,6 +14,7 @@ module.exports = {
   listDatasets,
   removeDataset,
   getDatasetSample,
+  updateDirectDatasetSettings,
 };
 
 async function addWorkbook(req, res, next) {
@@ -114,6 +115,11 @@ async function addDataset(req, res, next) {
     req.query?.adapterVersion ||
     ""
   ).trim();
+  const dateFormat = (
+    req.body?.dateFormat ||
+    req.query?.dateFormat ||
+    ""
+  ).trim();
   const sourceGroupScope = (
     req.body?.sourceGroupScope ||
     req.query?.sourceGroupScope ||
@@ -147,6 +153,7 @@ async function addDataset(req, res, next) {
       referenceKind: referenceKind || null,
       adapterType: adapterType || null,
       adapterVersion: adapterVersion || null,
+      dateFormat: dateFormat || null,
       sourceGroupScope: sourceGroupScope || null,
       sourceName,
       fileName: file.originalname || null,
@@ -196,6 +203,48 @@ async function addDataset(req, res, next) {
         error: cleanupError.message,
       });
     }
+  }
+}
+
+async function updateDirectDatasetSettings(req, res, next) {
+  const customerId = req.effectiveCustomerId;
+  const userId = req.auth?.id;
+  const ptrsId = req.params.id;
+  const datasetId = req.params.datasetId;
+  try {
+    if (!customerId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "Customer ID missing" });
+    }
+    const dataset = await ptrsService.updateDatasetSettings({
+      customerId,
+      ptrsId,
+      datasetId,
+      dateFormat: req.body?.dateFormat,
+      reportingEntityName: req.body?.reportingEntityName,
+      reportingEntityAbn: req.body?.reportingEntityAbn,
+      reportingEntityAcn: req.body?.reportingEntityAcn,
+      reportingEntityArbn: req.body?.reportingEntityArbn,
+      userId,
+    });
+    await auditService.logEvent({
+      customerId,
+      userId,
+      ip: req.ip,
+      device: req.headers["user-agent"],
+      action: "PtrsV2UpdateDirectDatasetSettings",
+      entity: "PtrsRawDataset",
+      entityId: datasetId,
+      details: {
+        ptrsId,
+        dateFormat: dataset.dateFormat,
+        reportingEntitySnapshotId: dataset.reportingEntity?.id || null,
+      },
+    });
+    return res.status(200).json({ status: "success", data: dataset });
+  } catch (error) {
+    return next(error);
   }
 }
 

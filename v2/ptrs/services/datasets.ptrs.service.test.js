@@ -37,7 +37,7 @@ describe("PTRS dataset classification and schema", () => {
       sourceFormat: "csv",
       referenceKind: null,
       adapterType: "sap_accounting_event",
-      adapterVersion: null,
+      adapterVersion: "1",
       sourceGroupScope: "ledger-au",
       role: "transaction",
     });
@@ -51,10 +51,12 @@ describe("PTRS dataset classification and schema", () => {
           purpose: "reference",
           sourceFormat: "csv",
           referenceKind,
+          adapterVersion: "reference-v1",
         }),
       ).toMatchObject({
         purpose: DATASET_PURPOSES.REFERENCE,
         referenceKind,
+        adapterVersion: "reference-v1",
         role: referenceKind,
       });
     },
@@ -74,6 +76,12 @@ describe("PTRS dataset classification and schema", () => {
         referenceKind: "vendormaster",
       }),
     ).toThrow("referenceKind must be empty");
+    expect(() =>
+      validateDatasetClassification({
+        purpose: "transaction",
+        sourceFormat: "csv",
+      }),
+    ).toThrow("adapterType must identify a supported transaction adapter");
   });
 
   test("defines Xero import as an explicit API transaction dataset", () => {
@@ -102,10 +110,14 @@ describe("PTRS dataset classification and schema", () => {
     const canonicalRow = defineModel(
       require("../models/ptrs_canonical_source_row"),
     );
+    const datasetReportingEntity = defineModel(
+      require("../models/tbl_ptrs_dataset_reporting_entity_snapshot"),
+    );
 
     expect(dataset.rawAttributes.purpose.allowNull).toBe(false);
     expect(dataset.rawAttributes.sourceFormat.allowNull).toBe(false);
     expect(dataset.rawAttributes.referenceKind.allowNull).toBe(true);
+    expect(dataset.rawAttributes.dateFormat.allowNull).toBe(true);
     expect(
       dataset.options.indexes.some(
         (index) =>
@@ -128,17 +140,94 @@ describe("PTRS dataset classification and schema", () => {
     ]);
 
     expect(canonicalRevision.rawAttributes.datasetId.allowNull).toBe(false);
-    expect(canonicalRevision.rawAttributes.materialSignature.allowNull).toBe(false);
-    expect(canonicalRow.rawAttributes.canonicalRevisionId.allowNull).toBe(false);
+    expect(canonicalRevision.rawAttributes.materialSignature.allowNull).toBe(
+      false,
+    );
+    expect(canonicalRow.rawAttributes.canonicalRevisionId.allowNull).toBe(
+      false,
+    );
     expect(canonicalRow.rawAttributes.semanticKind.allowNull).toBe(false);
     expect(
       canonicalRow.options.indexes.find((index) => index.unique)?.fields,
     ).toEqual(["customerId", "canonicalRevisionId", "sourceRowNo"]);
+    expect(
+      canonicalRow.options.indexes.find(
+        (index) =>
+          index.name === "tbl_ptrs_canonical_source_row_source_raw_row_id_idx",
+      )?.fields,
+    ).toEqual(["sourceRawRowId"]);
+    expect(datasetReportingEntity.options.indexes).toEqual([
+      {
+        name: "ptrs_dataset_reporting_entity_customer_idx",
+        fields: ["customerId"],
+      },
+      {
+        name: "ptrs_dataset_reporting_entity_ptrs_idx",
+        fields: ["ptrsId"],
+      },
+      {
+        name: "ptrs_dataset_reporting_entity_dataset_ux",
+        fields: ["datasetId"],
+        unique: true,
+      },
+      {
+        name: "ptrs_dataset_reporting_entity_scope_ux",
+        fields: ["customerId", "ptrsId", "datasetId"],
+        unique: true,
+      },
+      {
+        name: "ptrs_dataset_reporting_entity_abn_idx",
+        fields: ["abn"],
+      },
+    ]);
+    expect(datasetReportingEntity.rawAttributes.abn.type.toString()).toBe(
+      "TEXT",
+    );
     expect(() =>
       canonicalRevision.options.hooks.beforeUpdate({
         previous: () => "succeeded",
       }),
     ).toThrow("Successful canonical revisions are immutable");
+  });
+
+  test("direct-payment governance migration owns dataset identity, date format and raw-row lookup index", () => {
+    const migration = fs.readFileSync(
+      path.join(
+        __dirname,
+        "../../../db/migrations/20260914_ptrs_direct_payment_dataset_governance.sql",
+      ),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "dateFormat" varchar(10)',
+    );
+    expect(migration).toContain("tbl_ptrs_dataset_reporting_entity_snapshot");
+    expect(migration).toContain(
+      "tbl_ptrs_canonical_source_row_source_raw_row_id_idx",
+    );
+    expect(migration).toContain('("sourceRawRowId")');
+    for (const indexName of [
+      "ptrs_dataset_reporting_entity_customer_idx",
+      "ptrs_dataset_reporting_entity_ptrs_idx",
+      "ptrs_dataset_reporting_entity_dataset_ux",
+      "ptrs_dataset_reporting_entity_scope_ux",
+      "ptrs_dataset_reporting_entity_abn_idx",
+    ]) {
+      expect(migration).toContain(`IF NOT EXISTS "${indexName}"`);
+    }
+
+    const abnEvidenceMigration = fs.readFileSync(
+      path.join(
+        __dirname,
+        "../../../db/migrations/20260914_ptrs_dataset_reporting_entity_abn_evidence.sql",
+      ),
+      "utf8",
+    );
+    expect(abnEvidenceMigration).toContain(
+      'DROP CONSTRAINT IF EXISTS "ptrs_dataset_reporting_entity_abn_ck"',
+    );
+    expect(abnEvidenceMigration).toContain('ALTER COLUMN "abn" TYPE text');
   });
 
   test("migration deterministically classifies current transaction and reference rows", () => {
@@ -157,9 +246,7 @@ describe("PTRS dataset classification and schema", () => {
     expect(migration).toContain("THEN 'invoices'");
     expect(migration).toContain("ELSE 'other'");
     expect(migration).toContain("THEN 'xero_accounting_event'");
-    expect(migration).toContain(
-      '"customerId", "ptrsId", "datasetId", "rowNo"',
-    );
+    expect(migration).toContain('"customerId", "ptrsId", "datasetId", "rowNo"');
   });
 
   test("canonical migration requires rebuild and installs immutable-source provenance schema", () => {

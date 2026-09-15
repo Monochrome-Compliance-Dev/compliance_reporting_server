@@ -285,11 +285,13 @@ async function getFieldMap({
   customerId,
   ptrsId,
   profileId,
+  datasetId,
   transaction = null,
 }) {
   if (!customerId) throw new Error("customerId is required");
   if (!ptrsId) throw new Error("ptrsId is required");
   if (!profileId) throw new Error("profileId is required");
+  if (!datasetId) throw new Error("datasetId is required");
 
   const t =
     transaction || (await beginTransactionWithCustomerContext(customerId));
@@ -301,6 +303,7 @@ async function getFieldMap({
         customerId,
         ptrsId,
         profileId,
+        datasetId,
       },
       order: [["canonicalField", "ASC"]],
       raw: true,

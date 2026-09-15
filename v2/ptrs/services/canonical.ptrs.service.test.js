@@ -39,6 +39,7 @@ const datasets = {
     sourceFormat: "csv",
     adapterType: "direct_payment",
     adapterVersion: "1",
+    dateFormat: "MDY",
     status: "parsed",
     rowsCount: 1,
     fileName: "Direct.csv",
@@ -108,6 +109,15 @@ let joins = {
 };
 let referenceVersion = "2026-01-03";
 let revisionSequence = 0;
+let reportingEntity = {
+  id: "entity-snapshot-1",
+  datasetId: "dataset-direct",
+  profileId: "profile-1",
+  entityName: "Snapshot Entity",
+  abn: "33333333333",
+  source: "manual",
+  updatedAt: "2026-01-05",
+};
 
 function plainRevision(values) {
   const revision = {
@@ -171,6 +181,9 @@ const mockDb = {
   },
   PtrsColumnMap: {
     findOne: jest.fn(async () => ({ joins, customFields: [] })),
+  },
+  PtrsDatasetReportingEntitySnapshot: {
+    findOne: jest.fn(async () => ({ ...reportingEntity })),
   },
   PtrsImportRaw: {
     count: jest.fn(
@@ -339,6 +352,16 @@ describe("PTRS canonical revisions", () => {
     transactions.length = 0;
     revisionSequence = 0;
     referenceVersion = "2026-01-03";
+    datasets["dataset-direct"].dateFormat = "MDY";
+    reportingEntity = {
+      id: "entity-snapshot-1",
+      datasetId: "dataset-direct",
+      profileId: "profile-1",
+      entityName: "Snapshot Entity",
+      abn: "33333333333",
+      source: "manual",
+      updatedAt: "2026-01-05",
+    };
     mappings = {
       "dataset-a": accountingMappings(),
       "dataset-b": accountingMappings(),
@@ -361,7 +384,7 @@ describe("PTRS canonical revisions", () => {
       semanticKind: "accounting_event",
       canonicalVersion: "ptrs-canonical-v3",
       inputSnapshot: {
-        datePolicyVersion: "sap-invoice-created-preferred-v1",
+        datePolicyVersion: "sap-distinct-invoice-dates-v2",
       },
     });
     expect(canonicalRows[0]).toMatchObject({
@@ -377,9 +400,9 @@ describe("PTRS canonical revisions", () => {
   });
 
   test("loads the governed canonical column projection for Stage consumers", async () => {
-    const { buildStageColumnProjection } = require(
-      "./stage.payment-time.ptrs.service",
-    );
+    const {
+      buildStageColumnProjection,
+    } = require("./stage.payment-time.ptrs.service");
     buildStageColumnProjection
       .mockReturnValueOnce({ sourceAccountCode: null })
       .mockReturnValueOnce({ sourceAccountCode: "SUP-1" });
@@ -852,6 +875,9 @@ describe("PTRS canonical revisions", () => {
       semanticKind: "direct_payment",
       adapterType: "direct_payment",
       inputSnapshot: {
+        dateFormat: "MDY",
+        dateNormalisationVersion: "direct-payment-dataset-date-format-v1",
+        scalarNormalisationVersion: "direct-payment-scalar-normalisation-v1",
         adapterContract: {
           canonicalProjection: "mapped_canonical_row",
           sourceGroupSemantics: "provenance_only_no_event_reconstruction",
@@ -864,6 +890,8 @@ describe("PTRS canonical revisions", () => {
       sourceRawRowId: "raw-direct-1",
       semanticKind: "direct_payment",
       data: {
+        payer_entity_name: "Snapshot Entity",
+        payer_entity_abn: "33333333333",
         payment_amount: "343.20",
         invoice_reference_number: "INV-1",
       },
@@ -872,6 +900,108 @@ describe("PTRS canonical revisions", () => {
         joinedReferences: { "reference-a": [1] },
       },
     });
+    expect(canonicalRows[0].data._ptrsMeta.canonicalSources).toMatchObject({
+      payer_entity_name: {
+        sourceRole: "dataset_reporting_entity_snapshot",
+        datasetReportingEntitySnapshotId: "entity-snapshot-1",
+        sourceDatasetId: "dataset-direct",
+      },
+    });
+    expect(
+      mockDb.PtrsDatasetReportingEntitySnapshot.findOne,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ datasetId: "dataset-direct" }),
+      }),
+    );
+  });
+
+  test("materialises a supplied invalid payer ABN for downstream validation", async () => {
+    reportingEntity = { ...reportingEntity, abn: "not-an-abn" };
+
+    await materializeCanonicalRevision({
+      ...scope,
+      datasetId: "dataset-direct",
+      compose: jest.fn(async () => composeDirectRow()),
+    });
+
+    expect(canonicalRows[0].data).toMatchObject({
+      payer_entity_name: "Snapshot Entity",
+      payer_entity_abn: "not-an-abn",
+    });
+    expect(
+      canonicalRows[0].data._ptrsMeta.canonicalSources.payer_entity_abn,
+    ).toMatchObject({
+      sourceRole: "dataset_reporting_entity_snapshot",
+      sourceField: "abn",
+    });
+  });
+
+  test("keeps a missing payer ABN distinct from supplied invalid identity", async () => {
+    reportingEntity = { ...reportingEntity, abn: "" };
+
+    await expect(
+      materializeCanonicalRevision({
+        ...scope,
+        datasetId: "dataset-direct",
+        compose: jest.fn(async () => composeDirectRow()),
+      }),
+    ).rejects.toMatchObject({
+      code: "DIRECT_PAYMENT_CANONICAL_ROW_INVALID",
+      details: { missingFields: ["payer_entity_abn"] },
+    });
+  });
+
+  test("accepts snapshot-supplied payer mappings and changes the material signature with identity", async () => {
+    mappings["dataset-direct"] = commonMappings().filter(
+      (mapping) =>
+        !["payer_entity_name", "payer_entity_abn"].includes(
+          mapping.canonicalField,
+        ),
+    );
+    const before = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-direct",
+      transaction: {},
+    });
+    const sapBefore = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-a",
+      transaction: {},
+    });
+    reportingEntity = {
+      ...reportingEntity,
+      entityName: "Changed Snapshot Entity",
+      updatedAt: "2026-01-06",
+    };
+    const after = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-direct",
+      transaction: {},
+    });
+    const sapAfter = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-a",
+      transaction: {},
+    });
+    expect(after.materialSignature).not.toBe(before.materialSignature);
+    expect(sapAfter.materialSignature).toBe(sapBefore.materialSignature);
+  });
+
+  test("changes only the direct dataset signature when its date format changes", async () => {
+    const before = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-direct",
+      transaction: {},
+    });
+    datasets["dataset-direct"].dateFormat = "DMY";
+    const after = await buildCanonicalInputSnapshot({
+      ...scope,
+      datasetId: "dataset-direct",
+      transaction: {},
+    });
+
+    expect(after.materialSignature).not.toBe(before.materialSignature);
   });
 
   test("rejects a direct-payment row with missing required values at canonical materialisation", async () => {
@@ -889,7 +1019,62 @@ describe("PTRS canonical revisions", () => {
         missingFields: ["payment_date"],
       },
     });
-    expect(revisions.at(-1)).toMatchObject({ status: "failed" });
+    expect(revisions.at(-1)).toMatchObject({
+      status: "failed",
+      failure: {
+        code: "DIRECT_PAYMENT_CANONICAL_ROW_INVALID",
+        details: { missingFields: ["payment_date"] },
+      },
+    });
+    expect(canonicalRows).toHaveLength(0);
+  });
+
+  test("identifies invalid direct-payment date fields in the response and persisted failure", async () => {
+    await expect(
+      materializeCanonicalRevision({
+        ...scope,
+        datasetId: "dataset-direct",
+        compose: jest.fn(async () =>
+          composeDirectRow({ payment_date: "2/26/2026" }),
+        ),
+      }),
+    ).rejects.toMatchObject({
+      code: "DIRECT_PAYMENT_CANONICAL_ROW_INVALID",
+      message: expect.stringContaining("invalid fields payment_date"),
+      details: {
+        invalidFields: ["payment_date"],
+        invalidFieldDetails: [
+          { field: "payment_date", reason: "INVALID_CANONICAL_DATE" },
+        ],
+      },
+    });
+    expect(revisions.at(-1).failure.details.invalidFields).toEqual([
+      "payment_date",
+    ]);
+  });
+
+  test("identifies malformed direct-payment amounts as a field-specific failure", async () => {
+    await expect(
+      materializeCanonicalRevision({
+        ...scope,
+        datasetId: "dataset-direct",
+        compose: jest.fn(async () =>
+          composeDirectRow({ payment_amount: "1.234,56" }),
+        ),
+      }),
+    ).rejects.toMatchObject({
+      code: "DIRECT_PAYMENT_CANONICAL_ROW_INVALID",
+      message: expect.stringContaining("invalid fields payment_amount"),
+      details: {
+        invalidFields: ["payment_amount"],
+        invalidFieldDetails: [
+          {
+            field: "payment_amount",
+            reason: "INVALID_CANONICAL_NUMBER",
+          },
+        ],
+      },
+    });
     expect(canonicalRows).toHaveLength(0);
   });
 

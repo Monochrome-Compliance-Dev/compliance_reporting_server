@@ -15,6 +15,7 @@ jest.mock("@/v2/ptrs/services/canonical.ptrs.service", () => ({
 }));
 
 const { buildStageInputSnapshot } = require("./stage.staleness.ptrs.service");
+const { buildStableInputHash } = require("./ptrs.service");
 
 describe("PTRS Stage input snapshot database access", () => {
   test("aggregates term state once before reading Stage configuration", async () => {
@@ -62,5 +63,14 @@ describe("PTRS Stage input snapshot database access", () => {
       count: 3,
       maxUpdatedAt: "2026-08-28T01:00:00.000Z",
     });
+    expect(snapshot.derivationVersion).toBe(
+      "2026-09-15-payment-term-numeric-component-v1",
+    );
+    expect(buildStableInputHash(snapshot)).not.toBe(
+      buildStableInputHash({
+        ...snapshot,
+        derivationVersion: "previous-stage-derivation-version",
+      }),
+    );
   });
 });

@@ -133,6 +133,22 @@ describe("bounded PTRS process validation", () => {
     expect(sql).toContain("sample_rank <= :sampleLimit");
   });
 
+  test("distinguishes missing and supplied-invalid payer ABNs using the common validation result", () => {
+    const sql = buildProcessValidateSummarySql();
+
+    expect(sql).toContain("AS payer_abn_supplied");
+    expect(sql).toContain("AS payer_abn_valid");
+    expect(sql).toContain("COUNT(*) FILTER (WHERE NOT payer_abn_supplied)");
+    expect(sql).toContain("WHERE payer_abn_supplied AND NOT payer_abn_valid");
+    expect(sql).toContain("NOT numbered.payer_abn_supplied");
+    expect(sql).toContain("numbered.payer_abn_supplied");
+    expect(sql).toContain("AND NOT numbered.payer_abn_valid");
+    expect(sql).toContain("'PAYER_ABN_MISSING'");
+    expect(sql).toContain("'PAYER_ABN_INVALID'");
+    expect(sql).toContain("% 89 = 0");
+    expect(sql).toContain("'value', numbered.payer_abn_raw");
+  });
+
   test("blocks a non-empty SAP obligation population with no ZP rows", async () => {
     db.sequelize.query.mockResolvedValue([
       {

@@ -52,3 +52,38 @@ test.each([
     );
   },
 );
+
+test("returns direct-payment field validation details to the mapping workflow", async () => {
+  service.materializeCanonicalRevision.mockRejectedValue(
+    Object.assign(
+      new Error("Invalid direct-payment row: invalid payment_date"),
+      {
+        code: "DIRECT_PAYMENT_CANONICAL_ROW_INVALID",
+        statusCode: 422,
+        details: {
+          sourceRowNo: 1,
+          invalidFields: ["payment_date"],
+        },
+      },
+    ),
+  );
+  const req = {
+    effectiveCustomerId: "customer01",
+    params: { id: "ptrs000001", datasetId: "dataset001" },
+    body: { profileId: "profile001" },
+    auth: { id: "user000001" },
+    headers: {},
+  };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const next = jest.fn();
+
+  await materializeRevision(req, res, next);
+
+  expect(next).not.toHaveBeenCalled();
+  expect(res.status).toHaveBeenCalledWith(422);
+  expect(res.json).toHaveBeenCalledWith({
+    status: "error",
+    message: "Invalid direct-payment row: invalid payment_date",
+    details: { sourceRowNo: 1, invalidFields: ["payment_date"] },
+  });
+});

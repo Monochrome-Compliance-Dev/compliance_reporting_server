@@ -7,7 +7,7 @@ const mockFieldMap = [
   {
     canonicalField: "payeeEntityAbn",
     sourceRole: "vendormaster",
-    datasetId: "vendor-1",
+    datasetId: "transaction-1",
   },
 ];
 
@@ -50,14 +50,14 @@ describe("GET PTRS field map", () => {
     jest.clearAllMocks();
   });
 
-  test("returns the complete profile-scoped map without datasetId", async () => {
+  test("returns the map scoped to the requested dataset", async () => {
     const req = {
       effectiveCustomerId: "customer-1",
       auth: { id: "user-1" },
       ip: "127.0.0.1",
       headers: { "user-agent": "jest" },
       params: { id: "ptrs-1" },
-      query: { profileId: "profile-1" },
+      query: { profileId: "profile-1", datasetId: "transaction-1" },
     };
     const res = makeResponse();
     const next = jest.fn();
@@ -78,10 +78,11 @@ describe("GET PTRS field map", () => {
       customerId: "customer-1",
       ptrsId: "ptrs-1",
       profileId: "profile-1",
+      datasetId: "transaction-1",
     });
     expect(mockFieldMap.map((row) => row.datasetId)).toEqual([
       "transaction-1",
-      "vendor-1",
+      "transaction-1",
     ]);
   });
 });

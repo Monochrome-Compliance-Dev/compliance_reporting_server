@@ -41,7 +41,7 @@ const {
   loadEffectiveTermChangesForRows,
   applyEffectiveTermChangesToRows,
   loadPaymentTermMap,
-  applyPaymentTermDaysFromMap,
+  applyPaymentTermDays,
 } = require("@/v2/ptrs/services/stage.payment-terms.ptrs.service");
 
 const {
@@ -94,7 +94,7 @@ async function stagePtrs({
     loadEffectiveTermChangesForRows,
     applyEffectiveTermChangesToRows,
     loadPaymentTermMap,
-    applyPaymentTermDaysFromMap,
+    applyPaymentTermDays,
     computePaymentTimeRegulator,
     collectCanonicalContractFields,
     PTRS_CANONICAL_CONTRACT,

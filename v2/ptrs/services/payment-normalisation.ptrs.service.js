@@ -26,6 +26,7 @@ const DOCUMENT_TYPES = Object.freeze({
 
 const NORMALISATION_EPSILON = 0.005;
 const PAYMENT_NORMALISATION_VERSION = "veolia-payment-normalisation-v8";
+const PAYMENT_NORMALISATION_WORK_MEM = "128MB";
 const NORMALISATION_RESULT_MISSING = "PTRS_NORMALISATION_RESULT_MISSING";
 const VEOLIA_PAYMENT_TIME_REFERENCE_POLICY = Object.freeze({
   id: "veolia_ariba_invoice_receipt_v1",
@@ -115,6 +116,14 @@ async function acquirePaymentNormalisationLock({ transaction, identity }) {
       },
       type: db.sequelize.QueryTypes.SELECT,
     },
+  );
+}
+
+async function setPaymentNormalisationWorkMem({ transaction }) {
+  if (!transaction) return;
+  await db.sequelize.query(
+    `SET LOCAL work_mem = '${PAYMENT_NORMALISATION_WORK_MEM}'`,
+    { transaction },
   );
 }
 
@@ -1346,48 +1355,69 @@ function buildPaymentNormalisationCte() {
         END AS clearing_pattern
       FROM payment_normalisation_group_facts facts
     ),
-    payment_normalisation_neutralisation_candidates AS (
-      SELECT
-        negative."id" AS negative_stage_row_id,
-        positive."id" AS positive_stage_row_id,
-        COUNT(*) OVER (PARTITION BY negative."id") AS negative_match_count,
-        COUNT(*) OVER (PARTITION BY positive."id") AS positive_match_count
-      FROM payment_normalisation_classified_source_rows negative
-      JOIN payment_normalisation_clearing_events event
-        ON event.normalisation_group_key = negative.normalisation_group_key
-      JOIN payment_normalisation_classified_source_rows positive
-        ON positive.normalisation_group_key =
-          negative.normalisation_group_key
-       AND positive.signed_amount > 0.005
-       AND ABS(negative.signed_amount + positive.signed_amount) <= 0.005
-       AND (
-         (
-           negative.document_type = 'AB'
-           AND positive.document_type IN ('RE', 'KR')
-         )
-         OR (
-           negative.document_type IN ('ET', 'KG', 'KR')
-           AND positive.document_type = negative.document_type
-           AND COALESCE(positive.economic_reference, '') =
-             COALESCE(negative.economic_reference, '')
-         )
-       )
-      WHERE event.clearing_pattern IN (
-          'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
-          'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
-        )
-        AND negative.signed_amount < -0.005
-    ),
-    payment_normalisation_aggregate_ab_offset_groups AS MATERIALIZED (
-      SELECT source.normalisation_group_key
+    payment_normalisation_neutralisation_eligible_rows AS MATERIALIZED (
+      SELECT source.*
       FROM payment_normalisation_classified_source_rows source
       JOIN payment_normalisation_clearing_events event
         ON event.normalisation_group_key = source.normalisation_group_key
       WHERE event.clearing_pattern IN (
-          'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
-          'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
-        )
+        'SUPPORTED_5_ZP_SUPPLIER_SETTLEMENT',
+        'SUPPORTED_4_KZ_SUPPLIER_SETTLEMENT'
+      )
         AND (
+          (
+            source.signed_amount < -0.005
+            AND source.document_type IN ('AB', 'ET', 'KG', 'KR')
+          )
+          OR (
+            source.signed_amount > 0.005
+            AND source.document_type IN ('RE', 'KR', 'ET', 'KG')
+          )
+        )
+    ),
+    payment_normalisation_neutralisation_candidate_pairs AS MATERIALIZED (
+      SELECT
+        negative."id" AS negative_stage_row_id,
+        positive."id" AS positive_stage_row_id
+      FROM payment_normalisation_neutralisation_eligible_rows negative
+      JOIN payment_normalisation_neutralisation_eligible_rows positive
+        ON positive.normalisation_group_key =
+          negative.normalisation_group_key
+       -- Stage paymentAmount is DECIMAL(18,2), so this is equivalent to the
+       -- previous 0.005 tolerance while remaining an equality join key.
+       AND positive.signed_amount = -negative.signed_amount
+      WHERE negative.document_type = 'AB'
+        AND negative.signed_amount < -0.005
+        AND positive.document_type IN ('RE', 'KR')
+        AND positive.signed_amount > 0.005
+      UNION ALL
+      SELECT
+        negative."id" AS negative_stage_row_id,
+        positive."id" AS positive_stage_row_id
+      FROM payment_normalisation_neutralisation_eligible_rows negative
+      JOIN payment_normalisation_neutralisation_eligible_rows positive
+        ON positive.normalisation_group_key =
+          negative.normalisation_group_key
+       AND positive.document_type = negative.document_type
+       AND positive.signed_amount = -negative.signed_amount
+       AND COALESCE(positive.economic_reference, '') =
+         COALESCE(negative.economic_reference, '')
+      WHERE negative.document_type IN ('ET', 'KG', 'KR')
+        AND negative.signed_amount < -0.005
+        AND positive.signed_amount > 0.005
+    ),
+    payment_normalisation_neutralisation_candidates AS (
+      SELECT pair.*,
+        COUNT(*) OVER (PARTITION BY negative_stage_row_id)
+          AS negative_match_count,
+        COUNT(*) OVER (PARTITION BY positive_stage_row_id)
+          AS positive_match_count
+      FROM payment_normalisation_neutralisation_candidate_pairs pair
+    ),
+    payment_normalisation_aggregate_ab_offset_groups AS MATERIALIZED (
+      SELECT source.normalisation_group_key
+      FROM payment_normalisation_neutralisation_eligible_rows source
+      WHERE (
           (document_type = 'AB' AND signed_amount < -0.005)
           OR (
             document_type IN ('RE', 'KR') AND signed_amount > 0.005
@@ -1989,12 +2019,6 @@ function buildPersistPaymentNormalisationSql() {
   } = buildPaymentTimeAllocationProjectionSql();
   return `
       WITH ${buildPaymentNormalisationCte()},
-      invoice_adjustment_evidence AS MATERIALIZED (
-        SELECT allocation.invoice_stage_row_id,
-          JSONB_AGG(DISTINCT allocation.reason_code) AS reason_codes
-        FROM payment_normalisation_adjustment_allocations allocation
-        GROUP BY allocation.invoice_stage_row_id
-      ),
       invoice_payment_evidence AS MATERIALIZED (
         SELECT allocation.invoice_stage_row_id,
           SUM(allocation.allocated_amount)::numeric AS allocated_amount,
@@ -2005,132 +2029,10 @@ function buildPersistPaymentNormalisationSql() {
         FROM payment_normalisation_payment_allocations allocation
         GROUP BY allocation.invoice_stage_row_id
       ),
-      payment_source_evidence AS MATERIALIZED (
-        SELECT allocation.payment_stage_row_id,
-          JSONB_AGG(
-            allocation.invoice_stage_row_id
-            ORDER BY allocation.invoice_stage_row_id
-          ) AS invoice_stage_row_ids,
-          BOOL_OR(allocation.obligation_after_payment > 0.005)
-            AS partial_payment,
-          BOOL_OR(allocation.obligation_after_payment <= 0.005)
-            AS final_settlement
-        FROM payment_normalisation_payment_allocations allocation
-        GROUP BY allocation.payment_stage_row_id
-      ),
       exception_codes AS MATERIALIZED (
         SELECT source_stage_row_id, MIN(reason_code) AS exception_code
         FROM payment_normalisation_exceptions
         GROUP BY source_stage_row_id
-      ),
-      evidence AS (
-        SELECT source."id" AS stage_row_id,
-          JSONB_BUILD_OBJECT(
-            'role', source.normalisation_role,
-            'signedAmount', source.signed_amount,
-            'originalAmount', source.normalisation_amount,
-            'originalObligationAmount',
-              obligation.original_obligation_amount,
-            'adjustedObligationAmount',
-              obligation.adjusted_obligation_amount,
-            'adjustmentAllocatedAmount',
-              obligation.adjustment_allocated_amount,
-            'paymentAllocatedAmount', COALESCE(
-              invoice_payment.allocated_amount,
-              payment_totals.allocated_amount
-            ),
-            'outstandingAmount', CASE
-              WHEN obligation."id" IS NULL THEN NULL
-              ELSE GREATEST(
-                0,
-                obligation.adjusted_obligation_amount
-                  - COALESCE(invoice_payment.allocated_amount, 0)
-              )
-            END,
-            'unmatchedAmount', COALESCE(
-              adjustment_totals.unmatched_amount,
-              payment_totals.unmatched_amount
-            ),
-            'reversalOffsetAmount', CASE
-              WHEN source.normalisation_role IN (
-                'NON_PAYMENT', 'NEUTRALISED'
-              ) THEN source.normalisation_amount
-              ELSE COALESCE(adjustment_totals.reversal_offset_amount, 0)
-            END,
-            'exceptionCode', exception_codes.exception_code,
-            'adjustmentReasonCodes',
-              COALESCE(adjustment_evidence.reason_codes, '[]'::jsonb),
-            'paymentStageRowIds',
-              COALESCE(invoice_payment.payment_stage_row_ids, '[]'::jsonb),
-            'invoiceStageRowIds', CASE
-              WHEN source.normalisation_role <> 'PAYMENT' THEN '[]'::jsonb
-              ELSE COALESCE(
-                payment_evidence.invoice_stage_row_ids,
-                '[]'::jsonb
-              )
-            END,
-            'partialPayment', CASE
-              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
-              ELSE COALESCE(payment_evidence.partial_payment, false)
-            END,
-            'finalSettlement', CASE
-              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
-              ELSE COALESCE(payment_evidence.final_settlement, false)
-            END,
-            'classificationBasis', CASE
-              WHEN source.normalisation_role <> 'PAYMENT' THEN NULL
-              WHEN source.document_type = 'KZ'
-                THEN 'outstanding_obligation_after_clearing_settlement'
-              ELSE 'outstanding_obligation_after_zp'
-            END,
-            'contractualInstalmentIndicatorAvailable', false,
-            'clearingEvent', CASE
-              WHEN reconciliation.normalisation_group_key IS NULL THEN NULL
-              ELSE JSONB_BUILD_OBJECT(
-                'clearingFamily', reconciliation.clearing_family,
-                'clearingPattern', reconciliation.clearing_pattern,
-                'reconciled', reconciliation.reconciled,
-                'allocationResolved', reconciliation.allocation_resolved,
-                'signedClearingGroupTotal',
-                  reconciliation.signed_clearing_group_total,
-                'finalUnexplainedSignedResidual',
-                  reconciliation.final_unexplained_signed_residual,
-                'sourceAbsoluteAmount',
-                  reconciliation.source_absolute_amount,
-                'participatingDocumentTypes',
-                  reconciliation.participating_document_types
-              )
-            END,
-            'unresolvedAdjustmentAllocation', CASE
-              WHEN exception_codes.exception_code =
-                'UNRESOLVED_ADJUSTMENT_ALLOCATION'
-                THEN reconciliation.unresolved_adjustment_evidence
-              ELSE NULL
-            END,
-            'normalisationResultId', :normalisationResultId,
-            'inputSignature', :inputSignature,
-            'calculationVersion', :calculationVersion
-          ) AS evidence
-        FROM payment_normalisation_source_rows source
-        LEFT JOIN payment_normalisation_adjusted_obligations obligation
-          ON obligation."id" = source."id"
-        LEFT JOIN invoice_adjustment_evidence adjustment_evidence
-          ON adjustment_evidence.invoice_stage_row_id = source."id"
-        LEFT JOIN invoice_payment_evidence invoice_payment
-          ON invoice_payment.invoice_stage_row_id = source."id"
-        LEFT JOIN payment_source_evidence payment_evidence
-          ON payment_evidence.payment_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_adjustment_source_totals
-            adjustment_totals
-          ON adjustment_totals.adjustment_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_payment_source_totals payment_totals
-          ON payment_totals.payment_stage_row_id = source."id"
-        LEFT JOIN exception_codes
-          ON exception_codes.source_stage_row_id = source."id"
-        LEFT JOIN payment_normalisation_clearing_reconciliations
-            reconciliation
-          ON reconciliation.normalisation_group_key =
-            source.normalisation_group_key
       ),
       normalisation_rows_inserted AS (
         INSERT INTO "tbl_ptrs_payment_normalisation_row" (
@@ -2256,37 +2158,10 @@ function buildPersistPaymentNormalisationSql() {
         JOIN payment_normalisation_source_rows source
           ON source."id" = exception.source_stage_row_id
         RETURNING 1
-      ),
-      updated AS (
-        UPDATE "tbl_ptrs_stage_row" stage_row
-        SET "meta" = JSONB_SET(
-              COALESCE(stage_row."meta", '{}'::jsonb),
-              '{paymentNormalisation}',
-              evidence.evidence,
-              true
-            ),
-            "data" = CASE
-              WHEN evidence.evidence->>'role' = 'PAYMENT' THEN JSONB_SET(
-                COALESCE(stage_row."data", '{}'::jsonb),
-                '{partial_payment}',
-                TO_JSONB(COALESCE(
-                  (evidence.evidence->>'partialPayment')::boolean,
-                  false
-                )),
-                true
-              )
-              ELSE COALESCE(stage_row."data", '{}'::jsonb)
-            END,
-            "updatedAt" = now()
-        FROM evidence
-        WHERE stage_row."id" = evidence.stage_row_id
-          AND stage_row."customerId" = :customerId
-          AND stage_row."ptrsId" = :ptrsId
-          AND stage_row."deletedAt" IS NULL
-        RETURNING stage_row."id"
       )
       SELECT
-        (SELECT COUNT(*)::int FROM updated) AS "persisted",
+        (SELECT COUNT(*)::int FROM normalisation_rows_inserted)
+          AS "persisted",
         (SELECT COUNT(*)::int FROM normalisation_rows_inserted)
           AS "normalisationRowCount",
         (SELECT COUNT(*)::int FROM normalisation_allocations_inserted)
@@ -2567,6 +2442,9 @@ async function persistPaymentNormalisationEvidence({
       );
     }
     const calculationStartedAt = process.hrtime.bigint();
+    await measure("workMem", () =>
+      setPaymentNormalisationWorkMem({ transaction }),
+    );
     const sql = buildPersistPaymentNormalisationSql();
     const resultRows = await measure("materialisationStatement", () =>
       db.sequelize.query(sql, {

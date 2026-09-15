@@ -2,6 +2,7 @@ let mockConfiguredJoins = [];
 let mockConfiguredCustomFields = [];
 let mockTransactionRows = [];
 let mockReferenceRows = [];
+let mockTransactionDataset = null;
 
 const mockDb = {
   PtrsDataset: {
@@ -82,6 +83,14 @@ jest.mock("@/v2/ptrs/services/maps.dependencies.ptrs.service", () => ({
       },
       {
         datasetId: "transaction-1",
+        canonicalField: "payment_amount",
+        sourceRole: "transaction",
+        sourceColumn: "Amount",
+        transformType: null,
+        transformConfig: null,
+      },
+      {
+        datasetId: "transaction-1",
         canonicalField: "invoice_due_date",
         sourceRole: "transaction",
         sourceColumn: "Due Date",
@@ -103,13 +112,9 @@ jest.mock("@/v2/ptrs/services/maps.dependencies.ptrs.service", () => ({
     normalisedJoins: mockConfiguredJoins,
   })),
   normaliseConfiguredCustomFields: jest.fn(() => mockConfiguredCustomFields),
-  resolveTransactionDatasetForCompose: jest.fn(async () => ({
-    id: "transaction-1",
-    purpose: "transaction",
-    adapterType: "sap_accounting_event",
-    sourceFormat: "csv",
-    status: "parsed",
-  })),
+  resolveTransactionDatasetForCompose: jest.fn(
+    async () => mockTransactionDataset,
+  ),
   loadTransactionRowsForCompose: jest.fn(async () => mockTransactionRows),
   buildHeadersFromComposedRows: jest.fn((rows) => Object.keys(rows?.[0] || {})),
 }));
@@ -165,6 +170,13 @@ describe("PTRS custom-field join composition", () => {
     jest.clearAllMocks();
     mockConfiguredJoins = [];
     mockConfiguredCustomFields = [];
+    mockTransactionDataset = {
+      id: "transaction-1",
+      purpose: "transaction",
+      adapterType: "sap_accounting_event",
+      sourceFormat: "csv",
+      status: "parsed",
+    };
     mockTransactionRows = [
       {
         id: "raw-transaction-1",
@@ -204,6 +216,79 @@ describe("PTRS custom-field join composition", () => {
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0].invoice_receipt_date).toBe("2026-01-15");
+  });
+
+  test("normalises governed direct-payment dates and amount while retaining source evidence", async () => {
+    mockTransactionDataset = {
+      ...mockTransactionDataset,
+      adapterType: "direct_payment",
+      dateFormat: "MDY",
+    };
+    mockTransactionRows[0].data = {
+      ...mockTransactionRows[0].data,
+      "Document Date": "12/02/2025",
+      "Payment Date": "2/26/2026",
+      Amount: "(27,844.63)",
+      "Due Date": "03/02/2026",
+    };
+
+    const result = await compose();
+
+    expect(result.rows[0]).toMatchObject({
+      "Document Date": "12/02/2025",
+      invoice_issue_date: "2025-12-02",
+      payment_date: "2026-02-26",
+      payment_amount: "-27844.63",
+      invoice_due_date: "2026-03-02",
+    });
+    expect(mockTransactionRows[0].data).toMatchObject({
+      "Document Date": "12/02/2025",
+      "Payment Date": "2/26/2026",
+      Amount: "(27,844.63)",
+      "Due Date": "03/02/2026",
+    });
+    expect(
+      result.rows[0]._ptrsMeta.canonicalSources.payment_date.normalisation,
+    ).toEqual({
+      type: "date",
+      dateFormat: "MDY",
+      originalValue: "2/26/2026",
+      canonicalValue: "2026-02-26",
+      error: null,
+    });
+    expect(
+      result.rows[0]._ptrsMeta.canonicalSources.payment_amount.normalisation,
+    ).toEqual({
+      type: "numeric",
+      originalValue: "(27,844.63)",
+      canonicalValue: "-27844.63",
+      error: null,
+    });
+  });
+
+  test("retains malformed direct-payment amount evidence for field validation", async () => {
+    mockTransactionDataset = {
+      ...mockTransactionDataset,
+      adapterType: "direct_payment",
+      dateFormat: "MDY",
+    };
+    mockTransactionRows[0].data = {
+      ...mockTransactionRows[0].data,
+      Amount: "1.234,56",
+    };
+
+    const result = await compose();
+
+    expect(result.rows[0].payment_amount).toBe("1.234,56");
+    expect(mockTransactionRows[0].data.Amount).toBe("1.234,56");
+    expect(
+      result.rows[0]._ptrsMeta.canonicalSources.payment_amount.normalisation,
+    ).toEqual({
+      type: "numeric",
+      originalValue: "1.234,56",
+      canonicalValue: null,
+      error: "UNSUPPORTED_NUMERIC_FORMAT",
+    });
   });
 
   test("one prepared context loads references/indexes once across batches and retains the first duplicate and provenance", async () => {

@@ -179,7 +179,7 @@ function makeDependencies(persistedRows) {
       return { rows, stats: { considered: 1, applied: 1, missingKey: 0 } };
     }),
     loadPaymentTermMap: jest.fn(async () => new Map([["CHANGED", 45]])),
-    applyPaymentTermDaysFromMap: jest.fn((rows, termMap) => {
+    applyPaymentTermDays: jest.fn((rows, termMap) => {
       rows[0].payment_term_days = termMap.get(
         rows[0].contract_po_payment_terms_effective,
       );

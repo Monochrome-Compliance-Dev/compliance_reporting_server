@@ -8,6 +8,9 @@ const {
   normaliseConfiguredJoins,
 } = require("@/v2/ptrs/services/maps.dependencies.ptrs.service");
 
+const STAGE_DERIVATION_VERSION =
+  "2026-09-15-payment-term-numeric-component-v1";
+
 function deriveSupplierKey(row) {
   if (!row || typeof row !== "object") return null;
   const candidates = [
@@ -219,6 +222,40 @@ function extractTermChangesJoinSpec(
   });
 }
 
+function hasConfiguredTermChangesJoin(
+  mapRow,
+  {
+    customerId = null,
+    ptrsId = null,
+    transactionDatasetId = null,
+    datasets = [],
+  } = {},
+) {
+  const { normalisedJoins } = normaliseConfiguredJoins({
+    supportConfig: mapRow || {},
+    customerId,
+    ptrsId,
+    trace: null,
+  });
+  const datasetById = new Map(
+    (datasets || [])
+      .filter((dataset) => dataset?.id)
+      .map((dataset) => [String(dataset.id), dataset]),
+  );
+  return normalisedJoins.some((join) => {
+    const from = datasetById.get(String(join.fromDatasetId || ""));
+    const to = datasetById.get(String(join.toDatasetId || ""));
+    return (
+      (String(join.fromDatasetId) === String(transactionDatasetId) &&
+        from?.purpose === "transaction" &&
+        to?.referenceKind === "termschanges") ||
+      (String(join.toDatasetId) === String(transactionDatasetId) &&
+        to?.purpose === "transaction" &&
+        from?.referenceKind === "termschanges")
+    );
+  });
+}
+
 function getRowValueByField(row, field) {
   if (!row || typeof row !== "object" || !field) return null;
   if (!Object.prototype.hasOwnProperty.call(row, field)) return null;
@@ -240,6 +277,8 @@ async function loadEffectiveTermChangesForRows({
   const out = new Map();
   if (!customerId || !profileId) return out;
   if (!Array.isArray(rows) || rows.length === 0) return out;
+
+  if (!hasConfiguredTermChangesJoin(mapRow, joinContext || {})) return out;
 
   const joinSpec = extractTermChangesJoinSpec(mapRow, joinContext || {});
 
@@ -423,6 +462,10 @@ function applyEffectiveTermChangesToRows(
     return { rows, stats };
   }
 
+  if (!hasConfiguredTermChangesJoin(mapRow, joinContext || {})) {
+    return { rows, stats };
+  }
+
   const joinSpec = extractTermChangesJoinSpec(mapRow, joinContext || {});
 
   const allowedJoinColumns = new Set([
@@ -549,12 +592,17 @@ function inferTermDaysFromCode(code) {
   const s = String(code).trim();
   if (!s) return null;
 
-  if (/^\d{1,4}$/.test(s)) {
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
+  if (s.toUpperCase() === "COD") return 0;
+
+  const numericComponents = s.match(/\d+/g) || [];
+  if (numericComponents.length !== 1) return null;
+
+  const days = Number(numericComponents[0]);
+  if (!Number.isSafeInteger(days) || days < 0 || days > 2147483647) {
+    return null;
   }
 
-  return null;
+  return days;
 }
 
 async function seedMissingPaymentTermMapRows({
@@ -633,18 +681,22 @@ async function seedMissingPaymentTermMapRows({
   return { inserted };
 }
 
-function applyPaymentTermDaysFromMap(rows, termMap) {
+function applyPaymentTermDays(rows, termMap) {
   const stats = {
     lookedUp: 0,
     filled: 0,
+    derived: 0,
+    mapped: 0,
     missing: 0,
     unmapped: 0,
     unmappedTermsSample: [],
   };
 
-  if (!Array.isArray(rows) || !termMap || typeof termMap.get !== "function") {
+  if (!Array.isArray(rows)) {
     return { rows, stats };
   }
+  const configuredTermMap =
+    termMap && typeof termMap.get === "function" ? termMap : new Map();
 
   for (const r of rows) {
     if (!r || typeof r !== "object") continue;
@@ -669,10 +721,19 @@ function applyPaymentTermDaysFromMap(rows, termMap) {
 
     stats.lookedUp += 1;
 
-    const mapped = termMap.get(code);
+    const derived = inferTermDaysFromCode(code);
+    if (Number.isFinite(derived)) {
+      r.payment_term_days = derived;
+      stats.filled += 1;
+      stats.derived += 1;
+      continue;
+    }
+
+    const mapped = configuredTermMap.get(code);
     if (Number.isFinite(mapped)) {
       r.payment_term_days = mapped;
       stats.filled += 1;
+      stats.mapped += 1;
       continue;
     }
 
@@ -682,7 +743,8 @@ function applyPaymentTermDaysFromMap(rows, termMap) {
     if (!Array.isArray(r._stageErrors)) r._stageErrors = [];
     r._stageErrors.push({
       code: "PAYMENT_TERM_UNMAPPED",
-      message: "Payment term code is not mapped in tbl_ptrs_payment_term_map",
+      message:
+        "Payment term code could not be derived and is not explicitly mapped",
       field: "invoice_payment_terms_effective",
       value: code,
     });
@@ -695,6 +757,7 @@ function applyPaymentTermDaysFromMap(rows, termMap) {
 }
 
 module.exports = {
+  STAGE_DERIVATION_VERSION,
   deriveSupplierKey,
   deriveTermReferenceDate,
   buildEffectiveTermChangeKey,
@@ -702,6 +765,7 @@ module.exports = {
   normaliseHeaderToDbColumn,
   getCanonicalFieldForTransactionHeader,
   extractTermChangesJoinSpec,
+  hasConfiguredTermChangesJoin,
   getRowValueByField,
   loadEffectiveTermChangesForRows,
   applyEffectiveTermChangesToRows,
@@ -709,5 +773,5 @@ module.exports = {
   deriveTermCode,
   inferTermDaysFromCode,
   seedMissingPaymentTermMapRows,
-  applyPaymentTermDaysFromMap,
+  applyPaymentTermDays,
 };

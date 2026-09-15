@@ -14,6 +14,9 @@ const {
 const {
   resolveCurrentCanonicalRevisions,
 } = require("@/v2/ptrs/services/canonical.ptrs.service");
+const {
+  STAGE_DERIVATION_VERSION,
+} = require("@/v2/ptrs/services/stage.payment-terms.ptrs.service");
 
 async function buildStageInputSnapshot({
   customerId,
@@ -72,6 +75,7 @@ async function buildStageInputSnapshot({
   });
 
   return {
+    derivationVersion: STAGE_DERIVATION_VERSION,
     ptrsId,
     customerId,
     profileId: profileId || null,

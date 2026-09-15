@@ -28,6 +28,11 @@ router.post(
   ptrsController.addWorkbook,
 );
 router.get("/:id/datasets", requirePtrs, ptrsController.listDatasets);
+router.patch(
+  "/:id/datasets/:datasetId/settings",
+  requirePtrs,
+  ptrsController.updateDirectDatasetSettings,
+);
 router.delete(
   "/:id/datasets/:datasetId",
   requirePtrs,

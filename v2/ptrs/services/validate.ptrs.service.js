@@ -51,6 +51,25 @@ function buildValidDateSql(valueSql) {
   END`;
 }
 
+function buildAbnChecksumValidSql(digitsSql) {
+  return `CASE
+    WHEN ${digitsSql} ~ '^\\d{11}$' THEN (
+      (substring(${digitsSql}, 1, 1)::int - 1) * 10
+      + substring(${digitsSql}, 2, 1)::int
+      + substring(${digitsSql}, 3, 1)::int * 3
+      + substring(${digitsSql}, 4, 1)::int * 5
+      + substring(${digitsSql}, 5, 1)::int * 7
+      + substring(${digitsSql}, 6, 1)::int * 9
+      + substring(${digitsSql}, 7, 1)::int * 11
+      + substring(${digitsSql}, 8, 1)::int * 13
+      + substring(${digitsSql}, 9, 1)::int * 15
+      + substring(${digitsSql}, 10, 1)::int * 17
+      + substring(${digitsSql}, 11, 1)::int * 19
+    ) % 89 = 0
+    ELSE false
+  END`;
+}
+
 function buildComparableDateSql(valueSql) {
   const text = `BTRIM(COALESCE(${valueSql}, ''))`;
   return `CASE
@@ -128,6 +147,11 @@ function buildProcessValidateSummarySql() {
   const paymentDateValidSql = buildValidDateSql(paymentDateSql);
   const referenceDateValidSql = buildValidDateSql(referenceDateSql);
   const invoiceDateValidSql = buildValidDateSql(invoiceDateSql);
+  const payerAbnDigitsSql = `NULLIF(
+    regexp_replace(COALESCE(source.payer_abn_raw, ''), '\\D', '', 'g'),
+    ''
+  )`;
+  const payerAbnValidSql = buildAbnChecksumValidSql(payerAbnDigitsSql);
 
   return `
     WITH ${buildPaymentObservationsCte()},
@@ -192,6 +216,9 @@ function buildProcessValidateSummarySql() {
           ),
           ''
         ) AS payer_abn,
+        NULLIF(BTRIM(COALESCE(source.payer_abn_raw, '')), '') IS NOT NULL
+          AS payer_abn_supplied,
+        ${payerAbnValidSql} AS payer_abn_valid,
         BTRIM(COALESCE(source.payment_date_raw, '')) AS payment_date,
         BTRIM(COALESCE(source.reference_date_raw, ''))
           AS reference_date,
@@ -278,10 +305,10 @@ function buildProcessValidateSummarySql() {
         COUNT(*) FILTER (
           WHERE payee_abn IS NOT NULL AND payee_abn !~ '^\\d{11}$'
         )::int AS "invalidPayeeAbnCount",
-        COUNT(*) FILTER (WHERE payer_abn IS NULL)::int
+        COUNT(*) FILTER (WHERE NOT payer_abn_supplied)::int
           AS "missingPayerAbnCount",
         COUNT(*) FILTER (
-          WHERE payer_abn IS NOT NULL AND payer_abn !~ '^\\d{11}$'
+          WHERE payer_abn_supplied AND NOT payer_abn_valid
         )::int AS "invalidPayerAbnCount",
         COUNT(*) FILTER (WHERE reference_date = '')::int
           AS "missingPaymentTimeReferenceDateCount",
@@ -379,13 +406,13 @@ function buildProcessValidateSummarySql() {
               'value', numbered.payee_abn_raw
             )),
           (30, 'blocker', 'PAYER_ABN_MISSING',
-            numbered.payer_abn IS NULL,
+            NOT numbered.payer_abn_supplied,
             'Missing payer_entity_abn',
             jsonb_build_object('field', 'payer_entity_abn')),
           (40, 'blocker', 'PAYER_ABN_INVALID',
-            numbered.payer_abn IS NOT NULL
-              AND numbered.payer_abn !~ '^\\d{11}$',
-            'payer_entity_abn is not a valid 11-digit ABN',
+            numbered.payer_abn_supplied
+              AND NOT numbered.payer_abn_valid,
+            'payer_entity_abn fails the Australian ABN structure/checksum',
             jsonb_build_object(
               'field', 'payer_entity_abn',
               'value', numbered.payer_abn_raw

@@ -96,7 +96,10 @@ jest.mock("@/v2/ptrs/services/ptrs.service", () => ({
     String(value || "")
       .trim()
       .toLowerCase(),
-  normalizeJoinKeyValue: (value) => String(value || "").trim().toLowerCase(),
+  normalizeJoinKeyValue: (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase(),
   createExecutionRun: jest.fn(),
   updateExecutionRun: jest.fn(),
 }));
@@ -108,10 +111,8 @@ jest.mock("@/v2/ptrs/services/maps.staleness.ptrs.service", () => ({
   getMapStaleness: jest.fn(),
 }));
 
-const {
-  getFieldMap,
-  saveFieldMap,
-} = require("./maps.config.ptrs.service");
+const { getFieldMap, saveFieldMap } = require("./maps.config.ptrs.service");
+const { slog } = require("./ptrs.service");
 const {
   loadTransactionRowsForCompose,
   normaliseConfiguredJoins,
@@ -163,17 +164,13 @@ describe("PTRS dataset-scoped maps and composition", () => {
     });
   });
 
-  test("mapping reads return the complete profile map across datasets", async () => {
-    const rows = await getFieldMap(scope);
+  test("mapping reads return only the requested transaction dataset map", async () => {
+    const rows = await getFieldMap({ ...scope, datasetId: "dataset-a" });
 
-    expect(rows).toEqual(fieldMapRows);
-    expect(rows.map((row) => row.datasetId)).toEqual([
-      "dataset-a",
-      "vendor-a",
-    ]);
+    expect(rows).toEqual([fieldMapRows[0]]);
     expect(mockDb.PtrsFieldMap.findAll).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        where: scope,
+        where: { ...scope, datasetId: "dataset-a" },
       }),
     );
   });
@@ -200,6 +197,18 @@ describe("PTRS dataset-scoped maps and composition", () => {
       "vendor-1",
       "vendor-2",
     ]);
+    expect(slog.debug).toHaveBeenCalledWith(
+      "PTRS v2 composeMappedRowsForPtrs: normalised joins",
+      expect.objectContaining({
+        customerId: "customer-1",
+        ptrsId: "ptrs-1",
+        joinsCount: 2,
+      }),
+    );
+    expect(slog.info).not.toHaveBeenCalledWith(
+      "PTRS v2 composeMappedRowsForPtrs: normalised joins",
+      expect.anything(),
+    );
     expect(() =>
       normaliseConfiguredJoins({
         supportConfig: {
@@ -249,7 +258,12 @@ describe("PTRS dataset-scoped maps and composition", () => {
       .map((key) => idPredicate[key])
       .flat();
     expect(requestedIds).toEqual(
-      expect.arrayContaining(["dataset-a", "dataset-b", "vendor-1", "vendor-2"]),
+      expect.arrayContaining([
+        "dataset-a",
+        "dataset-b",
+        "vendor-1",
+        "vendor-2",
+      ]),
     );
     expect(mockDb.PtrsColumnMap.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -309,7 +323,10 @@ describe("PTRS dataset-scoped maps and composition", () => {
         },
       ],
       preparedJoinIndexes: new Map([
-        ["vendor-2|Code", new Map([["v1", { Code: "V1", Name: "Vendor Two" }]])],
+        [
+          "vendor-2|Code",
+          new Map([["v1", { Code: "V1", Name: "Vendor Two" }]]),
+        ],
       ]),
       counters,
       customerId: "customer-1",
@@ -383,5 +400,4 @@ describe("PTRS dataset-scoped maps and composition", () => {
       }),
     );
   });
-
 });

@@ -65,6 +65,13 @@ async function materializeRevision(req, res, next) {
       .status(result.revision.status === "building" ? 202 : 200)
       .json({ status: "success", data: result });
   } catch (error) {
+    if (error?.code === "DIRECT_PAYMENT_CANONICAL_ROW_INVALID") {
+      return res.status(error.statusCode || 422).json({
+        status: "error",
+        message: error.message,
+        details: error.details || null,
+      });
+    }
     return next(error);
   }
 }

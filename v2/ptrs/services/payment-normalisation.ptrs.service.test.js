@@ -659,6 +659,19 @@ describe("PTRS payment normalisation", () => {
     expect(cte).toContain("payment_normalisation_adjustment_target_sets");
     expect(cte).toContain("payment_normalisation_aggregate_ab_offset_groups");
     expect(cte).toContain(
+      "payment_normalisation_neutralisation_eligible_rows AS MATERIALIZED",
+    );
+    expect(cte).toContain(
+      "payment_normalisation_neutralisation_candidate_pairs AS MATERIALIZED",
+    );
+    expect(cte).toContain("positive.signed_amount = -negative.signed_amount");
+    expect(cte).not.toContain(
+      "ABS(negative.signed_amount + positive.signed_amount)",
+    );
+    expect(cte).toMatch(
+      /payment_normalisation_aggregate_ab_offset_groups AS MATERIALIZED \([\s\S]*?FROM payment_normalisation_neutralisation_eligible_rows source[\s\S]*?GROUP BY source\.normalisation_group_key/,
+    );
+    expect(cte).toContain(
       "target.economic_reference = obligation.economic_reference",
     );
     expect(cte).toContain("PARTITION BY target.allocation_group_key");
@@ -672,10 +685,9 @@ describe("PTRS payment normalisation", () => {
     expect(cte).not.toContain("payment_normalisation_group_source_evidence");
     expect(cte).toContain("signed_amount");
     expect(cte).toContain("allocation_resolved");
-    expect(sql).toContain("'reconciled', reconciliation.reconciled");
-    expect(sql).toContain(
-      "'allocationResolved', reconciliation.allocation_resolved",
-    );
+    expect(sql).not.toContain('UPDATE "tbl_ptrs_stage_row"');
+    expect(sql).not.toContain("'{paymentNormalisation}'");
+    expect(sql).not.toContain("'{partial_payment}'");
     expect(sql).not.toContain("BALANCED_CLEARING_RECONCILIATION");
     expect(sql).not.toContain("accepted_as_balanced_clearing");
   });
@@ -695,13 +707,16 @@ describe("PTRS payment normalisation", () => {
     };
     db.PtrsPaymentNormalisationResult.findOne.mockResolvedValue(null);
     db.PtrsPaymentNormalisationResult.create.mockResolvedValue(resultRow);
-    db.sequelize.query.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      {
-        persisted: 3,
-        startingStageCount: 3,
-        paymentAllocationCount: 1,
-      },
-    ]);
+    db.sequelize.query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          persisted: 3,
+          startingStageCount: 3,
+          paymentAllocationCount: 1,
+        },
+      ]);
 
     await expect(
       persistPaymentNormalisationEvidence({
@@ -729,13 +744,18 @@ describe("PTRS payment normalisation", () => {
           materialisationStatement: expect.objectContaining({
             elapsedMs: expect.any(Number),
           }),
+          workMem: expect.objectContaining({ elapsedMs: expect.any(Number) }),
           commit: expect.objectContaining({ elapsedMs: expect.any(Number) }),
         }),
       }),
       limitations: { contractualInstalmentIndicatorAvailable: false },
     });
-    expect(db.sequelize.query).toHaveBeenCalledTimes(2);
-    const [sql, options] = db.sequelize.query.mock.calls[1];
+    expect(db.sequelize.query).toHaveBeenCalledTimes(3);
+    expect(db.sequelize.query.mock.calls[1]).toEqual([
+      "SET LOCAL work_mem = '128MB'",
+      { transaction },
+    ]);
+    const [sql, options] = db.sequelize.query.mock.calls[2];
     expect(options).toMatchObject({
       transaction,
       replacements: {
@@ -747,7 +767,6 @@ describe("PTRS payment normalisation", () => {
       },
       type: "SELECT",
     });
-    expect(sql).toContain("invoice_adjustment_evidence AS MATERIALIZED");
     expect(sql).toContain("invoice_payment_evidence AS MATERIALIZED");
     expect(sql).toContain('INSERT INTO "tbl_ptrs_payment_normalisation_row"');
     expect(sql).toContain(
@@ -756,16 +775,15 @@ describe("PTRS payment normalisation", () => {
     expect(sql).toContain(
       'INSERT INTO "tbl_ptrs_payment_normalisation_exception"',
     );
-    expect(sql).toContain("'clearingEvent', CASE");
-    expect(sql).toContain("payment_source_evidence AS MATERIALIZED");
-    expect(sql).not.toContain("'sourceRows', reconciliation.source_rows");
-    expect(sql).not.toContain("\n      evidence AS MATERIALIZED");
-    expect(sql).toContain(
-      "'allocationResolved', reconciliation.allocation_resolved",
-    );
-    expect(sql).toContain("'reconciled', reconciliation.reconciled");
+    expect(sql).not.toContain("invoice_adjustment_evidence AS MATERIALIZED");
+    expect(sql).not.toContain("payment_source_evidence AS MATERIALIZED");
+    expect(sql).not.toContain("evidence AS (");
     expect(sql).not.toContain("BALANCED_CLEARING_RECONCILIATION");
-    expect(sql).toContain("updated AS (");
+    expect(sql).not.toContain("updated AS (");
+    expect(sql).not.toContain('UPDATE "tbl_ptrs_stage_row"');
+    expect(sql).toContain(
+      '(SELECT COUNT(*)::int FROM normalisation_rows_inserted)\n          AS "persisted"',
+    );
     expect(
       sql.match(/payment_normalisation_source_rows AS MATERIALIZED/g),
     ).toHaveLength(1);
@@ -843,6 +861,7 @@ describe("PTRS payment normalisation", () => {
     db.PtrsPaymentNormalisationException.destroy.mockResolvedValue(0);
     db.sequelize.query
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ persisted: 1, startingStageCount: 1 }]);
 
     const result = await persistPaymentNormalisationEvidence({
@@ -906,6 +925,7 @@ describe("PTRS payment normalisation", () => {
     db.PtrsPaymentNormalisationResult.create.mockResolvedValue(resultRow);
     db.sequelize.query
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ persisted: 2, startingStageCount: 2 }]);
 
     const calculated = await persistPaymentNormalisationEvidence({
@@ -967,6 +987,7 @@ describe("PTRS payment normalisation", () => {
     beginTransactionWithCustomerContext.mockResolvedValue(transaction);
     db.PtrsPaymentNormalisationResult.create.mockResolvedValue(resultRow);
     db.sequelize.query
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ persisted: 2, startingStageCount: 2 }]);
 

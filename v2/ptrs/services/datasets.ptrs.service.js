@@ -13,6 +13,14 @@ const REFERENCE_KINDS = Object.freeze([
 
 const SOURCE_FORMATS = Object.freeze(["csv", "xlsx", "api"]);
 
+function getAdapterContract(adapterType) {
+  // Resolve lazily because ptrs.service -> data.ptrs.service -> this module is
+  // part of the normal upload dependency chain.
+  return require("./canonical.adapters.ptrs.service").getCanonicalAdapterContract(
+    adapterType,
+  );
+}
+
 const XERO_TRANSACTION_DATASET = Object.freeze({
   role: "transaction",
   purpose: "transaction",
@@ -78,9 +86,36 @@ function validateDatasetClassification({
     referenceKind != null &&
     String(referenceKind).trim() !== ""
   ) {
-    const error = new Error("referenceKind must be empty for transaction datasets");
+    const error = new Error(
+      "referenceKind must be empty for transaction datasets",
+    );
     error.statusCode = 400;
     throw error;
+  }
+
+  const normalisedAdapterType = normaliseToken(adapterType);
+  let adapterContract = null;
+  if (normalisedPurpose === DATASET_PURPOSES.TRANSACTION) {
+    adapterContract = getAdapterContract(normalisedAdapterType);
+    if (!adapterContract) {
+      const error = new Error(
+        "adapterType must identify a supported transaction adapter",
+      );
+      error.statusCode = 400;
+      error.code = "UNSUPPORTED_CANONICAL_ADAPTER";
+      throw error;
+    }
+    const requestedVersion = String(
+      adapterVersion || adapterContract.defaultVersion,
+    ).trim();
+    if (!adapterContract.supportedVersions.includes(requestedVersion)) {
+      const error = new Error(
+        `Unsupported transaction adapter version: ${normalisedAdapterType}@${requestedVersion}`,
+      );
+      error.statusCode = 400;
+      error.code = "UNSUPPORTED_CANONICAL_ADAPTER_VERSION";
+      throw error;
+    }
   }
 
   return {
@@ -90,8 +125,12 @@ function validateDatasetClassification({
       normalisedPurpose === DATASET_PURPOSES.REFERENCE
         ? normalisedReferenceKind
         : null,
-    adapterType: normaliseToken(adapterType) || null,
-    adapterVersion: String(adapterVersion || "").trim() || null,
+    adapterType: normalisedAdapterType || null,
+    adapterVersion:
+      normalisedPurpose === DATASET_PURPOSES.TRANSACTION
+        ? String(adapterVersion || "").trim() ||
+          adapterContract.defaultVersion
+        : String(adapterVersion || "").trim() || null,
     sourceGroupScope: String(sourceGroupScope || "").trim() || null,
     role:
       normalisedPurpose === DATASET_PURPOSES.TRANSACTION

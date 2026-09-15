@@ -109,8 +109,8 @@ async function loadComposeDependencies({
     throw e;
   }
 
-  if (logger && logger.info) {
-    slog.info(
+  if (logger && logger.debug) {
+    slog.debug(
       "PTRS v2 composeMappedRowsForPtrs: field map loaded",
       safeMeta({
         customerId,
@@ -214,8 +214,8 @@ function normaliseConfiguredJoins({
     joinsCount: normalisedJoins.length,
   });
 
-  if (logger && logger.info) {
-    slog.info(
+  if (logger && logger.debug) {
+    slog.debug(
       "PTRS v2 composeMappedRowsForPtrs: normalised joins",
       safeMeta({ customerId, ptrsId, joinsCount: normalisedJoins.length }),
     );
@@ -253,8 +253,8 @@ function normaliseConfiguredCustomFields({
     customFieldsCount: Array.isArray(customFields) ? customFields.length : 0,
   });
 
-  if (logger && logger.info) {
-    slog.info(
+  if (logger && logger.debug) {
+    slog.debug(
       "PTRS v2 composeMappedRowsForPtrs: custom fields normalised",
       safeMeta({
         customerId,

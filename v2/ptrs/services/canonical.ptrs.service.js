@@ -21,6 +21,13 @@ const {
 const {
   SAP_INVOICE_DATE_POLICY_VERSION,
 } = require("@/v2/ptrs/services/canonical.date-policy.ptrs.service");
+const {
+  DIRECT_PAYMENT_DATE_NORMALISATION_VERSION,
+  normaliseDatasetDateFormat,
+} = require("@/v2/ptrs/services/canonical.date-normalisation.ptrs.service");
+const {
+  DIRECT_PAYMENT_SCALAR_NORMALISATION_VERSION,
+} = require("@/v2/ptrs/services/canonical.scalar-normalisation.ptrs.service");
 
 const CANONICAL_VERSION = "ptrs-canonical-v3";
 const CANONICAL_BATCH_SIZE = 2000;
@@ -54,6 +61,59 @@ function parseJson(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function buildReportingEntityMaterial(snapshot) {
+  if (!snapshot) return null;
+  return {
+    id: snapshot.id,
+    datasetId: snapshot.datasetId || null,
+    profileId: snapshot.profileId || null,
+    entityName: snapshot.entityName,
+    abn: snapshot.abn,
+    acn: snapshot.acn || null,
+    arbn: snapshot.arbn || null,
+    country: snapshot.country || null,
+    source: snapshot.source || null,
+    updatedAt: snapshot.updatedAt || null,
+  };
+}
+
+function applyReportingEntitySnapshot(row, reportingEntity) {
+  if (!reportingEntity) return row;
+  const data = { ...(row || {}) };
+  data.payer_entity_name = reportingEntity.entityName;
+  data.payer_entity_abn = reportingEntity.abn;
+  if (reportingEntity.acn || reportingEntity.arbn) {
+    data.payer_entity_acn_arbn = reportingEntity.acn || reportingEntity.arbn;
+  }
+  const meta =
+    data._ptrsMeta && typeof data._ptrsMeta === "object"
+      ? { ...data._ptrsMeta }
+      : {};
+  const canonicalSources =
+    meta.canonicalSources && typeof meta.canonicalSources === "object"
+      ? { ...meta.canonicalSources }
+      : {};
+  for (const field of ["payer_entity_name", "payer_entity_abn"]) {
+    canonicalSources[field] = {
+      sourceRole: "dataset_reporting_entity_snapshot",
+      datasetReportingEntitySnapshotId: reportingEntity.id,
+      sourceDatasetId: reportingEntity.datasetId,
+      sourceField: field === "payer_entity_name" ? "entityName" : "abn",
+    };
+  }
+  if (data.payer_entity_acn_arbn) {
+    canonicalSources.payer_entity_acn_arbn = {
+      sourceRole: "dataset_reporting_entity_snapshot",
+      datasetReportingEntitySnapshotId: reportingEntity.id,
+      sourceDatasetId: reportingEntity.datasetId,
+      sourceField: reportingEntity.acn ? "acn" : "arbn",
+    };
+  }
+  meta.canonicalSources = canonicalSources;
+  data._ptrsMeta = meta;
+  return data;
 }
 
 function resolveCanonicalAdapter(dataset) {
@@ -195,6 +255,36 @@ async function buildCanonicalInputSnapshot({
     raw: true,
     transaction,
   });
+  const reportingEntity =
+    adapter.adapterType === "direct_payment"
+      ? buildReportingEntityMaterial(
+          await db.PtrsDatasetReportingEntitySnapshot.findOne({
+            where: { customerId, ptrsId, datasetId },
+            raw: true,
+            transaction,
+          }),
+        )
+      : null;
+  if (adapter.adapterType === "direct_payment" && !reportingEntity) {
+    const error = new Error(
+      "A dataset reporting-entity snapshot is required for direct-payment canonicalisation",
+    );
+    error.statusCode = 400;
+    error.code = "DATASET_REPORTING_ENTITY_SNAPSHOT_REQUIRED";
+    throw error;
+  }
+  const dateFormat =
+    adapter.adapterType === "direct_payment"
+      ? normaliseDatasetDateFormat(dataset.dateFormat)
+      : null;
+  if (adapter.adapterType === "direct_payment" && !dateFormat) {
+    const error = new Error(
+      "A governed dataset date format is required for direct-payment canonicalisation",
+    );
+    error.statusCode = 400;
+    error.code = "DATASET_DATE_FORMAT_REQUIRED";
+    throw error;
+  }
   const transactionDatasets = await db.PtrsDataset.findAll({
     where: { customerId, ptrsId, purpose: "transaction" },
     attributes: ["id"],
@@ -247,6 +337,9 @@ async function buildCanonicalInputSnapshot({
     contract: adapter.contract,
     fieldMap,
     datasetId,
+    systemSuppliedFields: reportingEntity
+      ? ["payer_entity_name", "payer_entity_abn"]
+      : [],
   });
   const enrichment = filterMaterialEnrichment({
     joins,
@@ -291,16 +384,26 @@ async function buildCanonicalInputSnapshot({
     ...(adapter.adapterType === "sap_accounting_event"
       ? { datePolicyVersion: SAP_INVOICE_DATE_POLICY_VERSION }
       : {}),
+    ...(adapter.adapterType === "direct_payment"
+      ? {
+          dateNormalisationVersion: DIRECT_PAYMENT_DATE_NORMALISATION_VERSION,
+          scalarNormalisationVersion:
+            DIRECT_PAYMENT_SCALAR_NORMALISATION_VERSION,
+          dateFormat,
+        }
+      : {}),
     profileId,
     sourceSignature,
     mappingSignature,
     enrichmentSignature,
+    reportingEntity,
     adapter,
     sourceGroupScope: dataset.sourceGroupScope || null,
   };
   return {
     dataset,
     adapter,
+    reportingEntity,
     sourceSignature,
     mappingSignature,
     enrichmentSignature,
@@ -315,6 +418,7 @@ async function buildCanonicalInputSnapshot({
           datasets: relatedDatasets,
           supportConfig: { profileId, ...enrichment },
           fieldMapRows: mappingMaterial,
+          reportingEntity,
         }),
       ),
     ),
@@ -435,7 +539,11 @@ async function recordCanonicalFailure(revision, error, meta) {
         {
           status: "failed",
           completedAt: new Date(),
-          failure: { message: error.message, code: error.code || null },
+          failure: {
+            message: error.message,
+            code: error.code || null,
+            details: error.details || null,
+          },
         },
         { transaction },
       );
@@ -606,7 +714,11 @@ async function materializeCanonicalRevision({
       const composeMs = elapsed(composeStarted);
       const persistenceStarted = process.hrtime.bigint();
       const payload = rows.map((row) => {
-        const data = sanitizeJson(row);
+        const data = sanitizeJson(
+          snapshot.adapter.adapterType === "direct_payment"
+            ? applyReportingEntitySnapshot(row, snapshot.reportingEntity)
+            : row,
+        );
         const meta = data?._ptrsMeta || {};
         const sourceRowNo = Number(meta.sourceRowNo);
         if (!Number.isFinite(sourceRowNo)) {

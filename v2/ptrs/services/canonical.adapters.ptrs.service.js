@@ -1,4 +1,7 @@
 const { toSnake } = require("@/v2/ptrs/services/ptrs.service");
+const {
+  CANONICAL_DATE_FIELDS,
+} = require("@/v2/ptrs/services/canonical.date-normalisation.ptrs.service");
 
 const COMMON_PAYMENT_FIELDS = Object.freeze([
   "payer_entity_name",
@@ -122,8 +125,14 @@ function normaliseMappedFields(fieldMap) {
   );
 }
 
-function validateAdapterMappings({ contract, fieldMap, datasetId }) {
+function validateAdapterMappings({
+  contract,
+  fieldMap,
+  datasetId,
+  systemSuppliedFields = [],
+}) {
   const mappedFields = normaliseMappedFields(fieldMap);
+  for (const field of systemSuppliedFields) mappedFields.add(toSnake(field));
   const missingFields = contract.requiredFields.filter(
     (field) => !mappedFields.has(field),
   );
@@ -148,22 +157,13 @@ function hasValue(value) {
 
 function isSupportedDate(value) {
   if (!hasValue(value)) return false;
+  if (value instanceof Date) return !Number.isNaN(value.getTime());
   const text = String(value).trim();
-  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  let year;
-  let month;
-  let day;
-  if (match) {
-    year = Number(match[1]);
-    month = Number(match[2]);
-    day = Number(match[3]);
-  } else {
-    match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
-    if (!match) return false;
-    day = Number(match[1]);
-    month = Number(match[2]);
-    year = Number(match[3]);
-  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
   const date = new Date(Date.UTC(year, month - 1, day));
   return (
     date.getUTCFullYear() === year &&
@@ -202,10 +202,7 @@ function validateCanonicalRowForAdapter({
   ) {
     invalidFields.push("payment_amount");
   }
-  if (hasValue(row?.payment_date) && !isSupportedDate(row.payment_date)) {
-    invalidFields.push("payment_date");
-  }
-  for (const field of PAYMENT_CLOCK_FIELDS) {
+  for (const field of CANONICAL_DATE_FIELDS) {
     if (hasValue(row?.[field]) && !isSupportedDate(row[field])) {
       invalidFields.push(field);
     }
@@ -216,7 +213,19 @@ function validateCanonicalRowForAdapter({
   }
 
   const error = new Error(
-    `Invalid direct-payment canonical row ${sourceRowNo} in dataset ${datasetId}`,
+    `Invalid direct-payment canonical row ${sourceRowNo} in dataset ${datasetId}: ${[
+      missingFields.length
+        ? `missing fields ${missingFields.join(", ")}`
+        : null,
+      missingGroups.length
+        ? `missing field groups ${missingGroups.map((group) => group.id).join(", ")}`
+        : null,
+      invalidFields.length
+        ? `invalid fields ${Array.from(new Set(invalidFields)).join(", ")}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("; ")}`,
   );
   error.statusCode = 422;
   error.code = "DIRECT_PAYMENT_CANONICAL_ROW_INVALID";
@@ -226,6 +235,14 @@ function validateCanonicalRowForAdapter({
     missingFields,
     missingGroups,
     invalidFields: Array.from(new Set(invalidFields)),
+    invalidFieldDetails: Array.from(new Set(invalidFields)).map((field) => ({
+      field,
+      reason:
+        row?._ptrsMeta?.canonicalSources?.[field]?.normalisation?.error ||
+        (field === "payment_amount"
+          ? "INVALID_CANONICAL_NUMBER"
+          : "INVALID_CANONICAL_DATE"),
+    })),
   };
   throw error;
 }

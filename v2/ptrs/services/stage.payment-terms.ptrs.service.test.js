@@ -16,8 +16,10 @@ jest.mock("./ptrs.service", () => ({
 
 const {
   applyEffectiveTermChangesToRows,
+  applyPaymentTermDays,
   deriveTermReferenceDate,
   extractTermChangesJoinSpec,
+  inferTermDaysFromCode,
   loadEffectiveTermChangesForRows,
 } = require("./stage.payment-terms.ptrs.service");
 const { transformStageRows } = require("./stage.build.ptrs.service");
@@ -33,6 +35,7 @@ function makeContext() {
   return {
     customerId: "customer-1",
     ptrsId: "ptrs-1",
+    transactionDatasetId: TRANSACTION_DATASET_ID,
     datasets: [
       {
         id: TRANSACTION_DATASET_ID,
@@ -156,6 +159,135 @@ describe("PTRS effective-term join resolution", () => {
     ).toBeNull();
   });
 
+  test("returns no term changes when the transaction has no configured term-change join", async () => {
+    await expect(
+      loadEffectiveTermChangesForRows({
+        customerId: "customer-1",
+        profileId: "profile-1",
+        rows: [{ payment_term: "E62", invoice_issue_date: "2026-03-04" }],
+        mapRow: { joins: { conditions: [] } },
+        joinContext: makeContext(),
+        transaction: {},
+      }),
+    ).resolves.toEqual(new Map());
+    expect(require("@/db/database").sequelize.query).not.toHaveBeenCalled();
+  });
+
+  test("derives a joinless raw term through the generic Stage rule", async () => {
+    const rows = [
+      {
+        payment_term: "E62",
+        payment_term_days: null,
+        invoice_issue_date: "2026-03-04",
+      },
+    ];
+
+    const result = await transformStageRows({
+      rows,
+      rowRules: [],
+      customerId: "customer-1",
+      profileId: "profile-1",
+      mapRow: { joins: { conditions: [] } },
+      joinContext: makeContext(),
+      transaction: {},
+      applyRules: (inputRows) => ({ rows: inputRows, stats: {} }),
+      loadEffectiveTermChangesForRows,
+      applyEffectiveTermChangesToRows,
+      termMap: new Map(),
+      applyPaymentTermDays,
+      computePaymentTimeRegulator: () => ({ days: null }),
+      semanticKind: "direct_payment",
+    });
+
+    expect(result.rows[0]).toMatchObject({
+      payment_term: "E62",
+      payment_term_days: 62,
+    });
+    expect(result.rows[0]._stageErrors || []).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "PAYMENT_TERM_UNMAPPED" }),
+      ]),
+    );
+    expect(require("@/db/database").sequelize.query).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["45", 45],
+    ["0040", 40],
+    ["Y14F", 14],
+    ["E61", 61],
+    ["30I", 30],
+    ["COD", 0],
+    [" cod ", 0],
+    ["", null],
+    ["UNSUPPORTED", null],
+  ])("derives payment-term code %p as %p", (sourceTerm, expected) => {
+    expect(inferTermDaysFromCode(sourceTerm)).toBe(expected);
+  });
+
+  test("preserves raw evidence while deriving typed payment-term days", () => {
+    const rows = [
+      { invoice_payment_terms: "Y14F", payment_term_days: null },
+      { invoice_payment_terms: "COD", payment_term_days: null },
+      { invoice_payment_terms: "UNSUPPORTED", payment_term_days: null },
+      { invoice_payment_terms: "  ", payment_term_days: null },
+    ];
+
+    const result = applyPaymentTermDays(rows);
+
+    expect(rows.map((row) => row.invoice_payment_terms)).toEqual([
+      "Y14F",
+      "COD",
+      "UNSUPPORTED",
+      "  ",
+    ]);
+    expect(rows.map((row) => row.payment_term_days)).toEqual([
+      14,
+      0,
+      null,
+      null,
+    ]);
+    expect(result.stats).toMatchObject({
+      filled: 2,
+      derived: 2,
+      mapped: 0,
+      missing: 2,
+      unmapped: 1,
+    });
+    expect(rows[2]._stageErrors).toEqual([
+      expect.objectContaining({
+        code: "PAYMENT_TERM_UNMAPPED",
+        value: "UNSUPPORTED",
+      }),
+    ]);
+    expect(rows[3]._stageErrors).toEqual([
+      expect.objectContaining({ code: "PAYMENT_TERM_MISSING" }),
+    ]);
+  });
+
+  test("numeric source evidence takes precedence over a conflicting map", () => {
+    const rows = [{ invoice_payment_terms: "E61" }];
+
+    applyPaymentTermDays(rows, new Map([["E61", 30]]));
+
+    expect(rows[0]).toMatchObject({
+      invoice_payment_terms: "E61",
+      payment_term_days: 61,
+    });
+  });
+
+  test("retains configured mappings for supported nonnumeric terms", () => {
+    const rows = [{ invoice_payment_terms: "ON_DELIVERY" }];
+
+    const result = applyPaymentTermDays(
+      rows,
+      new Map([["ON_DELIVERY", 0]]),
+    );
+
+    expect(rows[0].payment_term_days).toBe(0);
+    expect(result.stats).toMatchObject({ filled: 1, derived: 0, mapped: 1 });
+  });
+
   test("does not apply a future change retrospectively", () => {
     const rows = [
       {
@@ -167,7 +299,9 @@ describe("PTRS effective-term join resolution", () => {
 
     applyEffectiveTermChangesToRows(
       rows,
-      new Map([["SUP-1::2026-03-25", { term: "NT60", changedAt: "2026-03-06" }]]),
+      new Map([
+        ["SUP-1::2026-03-25", { term: "NT60", changedAt: "2026-03-06" }],
+      ]),
       makeTermChangeMapRow(),
       makeContext(),
     );
@@ -188,10 +322,7 @@ describe("PTRS effective-term join resolution", () => {
       },
     ];
     const changeMap = new Map([
-      [
-        `SUP-1::${invoiceIssueDate}`,
-        { term: "NT60", changedAt: "2026-03-06" },
-      ],
+      [`SUP-1::${invoiceIssueDate}`, { term: "NT60", changedAt: "2026-03-06" }],
     ]);
 
     applyEffectiveTermChangesToRows(
@@ -290,10 +421,7 @@ describe("PTRS effective-term join resolution", () => {
       },
     ];
     const changeMap = new Map([
-      [
-        "SUP-1::2026-03-25",
-        { term: "NT60", changedAt: "2026-03-06" },
-      ],
+      ["SUP-1::2026-03-25", { term: "NT60", changedAt: "2026-03-06" }],
     ]);
 
     const result = await transformStageRows({
@@ -308,7 +436,7 @@ describe("PTRS effective-term join resolution", () => {
       loadEffectiveTermChangesForRows: async () => changeMap,
       applyEffectiveTermChangesToRows,
       termMap: new Map(),
-      applyPaymentTermDaysFromMap: (inputRows) => ({
+      applyPaymentTermDays: (inputRows) => ({
         rows: inputRows,
         stats: {},
       }),

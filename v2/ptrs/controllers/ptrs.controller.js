@@ -68,7 +68,8 @@ function safeLog(prefix, meta) {
  *   label?: string,
  *   periodStart?: string (YYYY-MM-DD),
  *   periodEnd?: string (YYYY-MM-DD),
- *   reportingEntityName?: string
+ *   reportingEntityName: string,
+ *   reportingEntityAbn: string
  * }
  */
 async function createPtrs(req, res, next) {
@@ -84,8 +85,16 @@ async function createPtrs(req, res, next) {
         .json({ status: "error", message: "Customer ID missing" });
     }
 
-    const { profileId, label, periodStart, periodEnd, reportingEntityName } =
-      req.body || {};
+    const {
+      profileId,
+      label,
+      periodStart,
+      periodEnd,
+      reportingEntityName,
+      reportingEntityAbn,
+      reportingEntityAcn,
+      reportingEntityArbn,
+    } = req.body || {};
 
     const ptrs = await ptrsService.createPtrs({
       customerId,
@@ -94,6 +103,9 @@ async function createPtrs(req, res, next) {
       periodStart,
       periodEnd,
       reportingEntityName,
+      reportingEntityAbn,
+      reportingEntityAcn,
+      reportingEntityArbn,
       createdBy: userId,
     });
 
@@ -305,6 +317,9 @@ async function updatePtrs(req, res, next) {
       periodStart,
       periodEnd,
       reportingEntityName,
+      reportingEntityAbn,
+      reportingEntityAcn,
+      reportingEntityArbn,
       profileId,
       status,
       meta,
@@ -318,6 +333,9 @@ async function updatePtrs(req, res, next) {
       periodStart,
       periodEnd,
       reportingEntityName,
+      reportingEntityAbn,
+      reportingEntityAcn,
+      reportingEntityArbn,
       profileId,
       status,
       meta,

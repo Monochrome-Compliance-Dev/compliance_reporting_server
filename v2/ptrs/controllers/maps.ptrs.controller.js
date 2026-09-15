@@ -289,8 +289,8 @@ async function saveMap(req, res, next) {
 }
 
 /**
- * GET /api/v2/ptrs/:id/field-map?profileId=...
- * Returns profile-scoped canonical field mappings.
+ * GET /api/v2/ptrs/:id/field-map?profileId=...&datasetId=...
+ * Returns canonical field mappings for one transaction dataset.
  */
 async function getFieldMap(req, res, next) {
   const customerId = req.effectiveCustomerId;
@@ -299,6 +299,7 @@ async function getFieldMap(req, res, next) {
   const device = req.headers["user-agent"];
   const ptrsId = req.params.id;
   const profileId = req.query.profileId || null;
+  const datasetId = req.query.datasetId || null;
 
   try {
     if (!customerId) {
@@ -311,6 +312,11 @@ async function getFieldMap(req, res, next) {
         .status(400)
         .json({ status: "error", message: "profileId is required" });
     }
+    if (!datasetId) {
+      return res
+        .status(400)
+        .json({ status: "error", message: "datasetId is required" });
+    }
     const ptrs = await ptrsService.getPtrs({ customerId, ptrsId });
     if (!ptrs) {
       return res
@@ -322,6 +328,7 @@ async function getFieldMap(req, res, next) {
       customerId,
       ptrsId,
       profileId,
+      datasetId,
     });
 
     await auditService.logEvent({
@@ -334,6 +341,7 @@ async function getFieldMap(req, res, next) {
       entityId: ptrsId,
       details: {
         profileId,
+        datasetId,
         count: Array.isArray(fieldMap) ? fieldMap.length : 0,
       },
     });

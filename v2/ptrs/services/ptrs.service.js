@@ -346,6 +346,9 @@ async function updatePtrs({
   periodStart,
   periodEnd,
   reportingEntityName,
+  reportingEntityAbn,
+  reportingEntityAcn,
+  reportingEntityArbn,
   profileId,
   status,
   meta,
@@ -378,6 +381,60 @@ async function updatePtrs({
     if (profileId != null) updates.profileId = profileId;
     if (status != null) updates.status = status;
     if (meta != null) updates.meta = meta;
+
+    const identitySupplied = [
+      reportingEntityName,
+      reportingEntityAbn,
+      reportingEntityAcn,
+      reportingEntityArbn,
+    ].some((value) => value != null);
+    if (identitySupplied) {
+      const existingSnapshot = await db.PtrsReportingEntitySnapshot.findOne({
+        where: { customerId, ptrsId },
+        transaction: t,
+      });
+      const entityName = String(
+        reportingEntityName ?? existingSnapshot?.entityName ?? "",
+      ).trim();
+      const abn = String(
+        reportingEntityAbn ?? existingSnapshot?.abn ?? "",
+      ).replace(/\D/g, "");
+      if (!entityName || !/^\d{11}$/.test(abn)) {
+        const error = new Error(
+          "Reporting entity name and an 11-digit ABN are required",
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+      const snapshotValues = {
+        profileId: profileId ?? existingSnapshot?.profileId ?? ptrs.profileId,
+        entityName,
+        abn,
+        acn:
+          reportingEntityAcn == null
+            ? existingSnapshot?.acn || null
+            : String(reportingEntityAcn).replace(/\D/g, "") || null,
+        arbn:
+          reportingEntityArbn == null
+            ? existingSnapshot?.arbn || null
+            : String(reportingEntityArbn).replace(/\D/g, "") || null,
+        source: "manual",
+        updatedBy: userId || null,
+      };
+      if (existingSnapshot) {
+        await existingSnapshot.update(snapshotValues, { transaction: t });
+      } else {
+        await db.PtrsReportingEntitySnapshot.create(
+          {
+            customerId,
+            ptrsId,
+            ...snapshotValues,
+            createdBy: userId || null,
+          },
+          { transaction: t },
+        );
+      }
+    }
 
     if (Object.keys(updates).length === 0) {
       await t.commit();
@@ -603,6 +660,7 @@ async function getUpload({ ptrsId, customerId }) {
  * @param {string} [params.periodStart] - YYYY-MM-DD
  * @param {string} [params.periodEnd] - YYYY-MM-DD
  * @param {string} [params.reportingEntityName]
+ * @param {string} [params.reportingEntityAbn]
  * @param {Object} [params.meta]
  * @param {string} [params.createdBy]
  */
@@ -614,11 +672,26 @@ async function createPtrs(params) {
     periodStart,
     periodEnd,
     reportingEntityName,
+    reportingEntityAbn,
+    reportingEntityAcn,
+    reportingEntityArbn,
     meta,
     createdBy,
   } = params || {};
 
   if (!customerId) throw new Error("customerId is required");
+  const entityName = String(reportingEntityName || "").trim();
+  const entityAbn = String(reportingEntityAbn || "").replace(/\D/g, "");
+  if (!entityName) {
+    const error = new Error("reportingEntityName is required");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^\d{11}$/.test(entityAbn)) {
+    const error = new Error("reportingEntityAbn must be an 11-digit ABN");
+    error.statusCode = 400;
+    throw error;
+  }
 
   const t = await beginTransactionWithCustomerContext(customerId);
   try {
@@ -629,10 +702,26 @@ async function createPtrs(params) {
         label: label || null,
         periodStart: periodStart || null,
         periodEnd: periodEnd || null,
-        reportingEntityName: reportingEntityName || null,
+        reportingEntityName: entityName,
         status: "draft",
         currentStep: "create",
         meta: meta && typeof meta === "object" ? meta : null,
+        createdBy: createdBy || null,
+        updatedBy: createdBy || null,
+      },
+      { transaction: t },
+    );
+
+    await db.PtrsReportingEntitySnapshot.create(
+      {
+        customerId,
+        ptrsId: row.id,
+        profileId: profileId || null,
+        entityName,
+        abn: entityAbn,
+        acn: String(reportingEntityAcn || "").replace(/\D/g, "") || null,
+        arbn: String(reportingEntityArbn || "").replace(/\D/g, "") || null,
+        source: "manual",
         createdBy: createdBy || null,
         updatedBy: createdBy || null,
       },
